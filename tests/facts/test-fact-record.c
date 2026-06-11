@@ -161,6 +161,95 @@ test_fact_record_rejects_uninitialized_wirelog_serialization (void)
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 }
 
+static WyreboxFactRecord *
+test_fact_record_new (const char *predicate,
+    const char *const *args, const char *source)
+{
+  g_autoptr (GError) error = NULL;
+  WyreboxFactRecord *record = NULL;
+
+  record = g_new0 (WyreboxFactRecord, 1);
+  g_assert_true (wyrebox_fact_record_init (record,
+          predicate, args, source, 1000000, 1800000000000000, &error));
+  g_assert_no_error (error);
+
+  return record;
+}
+
+static void
+test_fact_record_free (gpointer data)
+{
+  WyreboxFactRecord *record = data;
+
+  wyrebox_fact_record_clear (record);
+  g_free (record);
+}
+
+static void
+test_fact_record_serializes_empty_wirelog_batch (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autofree char *text = NULL;
+
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  text = wyrebox_fact_record_array_to_wirelog_facts (records, &error);
+  g_assert_no_error (error);
+  g_assert_cmpstr (text, ==, "");
+}
+
+static void
+test_fact_record_serializes_wirelog_batch (void)
+{
+  const char *sender_args[] = {
+    "mail-1",
+    "example.test",
+    NULL,
+  };
+  const char *participant_args[] = {
+    "mail-1",
+    "Alice <alice@example.test>",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autofree char *text = NULL;
+
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  g_ptr_array_add (records,
+      test_fact_record_new ("sender_domain", sender_args, "header:from"));
+  g_ptr_array_add (records,
+      test_fact_record_new ("participant", participant_args, "header:from"));
+
+  text = wyrebox_fact_record_array_to_wirelog_facts (records, &error);
+  g_assert_no_error (error);
+  g_assert_cmpstr (text, ==,
+      "sender_domain(\"mail-1\", \"example.test\").\n"
+      "participant(\"mail-1\", \"Alice <alice@example.test>\").\n");
+}
+
+static void
+test_fact_record_wirelog_batch_propagates_invalid_record (void)
+{
+  const char *args[] = {
+    "mail-1",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autofree char *text = NULL;
+  WyreboxFactRecord *record = NULL;
+
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  record = test_fact_record_new ("participant", args, "header:to");
+  g_clear_pointer (&record->predicate, g_free);
+  g_ptr_array_add (records, record);
+
+  text = wyrebox_fact_record_array_to_wirelog_facts (records, &error);
+  g_assert_null (text);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -183,6 +272,13 @@ main (int argc, char **argv)
   g_test_add_func ("/facts/fact-record/"
       "rejects-uninitialized-wirelog-serialization",
       test_fact_record_rejects_uninitialized_wirelog_serialization);
+  g_test_add_func ("/facts/fact-record/serializes-empty-wirelog-batch",
+      test_fact_record_serializes_empty_wirelog_batch);
+  g_test_add_func ("/facts/fact-record/serializes-wirelog-batch",
+      test_fact_record_serializes_wirelog_batch);
+  g_test_add_func ("/facts/fact-record/"
+      "wirelog-batch-propagates-invalid-record",
+      test_fact_record_wirelog_batch_propagates_invalid_record);
 
   return g_test_run ();
 }

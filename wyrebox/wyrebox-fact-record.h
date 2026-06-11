@@ -53,5 +53,8 @@ gboolean wyrebox_fact_record_mark_retracted (WyreboxFactRecord *record,
 char *wyrebox_fact_record_to_wirelog_fact (const WyreboxFactRecord *record,
     GError **error);
 
+char *wyrebox_fact_record_array_to_wirelog_facts (GPtrArray *records,
+    GError **error);
+
 G_END_DECLS
 /* *INDENT-ON* */

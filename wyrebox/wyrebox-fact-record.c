@@ -231,3 +231,28 @@ wyrebox_fact_record_to_wirelog_fact (const WyreboxFactRecord *record,
   g_string_append (builder, ").");
   return g_string_free (g_steal_pointer (&builder), FALSE);
 }
+
+char *
+wyrebox_fact_record_array_to_wirelog_facts (GPtrArray *records, GError **error)
+{
+  g_autoptr (GString) builder = NULL;
+
+  g_return_val_if_fail (records != NULL, NULL);
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  builder = g_string_new (NULL);
+
+  for (guint index = 0; index < records->len; index++) {
+    const WyreboxFactRecord *record = g_ptr_array_index (records, index);
+    g_autofree char *line = NULL;
+
+    line = wyrebox_fact_record_to_wirelog_fact (record, error);
+    if (line == NULL)
+      return NULL;
+
+    g_string_append (builder, line);
+    g_string_append_c (builder, '\n');
+  }
+
+  return g_string_free (g_steal_pointer (&builder), FALSE);
+}
