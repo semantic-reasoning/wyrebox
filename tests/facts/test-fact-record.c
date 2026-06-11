@@ -466,6 +466,43 @@ test_fact_record_wirelog_file_writer_propagates_replace_failure (void)
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
 }
 
+static void
+test_fact_record_wirelog_file_writer_serializes_before_replace (void)
+{
+  const char *args[] = {
+    "mail-1",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autofree char *root = g_dir_make_tmp ("wyrebox-fact-record-XXXXXX", NULL);
+  g_autofree char *path = NULL;
+  g_autoptr (GFile) file = NULL;
+  g_autofree char *contents = NULL;
+  gsize length = 0;
+  WyreboxFactRecord *record = NULL;
+
+  g_assert_nonnull (root);
+  path = g_build_filename (root, "facts.wl", NULL);
+  g_assert_true (g_file_set_contents (path, "stale\n", -1, &error));
+  g_assert_no_error (error);
+  file = g_file_new_for_path (path);
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  record = test_fact_record_new ("participant", args, "header:to");
+  g_clear_pointer (&record->predicate, g_free);
+  g_ptr_array_add (records, record);
+
+  g_assert_false (wyrebox_fact_record_array_write_wirelog_fact_file (records,
+          file, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+  g_assert_true (g_file_get_contents (path, &contents, &length, &error));
+  g_assert_no_error (error);
+  g_assert_cmpmem (contents, length, "stale\n", strlen ("stale\n"));
+
+  remove_tree (root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -511,6 +548,9 @@ main (int argc, char **argv)
   g_test_add_func ("/facts/fact-record/"
       "wirelog-file-writer-propagates-replace-failure",
       test_fact_record_wirelog_file_writer_propagates_replace_failure);
+  g_test_add_func ("/facts/fact-record/"
+      "wirelog-file-writer-serializes-before-replace",
+      test_fact_record_wirelog_file_writer_serializes_before_replace);
 
   return g_test_run ();
 }
