@@ -9,6 +9,22 @@ static const char *valid_object_key =
 
 #define V2_OBJECT_KEY_LEN_OFFSET 28
 #define V2_OBJECT_KEY_OFFSET 30
+#define V1_OBJECT_KEY_LEN_OFFSET 16
+
+static const guint8 golden_v1_payload[] = {
+  'W', 'Y', 'R', 'E', 'M', 'D', 'P', '1',
+  0x39, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x47, 0x00,
+  's', 'h', 'a', '2', '5', '6', ':',
+  '0', '1', '2', '3', '4', '5', '6', '7',
+  '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+  '0', '1', '2', '3', '4', '5', '6', '7',
+  '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+  '0', '1', '2', '3', '4', '5', '6', '7',
+  '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+  '0', '1', '2', '3', '4', '5', '6', '7',
+  '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+};
 
 static void
 assert_decode_fails_invalid_data (GBytes *bytes)
@@ -162,6 +178,30 @@ test_wrapper_encodes_empty_metadata (void)
 }
 
 static void
+test_decodes_golden_v1_payload (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) bytes =
+      g_bytes_new_static (golden_v1_payload, sizeof (golden_v1_payload));
+  g_auto (WyreboxMessageDeliveredPayload) decoded = { 0 };
+
+  g_assert_true (wyrebox_message_delivered_payload_decode (bytes,
+          &decoded, &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (decoded.object_key, ==, valid_object_key);
+  g_assert_cmpuint (decoded.size_bytes, ==, 12345);
+  g_assert_cmpuint (decoded.internal_date_unix_us, ==, 0);
+  g_assert_null (decoded.message_id);
+  g_assert_null (decoded.subject);
+  g_assert_null (decoded.from);
+  g_assert_null (decoded.to);
+  g_assert_null (decoded.cc);
+  g_assert_null (decoded.bcc);
+  g_assert_null (decoded.date);
+  g_assert_cmpuint (decoded.duplicate_message_id_count, ==, 0);
+}
+
+static void
 test_rejects_invalid_key_on_encode (void)
 {
   g_autoptr (GError) error = NULL;
@@ -173,6 +213,35 @@ test_rejects_invalid_key_on_encode (void)
 
   g_assert_null (encoded);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
+test_rejects_v1_trailing_bytes (void)
+{
+  g_autoptr (GBytes) malformed = NULL;
+  g_autofree guint8 *copy = NULL;
+  gsize payload_size = sizeof (golden_v1_payload);
+
+  copy = g_malloc (payload_size + 1);
+  memcpy (copy, golden_v1_payload, payload_size);
+  copy[payload_size] = 0;
+  malformed = g_bytes_new_take (g_steal_pointer (&copy), payload_size + 1);
+
+  assert_decode_fails_invalid_data (malformed);
+}
+
+static void
+test_rejects_v1_malformed_payload_length (void)
+{
+  g_autoptr (GBytes) malformed = NULL;
+  g_autofree guint8 *copy = NULL;
+  gsize payload_size = sizeof (golden_v1_payload);
+
+  copy = g_memdup2 (golden_v1_payload, payload_size);
+  copy[V1_OBJECT_KEY_LEN_OFFSET] = 0x48;
+  malformed = g_bytes_new_take (g_steal_pointer (&copy), payload_size);
+
+  assert_decode_fails_invalid_data (malformed);
 }
 
 static void
@@ -353,8 +422,15 @@ main (int argc, char **argv)
       test_encoded_format_matches_golden_v2);
   g_test_add_func ("/message-delivered-payload/wrapper-encodes-empty-metadata",
       test_wrapper_encodes_empty_metadata);
+  g_test_add_func ("/message-delivered-payload/decodes-golden-v1-payload",
+      test_decodes_golden_v1_payload);
   g_test_add_func ("/message-delivered-payload/rejects-invalid-key-on-encode",
       test_rejects_invalid_key_on_encode);
+  g_test_add_func ("/message-delivered-payload/rejects-v1-trailing-bytes",
+      test_rejects_v1_trailing_bytes);
+  g_test_add_func
+      ("/message-delivered-payload/rejects-v1-malformed-payload-length",
+      test_rejects_v1_malformed_payload_length);
   g_test_add_func
       ("/message-delivered-payload/rejects-invalid-prefix-on-decode",
       test_rejects_invalid_prefix_on_decode);
