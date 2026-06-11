@@ -3,6 +3,7 @@
  */
 
 #include "wyrebox-schema-migration.h"
+#include "wyrebox-schema-metadata-store.h"
 
 #include <glib.h>
 #include <string.h>
@@ -365,4 +366,27 @@ wyrebox_schema_migration_evaluate_to_current (WyreboxSchemaMigration *self,
 {
   return wyrebox_schema_migration_evaluate_to_version (self, state,
       wyrebox_schema_migration_get_current_schema_version (), error);
+}
+
+gboolean
+wyrebox_schema_migration_run_store_to_current (WyreboxSchemaMigration *self,
+    WyreboxSchemaMetadataStore *metadata_store,
+    gboolean checkpoint_precondition_satisfied, GError **error)
+{
+  g_auto (WyreboxSchemaMigrationMetadataState) state = { 0 };
+
+  g_return_val_if_fail (WYREBOX_IS_SCHEMA_MIGRATION (self), FALSE);
+  g_return_val_if_fail (WYREBOX_IS_SCHEMA_METADATA_STORE (metadata_store),
+      FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (!wyrebox_schema_metadata_store_load (metadata_store, &state, error))
+    return FALSE;
+
+  state.checkpoint_precondition_satisfied = checkpoint_precondition_satisfied;
+
+  if (!wyrebox_schema_migration_evaluate_to_current (self, &state, error))
+    return FALSE;
+
+  return wyrebox_schema_metadata_store_save (metadata_store, &state, error);
 }

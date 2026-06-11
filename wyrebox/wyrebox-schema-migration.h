@@ -7,6 +7,8 @@
 #include <glib-object.h>
 #include <gio/gio.h>
 
+typedef struct _WyreboxSchemaMetadataStore WyreboxSchemaMetadataStore;
+
 /* *INDENT-OFF* */
 G_BEGIN_DECLS
 
@@ -183,6 +185,22 @@ gboolean wyrebox_schema_migration_evaluate_to_version (
 gboolean wyrebox_schema_migration_evaluate_to_current (
     WyreboxSchemaMigration *self,
     WyreboxSchemaMigrationMetadataState *state,
+    GError **error);
+
+/*
+ * Load schema metadata from @metadata_store, apply a transient
+ * materialization checkpoint precondition, evaluate to the current schema
+ * version, and persist updated metadata only when evaluation succeeds.
+ *
+ * Ownership:
+ * - @self and @metadata_store are non-floating references owned by the caller.
+ * - @error, when set, is returned as a floating, caller-owned GError via
+ *   g_autoptr conventions; callers should clear it with g_clear_error().
+ */
+gboolean wyrebox_schema_migration_run_store_to_current (
+    WyreboxSchemaMigration *self,
+    WyreboxSchemaMetadataStore *metadata_store,
+    gboolean checkpoint_precondition_satisfied,
     GError **error);
 
 G_END_DECLS
