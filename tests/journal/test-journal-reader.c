@@ -416,6 +416,96 @@ test_rejects_truncated_record (void)
 }
 
 static void
+test_rejects_oversized_payload_length (void)
+{
+  const guint8 payload[] = { 0x68, 0x75, 0x67, 0x65 };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autofree guint8 *segment = NULL;
+  gsize segment_size = 0;
+  guint64 sequence = 0;
+  guint64 offset = 0;
+  g_auto (WyreboxJournalRecord) record = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_autoptr (GBytes) payload_bytes =
+      g_bytes_new_static (payload, sizeof (payload));
+  gboolean eof = FALSE;
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          payload_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+
+  read_segment (segment_path, &segment, &segment_size);
+  g_assert_cmpuint (segment_size, >, 32);
+  write_u64_le (segment + 24, G_MAXUINT64);
+  overwrite_segment (segment_path, segment, segment_size);
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_nonnull (reader);
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_journal_reader_read_next (reader,
+          &record, &eof, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_clear_error (&error);
+
+  remove_tree (root);
+}
+
+static void
+test_rejects_oversized_event_length (void)
+{
+  const guint8 payload[] = { 0x65, 0x76, 0x65, 0x6e, 0x74 };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autofree guint8 *segment = NULL;
+  gsize segment_size = 0;
+  guint64 sequence = 0;
+  guint64 offset = 0;
+  g_auto (WyreboxJournalRecord) record = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_autoptr (GBytes) payload_bytes =
+      g_bytes_new_static (payload, sizeof (payload));
+  gboolean eof = FALSE;
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          payload_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+
+  read_segment (segment_path, &segment, &segment_size);
+  g_assert_cmpuint (segment_size, >, 16);
+  write_u32_le (segment + 12, G_MAXUINT32);
+  overwrite_segment (segment_path, segment, segment_size);
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_nonnull (reader);
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_journal_reader_read_next (reader,
+          &record, &eof, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_clear_error (&error);
+
+  remove_tree (root);
+}
+
+static void
 test_rejects_non_monotonic_sequence (void)
 {
   const guint8 first_payload[] = { 0x6d, 0x6f, 0x72, 0x65 };
@@ -562,6 +652,10 @@ main (int argc, char **argv)
       test_rejects_invalid_checksum);
   g_test_add_func ("/journal-reader/rejects-truncated-record",
       test_rejects_truncated_record);
+  g_test_add_func ("/journal-reader/rejects-oversized-payload-length",
+      test_rejects_oversized_payload_length);
+  g_test_add_func ("/journal-reader/rejects-oversized-event-length",
+      test_rejects_oversized_event_length);
   g_test_add_func ("/journal-reader/rejects-non-monotonic-sequence",
       test_rejects_non_monotonic_sequence);
   g_test_add_func ("/journal-reader/rejects-unknown-event-type",

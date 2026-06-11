@@ -160,7 +160,7 @@ wyrebox_journal_reader_new (const char *journal_root_dir, GError **error)
   g_autoptr (WyreboxJournalReader) self = NULL;
   g_autofree char *segment_path = NULL;
   struct stat segment_stat = { 0 };
-  int fd = -1;
+  g_autofd int fd = -1;
 
   g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
@@ -219,7 +219,8 @@ wyrebox_journal_reader_new (const char *journal_root_dir, GError **error)
   self->journal_root_dir = g_strdup (journal_root_dir);
   self->segment_path = g_steal_pointer (&segment_path);
   self->fd = fd;
-  if (fd >= 0)
+  fd = -1;
+  if (self->fd >= 0)
     self->file_size = (gsize) segment_stat.st_size;
 
   return g_steal_pointer (&self);
@@ -245,6 +246,8 @@ wyrebox_journal_reader_read_next (WyreboxJournalReader *self,
   guint64 sequence = 0;
   guint64 current_offset = 0;
   guint64 record_end_offset = 0;
+  gsize remaining = 0;
+  gsize remaining_after_header = 0;
 
   g_return_val_if_fail (WYREBOX_IS_JOURNAL_READER (self), FALSE);
   g_return_val_if_fail (record != NULL, FALSE);
@@ -328,21 +331,12 @@ wyrebox_journal_reader_read_next (WyreboxJournalReader *self,
     return FALSE;
   }
 
-  if (current_offset + WYREBOX_JOURNAL_RECORD_HEADER_SIZE > G_MAXUINT64 ||
-      current_offset + WYREBOX_JOURNAL_RECORD_HEADER_SIZE + event_type_len <
-      current_offset ||
-      current_offset + WYREBOX_JOURNAL_RECORD_HEADER_SIZE + event_type_len +
-      payload_len < current_offset) {
+  remaining = self->file_size - (gsize) current_offset;
+  remaining_after_header = remaining - WYREBOX_JOURNAL_RECORD_HEADER_SIZE;
+  if (event_type_len > remaining_after_header ||
+      payload_len > remaining_after_header - event_type_len) {
     g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
         "journal record has invalid size");
-    return FALSE;
-  }
-
-  if (self->file_size <
-      current_offset + WYREBOX_JOURNAL_RECORD_HEADER_SIZE + event_type_len +
-      payload_len) {
-    g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
-        "failed to read complete journal record: truncated");
     return FALSE;
   }
 
