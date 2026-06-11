@@ -14,6 +14,17 @@ typedef struct
   guint expected_fail_at_call;
 } TestMigrationFixtureData;
 
+static void
+    test_schema_migration_set_materialization_checkpoint_fields
+    (WyreboxSchemaMigrationMetadataState * state)
+{
+  g_assert_nonnull (state);
+
+  state->materialization_checkpoint_present = TRUE;
+  state->materialization_checkpoint_journal_offset = 4096;
+  state->materialization_checkpoint_sequence = 2048;
+}
+
 static gboolean
 test_schema_migration_force_failure_for_call (guint64 source_version,
     guint64 target_version,
@@ -114,6 +125,7 @@ test_checkpoint_precondition_missing_blocks_legacy_migration (void)
   migration = wyrebox_schema_migration_new ();
   metadata.schema_version_present = TRUE;
   metadata.schema_version = 0;
+  test_schema_migration_set_materialization_checkpoint_fields (&metadata);
   wyrebox_schema_migration_set_test_step_hooks (migration,
       test_schema_migration_record_step_calls,
       test_schema_migration_record_validation_calls, &fixture_data, NULL);
@@ -124,6 +136,10 @@ test_checkpoint_precondition_missing_blocks_legacy_migration (void)
   g_assert_cmpuint (metadata.schema_version, ==, 0);
   g_assert_cmpuint (fixture_data.operation_call_count, ==, 0);
   g_assert_cmpuint (fixture_data.validation_call_count, ==, 0);
+  g_assert_true (metadata.materialization_checkpoint_present);
+  g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==,
+      4096);
+  g_assert_cmpuint (metadata.materialization_checkpoint_sequence, ==, 2048);
 }
 
 static void
@@ -143,11 +159,16 @@ test_missing_schema_metadata_initializes_to_first_supported_version (void)
   g_assert_false (metadata.schema_version_present);
   g_assert_cmpuint (first_version, ==, 1);
   g_assert_cmpuint (first_version, ==, current_version);
+  test_schema_migration_set_materialization_checkpoint_fields (&metadata);
   g_assert_true (wyrebox_schema_migration_evaluate_to_version (migration,
           &metadata, first_version, &error));
   g_assert_no_error (error);
   g_assert_true (metadata.schema_version_present);
   g_assert_cmpuint (metadata.schema_version, ==, first_version);
+  g_assert_true (metadata.materialization_checkpoint_present);
+  g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==,
+      4096);
+  g_assert_cmpuint (metadata.materialization_checkpoint_sequence, ==, 2048);
 }
 
 static void
@@ -161,10 +182,15 @@ test_current_schema_version_is_noop (void)
   metadata.schema_version_present = TRUE;
   metadata.schema_version =
       wyrebox_schema_migration_get_current_schema_version ();
+  test_schema_migration_set_materialization_checkpoint_fields (&metadata);
 
   g_assert_true (wyrebox_schema_migration_evaluate_to_current (migration,
           &metadata, &error));
   g_assert_no_error (error);
+  g_assert_true (metadata.materialization_checkpoint_present);
+  g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==,
+      4096);
+  g_assert_cmpuint (metadata.materialization_checkpoint_sequence, ==, 2048);
   g_assert_true (metadata.schema_version_present);
   g_assert_cmpuint (metadata.schema_version, ==,
       wyrebox_schema_migration_get_current_schema_version ());
@@ -185,11 +211,16 @@ test_unknown_future_schema_version_is_rejected (void)
       wyrebox_schema_migration_get_current_schema_version ();
   original_version = metadata.schema_version;
   future_version = metadata.schema_version + 1;
+  test_schema_migration_set_materialization_checkpoint_fields (&metadata);
 
   g_assert_false (wyrebox_schema_migration_evaluate_to_version (migration,
           &metadata, future_version, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
   g_assert_cmpuint (metadata.schema_version, ==, original_version);
+  g_assert_true (metadata.materialization_checkpoint_present);
+  g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==,
+      4096);
+  g_assert_cmpuint (metadata.materialization_checkpoint_sequence, ==, 2048);
 }
 
 static void
@@ -204,11 +235,16 @@ test_future_schema_metadata_is_rejected (void)
   metadata.schema_version_present = TRUE;
   original_version = wyrebox_schema_migration_get_current_schema_version () + 1;
   metadata.schema_version = original_version;
+  test_schema_migration_set_materialization_checkpoint_fields (&metadata);
 
   g_assert_false (wyrebox_schema_migration_evaluate_to_current (migration,
           &metadata, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
   g_assert_cmpuint (metadata.schema_version, ==, original_version);
+  g_assert_true (metadata.materialization_checkpoint_present);
+  g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==,
+      4096);
+  g_assert_cmpuint (metadata.materialization_checkpoint_sequence, ==, 2048);
 }
 
 static void
@@ -225,11 +261,16 @@ test_downgrade_target_is_rejected (void)
   requested_version = current_version - 1;
   metadata.schema_version_present = TRUE;
   metadata.schema_version = current_version;
+  test_schema_migration_set_materialization_checkpoint_fields (&metadata);
 
   g_assert_false (wyrebox_schema_migration_evaluate_to_version (migration,
           &metadata, requested_version, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
   g_assert_cmpuint (metadata.schema_version, ==, current_version);
+  g_assert_true (metadata.materialization_checkpoint_present);
+  g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==,
+      4096);
+  g_assert_cmpuint (metadata.materialization_checkpoint_sequence, ==, 2048);
 }
 
 static void
@@ -246,6 +287,7 @@ test_explicit_forward_path_succeeds_with_checkpoint_precondition (void)
   metadata.schema_version_present = TRUE;
   metadata.schema_version = 0;
   metadata.checkpoint_precondition_satisfied = TRUE;
+  test_schema_migration_set_materialization_checkpoint_fields (&metadata);
   fixture_data.expected_fail_at_call = 0;
   wyrebox_schema_migration_set_test_step_hooks (migration,
       test_schema_migration_record_step_calls,
@@ -257,6 +299,9 @@ test_explicit_forward_path_succeeds_with_checkpoint_precondition (void)
   g_assert_cmpuint (fixture_data.operation_call_count, ==, 1);
   g_assert_cmpuint (fixture_data.validation_call_count, ==, 1);
   g_assert_cmpuint (metadata.schema_version, ==, current_version);
+  g_assert_false (metadata.materialization_checkpoint_present);
+  g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==, 0);
+  g_assert_cmpuint (metadata.materialization_checkpoint_sequence, ==, 0);
 }
 
 static void
@@ -290,6 +335,7 @@ test_operation_hook_failure_does_not_promote_version (void)
   metadata.schema_version_present = TRUE;
   metadata.schema_version = 0;
   metadata.checkpoint_precondition_satisfied = TRUE;
+  test_schema_migration_set_materialization_checkpoint_fields (&metadata);
   wyrebox_schema_migration_set_test_step_hooks (migration,
       test_schema_migration_force_op_failure, NULL, &fixture_data, NULL);
 
@@ -297,6 +343,10 @@ test_operation_hook_failure_does_not_promote_version (void)
           &metadata, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
   g_assert_cmpuint (metadata.schema_version, ==, 0);
+  g_assert_true (metadata.materialization_checkpoint_present);
+  g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==,
+      4096);
+  g_assert_cmpuint (metadata.materialization_checkpoint_sequence, ==, 2048);
 }
 
 static void
@@ -312,6 +362,7 @@ test_validation_hook_failure_does_not_promote_version (void)
   metadata.schema_version_present = TRUE;
   metadata.schema_version = 0;
   metadata.checkpoint_precondition_satisfied = TRUE;
+  test_schema_migration_set_materialization_checkpoint_fields (&metadata);
   wyrebox_schema_migration_set_test_step_hooks (migration,
       NULL,
       test_schema_migration_force_validation_failure, &fixture_data, NULL);
@@ -320,6 +371,10 @@ test_validation_hook_failure_does_not_promote_version (void)
           &metadata, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
   g_assert_cmpuint (metadata.schema_version, ==, 0);
+  g_assert_true (metadata.materialization_checkpoint_present);
+  g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==,
+      4096);
+  g_assert_cmpuint (metadata.materialization_checkpoint_sequence, ==, 2048);
 }
 
 static void

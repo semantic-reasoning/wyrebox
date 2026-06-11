@@ -52,6 +52,23 @@ typedef gboolean (*WyreboxSchemaMigrationFixtureStepValidationFunc) (
     GError **error);
 
 /*
+ * Materialization checkpoint compatibility policy for an individual migration
+ * step.
+ */
+typedef enum
+{
+  /*
+   * Keep any previously known materialization checkpoint state.
+   */
+  WYREBOX_SCHEMA_MIGRATION_MATERIALIZATION_CHECKPOINT_PRESERVE,
+
+  /*
+   * Invalidate materialization checkpoint state after the step succeeds.
+   */
+  WYREBOX_SCHEMA_MIGRATION_MATERIALIZATION_CHECKPOINT_INVALIDATE,
+} WyreboxSchemaMigrationMaterializationCheckpointPolicy;
+
+/*
  * Optional metadata state for schema migrations.
  *
  * This structure intentionally models metadata storage as an in-memory value
@@ -83,6 +100,27 @@ typedef struct
    * Ownership: value type field; owned by the struct.
    */
   gboolean checkpoint_precondition_satisfied;
+
+  /*
+   * TRUE when a materialization checkpoint payload is known in metadata.
+   *
+   * Ownership: value type field; owned by the struct.
+   */
+  gboolean materialization_checkpoint_present;
+
+  /*
+   * Durable replay byte offset for the current checkpoint payload.
+   *
+   * Ownership: value type field; owned by the struct.
+   */
+  guint64 materialization_checkpoint_journal_offset;
+
+  /*
+   * Durable replay sequence for the current checkpoint payload.
+   *
+   * Ownership: value type field; owned by the struct.
+   */
+  guint64 materialization_checkpoint_sequence;
 } WyreboxSchemaMigrationMetadataState;
 
 void wyrebox_schema_migration_metadata_state_clear (
@@ -126,7 +164,9 @@ WyreboxSchemaMigration *wyrebox_schema_migration_new (void);
  * @target_version.
  *
  * If any visited migration step has @requires_checkpoint set, callers must set
- * @state->checkpoint_precondition_satisfied before evaluation.
+ * @state->checkpoint_precondition_satisfied before evaluation. Materialization
+ * checkpoint compatibility policy is handled per step and applied only after
+ * operation and validation succeed.
  *
  * If successful, transitions are applied in-memory and @state is updated.
  * On failure, @state is not modified.

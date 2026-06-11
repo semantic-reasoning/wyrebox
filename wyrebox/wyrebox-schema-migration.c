@@ -22,6 +22,7 @@ typedef struct
   WyreboxSchemaMigrationStepOperationFunc operation;
   WyreboxSchemaMigrationStepValidationFunc validate;
   gboolean requires_checkpoint;
+  WyreboxSchemaMigrationMaterializationCheckpointPolicy checkpoint_policy;
 } WyreboxSchemaMigrationStep;
 
 struct _WyreboxSchemaMigration
@@ -72,8 +73,23 @@ static const WyreboxSchemaMigrationStep wyrebox_schema_migration_steps[] = {
         "legacy-bootstrap",
         wyrebox_schema_migration_default_step_operation,
         wyrebox_schema_migration_default_step_validation,
-      TRUE},
+        TRUE,
+      WYREBOX_SCHEMA_MIGRATION_MATERIALIZATION_CHECKPOINT_INVALIDATE},
 };
+
+static void
+    wyrebox_schema_migration_apply_step_checkpoint_policy
+    (WyreboxSchemaMigrationMetadataState * state,
+    const WyreboxSchemaMigrationStep * step)
+{
+  if (step->checkpoint_policy ==
+      WYREBOX_SCHEMA_MIGRATION_MATERIALIZATION_CHECKPOINT_PRESERVE)
+    return;
+
+  state->materialization_checkpoint_present = FALSE;
+  state->materialization_checkpoint_journal_offset = 0;
+  state->materialization_checkpoint_sequence = 0;
+}
 
 static void
 wyrebox_schema_migration_clear_test_step_hooks (WyreboxSchemaMigration *self)
@@ -255,6 +271,8 @@ wyrebox_schema_migration_apply_step (WyreboxSchemaMigration *self,
   if (!step->validate (step->source_version, step->target_version, error))
     return FALSE;
 
+  wyrebox_schema_migration_apply_step_checkpoint_policy (state, step);
+
   return TRUE;
 }
 
@@ -310,6 +328,7 @@ wyrebox_schema_migration_evaluate_to_version (WyreboxSchemaMigration *self,
     guint64 target_version, GError **error)
 {
   guint64 source_version = 0;
+  g_auto (WyreboxSchemaMigrationMetadataState) updated_state = { 0 };
 
   g_return_val_if_fail (WYREBOX_IS_SCHEMA_MIGRATION (self), FALSE);
   g_return_val_if_fail (state != NULL, FALSE);
@@ -317,6 +336,7 @@ wyrebox_schema_migration_evaluate_to_version (WyreboxSchemaMigration *self,
 
   source_version = state->schema_version_present ? state->schema_version :
       wyrebox_schema_migration_get_first_supported_schema_version ();
+  updated_state = *state;
 
   if (!metadata_source_is_supported (source_version, error))
     return FALSE;
@@ -329,11 +349,12 @@ wyrebox_schema_migration_evaluate_to_version (WyreboxSchemaMigration *self,
 
   if (source_version < target_version &&
       !metadata_apply_to_version (self,
-          state, source_version, target_version, error))
+          &updated_state, source_version, target_version, error))
     return FALSE;
 
-  state->schema_version_present = TRUE;
-  state->schema_version = target_version;
+  updated_state.schema_version_present = TRUE;
+  updated_state.schema_version = target_version;
+  *state = updated_state;
 
   return TRUE;
 }
