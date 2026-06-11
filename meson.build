@@ -107,3 +107,4 @@ test(
 subdir('tests/object-store')
 subdir('tests/ingestion')
 subdir('tests/journal')
+subdir('tests/migration')

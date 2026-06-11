@@ -7,6 +7,7 @@ wyrebox_sources = files(
   'wyrebox-message-delivered-payload.c',
   'wyrebox-journal-writer.c',
   'wyrebox-journal-reader.c',
+  'wyrebox-schema-migration.c',
 )
 
 wyrebox_inc = include_directories('.')
