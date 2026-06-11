@@ -75,6 +75,14 @@ typedef struct
    * Ownership: value type field; owned by the struct.
    */
   guint64 schema_version;
+
+  /*
+   * TRUE when the caller has explicitly satisfied the in-memory snapshot/
+   * checkpoint precondition for legacy migration steps that require it.
+   *
+   * Ownership: value type field; owned by the struct.
+   */
+  gboolean checkpoint_precondition_satisfied;
 } WyreboxSchemaMigrationMetadataState;
 
 void wyrebox_schema_migration_metadata_state_clear (
@@ -116,6 +124,9 @@ WyreboxSchemaMigration *wyrebox_schema_migration_new (void);
 /*
  * Evaluate migration from @state->schema_version (or missing metadata) to
  * @target_version.
+ *
+ * If any visited migration step has @requires_checkpoint set, callers must set
+ * @state->checkpoint_precondition_satisfied before evaluation.
  *
  * If successful, transitions are applied in-memory and @state is updated.
  * On failure, @state is not modified.

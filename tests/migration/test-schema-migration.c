@@ -104,6 +104,29 @@ test_schema_migration_record_validation_calls (guint64 source_version,
 }
 
 static void
+test_checkpoint_precondition_missing_blocks_legacy_migration (void)
+{
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) metadata = { 0 };
+  g_autoptr (GError) error = NULL;
+  TestMigrationFixtureData fixture_data = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  metadata.schema_version_present = TRUE;
+  metadata.schema_version = 0;
+  wyrebox_schema_migration_set_test_step_hooks (migration,
+      test_schema_migration_record_step_calls,
+      test_schema_migration_record_validation_calls, &fixture_data, NULL);
+
+  g_assert_false (wyrebox_schema_migration_evaluate_to_current (migration,
+          &metadata, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+  g_assert_cmpuint (metadata.schema_version, ==, 0);
+  g_assert_cmpuint (fixture_data.operation_call_count, ==, 0);
+  g_assert_cmpuint (fixture_data.validation_call_count, ==, 0);
+}
+
+static void
 test_missing_schema_metadata_initializes_to_first_supported_version (void)
 {
   g_autoptr (WyreboxSchemaMigration) migration = NULL;
@@ -210,7 +233,7 @@ test_downgrade_target_is_rejected (void)
 }
 
 static void
-test_explicit_forward_path_is_applied (void)
+test_explicit_forward_path_succeeds_with_checkpoint_precondition (void)
 {
   g_autoptr (WyreboxSchemaMigration) migration = NULL;
   g_auto (WyreboxSchemaMigrationMetadataState) metadata = { 0 };
@@ -222,6 +245,7 @@ test_explicit_forward_path_is_applied (void)
   current_version = wyrebox_schema_migration_get_current_schema_version ();
   metadata.schema_version_present = TRUE;
   metadata.schema_version = 0;
+  metadata.checkpoint_precondition_satisfied = TRUE;
   fixture_data.expected_fail_at_call = 0;
   wyrebox_schema_migration_set_test_step_hooks (migration,
       test_schema_migration_record_step_calls,
@@ -245,6 +269,7 @@ test_schema_jump_without_explicit_path_is_rejected (void)
   migration = wyrebox_schema_migration_new ();
   metadata.schema_version_present = TRUE;
   metadata.schema_version = 0;
+  metadata.checkpoint_precondition_satisfied = TRUE;
 
   g_assert_false (wyrebox_schema_migration_evaluate_to_version (migration,
           &metadata, 2, &error));
@@ -264,6 +289,7 @@ test_operation_hook_failure_does_not_promote_version (void)
   fixture_data.expected_fail_at_call = 1;
   metadata.schema_version_present = TRUE;
   metadata.schema_version = 0;
+  metadata.checkpoint_precondition_satisfied = TRUE;
   wyrebox_schema_migration_set_test_step_hooks (migration,
       test_schema_migration_force_op_failure, NULL, &fixture_data, NULL);
 
@@ -285,6 +311,7 @@ test_validation_hook_failure_does_not_promote_version (void)
   fixture_data.expected_fail_at_call = 1;
   metadata.schema_version_present = TRUE;
   metadata.schema_version = 0;
+  metadata.checkpoint_precondition_satisfied = TRUE;
   wyrebox_schema_migration_set_test_step_hooks (migration,
       NULL,
       test_schema_migration_force_validation_failure, &fixture_data, NULL);
@@ -318,7 +345,10 @@ main (int argc, char **argv)
   g_test_add_func ("/migration/schema/downgrade-target-rejected",
       test_downgrade_target_is_rejected);
   g_test_add_func ("/migration/schema/explicit-forward-path",
-      test_explicit_forward_path_is_applied);
+      test_explicit_forward_path_succeeds_with_checkpoint_precondition);
+  g_test_add_func
+      ("/migration/schema/legacy-forward-path-without-checkpoint-fails",
+      test_checkpoint_precondition_missing_blocks_legacy_migration);
   g_test_add_func ("/migration/schema/jump-without-explicit-path",
       test_schema_jump_without_explicit_path_is_rejected);
   g_test_add_func ("/migration/schema/operation-hook-failure-no-promotion",

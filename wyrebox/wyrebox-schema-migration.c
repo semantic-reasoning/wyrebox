@@ -227,8 +227,18 @@ wyrebox_schema_migration_find_step_for_source (guint64 source_version)
 
 static gboolean
 wyrebox_schema_migration_apply_step (WyreboxSchemaMigration *self,
-    const WyreboxSchemaMigrationStep *step, GError **error)
+    const WyreboxSchemaMigrationStep *step,
+    WyreboxSchemaMigrationMetadataState *state, GError **error)
 {
+  if (step->requires_checkpoint && !state->checkpoint_precondition_satisfied) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "checkpoint precondition not satisfied for migration step %s",
+        step->name);
+    return FALSE;
+  }
+
   if (self->operation_hook != NULL &&
       !self->operation_hook (step->source_version, step->target_version,
           self->hook_user_data, error))
@@ -250,6 +260,7 @@ wyrebox_schema_migration_apply_step (WyreboxSchemaMigration *self,
 
 static gboolean
 metadata_apply_to_version (WyreboxSchemaMigration *self,
+    WyreboxSchemaMigrationMetadataState *state,
     guint64 source_version, guint64 target_version, GError **error)
 {
   guint64 cursor = source_version;
@@ -284,7 +295,7 @@ metadata_apply_to_version (WyreboxSchemaMigration *self,
       return FALSE;
     }
 
-    if (!wyrebox_schema_migration_apply_step (self, step, error))
+    if (!wyrebox_schema_migration_apply_step (self, step, state, error))
       return FALSE;
 
     cursor = step->target_version;
@@ -317,7 +328,8 @@ wyrebox_schema_migration_evaluate_to_version (WyreboxSchemaMigration *self,
     return FALSE;
 
   if (source_version < target_version &&
-      !metadata_apply_to_version (self, source_version, target_version, error))
+      !metadata_apply_to_version (self,
+          state, source_version, target_version, error))
     return FALSE;
 
   state->schema_version_present = TRUE;
