@@ -68,6 +68,68 @@ test_error_frame_rejects_missing_message (void)
 }
 
 static void
+test_error_frame_rejects_invalid_error_class (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonErrorFrame) frame = { 0 };
+
+  g_assert_false (wyrebox_daemon_error_frame_init (&frame,
+          "request-4",
+          (WyreboxDaemonErrorClass) 999, "bad class", NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (frame.request_id);
+  g_assert_null (frame.message);
+  g_assert_null (frame.retry_hint);
+}
+
+static void
+test_error_frame_success_replaces_existing_contents (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonErrorFrame) frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_error_frame_init (&frame,
+          "request-old",
+          WYREBOX_DAEMON_ERROR_INTERNAL_ERROR,
+          "old message", "old hint", &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_error_frame_init (&frame,
+          "request-new",
+          WYREBOX_DAEMON_ERROR_NOT_FOUND, "new message", NULL, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpstr (frame.request_id, ==, "request-new");
+  g_assert_cmpint (frame.error_class, ==, WYREBOX_DAEMON_ERROR_NOT_FOUND);
+  g_assert_cmpstr (frame.message, ==, "new message");
+  g_assert_null (frame.retry_hint);
+}
+
+static void
+test_error_frame_failure_leaves_existing_contents (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonErrorFrame) frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_error_frame_init (&frame,
+          "request-stable",
+          WYREBOX_DAEMON_ERROR_CONFLICT,
+          "existing message", "existing hint", &error));
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_daemon_error_frame_init (&frame,
+          "",
+          WYREBOX_DAEMON_ERROR_INTERNAL_ERROR,
+          "replacement message", NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  g_assert_cmpstr (frame.request_id, ==, "request-stable");
+  g_assert_cmpint (frame.error_class, ==, WYREBOX_DAEMON_ERROR_CONFLICT);
+  g_assert_cmpstr (frame.message, ==, "existing message");
+  g_assert_cmpstr (frame.retry_hint, ==, "existing hint");
+}
+
+static void
 test_error_frame_from_g_error_maps_class_and_message (void)
 {
   g_autoptr (GError) cause = NULL;
@@ -78,10 +140,10 @@ test_error_frame_from_g_error_maps_class_and_message (void)
       G_IO_ERROR, G_IO_ERROR_TIMED_OUT, "daemon request timed out");
 
   g_assert_true (wyrebox_daemon_error_frame_init_from_g_error (&frame,
-          "request-4", cause, "retry later", &error));
+          "request-5", cause, "retry later", &error));
   g_assert_no_error (error);
 
-  g_assert_cmpstr (frame.request_id, ==, "request-4");
+  g_assert_cmpstr (frame.request_id, ==, "request-5");
   g_assert_cmpint (frame.error_class, ==,
       WYREBOX_DAEMON_ERROR_TEMPORARY_FAILURE);
   g_assert_cmpstr (frame.message, ==, "daemon request timed out");
@@ -99,7 +161,7 @@ test_error_frame_from_non_gio_error_is_internal (void)
       G_MARKUP_ERROR, G_MARKUP_ERROR_PARSE, "unexpected parser failure");
 
   g_assert_true (wyrebox_daemon_error_frame_init_from_g_error (&frame,
-          "request-5", cause, NULL, &error));
+          "request-6", cause, NULL, &error));
   g_assert_no_error (error);
 
   g_assert_cmpint (frame.error_class, ==, WYREBOX_DAEMON_ERROR_INTERNAL_ERROR);
@@ -119,6 +181,12 @@ main (int argc, char **argv)
       test_error_frame_rejects_missing_request_id);
   g_test_add_func ("/daemon-api/error-frame/rejects-missing-message",
       test_error_frame_rejects_missing_message);
+  g_test_add_func ("/daemon-api/error-frame/rejects-invalid-error-class",
+      test_error_frame_rejects_invalid_error_class);
+  g_test_add_func ("/daemon-api/error-frame/success-replaces-existing",
+      test_error_frame_success_replaces_existing_contents);
+  g_test_add_func ("/daemon-api/error-frame/failure-leaves-existing",
+      test_error_frame_failure_leaves_existing_contents);
   g_test_add_func ("/daemon-api/error-frame/from-g-error",
       test_error_frame_from_g_error_maps_class_and_message);
   g_test_add_func ("/daemon-api/error-frame/from-non-gio-error",

@@ -31,6 +31,11 @@ void wyrebox_daemon_error_frame_clear (WyreboxDaemonErrorFrame *frame);
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDaemonErrorFrame,
     wyrebox_daemon_error_frame_clear)
 
+/*
+ * Reinitialization semantics for init helpers:
+ * - on success, replaces any existing contents of @frame;
+ * - on failure, leaves any existing contents of @frame unchanged.
+ */
 gboolean wyrebox_daemon_error_frame_init (WyreboxDaemonErrorFrame *frame,
     const char *request_id,
     WyreboxDaemonErrorClass error_class,
