@@ -201,6 +201,108 @@ test_ingests_raw_fixture_and_appends_message_delivered_journal (void)
 }
 
 static void
+test_duplicate_journaled_ingest_appends_distinct_deliveries (void)
+{
+  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-eml-ingestor-objects-XXXXXX", NULL);
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-eml-ingestor-journal-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) input = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+  g_auto (WyreboxEmlIngestResult) first_result = { 0 };
+  g_auto (WyreboxEmlIngestResult) second_result = { 0 };
+  g_auto (WyreboxJournalRecord) first_record = { 0 };
+  g_auto (WyreboxJournalRecord) second_record = { 0 };
+  g_auto (WyreboxJournalRecord) eof_record = { 0 };
+  g_auto (WyreboxMessageDeliveredPayload) first_decoded = { 0 };
+  g_auto (WyreboxMessageDeliveredPayload) second_decoded = { 0 };
+  gboolean eof = FALSE;
+  gsize input_size = 0;
+
+  g_assert_nonnull (fixture_dir);
+  g_assert_nonnull (object_root);
+  g_assert_nonnull (journal_root);
+
+  input = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
+  input_size = g_bytes_get_size (input);
+  store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+
+  ingestor = wyrebox_eml_ingestor_new_with_journal (store, writer);
+  g_assert_nonnull (ingestor);
+
+  g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, input,
+          &first_result, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, input,
+          &second_result, &error));
+  g_assert_no_error (error);
+
+  g_assert_nonnull (first_result.object_key);
+  g_assert_nonnull (second_result.object_key);
+  g_assert_cmpstr (second_result.object_key, ==, first_result.object_key);
+  g_assert_cmpuint (first_result.size_bytes, ==, input_size);
+  g_assert_cmpuint (second_result.size_bytes, ==, input_size);
+  g_assert_cmpuint (first_result.journal_sequence, <,
+      second_result.journal_sequence);
+  g_assert_cmpuint (first_result.journal_offset, <,
+      second_result.journal_offset);
+
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  g_assert_true (wyrebox_journal_reader_read_next (reader,
+          &first_record, &eof, &error));
+  g_assert_no_error (error);
+  g_assert_false (eof);
+  g_assert_true (wyrebox_journal_reader_read_next (reader,
+          &second_record, &eof, &error));
+  g_assert_no_error (error);
+  g_assert_false (eof);
+
+  g_assert_cmpint (first_record.event_type,
+      ==, WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED);
+  g_assert_cmpint (second_record.event_type,
+      ==, WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED);
+  g_assert_cmpuint (first_record.offset, ==, first_result.journal_offset);
+  g_assert_cmpuint (second_record.offset, ==, second_result.journal_offset);
+  g_assert_cmpuint (first_record.sequence, ==, first_result.journal_sequence);
+  g_assert_cmpuint (second_record.sequence, ==, second_result.journal_sequence);
+  g_assert_cmpuint (first_record.sequence, <, second_record.sequence);
+
+  g_assert_true (wyrebox_message_delivered_payload_decode (first_record.payload,
+          &first_decoded, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_message_delivered_payload_decode
+      (second_record.payload, &second_decoded, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpstr (first_decoded.object_key, ==, first_result.object_key);
+  g_assert_cmpstr (second_decoded.object_key, ==, first_result.object_key);
+  g_assert_cmpuint (first_decoded.size_bytes, ==, first_result.size_bytes);
+  g_assert_cmpuint (second_decoded.size_bytes, ==, first_result.size_bytes);
+
+  g_assert_false (wyrebox_journal_reader_read_next (reader,
+          &eof_record, &eof, &error));
+  g_assert_no_error (error);
+  g_assert_true (eof);
+
+  remove_tree (object_root);
+  remove_tree (journal_root);
+}
+
+static void
 test_journaled_ingest_rejects_missing_header_separator (void)
 {
   static const char malformed[] =
@@ -318,6 +420,9 @@ main (int argc, char **argv)
       test_ingests_raw_fixture_into_object_store);
   g_test_add_func ("/ingestion/eml-ingestor/message-delivered-journal",
       test_ingests_raw_fixture_and_appends_message_delivered_journal);
+  g_test_add_func ("/ingestion/eml-ingestor/"
+      "duplicate-journaled-ingest-appends-distinct-deliveries",
+      test_duplicate_journaled_ingest_appends_distinct_deliveries);
   g_test_add_func ("/ingestion/eml-ingestor/"
       "journaled-rejects-missing-header-separator",
       test_journaled_ingest_rejects_missing_header_separator);
