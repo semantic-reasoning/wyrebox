@@ -10,5 +10,12 @@ daemon_request_identity_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_runtime_test = executable(
+  'test-daemon-runtime',
+  'test-daemon-runtime.c',
+  dependencies: [wyrebox_dep],
+)
+
 test('daemon success receipt', daemon_success_receipt_test)
 test('daemon request identity', daemon_request_identity_test)
+test('daemon runtime', daemon_runtime_test)
