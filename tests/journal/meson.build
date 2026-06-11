@@ -16,6 +16,13 @@ message_delivered_payload_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+message_delivered_journal_test = executable(
+  'test-message-delivered-journal',
+  'test-message-delivered-journal.c',
+  dependencies: [wyrebox_dep],
+)
+
 test('local journal writer', journal_writer_test)
 test('local journal reader', journal_reader_test)
 test('message delivered payload codec', message_delivered_payload_test)
+test('message delivered journal', message_delivered_journal_test)
