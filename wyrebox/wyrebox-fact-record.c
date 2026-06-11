@@ -373,3 +373,28 @@ wyrebox_fact_record_build_wirelog_dump_filename (const char *batch_id,
   return g_strdup_printf ("%020" G_GUINT64_FORMAT "-%s.wl",
       journal_sequence, sanitized->str);
 }
+
+GFile *
+wyrebox_fact_record_array_write_wirelog_dump (GPtrArray *records,
+    GFile *directory,
+    const char *batch_id,
+    guint64 journal_sequence, GCancellable *cancellable, GError **error)
+{
+  g_autofree char *filename = NULL;
+  g_autoptr (GFile) output = NULL;
+
+  g_return_val_if_fail (directory != NULL, NULL);
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  filename = wyrebox_fact_record_build_wirelog_dump_filename (batch_id,
+      journal_sequence, error);
+  if (filename == NULL)
+    return NULL;
+
+  output = g_file_get_child (directory, filename);
+  if (!wyrebox_fact_record_array_write_wirelog_fact_file (records,
+          output, cancellable, error))
+    return NULL;
+
+  return g_steal_pointer (&output);
+}

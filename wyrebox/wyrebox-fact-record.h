@@ -85,5 +85,12 @@ char *wyrebox_fact_record_build_wirelog_dump_filename (const char *batch_id,
     guint64 journal_sequence,
     GError **error);
 
+GFile *wyrebox_fact_record_array_write_wirelog_dump (GPtrArray *records,
+    GFile *directory,
+    const char *batch_id,
+    guint64 journal_sequence,
+    GCancellable *cancellable,
+    GError **error);
+
 G_END_DECLS
 /* *INDENT-ON* */

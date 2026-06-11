@@ -752,6 +752,68 @@ test_fact_record_wirelog_dump_filename_allows_zero_sequence (void)
   g_assert_cmpstr (filename, ==, "00000000000000000000-bootstrap.wl");
 }
 
+static void
+test_fact_record_writes_wirelog_dump_to_directory (void)
+{
+  const char *args[] = {
+    "mail-1",
+    "example.test",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autofree char *root = g_dir_make_tmp ("wyrebox-fact-record-XXXXXX", NULL);
+  g_autoptr (GFile) directory = NULL;
+  g_autoptr (GFile) output = NULL;
+  g_autofree char *path = NULL;
+  g_autofree char *contents = NULL;
+  gsize length = 0;
+
+  g_assert_nonnull (root);
+  directory = g_file_new_for_path (root);
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  g_ptr_array_add (records,
+      test_fact_record_new ("sender_domain", args, "header:from"));
+
+  output = wyrebox_fact_record_array_write_wirelog_dump (records,
+      directory, "../mail id/one", 7, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (output);
+  path = g_file_get_path (output);
+  g_assert_true (g_str_has_suffix (path,
+          "00000000000000000007-___mail_id_one.wl"));
+  g_assert_true (g_file_get_contents (path, &contents, &length, &error));
+  g_assert_no_error (error);
+  g_assert_cmpmem (contents, length,
+      "sender_domain(\"mail-1\", \"example.test\").\n",
+      strlen ("sender_domain(\"mail-1\", \"example.test\").\n"));
+
+  remove_tree (root);
+}
+
+static void
+test_fact_record_wirelog_dump_directory_propagates_write_failure (void)
+{
+  const char *args[] = {
+    "mail-1",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autoptr (GFile) directory = NULL;
+  g_autoptr (GFile) output = NULL;
+
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  g_ptr_array_add (records,
+      test_fact_record_new ("participant", args, "header:to"));
+  directory = g_file_new_for_path ("/no/such/wyrebox");
+
+  output = wyrebox_fact_record_array_write_wirelog_dump (records,
+      directory, "mail-1", 7, NULL, &error);
+  g_assert_null (output);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -826,6 +888,11 @@ main (int argc, char **argv)
   g_test_add_func ("/facts/fact-record/"
       "wirelog-dump-filename-allows-zero-sequence",
       test_fact_record_wirelog_dump_filename_allows_zero_sequence);
+  g_test_add_func ("/facts/fact-record/writes-wirelog-dump-to-directory",
+      test_fact_record_writes_wirelog_dump_to_directory);
+  g_test_add_func ("/facts/fact-record/"
+      "wirelog-dump-directory-propagates-write-failure",
+      test_fact_record_wirelog_dump_directory_propagates_write_failure);
 
   return g_test_run ();
 }
