@@ -152,6 +152,98 @@ test_replays_two_deliveries_after_reopen (void)
 }
 
 static void
+test_replay_preserves_duplicate_raw_object_deliveries (void)
+{
+  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-delivery-projection-objects-XXXXXX", NULL);
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-delivery-projection-journal-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) input = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+  g_auto (WyreboxEmlIngestResult) first_result = { 0 };
+  g_auto (WyreboxEmlIngestResult) second_result = { 0 };
+  g_autoptr (WyreboxLocalObjectStore) reopened_store = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_autoptr (WyreboxDeliveryProjection) projection = NULL;
+  g_auto (WyreboxDeliveryProjectionList) list = { 0 };
+
+  g_assert_nonnull (fixture_dir);
+  g_assert_nonnull (object_root);
+  g_assert_nonnull (journal_root);
+
+  input = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
+
+  store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+
+  ingestor = wyrebox_eml_ingestor_new_with_journal (store, writer);
+  g_assert_nonnull (ingestor);
+
+  g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, input,
+          &first_result, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, input,
+          &second_result, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (first_result.journal_sequence, <,
+      second_result.journal_sequence);
+  g_assert_cmpuint (first_result.journal_offset, <,
+      second_result.journal_offset);
+  g_assert_cmpstr (first_result.object_key, ==, second_result.object_key);
+  g_assert_cmpuint (first_result.size_bytes, ==, second_result.size_bytes);
+
+  g_clear_object (&store);
+  g_clear_object (&writer);
+  g_clear_object (&ingestor);
+
+  reopened_store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reopened_store);
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  projection = wyrebox_delivery_projection_new (reader, reopened_store);
+  g_assert_nonnull (projection);
+
+  g_assert_true (wyrebox_delivery_projection_replay_all (projection, &list,
+          &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (list.records);
+  g_assert_cmpuint (list.records->len, ==, 2);
+
+  WyreboxDeliveryProjectionRecord *first = g_ptr_array_index (list.records, 0);
+  WyreboxDeliveryProjectionRecord *second = g_ptr_array_index (list.records, 1);
+
+  g_assert_cmpuint (first->journal_sequence, ==, first_result.journal_sequence);
+  g_assert_cmpuint (first->journal_offset, ==, first_result.journal_offset);
+  g_assert_cmpstr (first->object_key, ==, first_result.object_key);
+  g_assert_cmpuint (first->size_bytes, ==, first_result.size_bytes);
+  g_assert_cmpuint (second->journal_sequence, ==,
+      second_result.journal_sequence);
+  g_assert_cmpuint (second->journal_offset, ==, second_result.journal_offset);
+  g_assert_cmpstr (second->object_key, ==, second_result.object_key);
+  g_assert_cmpuint (second->size_bytes, ==, second_result.size_bytes);
+  g_assert_cmpuint (first->journal_sequence, <, second->journal_sequence);
+  g_assert_cmpuint (first->journal_offset, <, second->journal_offset);
+  g_assert_cmpstr (first->object_key, ==, second->object_key);
+  g_assert_cmpuint (first->size_bytes, ==, second->size_bytes);
+
+  remove_tree (object_root);
+  remove_tree (journal_root);
+}
+
+static void
 test_replay_preserves_metadata (void)
 {
   const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
@@ -487,6 +579,9 @@ main (int argc, char **argv)
 
   g_test_add_func ("/ingestion/delivery-projection/two-record-replay",
       test_replays_two_deliveries_after_reopen);
+  g_test_add_func ("/ingestion/delivery-projection/"
+      "duplicate-raw-object-replay",
+      test_replay_preserves_duplicate_raw_object_deliveries);
   g_test_add_func ("/ingestion/delivery-projection/metadata-preserved",
       test_replay_preserves_metadata);
   g_test_add_func ("/ingestion/delivery-projection/"
