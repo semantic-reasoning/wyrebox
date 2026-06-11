@@ -62,5 +62,10 @@ gboolean wyrebox_fact_record_array_write_wirelog_facts (GPtrArray *records,
     GCancellable *cancellable,
     GError **error);
 
+gboolean wyrebox_fact_record_array_write_wirelog_fact_file (GPtrArray *records,
+    GFile *file,
+    GCancellable *cancellable,
+    GError **error);
+
 G_END_DECLS
 /* *INDENT-ON* */

@@ -4,6 +4,28 @@
 
 #include <gio/gio.h>
 #include <glib.h>
+#include <glib/gstdio.h>
+
+static void
+remove_tree (const char *path)
+{
+  g_autoptr (GDir) dir = NULL;
+  const char *name = NULL;
+
+  dir = g_dir_open (path, 0, NULL);
+  if (dir == NULL) {
+    (void) g_remove (path);
+    return;
+  }
+
+  while ((name = g_dir_read_name (dir)) != NULL) {
+    g_autofree char *child = g_build_filename (path, name, NULL);
+
+    remove_tree (child);
+  }
+
+  (void) g_rmdir (path);
+}
 
 static void
 test_fact_record_copies_owned_fields (void)
@@ -357,6 +379,93 @@ test_fact_record_wirelog_batch_write_propagates_stream_failure (void)
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_CLOSED);
 }
 
+static void
+test_fact_record_writes_wirelog_batch_to_file (void)
+{
+  const char *args[] = {
+    "mail-1",
+    "example.test",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autofree char *root = g_dir_make_tmp ("wyrebox-fact-record-XXXXXX", NULL);
+  g_autofree char *path = NULL;
+  g_autoptr (GFile) file = NULL;
+  g_autofree char *contents = NULL;
+  gsize length = 0;
+
+  g_assert_nonnull (root);
+  path = g_build_filename (root, "facts.wl", NULL);
+  file = g_file_new_for_path (path);
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  g_ptr_array_add (records,
+      test_fact_record_new ("sender_domain", args, "header:from"));
+
+  g_assert_true (wyrebox_fact_record_array_write_wirelog_fact_file (records,
+          file, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (g_file_get_contents (path, &contents, &length, &error));
+  g_assert_no_error (error);
+  g_assert_cmpmem (contents, length,
+      "sender_domain(\"mail-1\", \"example.test\").\n",
+      strlen ("sender_domain(\"mail-1\", \"example.test\").\n"));
+
+  remove_tree (root);
+}
+
+static void
+test_fact_record_wirelog_file_writer_replaces_existing_file (void)
+{
+  const char *args[] = {
+    "mail-1",
+    "example.test",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autofree char *root = g_dir_make_tmp ("wyrebox-fact-record-XXXXXX", NULL);
+  g_autofree char *path = NULL;
+  g_autoptr (GFile) file = NULL;
+  g_autofree char *contents = NULL;
+  gsize length = 0;
+
+  g_assert_nonnull (root);
+  path = g_build_filename (root, "facts.wl", NULL);
+  g_assert_true (g_file_set_contents (path, "stale\n", -1, &error));
+  g_assert_no_error (error);
+  file = g_file_new_for_path (path);
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  g_ptr_array_add (records,
+      test_fact_record_new ("sender_domain", args, "header:from"));
+
+  g_assert_true (wyrebox_fact_record_array_write_wirelog_fact_file (records,
+          file, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (g_file_get_contents (path, &contents, &length, &error));
+  g_assert_no_error (error);
+  g_assert_cmpmem (contents, length,
+      "sender_domain(\"mail-1\", \"example.test\").\n",
+      strlen ("sender_domain(\"mail-1\", \"example.test\").\n"));
+
+  remove_tree (root);
+}
+
+static void
+test_fact_record_wirelog_file_writer_propagates_replace_failure (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autoptr (GFile) file = NULL;
+
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  file = g_file_new_for_path ("/no/such/wyrebox/facts.wl");
+
+  g_assert_false (wyrebox_fact_record_array_write_wirelog_fact_file (records,
+          file, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -395,6 +504,13 @@ main (int argc, char **argv)
   g_test_add_func ("/facts/fact-record/"
       "wirelog-batch-write-propagates-stream-failure",
       test_fact_record_wirelog_batch_write_propagates_stream_failure);
+  g_test_add_func ("/facts/fact-record/writes-wirelog-batch-to-file",
+      test_fact_record_writes_wirelog_batch_to_file);
+  g_test_add_func ("/facts/fact-record/wirelog-file-writer-replaces-existing",
+      test_fact_record_wirelog_file_writer_replaces_existing_file);
+  g_test_add_func ("/facts/fact-record/"
+      "wirelog-file-writer-propagates-replace-failure",
+      test_fact_record_wirelog_file_writer_propagates_replace_failure);
 
   return g_test_run ();
 }

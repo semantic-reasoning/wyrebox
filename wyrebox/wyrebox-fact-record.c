@@ -282,3 +282,24 @@ wyrebox_fact_record_array_write_wirelog_facts (GPtrArray *records,
   return g_output_stream_write_all (stream,
       text, strlen (text), &bytes_written, cancellable, error);
 }
+
+gboolean
+wyrebox_fact_record_array_write_wirelog_fact_file (GPtrArray *records,
+    GFile *file, GCancellable *cancellable, GError **error)
+{
+  g_autoptr (GFileOutputStream) stream = NULL;
+
+  g_return_val_if_fail (file != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  stream = g_file_replace (file,
+      NULL, FALSE, G_FILE_CREATE_REPLACE_DESTINATION, cancellable, error);
+  if (stream == NULL)
+    return FALSE;
+
+  if (!wyrebox_fact_record_array_write_wirelog_facts (records,
+          G_OUTPUT_STREAM (stream), cancellable, error))
+    return FALSE;
+
+  return g_output_stream_close (G_OUTPUT_STREAM (stream), cancellable, error);
+}
