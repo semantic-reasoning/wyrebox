@@ -17,3 +17,9 @@ test(
   python,
   args: files('tests/docs/test_issue_0001_dovecot_boundary_adr.py'),
 )
+
+test(
+  'docs issue 0001 mailbox storage model contract',
+  python,
+  args: files('tests/docs/test_issue_0001_mailbox_storage_model_contract.py'),
+)
