@@ -22,6 +22,7 @@ REQUIRED_SECTIONS = [
     "## Message Search Operation Contract",
     "## Flag Keyword Update Operation Contract",
     "## Fact Insert Retract Mutation Operation Contract",
+    "## Wirelog Predicate Query Operation Contract",
     "## State Authority Boundary",
     "## Deferred Operation Payloads",
     "## Out Of Scope",
@@ -343,6 +344,77 @@ FACT_MUTATION_FORBIDDEN_EXAMPLES = [
     "Fact mutation returns success before durable journal append.",
 ]
 
+WIRELOG_QUERY_FORBIDDEN_SURFACES = [
+    r"arbitrary Datalog/Wirelog query text",
+    r"arbitrary Wirelog query text",
+    r"arbitrary Datalog query text",
+    r"arbitrary Wirelog text",
+    r"arbitrary Datalog text",
+    r"rule text",
+    r"arbitrary SQL",
+    r"write SQL",
+    r"direct DuckDB query execution",
+    r"DuckDB mutation",
+    r"direct Wirelog mutable handles",
+    r"object-store metadata mutation",
+    r"direct journal append",
+    r"direct journal write",
+    r"direct journal append/write",
+    r"mutation journal append surface",
+]
+
+WIRELOG_QUERY_FORBIDDEN_SURFACE_PATTERNS = [
+    rf"(?<!not )\b(?:{DELIVERY_FORBIDDEN_SURFACE_VERBS})\b(?:\s+\S+){{0,8}}\s+{surface}"
+    for surface in WIRELOG_QUERY_FORBIDDEN_SURFACES
+]
+
+WIRELOG_QUERY_FORBIDDEN_MODAL_PATTERNS = [
+    rf"\b(may|can|must|should)\b\s+\b(expose|allow|permit|provide|accept|support|execute|enable|grant)\b.*{surface}"
+    for surface in WIRELOG_QUERY_FORBIDDEN_SURFACES
+]
+
+WIRELOG_QUERY_FORBIDDEN_DIRECT_ACTION_PATTERNS = [
+    r"\b(may|can|must|should|will)\b\s+insert\s+facts",
+    r"\b(may|can|must|should|will)\b\s+retract\s+facts",
+    r"\b(may|can|must|should|will)\b\s+append\s+mutation journal records",
+    r"\b(may|can|must|should|will)\b\s+append\s+to\s+the\s+mutation journal",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+DuckDB",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+Wirelog state",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+object-store metadata",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+raw objects",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+journal state",
+    r"\b(may|can|must|should|will)\b\s+write\s+directly\s+to\s+the\s+journal",
+]
+
+WIRELOG_QUERY_FORBIDDEN_EXAMPLES = [
+    "Wirelog predicate query accepts arbitrary Datalog/Wirelog query text.",
+    "Wirelog predicate query accepts arbitrary Wirelog query text.",
+    "Wirelog predicate query accepts arbitrary Datalog query text.",
+    "Wirelog predicate query accepts arbitrary Wirelog text.",
+    "Wirelog predicate query accepts arbitrary Datalog text.",
+    "Wirelog predicate query accepts rule text.",
+    "Wirelog predicate query exposes arbitrary SQL.",
+    "Wirelog predicate query accepts write SQL from tools.",
+    "Wirelog predicate query supports direct DuckDB query execution.",
+    "Wirelog predicate query enables DuckDB mutation by tools.",
+    "Wirelog predicate query exposes direct Wirelog mutable handles.",
+    "Wirelog predicate query provides object-store metadata mutation access.",
+    "Wirelog predicate query grants direct journal append access.",
+    "Wirelog predicate query allows direct journal write access.",
+    "Wirelog predicate query supports direct journal append/write.",
+    "Wirelog predicate query exposes a mutation journal append surface.",
+    "Wirelog predicate query may insert facts.",
+    "Wirelog predicate query may retract facts.",
+    "Wirelog predicate query may append mutation journal records.",
+    "Wirelog predicate query may append to the mutation journal.",
+    "Wirelog predicate query may mutate DuckDB.",
+    "Wirelog predicate query may mutate Wirelog state.",
+    "Wirelog predicate query may mutate object-store metadata.",
+    "Wirelog predicate query may mutate raw objects.",
+    "Wirelog predicate query may mutate journal state.",
+    "Wirelog predicate query may write directly to the journal.",
+]
+
 
 def section_map(text: str) -> dict[str, str]:
     matches = list(re.finditer(r"^## .+$", text, flags=re.MULTILINE))
@@ -432,6 +504,11 @@ def main() -> None:
         sections,
         "## Scope",
         r"Fact insert/retract mutation operation contract",
+    )
+    assert_section_matches(
+        sections,
+        "## Scope",
+        r"Wirelog predicate query operation contract",
     )
     assert_section_matches(
         sections,
@@ -1209,7 +1286,184 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Fact Insert Retract Mutation Operation Contract",
-        r"Wirelog predicate query API and DuckDB query-template API are deferred",
+        r"Concrete Wirelog predicate query `.capnp` schemas and field layouts are deferred",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"DuckDB query-template API is deferred",
+    )
+
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"read-only daemon operation",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"authorized local tools/skills",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"Cap'n Proto-over-UDS",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"not a Dovecot IMAP client operation",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"not a fact mutation operation",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"not a DuckDB query-template operation",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"does not define concrete `.capnp` schemas, field layouts, generated code, Wirelog integration, query planner behavior, or query execution implementation",
+    )
+    for identity_field in [
+        "request_id",
+        "caller/tool identity",
+        "authorization/audit identity",
+        "operation correlation",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Wirelog Predicate Query Operation Contract",
+            identity_field,
+        )
+    for input_field in [
+        "known predicate/catalog entry",
+        "typed bound arguments",
+        "typed variables",
+        "operation inputs",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Wirelog Predicate Query Operation Contract",
+            input_field,
+        )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"no arbitrary Wirelog, Datalog, or rule text",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"Authorization scope.*caller/tool identity, predicate, catalog, account, tenant, source",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"must not be able to query facts outside that scope",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"structured tuples or variable bindings",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"predicate/catalog identity.*typed values",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"bounded, pageable, or streamed",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"chunks or cursors.*request_id.*query identity",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"must not infer success from partial chunks alone",
+    )
+    for error_case in [
+        "permission denied",
+        "not found",
+        "conflict",
+        "permanent failure",
+        "temporary backend failure",
+        "docs/contracts/error-model.md",
+        "ambiguous transport outcomes are not success",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Wirelog Predicate Query Operation Contract",
+            error_case,
+        )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"unauthorized caller or predicate scope failure",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"unknown predicate/catalog.*not found.*conflict",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"disabled predicate/catalog.*conflict",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"validation, type, or catalog errors",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"transient Wirelog, materialized-state, or daemon API failures",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"does not insert or retract facts",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"does not append mutation journal records",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"does not mutate DuckDB, Wirelog state, object-store metadata, raw objects, or journal state",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"may read daemon-owned Wirelog-derived state and materialized facts",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"does not expose arbitrary Datalog/Wirelog query text, arbitrary SQL, write SQL, direct DuckDB query execution, direct Wirelog mutable handles, object-store metadata mutation, direct journal append/write, or mutation journal append surfaces",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"Concrete Wirelog predicate query `.capnp` schemas and field layouts are deferred",
+    )
+    assert_section_matches(
+        sections,
+        "## Wirelog Predicate Query Operation Contract",
+        r"safe DuckDB query-template API is separate and deferred",
     )
 
     assert_section_matches(
@@ -1235,7 +1489,7 @@ def main() -> None:
 
     for operation in [
         "concrete fact mutation `.capnp` schemas and field layouts",
-        "Wirelog predicate query API",
+        "concrete Wirelog predicate query `.capnp` schemas and field layouts",
         "safe DuckDB query-template API",
     ]:
         assert_in_section(sections, "## Deferred Operation Payloads", operation)
@@ -1257,7 +1511,12 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Deferred Operation Payloads",
-        r"Wirelog predicate query API and safe DuckDB query-template API remain deferred",
+        r"Concrete Wirelog predicate query `.capnp` schemas and field layouts are deferred",
+    )
+    assert_section_matches(
+        sections,
+        "## Deferred Operation Payloads",
+        r"Safe DuckDB query-template API remains deferred",
     )
     assert_section_matches(
         sections,
@@ -1267,7 +1526,6 @@ def main() -> None:
 
     for excluded in [
         "Dovecot implementation",
-        "Wirelog predicate query API",
         "DuckDB query-template API",
         "concrete daemon implementation",
         "full .capnp generation",
@@ -1435,6 +1693,33 @@ def main() -> None:
             FACT_MUTATION_FORBIDDEN_SURFACE_PATTERNS
             + FACT_MUTATION_FORBIDDEN_MODAL_PATTERNS
             + FACT_MUTATION_FORBIDDEN_DIRECT_ACTION_PATTERNS,
+        )
+    for pattern in WIRELOG_QUERY_FORBIDDEN_SURFACE_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## Wirelog Predicate Query Operation Contract",
+            pattern,
+        )
+    for pattern in WIRELOG_QUERY_FORBIDDEN_MODAL_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## Wirelog Predicate Query Operation Contract",
+            pattern,
+        )
+    for pattern in WIRELOG_QUERY_FORBIDDEN_DIRECT_ACTION_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## Wirelog Predicate Query Operation Contract",
+            pattern,
+        )
+    for example in WIRELOG_QUERY_FORBIDDEN_EXAMPLES:
+        assert_any_pattern_matches(
+            sections["## Wirelog Predicate Query Operation Contract"]
+            + "\n"
+            + example,
+            WIRELOG_QUERY_FORBIDDEN_SURFACE_PATTERNS
+            + WIRELOG_QUERY_FORBIDDEN_MODAL_PATTERNS
+            + WIRELOG_QUERY_FORBIDDEN_DIRECT_ACTION_PATTERNS,
         )
 
 

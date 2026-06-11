@@ -19,6 +19,7 @@ This contract defines:
 - Message SEARCH operation contract.
 - Flag/keyword update operation contract.
 - Fact insert/retract mutation operation contract.
+- Wirelog predicate query operation contract.
 - State authority boundaries for Postfix helpers, Dovecot plugins, and local tools.
 
 It does not define concrete command payload schemas, daemon runtime internals, or
@@ -439,7 +440,77 @@ direct Wirelog mutable handles to callers. It accepts fact insert/retract
 inputs only.
 
 Concrete fact mutation `.capnp` schemas and field layouts are deferred.
-Wirelog predicate query API and DuckDB query-template API are deferred.
+Concrete Wirelog predicate query `.capnp` schemas and field layouts are
+deferred. DuckDB query-template API is deferred.
+
+## Wirelog Predicate Query Operation Contract
+
+Wirelog predicate query is a read-only daemon operation for authorized local
+tools/skills over the Cap'n Proto-over-UDS daemon API. It is not a Dovecot IMAP
+client operation, not a fact mutation operation, and not a DuckDB query-template
+operation.
+
+This section defines operation behavior only; it does not define concrete
+`.capnp` schemas, field layouts, generated code, Wirelog integration, query
+planner behavior, or query execution implementation.
+
+Every Wirelog predicate query request carries request and caller identity
+sufficient for `wyreboxd` to authorize, audit, and correlate the operation:
+
+- required `request_id`;
+- caller/tool identity;
+- authorization/audit identity; and
+- optional operation correlation supplied by the local tool/skill.
+
+The operation input is structured query identity and typed bindings. Each
+request identifies a known predicate/catalog entry and supplies typed bound
+arguments and typed variables as operation inputs. Typed bound arguments
+constrain the facts that may match. Typed variables define which positions are
+returned in result bindings. The request accepts structured predicate query
+inputs only; no arbitrary Wirelog, Datalog, or rule text is accepted.
+
+Only authorized callers may query predicates and facts. Authorization scope
+controls the caller/tool identity, predicate, catalog, account, tenant, source,
+and operational scope that may be queried. A caller authorized for one
+predicate, catalog, account, tenant, source, or operational scope must not be
+able to query facts outside that scope through this operation.
+
+Successful query results return structured tuples or variable bindings. Each
+result is correlated with the predicate/catalog identity that was queried and
+returns typed values according to daemon catalog state. Results may be bounded,
+pageable, or streamed by later concrete payload slices. If streamed result
+chunks or cursors are used, every chunk and cursor is correlatable to the
+original `request_id` and query identity, and completion requires a definitive
+end response or definitive error response for that request/query. A caller must
+not infer success from partial chunks alone.
+
+Wirelog predicate query error behavior is governed by
+`docs/contracts/error-model.md`:
+
+- an unauthorized caller or predicate scope failure is `permission denied`;
+- an unknown predicate/catalog is `not found` or `conflict` according to
+  operation-aware catalog semantics selected by the concrete schema slice;
+- a disabled predicate/catalog is `conflict` when catalog state exists but is
+  not queryable for this operation;
+- non-retryable validation, type, or catalog errors are `permanent failure`;
+- transient Wirelog, materialized-state, or daemon API failures are
+  `temporary backend failure`; and
+- ambiguous transport outcomes are not success.
+
+Wirelog predicate query is read-only. It does not insert or retract facts, does
+not append mutation journal records, and does not mutate DuckDB, Wirelog state,
+object-store metadata, raw objects, or journal state. It may read daemon-owned
+Wirelog-derived state and materialized facts needed to authorize and evaluate
+the structured predicate query.
+
+This operation does not expose arbitrary Datalog/Wirelog query text, arbitrary
+SQL, write SQL, direct DuckDB query execution, direct Wirelog mutable handles,
+object-store metadata mutation, direct journal append/write, or mutation
+journal append surfaces to callers. It accepts Wirelog predicate query inputs
+only.
+
+Concrete Wirelog predicate query `.capnp` schemas and field layouts are
+deferred. The safe DuckDB query-template API is separate and deferred.
 
 ## State Authority Boundary
 
@@ -464,15 +535,16 @@ Command payload schemas and later query operation groups are deferred to later
 issue-0004 units:
 
 - concrete fact mutation `.capnp` schemas and field layouts
-- Wirelog predicate query API
+- concrete Wirelog predicate query `.capnp` schemas and field layouts
 - safe DuckDB query-template API
 
 Concrete SEARCH `.capnp` schemas, field layouts, and criteria payloads are
 deferred. Concrete flag/keyword `.capnp` schemas and field layouts are
 deferred. Concrete fact mutation `.capnp` schemas and field layouts are
-deferred. Wirelog predicate query API and safe DuckDB query-template API remain
-deferred, along with query-safety policy details. In this slice, no arbitrary
-write SQL is allowed over the daemon API.
+deferred. Concrete Wirelog predicate query `.capnp` schemas and field layouts
+are deferred. Safe DuckDB query-template API remains deferred, along with
+query-safety policy details. In this slice, no arbitrary write SQL is allowed
+over the daemon API.
 
 ## Out Of Scope
 
@@ -482,7 +554,6 @@ The following are out of scope for this slice:
 - concrete request/response/error/query payload schemas
 - TCP, TLS, HTTP, LMTP, and remote authentication
 - Dovecot implementation
-- Wirelog predicate query API
 - DuckDB query-template API
 - concrete daemon implementation
 - full .capnp generation
