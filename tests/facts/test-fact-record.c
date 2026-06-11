@@ -105,6 +105,62 @@ test_fact_record_rejects_retraction_before_creation (void)
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 }
 
+static void
+test_fact_record_serializes_wirelog_fact (void)
+{
+  const char *args[] = {
+    "mail-1",
+    "example.test",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxFactRecord) record = { 0 };
+  g_autofree char *text = NULL;
+
+  g_assert_true (wyrebox_fact_record_init (&record,
+          "sender_domain",
+          args, "header:from", 1000000, 1800000000000000, &error));
+  g_assert_no_error (error);
+
+  text = wyrebox_fact_record_to_wirelog_fact (&record, &error);
+  g_assert_no_error (error);
+  g_assert_cmpstr (text, ==, "sender_domain(\"mail-1\", \"example.test\").");
+}
+
+static void
+test_fact_record_serializes_escaped_wirelog_args (void)
+{
+  const char *args[] = {
+    "mail\"1",
+    "line\\one\nline\ttwo",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxFactRecord) record = { 0 };
+  g_autofree char *text = NULL;
+
+  g_assert_true (wyrebox_fact_record_init (&record,
+          "participant", args, "header:to", 1000000, 1800000000000000, &error));
+  g_assert_no_error (error);
+
+  text = wyrebox_fact_record_to_wirelog_fact (&record, &error);
+  g_assert_no_error (error);
+  g_assert_cmpstr (text, ==,
+      "participant(\"mail\\\"1\", \"line\\\\one\\nline\\ttwo\").");
+}
+
+static void
+test_fact_record_rejects_uninitialized_wirelog_serialization (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxFactRecord) record = { 0 };
+  g_autofree char *text = NULL;
+
+  text = wyrebox_fact_record_to_wirelog_fact (&record, &error);
+  g_assert_null (text);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -120,6 +176,13 @@ main (int argc, char **argv)
       test_fact_record_marks_retraction_after_creation);
   g_test_add_func ("/facts/fact-record/rejects-retraction-before-creation",
       test_fact_record_rejects_retraction_before_creation);
+  g_test_add_func ("/facts/fact-record/serializes-wirelog-fact",
+      test_fact_record_serializes_wirelog_fact);
+  g_test_add_func ("/facts/fact-record/serializes-escaped-wirelog-args",
+      test_fact_record_serializes_escaped_wirelog_args);
+  g_test_add_func ("/facts/fact-record/"
+      "rejects-uninitialized-wirelog-serialization",
+      test_fact_record_rejects_uninitialized_wirelog_serialization);
 
   return g_test_run ();
 }

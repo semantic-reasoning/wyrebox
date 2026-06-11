@@ -171,3 +171,63 @@ wyrebox_fact_record_mark_retracted (WyreboxFactRecord *record,
   record->retracted_at_unix_us = retracted_at_unix_us;
   return TRUE;
 }
+
+static void
+append_wirelog_escaped_string (GString *builder, const char *value)
+{
+  g_string_append_c (builder, '"');
+
+  for (const char *cursor = value; *cursor != '\0'; cursor++) {
+    switch (*cursor) {
+      case '\\':
+        g_string_append (builder, "\\\\");
+        break;
+      case '"':
+        g_string_append (builder, "\\\"");
+        break;
+      case '\n':
+        g_string_append (builder, "\\n");
+        break;
+      case '\r':
+        g_string_append (builder, "\\r");
+        break;
+      case '\t':
+        g_string_append (builder, "\\t");
+        break;
+      default:
+        g_string_append_c (builder, *cursor);
+        break;
+    }
+  }
+
+  g_string_append_c (builder, '"');
+}
+
+char *
+wyrebox_fact_record_to_wirelog_fact (const WyreboxFactRecord *record,
+    GError **error)
+{
+  g_autoptr (GString) builder = NULL;
+
+  g_return_val_if_fail (record != NULL, NULL);
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  if (!validate_predicate (record->predicate, error))
+    return NULL;
+
+  if (!validate_args ((const char *const *) record->args, error))
+    return NULL;
+
+  builder = g_string_new (record->predicate);
+  g_string_append_c (builder, '(');
+
+  for (guint index = 0; record->args[index] != NULL; index++) {
+    if (index > 0)
+      g_string_append (builder, ", ");
+
+    append_wirelog_escaped_string (builder, record->args[index]);
+  }
+
+  g_string_append (builder, ").");
+  return g_string_free (g_steal_pointer (&builder), FALSE);
+}
