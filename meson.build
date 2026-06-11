@@ -55,5 +55,11 @@ test(
   args: files('tests/docs/test_issue_0003_mutation_journal_contract.py'),
 )
 
+test(
+  'docs issue 0003 core schema contract',
+  python,
+  args: files('tests/docs/test_issue_0003_core_schema_contract.py'),
+)
+
 subdir('tests/object-store')
 subdir('tests/journal')
