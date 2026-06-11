@@ -194,8 +194,8 @@ gboolean wyrebox_schema_migration_evaluate_to_current (
  *
  * Ownership:
  * - @self and @metadata_store are non-floating references owned by the caller.
- * - @error, when set, is returned as a floating, caller-owned GError via
- *   g_autoptr conventions; callers should clear it with g_clear_error().
+ * - @error, when set, is a caller-owned GError; callers should clear it with
+ *   g_clear_error() or use g_autoptr(GError).
  */
 gboolean wyrebox_schema_migration_run_store_to_current (
     WyreboxSchemaMigration *self,
