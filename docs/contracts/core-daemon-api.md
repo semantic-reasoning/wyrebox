@@ -16,6 +16,7 @@ This contract defines:
 - Delivery ingestion operation contract.
 - Mailbox LIST/SELECT operation contract.
 - Message FETCH operation contract.
+- Message SEARCH operation contract.
 - Flag/keyword update operation contract.
 - State authority boundaries for Postfix helpers, Dovecot plugins, and local tools.
 
@@ -261,6 +262,64 @@ Wirelog mutation, object-store metadata mutation, raw object rewrite, direct
 journal append, direct journal write, or mutation journal append surfaces to
 Dovecot plugins or local callers. It accepts message FETCH inputs only.
 
+## Message Search Operation Contract
+
+Message SEARCH is a Dovecot-facing SEARCH call over the Cap'n Proto-over-UDS
+daemon API. This section defines operation behavior only; it does not define
+concrete `.capnp` schemas, field layouts, generated code, Dovecot backend
+implementation, or the concrete criteria schema.
+
+Every SEARCH request carries request and caller identity sufficient for
+`wyreboxd` to authorize and correlate the operation:
+
+- required `request_id`;
+- Dovecot/IMAP operation correlation ID where the caller stack can supply one;
+- caller/account identity;
+- stable selected-mailbox identity for an ordinary mailbox or virtual mailbox;
+  and
+- selected-mailbox `UIDVALIDITY` or equivalent selection epoch.
+
+The caller/account identity scopes all access. The selected mailbox identity,
+`UIDVALIDITY`, and selection epoch are the authorization and state boundary.
+SEARCH must not return results outside the authorized selected ordinary mailbox
+or virtual mailbox view.
+
+SEARCH criteria are IMAP-derived search criteria supplied as daemon operation
+inputs, not arbitrary SQL or raw DuckDB query strings. The concrete criteria
+schema is deferred to a later `.capnp` schema slice, but the semantic boundary
+is fixed here: Dovecot plugins request IMAP-search behavior from `wyreboxd`;
+they do not submit database or Datalog query text.
+
+SEARCH returns mailbox-scoped UIDs or equivalent mailbox-scoped message
+references suitable for Dovecot, not raw object-store keys as client-visible
+result identity. A matching raw message object may therefore have different
+returned identities in an ordinary mailbox and in a virtual mailbox.
+
+For an ordinary selected mailbox, SEARCH evaluates only that selected mailbox's
+membership. For a selected virtual mailbox, SEARCH is evaluated within that
+virtual view membership, and results remain mailbox-scoped to that view.
+
+SEARCH error behavior is governed by `docs/contracts/error-model.md`:
+
+- an absent selected mailbox in the caller's authorized scope is `not found`;
+- account, mailbox, or view authorization failure is `permission denied`;
+- stale `UIDVALIDITY`, stale selection context, stale selection epoch, or
+  invalid selected state is `conflict`;
+- transient index, materialized-state, or daemon API failures are
+  `temporary backend failure` in the Dovecot caller path; and
+- ambiguous transport outcomes are not success.
+
+SEARCH is a read-only daemon operation. It does not append mutation journal
+records, and it does not mutate DuckDB, Wirelog, object-store metadata, raw
+objects, or journal state. It may read daemon-owned indexes/materialized state
+needed to authorize the selected mailbox and evaluate the requested IMAP-derived
+criteria.
+
+This operation does not expose arbitrary SQL, write SQL, direct DuckDB query
+execution, Wirelog mutation/query, object-store metadata mutation, direct
+journal append/write, or mutation journal append surfaces to Dovecot plugins or
+local callers. It accepts message SEARCH inputs only.
+
 ## Flag Keyword Update Operation Contract
 
 Flag/keyword update is a Dovecot-facing STORE-style mutation over the Cap'n
@@ -345,14 +404,14 @@ contract intentionally defines no runtime implementation details.
 Command payload schemas and operation groups are deferred to later issue-0004
 units:
 
-- search
 - fact insert/retract
 - Wirelog predicate query
 - safe DuckDB query templates
 
-Concrete flag/keyword `.capnp` schemas and field layouts are deferred, along
-with query-safety policy details. In this slice, no arbitrary write SQL is
-allowed over the daemon API.
+Concrete SEARCH `.capnp` schemas, field layouts, and criteria payloads are
+deferred. Concrete flag/keyword `.capnp` schemas and field layouts are
+deferred, along with query-safety policy details. In this slice, no arbitrary
+write SQL is allowed over the daemon API.
 
 ## Out Of Scope
 
@@ -361,7 +420,6 @@ The following are out of scope for this slice:
 - concrete Cap'n Proto message layouts
 - concrete request/response/error/query payload schemas
 - TCP, TLS, HTTP, LMTP, and remote authentication
-- Dovecot search operation contracts
 - Dovecot implementation
 - fact/query APIs
 - concrete daemon implementation
