@@ -1,0 +1,9 @@
+From: No ID <no-id@example.test>
+To: Intake <intake@example.test>
+Subject: Missing Message-ID fixture
+Date: Sun, 07 Jun 2026 11:20:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+
+This message intentionally has no Message-ID header.
+Future parser work should define deterministic handling for it.

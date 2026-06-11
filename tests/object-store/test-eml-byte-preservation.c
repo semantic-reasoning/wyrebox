@@ -7,6 +7,10 @@ static const char *fixture_names[] = {
   "simple-crlf.eml",
   "utf8-8bit-body.eml",
   "multipart-attachment-like.eml",
+  "html-message.eml",
+  "non-ascii-headers.eml",
+  "missing-message-id.eml",
+  "duplicate-message-id.eml",
 };
 
 static void

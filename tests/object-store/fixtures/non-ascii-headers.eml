@@ -1,0 +1,11 @@
+From: =?UTF-8?B?SmnFmcOtIMWgYWZhw61r?= <jiri@example.test>
+To: =?UTF-8?Q?Zo=C3=AB_Reader?= <zoe@example.test>
+Subject: =?UTF-8?B?UsOpc3Vtw6kg4oCTIOyVhOuFle2VmOyEuOyalA==?=
+Date: Sat, 06 Jun 2026 16:45:00 +0000
+Message-ID: <non-ascii-headers@example.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+This fixture keeps non-ASCII header content RFC 2047 encoded.
+The body is deliberately simple for metadata parser coverage later.

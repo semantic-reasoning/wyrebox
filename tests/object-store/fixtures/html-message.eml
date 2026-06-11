@@ -1,0 +1,16 @@
+From: Newsletter <newsletter@example.test>
+To: Reader <reader@example.test>
+Subject: HTML fixture
+Date: Fri, 05 Jun 2026 09:30:00 +0000
+Message-ID: <html-message@example.test>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+<!doctype html>
+<html>
+<body>
+<h1>WyreBox HTML fixture</h1>
+<p>This body should be preserved byte-for-byte.</p>
+</body>
+</html>
