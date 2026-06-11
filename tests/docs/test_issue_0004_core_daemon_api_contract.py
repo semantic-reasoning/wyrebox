@@ -52,6 +52,14 @@ def assert_forbidden(text: str, pattern: str) -> None:
     )
 
 
+def assert_section_forbidden(
+    sections: dict[str, str], section: str, pattern: str
+) -> None:
+    assert not re.search(pattern, sections[section], re.IGNORECASE | re.DOTALL), (
+        f"{section} contains forbidden language: {pattern}"
+    )
+
+
 def main() -> None:
     assert CONTRACT_PATH.is_file(), f"missing contract: {CONTRACT_PATH}"
 
@@ -76,7 +84,7 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Scope",
-        r"does not define command payload schemas, daemon runtime internals, or command query implementation",
+        r"does not define concrete command payload schemas, daemon runtime internals, or command query implementation",
     )
     assert_section_matches(
         sections,
@@ -337,10 +345,28 @@ def main() -> None:
     for forbidden in [
         r"command-specific schema",
         r"full SQL support",
-        r"delivery ingestion.*(may|can|must|should) expose arbitrary SQL",
-        r"delivery ingestion.*(may|can|must|should) expose write SQL",
     ]:
         assert_forbidden(text, forbidden)
+
+    delivery_forbidden_surfaces = [
+        r"arbitrary SQL",
+        r"write SQL",
+        r"DuckDB mutation",
+        r"Wirelog fact mutation",
+        r"object-store metadata mutation",
+        r"direct journal append",
+    ]
+    for surface in delivery_forbidden_surfaces:
+        assert_section_forbidden(
+            sections,
+            "## Delivery Ingestion Operation Contract",
+            rf"(?<!not )\b(exposes?|allows?|permits?|provides?)\b\s+(?:direct\s+)?(?:access\s+to\s+)?{surface}",
+        )
+        assert_section_forbidden(
+            sections,
+            "## Delivery Ingestion Operation Contract",
+            rf"\b(may|can|must|should)\b\s+\b(expose|allow|permit|provide)\b.*{surface}",
+        )
 
 
 if __name__ == "__main__":

@@ -16,8 +16,8 @@ This contract defines:
 - Delivery ingestion operation contract.
 - State authority boundaries for Postfix helpers, Dovecot plugins, and local tools.
 
-It does not define command payload schemas, daemon runtime internals, or command
-query implementation.
+It does not define concrete command payload schemas, daemon runtime internals, or
+command query implementation.
 
 Error-class semantics are defined by `docs/contracts/error-model.md`.
 
