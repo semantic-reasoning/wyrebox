@@ -27,12 +27,12 @@ struct _WyreboxJournalWriter
 G_DEFINE_TYPE (WyreboxJournalWriter, wyrebox_journal_writer, G_TYPE_OBJECT);
 
 static const char *event_type_names[] = {
-  "message_delivered",
-  "flag_changed",
-  "keyword_changed",
-  "fact_inserted",
-  "fact_retracted",
-  "derived_view_membership_changed",
+  "MessageDelivered",
+  "FlagChanged",
+  "KeywordChanged",
+  "FactInserted",
+  "FactRetracted",
+  "DerivedViewMembershipChanged",
 };
 
 static inline void

@@ -8,12 +8,12 @@
 #define JOURNAL_MAGIC "WYREJNL1"
 
 static const char *canonical_event_types[] = {
-  "message_delivered",
-  "flag_changed",
-  "keyword_changed",
-  "fact_inserted",
-  "fact_retracted",
-  "derived_view_membership_changed",
+  "MessageDelivered",
+  "FlagChanged",
+  "KeywordChanged",
+  "FactInserted",
+  "FactRetracted",
+  "DerivedViewMembershipChanged",
 };
 
 static void
