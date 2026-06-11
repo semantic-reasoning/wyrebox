@@ -185,3 +185,6 @@ subdir('tests/ingestion')
 subdir('tests/journal')
 subdir('tests/migration')
 subdir('tests/build-config')
+if duckdb_found
+  subdir('tests/duckdb')
+endif
