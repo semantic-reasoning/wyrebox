@@ -27,8 +27,10 @@ typedef struct
   /*
    * Immutable raw object reference for the delivered RFC 5322 bytes.
    *
-   * Ownership: caller owns and must free with g_free() or
-   * wyrebox_delivery_projection_record_clear().
+   * Ownership: owned by this record and cleared by
+   * wyrebox_delivery_projection_record_clear(). When accessed through
+   * WyreboxDeliveryProjectionList, this pointer is borrowed and valid until the
+   * list is cleared or the record is removed from the list.
    */
   char *object_key;
 
@@ -50,8 +52,10 @@ typedef struct
 /*
  * A mutable ordered list of projected delivered messages.
  *
- * Ownership: caller owns each record entry and must call
- * wyrebox_delivery_projection_record_clear() before free().
+ * Ownership: the list owns @records and every contained
+ * WyreboxDeliveryProjectionRecord. Entries returned from @records are borrowed
+ * while they remain in the list. Clear the list with
+ * wyrebox_delivery_projection_list_clear() or g_auto().
  */
 typedef struct
 {
@@ -89,6 +93,11 @@ WyreboxDeliveryProjection *wyrebox_delivery_projection_new (
 /*
  * Replays MessageDelivered records from the reader's current position through
  * EOF into an owned result list.
+ *
+ * @out_projection must be zero-initialized or already managed by
+ * wyrebox_delivery_projection_list_clear(); any previous contents are cleared
+ * before replay starts. On failure, partial projection contents are cleared and
+ * @out_projection records is set to NULL.
  */
 gboolean wyrebox_delivery_projection_replay_all (
     WyreboxDeliveryProjection *self,
