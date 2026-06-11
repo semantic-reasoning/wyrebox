@@ -18,6 +18,7 @@ REQUIRED_SECTIONS = [
     "## Caller-Observed Success Semantics",
     "## Delivery Ingestion Operation Contract",
     "## Mailbox List Select Operation Contract",
+    "## Message Fetch Operation Contract",
     "## State Authority Boundary",
     "## Deferred Operation Payloads",
     "## Out Of Scope",
@@ -102,6 +103,61 @@ MAILBOX_FORBIDDEN_DIRECT_ACTION_PATTERNS = [
     r"\b(may|can|must|should|will)\b\s+write\s+directly\s+to\s+the\s+journal",
 ]
 
+FETCH_FORBIDDEN_SURFACES = [
+    r"arbitrary SQL",
+    r"write SQL",
+    r"DuckDB mutation",
+    r"Wirelog mutation",
+    r"object-store metadata mutation",
+    r"raw object rewrite",
+    r"raw message byte rewrite",
+    r"direct journal append",
+    r"direct journal write",
+    r"mutation journal append surface",
+]
+
+FETCH_FORBIDDEN_SURFACE_PATTERNS = [
+    rf"(?<!not )\b(?:{DELIVERY_FORBIDDEN_SURFACE_VERBS})\b(?:\s+\S+){{0,8}}\s+{surface}"
+    for surface in FETCH_FORBIDDEN_SURFACES
+]
+
+FETCH_FORBIDDEN_MODAL_PATTERNS = [
+    rf"\b(may|can|must|should)\b\s+\b(expose|allow|permit|provide|accept|support|execute|enable|grant)\b.*{surface}"
+    for surface in FETCH_FORBIDDEN_SURFACES
+]
+
+FETCH_FORBIDDEN_DIRECT_ACTION_PATTERNS = [
+    r"\b(may|can|must|should|will)\b\s+mutate\s+DuckDB",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+Wirelog",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+object-store metadata",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+raw objects",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+journal state",
+    r"\b(may|can|must|should|will)\b\s+rewrite\s+raw message bytes",
+    r"\b(may|can|must|should|will)\b\s+append\s+mutation journal records",
+    r"\b(may|can|must|should|will)\b\s+append\s+to\s+the\s+mutation journal",
+    r"\b(may|can|must|should|will)\b\s+write\s+directly\s+to\s+the\s+journal",
+]
+
+FETCH_FORBIDDEN_EXAMPLES = [
+    "FETCH exposes arbitrary SQL.",
+    "FETCH accepts write SQL from Dovecot.",
+    "FETCH enables DuckDB mutation by plugins.",
+    "FETCH supports Wirelog mutation by plugins.",
+    "FETCH provides object-store metadata mutation access.",
+    "FETCH grants direct journal append access.",
+    "FETCH allows direct journal write access.",
+    "FETCH exposes a mutation journal append surface.",
+    "FETCH may mutate DuckDB.",
+    "FETCH may mutate Wirelog.",
+    "FETCH may mutate object-store metadata.",
+    "FETCH may mutate raw objects.",
+    "FETCH may mutate journal state.",
+    "FETCH may rewrite raw message bytes.",
+    "FETCH may append mutation journal records.",
+    "FETCH may append to the mutation journal.",
+    "FETCH may write directly to the journal.",
+]
+
 
 def section_map(text: str) -> dict[str, str]:
     matches = list(re.finditer(r"^## .+$", text, flags=re.MULTILINE))
@@ -171,6 +227,11 @@ def main() -> None:
         sections,
         "## Scope",
         r"Mailbox LIST/SELECT operation contract",
+    )
+    assert_section_matches(
+        sections,
+        "## Scope",
+        r"Message FETCH operation contract",
     )
     assert_section_matches(
         sections,
@@ -480,6 +541,121 @@ def main() -> None:
 
     assert_section_matches(
         sections,
+        "## Message Fetch Operation Contract",
+        r"Dovecot-facing FETCH",
+    )
+    assert_section_matches(
+        sections,
+        "## Message Fetch Operation Contract",
+        r"Cap'n Proto-over-UDS",
+    )
+    assert_section_matches(
+        sections,
+        "## Message Fetch Operation Contract",
+        r"does not define concrete `.capnp` schemas, field layouts, generated code, or Dovecot backend implementation",
+    )
+    for identity_field in [
+        "request_id",
+        "IMAP operation correlation",
+        "account identity",
+        "selected mailbox",
+        "UID",
+        "message reference",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Message Fetch Operation Contract",
+            identity_field,
+        )
+    assert_section_matches(
+        sections,
+        "## Message Fetch Operation Contract",
+        r"caller/account identity.*scope",
+    )
+    assert_section_matches(
+        sections,
+        "## Message Fetch Operation Contract",
+        r"must not return messages outside the authorized selected mailbox or virtual mailbox view",
+    )
+    assert_section_matches(
+        sections,
+        "## Message Fetch Operation Contract",
+        r"ordinary mailbox",
+    )
+    assert_section_matches(
+        sections,
+        "## Message Fetch Operation Contract",
+        r"virtual mailbox",
+    )
+    assert_section_matches(
+        sections,
+        "## Message Fetch Operation Contract",
+        r"stable selected-mailbox identity",
+    )
+    assert_section_matches(
+        sections,
+        "## Message Fetch Operation Contract",
+        r"byte-for-byte original RFC 5322 message",
+    )
+    assert_section_matches(
+        sections,
+        "## Message Fetch Operation Contract",
+        r"canonical object",
+    )
+    assert_section_matches(
+        sections,
+        "## Message Fetch Operation Contract",
+        r"must not rewrite raw bytes.*flags, facts, search, or virtual views",
+    )
+    for stream_field in [
+        "stream/chunk",
+        "chunk",
+        "request_id",
+        "message",
+        "end",
+        "error",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Message Fetch Operation Contract",
+            stream_field,
+        )
+    for error_case in [
+        "not found",
+        "permission denied",
+        "conflict",
+        "temporary backend failure",
+        "docs/contracts/error-model.md",
+        "ambiguous transport outcomes are not success",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Message Fetch Operation Contract",
+            error_case,
+        )
+    assert_section_matches(
+        sections,
+        "## Message Fetch Operation Contract",
+        r"read-only",
+    )
+    assert_section_matches(
+        sections,
+        "## Message Fetch Operation Contract",
+        r"does not append mutation journal records",
+    )
+    assert_section_matches(
+        sections,
+        "## Message Fetch Operation Contract",
+        r"does not mutate DuckDB, Wirelog, object-store metadata, raw objects, or journal state",
+    )
+    assert_section_matches(
+        sections,
+        "## Message Fetch Operation Contract",
+        r"does not expose arbitrary SQL, write SQL, DuckDB mutation, Wirelog mutation, object-store metadata mutation, raw object rewrite, direct journal append, direct journal write, or mutation journal append surfaces",
+    )
+
+    assert_section_matches(
+        sections,
         "## State Authority Boundary",
         r"wyreboxd.*only mutable owner",
     )
@@ -500,7 +676,6 @@ def main() -> None:
     )
 
     for operation in [
-        "fetch",
         "flag/keyword update",
         "search",
         "fact insert/retract",
@@ -515,7 +690,8 @@ def main() -> None:
     )
 
     for excluded in [
-        "Dovecot fetch/search",
+        "Dovecot search",
+        "Dovecot implementation",
         "fact/query APIs",
         "concrete daemon implementation",
         "full .capnp generation",
@@ -581,6 +757,31 @@ def main() -> None:
             MAILBOX_FORBIDDEN_SURFACE_PATTERNS
             + MAILBOX_FORBIDDEN_MODAL_PATTERNS
             + MAILBOX_FORBIDDEN_DIRECT_ACTION_PATTERNS,
+        )
+    for pattern in FETCH_FORBIDDEN_SURFACE_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## Message Fetch Operation Contract",
+            pattern,
+        )
+    for pattern in FETCH_FORBIDDEN_MODAL_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## Message Fetch Operation Contract",
+            pattern,
+        )
+    for pattern in FETCH_FORBIDDEN_DIRECT_ACTION_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## Message Fetch Operation Contract",
+            pattern,
+        )
+    for example in FETCH_FORBIDDEN_EXAMPLES:
+        assert_any_pattern_matches(
+            sections["## Message Fetch Operation Contract"] + "\n" + example,
+            FETCH_FORBIDDEN_SURFACE_PATTERNS
+            + FETCH_FORBIDDEN_MODAL_PATTERNS
+            + FETCH_FORBIDDEN_DIRECT_ACTION_PATTERNS,
         )
 
 

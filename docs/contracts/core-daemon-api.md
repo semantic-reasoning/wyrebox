@@ -15,6 +15,7 @@ This contract defines:
 - Caller-observed success semantics.
 - Delivery ingestion operation contract.
 - Mailbox LIST/SELECT operation contract.
+- Message FETCH operation contract.
 - State authority boundaries for Postfix helpers, Dovecot plugins, and local tools.
 
 It does not define concrete command payload schemas, daemon runtime internals, or
@@ -201,6 +202,64 @@ Wirelog mutation, object-store metadata mutation, direct journal append, or
 direct journal write surfaces to Dovecot plugins or local callers. It accepts
 mailbox LIST/SELECT inputs only.
 
+## Message Fetch Operation Contract
+
+Message FETCH is a Dovecot-facing FETCH call over the Cap'n Proto-over-UDS
+daemon API. This section defines operation behavior only; it does not define
+concrete `.capnp` schemas, field layouts, generated code, or Dovecot backend
+implementation.
+
+Every FETCH request carries request and caller identity sufficient for
+`wyreboxd` to authorize and correlate the operation:
+
+- required `request_id`;
+- Dovecot/IMAP operation correlation ID where the caller stack can supply one;
+- caller/account identity;
+- stable selected-mailbox identity for an ordinary mailbox or virtual mailbox;
+  and
+- mailbox-scoped UID or equivalent message reference within that selected
+  mailbox context.
+
+The caller/account identity scopes all access. FETCH must not return messages
+outside the authorized selected mailbox or virtual mailbox view. A message
+reference is valid only inside the selected mailbox identity supplied by the
+request; the same raw message may have different mailbox-scoped references in
+ordinary and virtual mailbox contexts.
+
+FETCH retrieves the byte-for-byte original RFC 5322 message from the canonical
+object selected through daemon-owned mailbox state. It may use daemon-owned
+materialized state, indexes, or caches to resolve the stable selected-mailbox
+identity and message reference to the canonical object, but the returned body
+bytes are the original immutable message bytes. FETCH must not rewrite raw bytes
+for flags, facts, search, or virtual views.
+
+Body bytes are returned with stream/chunk response framing. Each body chunk is
+correlatable to the original `request_id` and selected message reference, and
+the stream ends with a definitive end response or definitive error response for
+that request/message. A caller must not infer success from partial chunks alone.
+
+FETCH error behavior is governed by `docs/contracts/error-model.md`:
+
+- an absent mailbox, selected mailbox outside the authorized scope, or absent
+  message reference in scope is `not found`;
+- account, mailbox, or view authorization failure is `permission denied`;
+- invalid selected-mailbox state, stale selection context, or a message
+  reference that is not valid for that selected mailbox is `conflict`;
+- transient object storage, materialized-state, or daemon API failures are
+  `temporary backend failure` in the Dovecot caller path; and
+- ambiguous transport outcomes are not success.
+
+FETCH is a read-only daemon operation. It does not append mutation journal
+records, and it does not mutate DuckDB, Wirelog, object-store metadata, raw
+objects, or journal state. It reads only enough daemon-owned state to authorize
+the selected mailbox context, resolve the requested message, and stream the
+canonical object bytes.
+
+This operation does not expose arbitrary SQL, write SQL, DuckDB mutation,
+Wirelog mutation, object-store metadata mutation, raw object rewrite, direct
+journal append, direct journal write, or mutation journal append surfaces to
+Dovecot plugins or local callers. It accepts message FETCH inputs only.
+
 ## State Authority Boundary
 
 `wyreboxd` remains the only mutable owner in the first architecture slice.
@@ -223,7 +282,6 @@ contract intentionally defines no runtime implementation details.
 Command payload schemas and operation groups are deferred to later issue-0004
 units:
 
-- fetch
 - flag/keyword update
 - search
 - fact insert/retract
@@ -240,7 +298,8 @@ The following are out of scope for this slice:
 - concrete Cap'n Proto message layouts
 - concrete request/response/error/query payload schemas
 - TCP, TLS, HTTP, LMTP, and remote authentication
-- Dovecot fetch/search operation contracts
+- Dovecot search operation contracts
+- Dovecot implementation
 - fact/query APIs
 - concrete daemon implementation
 - full .capnp generation
