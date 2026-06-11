@@ -31,6 +31,7 @@ static void
 test_extracts_header_facts_from_metadata (void)
 {
   WyreboxEmlMetadata metadata = {
+    .message_id = "<mail-1@example.test>",
     .from = "Alice <alice@Example.TEST>",
     .to = "Bob <bob@example.test>",
     .cc = "Carol <carol@example.test>",
@@ -43,17 +44,19 @@ test_extracts_header_facts_from_metadata (void)
       &metadata, 1800000000000000, &error);
   g_assert_no_error (error);
   g_assert_nonnull (facts);
-  g_assert_cmpuint (facts->len, ==, 5);
+  g_assert_cmpuint (facts->len, ==, 6);
 
   assert_fact (fact_at (facts, 0),
-      "sender_domain", "mail-1", "example.test", "header:from");
+      "message_id", "mail-1", "<mail-1@example.test>", "header:message-id");
   assert_fact (fact_at (facts, 1),
-      "participant", "mail-1", "Alice <alice@Example.TEST>", "header:from");
+      "sender_domain", "mail-1", "example.test", "header:from");
   assert_fact (fact_at (facts, 2),
-      "participant", "mail-1", "Bob <bob@example.test>", "header:to");
+      "participant", "mail-1", "Alice <alice@Example.TEST>", "header:from");
   assert_fact (fact_at (facts, 3),
-      "participant", "mail-1", "Carol <carol@example.test>", "header:cc");
+      "participant", "mail-1", "Bob <bob@example.test>", "header:to");
   assert_fact (fact_at (facts, 4),
+      "participant", "mail-1", "Carol <carol@example.test>", "header:cc");
+  assert_fact (fact_at (facts, 5),
       "sent_at", "mail-1", "Tue, 02 Jun 2026 12:34:56 +0000", "header:date");
 }
 

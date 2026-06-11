@@ -145,6 +145,15 @@ wyrebox_deterministic_fact_extract_from_metadata (const char *mail_id,
 
   facts = g_ptr_array_new_with_free_func (fact_record_free);
 
+  if (metadata->message_id != NULL && metadata->message_id[0] != '\0') {
+    if (!append_fact (facts,
+            "message_id",
+            mail_id,
+            metadata->message_id,
+            "header:message-id", created_at_unix_us, error))
+      return NULL;
+  }
+
   sender_domain = extract_domain_from_address_header (metadata->from);
   if (sender_domain != NULL) {
     if (!append_fact (facts,
