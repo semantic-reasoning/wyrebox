@@ -73,5 +73,11 @@ test(
   args: files('tests/docs/test_issue_0004_error_model_contract.py'),
 )
 
+test(
+  'docs issue 0004 core daemon api contract',
+  python,
+  args: files('tests/docs/test_issue_0004_core_daemon_api_contract.py'),
+)
+
 subdir('tests/object-store')
 subdir('tests/journal')
