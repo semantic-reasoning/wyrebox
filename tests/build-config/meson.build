@@ -19,4 +19,4 @@ build_config_test = executable(
   dependencies: [wyrebox_dep],
 )
 
-test('build config duckdb feature', build_config_test)
+test('build config feature macros', build_config_test)
