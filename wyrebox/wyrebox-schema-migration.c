@@ -256,6 +256,15 @@ wyrebox_schema_migration_apply_step (WyreboxSchemaMigration *self,
     return FALSE;
   }
 
+  if (step->requires_checkpoint && !state->materialization_checkpoint_present) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "materialization checkpoint metadata missing for migration step %s",
+        step->name);
+    return FALSE;
+  }
+
   if (self->operation_hook != NULL &&
       !self->operation_hook (step->source_version, step->target_version,
           self->hook_user_data, error))
