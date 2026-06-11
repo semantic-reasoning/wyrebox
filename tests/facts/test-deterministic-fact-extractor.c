@@ -80,6 +80,47 @@ test_extracts_only_present_header_facts (void)
 }
 
 static void
+test_extracts_message_reference_facts (void)
+{
+  WyreboxEmlMetadata metadata = {
+    .in_reply_to = "<parent@example.test>",
+    .references = "<root@example.test> <parent@example.test>",
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) facts = NULL;
+
+  facts = wyrebox_deterministic_fact_extract_from_metadata ("mail-3",
+      &metadata, 1800000000000000, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (facts);
+  g_assert_cmpuint (facts->len, ==, 3);
+
+  assert_fact (fact_at (facts, 0),
+      "replies_to", "mail-3", "<parent@example.test>", "header:in-reply-to");
+  assert_fact (fact_at (facts, 1),
+      "references", "mail-3", "<root@example.test>", "header:references");
+  assert_fact (fact_at (facts, 2),
+      "references", "mail-3", "<parent@example.test>", "header:references");
+}
+
+static void
+test_ignores_reference_headers_without_message_id_tokens (void)
+{
+  WyreboxEmlMetadata metadata = {
+    .in_reply_to = "not a message id",
+    .references = "also not ids",
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) facts = NULL;
+
+  facts = wyrebox_deterministic_fact_extract_from_metadata ("mail-4",
+      &metadata, 1800000000000000, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (facts);
+  g_assert_cmpuint (facts->len, ==, 0);
+}
+
+static void
 test_rejects_missing_mail_id (void)
 {
   WyreboxEmlMetadata metadata = {
@@ -118,6 +159,11 @@ main (int argc, char **argv)
       test_extracts_header_facts_from_metadata);
   g_test_add_func ("/facts/deterministic-extractor/only-present-header-facts",
       test_extracts_only_present_header_facts);
+  g_test_add_func ("/facts/deterministic-extractor/message-reference-facts",
+      test_extracts_message_reference_facts);
+  g_test_add_func ("/facts/deterministic-extractor/"
+      "ignores-reference-headers-without-message-id-tokens",
+      test_ignores_reference_headers_without_message_id_tokens);
   g_test_add_func ("/facts/deterministic-extractor/rejects-missing-mail-id",
       test_rejects_missing_mail_id);
   g_test_add_func ("/facts/deterministic-extractor/rejects-missing-created-at",

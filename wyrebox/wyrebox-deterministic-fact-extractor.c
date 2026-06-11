@@ -86,6 +86,39 @@ append_participant_if_present (GPtrArray *facts,
       "participant", mail_id, value, source, created_at_unix_us, error);
 }
 
+static gboolean
+append_message_id_tokens (GPtrArray *facts,
+    const char *predicate,
+    const char *mail_id,
+    const char *value,
+    const char *source, guint64 created_at_unix_us, GError **error)
+{
+  const char *cursor = value;
+
+  if (value == NULL || *value == '\0')
+    return TRUE;
+
+  while ((cursor = strchr (cursor, '<')) != NULL) {
+    const char *end = strchr (cursor, '>');
+    g_autofree char *message_id = NULL;
+
+    if (end == NULL)
+      break;
+
+    if (end > cursor + 1) {
+      message_id = g_strndup (cursor, (gsize) (end - cursor + 1));
+      if (!append_fact (facts,
+              predicate, mail_id, message_id, source, created_at_unix_us,
+              error))
+        return FALSE;
+    }
+
+    cursor = end + 1;
+  }
+
+  return TRUE;
+}
+
 GPtrArray *
 wyrebox_deterministic_fact_extract_from_metadata (const char *mail_id,
     const WyreboxEmlMetadata *metadata,
@@ -142,6 +175,19 @@ wyrebox_deterministic_fact_extract_from_metadata (const char *mail_id,
             mail_id, metadata->date, "header:date", created_at_unix_us, error))
       return NULL;
   }
+
+  if (!append_message_id_tokens (facts,
+          "replies_to",
+          mail_id,
+          metadata->in_reply_to,
+          "header:in-reply-to", created_at_unix_us, error))
+    return NULL;
+
+  if (!append_message_id_tokens (facts,
+          "references",
+          mail_id,
+          metadata->references, "header:references", created_at_unix_us, error))
+    return NULL;
 
   return g_steal_pointer (&facts);
 }
