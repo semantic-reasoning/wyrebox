@@ -185,6 +185,7 @@ subdir('tests/ingestion')
 subdir('tests/journal')
 subdir('tests/migration')
 subdir('tests/build-config')
+subdir('tests/daemon-api')
 if duckdb_found
   subdir('tests/duckdb')
 endif
