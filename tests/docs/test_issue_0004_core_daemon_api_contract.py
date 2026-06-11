@@ -17,6 +17,7 @@ REQUIRED_SECTIONS = [
     "## Request Identity And Correlation",
     "## Caller-Observed Success Semantics",
     "## Delivery Ingestion Operation Contract",
+    "## Mailbox List Select Operation Contract",
     "## State Authority Boundary",
     "## Deferred Operation Payloads",
     "## Out Of Scope",
@@ -54,6 +55,36 @@ DELIVERY_FORBIDDEN_EXAMPLES = [
     "Delivery ingestion exposes Wirelog fact mutation surfaces.",
     "Delivery ingestion provides object-store metadata mutation access.",
     "Delivery ingestion grants helpers direct journal append access.",
+]
+
+MAILBOX_FORBIDDEN_SURFACES = [
+    r"arbitrary SQL",
+    r"write SQL",
+    r"DuckDB mutation",
+    r"Wirelog mutation",
+    r"object-store metadata mutation",
+    r"direct journal append",
+    r"direct journal write",
+]
+
+MAILBOX_FORBIDDEN_SURFACE_PATTERNS = [
+    rf"(?<!not )\b(?:{DELIVERY_FORBIDDEN_SURFACE_VERBS})\b(?:\s+\S+){{0,8}}\s+{surface}"
+    for surface in MAILBOX_FORBIDDEN_SURFACES
+]
+
+MAILBOX_FORBIDDEN_MODAL_PATTERNS = [
+    rf"\b(may|can|must|should)\b\s+\b(expose|allow|permit|provide|accept|support|execute|enable|grant)\b.*{surface}"
+    for surface in MAILBOX_FORBIDDEN_SURFACES
+]
+
+MAILBOX_FORBIDDEN_EXAMPLES = [
+    "Mailbox LIST exposes arbitrary SQL.",
+    "Mailbox SELECT accepts write SQL from Dovecot.",
+    "Mailbox LIST enables DuckDB mutation by plugins.",
+    "Mailbox SELECT supports Wirelog mutation by plugins.",
+    "Mailbox LIST provides object-store metadata mutation access.",
+    "Mailbox SELECT grants direct journal append access.",
+    "Mailbox SELECT allows direct journal write access.",
 ]
 
 
@@ -120,6 +151,11 @@ def main() -> None:
         sections,
         "## Scope",
         r"Delivery ingestion operation contract",
+    )
+    assert_section_matches(
+        sections,
+        "## Scope",
+        r"Mailbox LIST/SELECT operation contract",
     )
     assert_section_matches(
         sections,
@@ -327,6 +363,104 @@ def main() -> None:
 
     assert_section_matches(
         sections,
+        "## Mailbox List Select Operation Contract",
+        r"Dovecot-facing LIST and SELECT calls",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox List Select Operation Contract",
+        r"Cap'n Proto-over-UDS",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox List Select Operation Contract",
+        r"does not define concrete `.capnp` schemas, field layouts, generated code, or Dovecot backend implementation",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox List Select Operation Contract",
+        r"caller/account identity.*scope mailbox visibility",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox List Select Operation Contract",
+        r"must not return mailbox records outside the authorized account scope",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox List Select Operation Contract",
+        r"ordinary mailboxes.*stable mailbox_id",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox List Select Operation Contract",
+        r"virtual mailboxes.*stable view_id",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox List Select Operation Contract",
+        r"Virtual mailbox identity is first-class.*not a client-side fiction",
+    )
+    for list_field in [
+        "stable identifier",
+        "IMAP-visible name",
+        "hierarchy delimiter",
+        "children",
+        "selectable",
+        "ordinary",
+        "virtual",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Mailbox List Select Operation Contract",
+            list_field,
+        )
+    for select_field in [
+        "UIDVALIDITY",
+        "UIDNEXT",
+        "selected-mailbox state",
+        "ordinary mailbox or virtual mailbox",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Mailbox List Select Operation Contract",
+            select_field,
+        )
+    for error_case in [
+        "not found",
+        "non-selectable",
+        "authorization",
+        "temporary backend failure",
+        "docs/contracts/error-model.md",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Mailbox List Select Operation Contract",
+            error_case,
+        )
+    assert_section_matches(
+        sections,
+        "## Mailbox List Select Operation Contract",
+        r"read-only",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox List Select Operation Contract",
+        r"do not append mutation journal records",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox List Select Operation Contract",
+        r"do not mutate DuckDB, Wirelog, object-store metadata, or journal state",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox List Select Operation Contract",
+        r"does not expose arbitrary SQL, write SQL, DuckDB mutation, Wirelog mutation, object-store metadata mutation, direct journal append, or direct journal write",
+    )
+
+    assert_section_matches(
+        sections,
         "## State Authority Boundary",
         r"wyreboxd.*only mutable owner",
     )
@@ -348,7 +482,6 @@ def main() -> None:
 
     for operation in [
         "fetch",
-        "mailbox list/select",
         "flag/keyword update",
         "search",
         "fact insert/retract",
@@ -363,7 +496,7 @@ def main() -> None:
     )
 
     for excluded in [
-        "Dovecot fetch/list/search",
+        "Dovecot fetch/search",
         "fact/query APIs",
         "concrete daemon implementation",
         "full .capnp generation",
@@ -404,6 +537,23 @@ def main() -> None:
         assert_any_pattern_matches(
             sections["## Delivery Ingestion Operation Contract"] + "\n" + example,
             DELIVERY_FORBIDDEN_SURFACE_PATTERNS + DELIVERY_FORBIDDEN_MODAL_PATTERNS,
+        )
+    for pattern in MAILBOX_FORBIDDEN_SURFACE_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## Mailbox List Select Operation Contract",
+            pattern,
+        )
+    for pattern in MAILBOX_FORBIDDEN_MODAL_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## Mailbox List Select Operation Contract",
+            pattern,
+        )
+    for example in MAILBOX_FORBIDDEN_EXAMPLES:
+        assert_any_pattern_matches(
+            sections["## Mailbox List Select Operation Contract"] + "\n" + example,
+            MAILBOX_FORBIDDEN_SURFACE_PATTERNS + MAILBOX_FORBIDDEN_MODAL_PATTERNS,
         )
 
 

@@ -14,6 +14,7 @@ This contract defines:
 - Request identity and correlation fields exposed to callers.
 - Caller-observed success semantics.
 - Delivery ingestion operation contract.
+- Mailbox LIST/SELECT operation contract.
 - State authority boundaries for Postfix helpers, Dovecot plugins, and local tools.
 
 It does not define concrete command payload schemas, daemon runtime internals, or
@@ -133,6 +134,73 @@ This operation does not expose arbitrary SQL, write SQL, DuckDB mutation,
 Wirelog fact mutation, object-store metadata mutation, or direct journal append
 surfaces to helpers. It accepts delivery-ingestion inputs only.
 
+## Mailbox List Select Operation Contract
+
+Mailbox LIST and SELECT are the first Dovecot-facing LIST and SELECT calls over
+the Cap'n Proto-over-UDS daemon API. This section defines operation behavior
+only; it does not define concrete `.capnp` schemas, field layouts, generated
+code, or Dovecot backend implementation.
+
+Each mailbox LIST or SELECT request carries request identity and caller/account
+identity sufficient for `wyreboxd` to scope mailbox visibility. The caller's
+authorized account identity is the outer visibility boundary. A successful LIST
+or SELECT response must not return mailbox records outside the authorized
+account scope, and authorization failure is reported through the error model
+rather than hidden behind direct store access.
+
+Mailbox identity is WyreBox-owned and account scoped:
+
+- ordinary mailboxes are returned with a stable mailbox_id value;
+- virtual mailboxes are returned with a stable view_id value; and
+- Virtual mailbox identity is first-class WyreBox mailbox identity, not a
+  client-side fiction, search-result alias, or Dovecot-only virtual folder.
+
+LIST returns mailbox records suitable for a Dovecot storage backend to translate
+into IMAP-visible mailbox listing results. Each returned record includes:
+
+- the mailbox kind, `ordinary` or `virtual`;
+- the stable identifier for that kind;
+- the stable IMAP-visible name;
+- the hierarchy delimiter;
+- attributes that distinguish selectable from non-selectable mailboxes; and
+- children or no-children attributes where the hierarchy state is known.
+
+SELECT opens one ordinary mailbox or virtual mailbox by stable identity or
+IMAP-visible account-scoped name and returns selected-mailbox state sufficient
+for IMAP serving. The selected-mailbox state includes at minimum:
+
+- mailbox kind and stable identity;
+- stable IMAP-visible name;
+- `UIDVALIDITY`; and
+- `UIDNEXT`.
+
+Additional Dovecot status fields, such as message counts, unseen counts,
+highest MODSEQ, special-use attributes, subscription state, or namespace policy
+may be added by later operation slices without changing the ownership boundary
+defined here.
+
+Mailbox LIST and SELECT error behavior is governed by
+`docs/contracts/error-model.md`:
+
+- a mailbox absent from the authorized account scope is `not found`;
+- account or mailbox authorization failure is an authorization/permission
+  outcome;
+- SELECT of a non-selectable hierarchy or container is a non-selectable
+  operation error, not success; and
+- temporary backend failure remains a temporary failure visible to the Dovecot
+  caller path.
+
+LIST and SELECT are read-only daemon operations. They do not append mutation
+journal records, and they do not mutate DuckDB, Wirelog, object-store metadata,
+or journal state. They may read daemon-owned materialized state and derived view
+state to describe ordinary and virtual mailbox visibility, but they do not
+refresh Wirelog facts or directly write derived memberships.
+
+This operation does not expose arbitrary SQL, write SQL, DuckDB mutation,
+Wirelog mutation, object-store metadata mutation, direct journal append, or
+direct journal write surfaces to Dovecot plugins or local callers. It accepts
+mailbox LIST/SELECT inputs only.
+
 ## State Authority Boundary
 
 `wyreboxd` remains the only mutable owner in the first architecture slice.
@@ -156,7 +224,6 @@ Command payload schemas and operation groups are deferred to later issue-0004
 units:
 
 - fetch
-- mailbox list/select
 - flag/keyword update
 - search
 - fact insert/retract
@@ -173,7 +240,7 @@ The following are out of scope for this slice:
 - concrete Cap'n Proto message layouts
 - concrete request/response/error/query payload schemas
 - TCP, TLS, HTTP, LMTP, and remote authentication
-- Dovecot fetch/list/search operation contracts
+- Dovecot fetch/search operation contracts
 - fact/query APIs
 - concrete daemon implementation
 - full .capnp generation
