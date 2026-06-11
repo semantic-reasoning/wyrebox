@@ -56,6 +56,10 @@ invoked. WyreBox assumes the helper can pass at least:
 - the Postfix queue ID when configured and available;
 - a delivery ID if the integration is configured to generate or receive one.
 
+The helper must receive these values through pipe arguments, environment
+variables, or configured metadata. It must not infer required envelope metadata
+from message headers or body content alone.
+
 The first helper contract is per delivery attempt. Multi-recipient fanout and
 recipient-level status behavior are not required from the `pipe(8)` slice and
 belong to the later LMTP design.
@@ -76,14 +80,15 @@ A daemon-confirmed success maps to Postfix delivery success.
 
 A temporary failure maps to Postfix retry behavior. Temporary failures include
 an unavailable `/run/wyrebox/wyrebox.sock`, daemon overload, transient storage
-errors, interrupted daemon communication, or any error where retry may later
-succeed without changing the message or envelope.
+errors, permission-unavailable socket access, interrupted daemon communication,
+or any error where retry may later succeed without changing the message or
+envelope.
 
 A permanent failure maps to Postfix permanent failure behavior. Permanent
-failures are limited to validation failures that `wyreboxd` classifies as not
-retryable for the submitted message and envelope, such as an invalid recipient
-for the configured WyreBox account mapping or a message rejected by a durable
-policy decision.
+failures are limited to validation failures and configuration failures that
+`wyreboxd` classifies as not retryable for the submitted message and envelope,
+such as an invalid recipient for the configured WyreBox account mapping or a
+message rejected by a durable policy decision.
 
 ## Duplicate Delivery Risk
 
@@ -96,6 +101,9 @@ The first slice accepts this risk as an integration constraint and requires the
 helper to include queue ID, sender, recipient, delivery ID where available, and
 daemon journal offsets in logs. A later ingestion contract may add explicit
 idempotency keys or duplicate suppression, but that is not part of this ADR.
+Because duplicate delivery is expected under retries, handling for any delivery
+identity that a later contract treats as stable must be idempotent or detect
+duplicates before exposing duplicate state.
 
 ## Chroot And Privilege-Drop Implications
 
@@ -128,10 +136,10 @@ materialized tables, and Wirelog fact/rule runtime state.
 
 ## Deferred Decisions
 
-Dovecot storage-backend decisions are deferred to ADR 0002. This ADR does not
-define the Dovecot mail storage backend, UID ownership, UIDVALIDITY behavior,
-flag update mechanics, search hooks, virtual mailbox view exposure, or Dovecot
-LMTP as a canonical ingress path.
+Dovecot storage-backend decisions are deferred to ADR 0002 and left for the
+next atomic unit. This ADR does not define the Dovecot mail storage backend,
+UID ownership, UIDVALIDITY behavior, flag update mechanics, search hooks,
+virtual mailbox view exposure, or Dovecot LMTP as a canonical ingress path.
 
 LMTP endpoint details are deferred to later additive work. That later work must
 document endpoint shape, recipient-level status behavior, process model
