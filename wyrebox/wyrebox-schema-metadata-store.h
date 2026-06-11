@@ -34,8 +34,8 @@ struct _WyreboxSchemaMetadataStoreClass
 /*
  * Construct an in-memory metadata store.
  *
- * Ownership: (transfer full) returned object is a floating GObject reference
- * until adopted by a new owner, typically by assigning to a g_autoptr slot.
+ * Returns: (transfer full): a non-floating GObject reference owned by the
+ * caller, typically stored in a g_autoptr slot.
  */
 WyreboxSchemaMetadataStore *
 wyrebox_schema_metadata_store_new_memory (void);
