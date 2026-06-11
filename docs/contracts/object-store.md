@@ -35,6 +35,10 @@ different bytes returns different object keys.
 The object key is the API identity. Local filename suffixes and directory
 partitioning are storage layout details and are not part of the API identity.
 
+This is identity only inside the object-store API. Outside that boundary, an
+object key is a reference to immutable raw RFC 5322 bytes and does not identify
+a delivered-message occurrence.
+
 ## Local Layout
 
 The local object store is rooted at a caller-provided directory. The first

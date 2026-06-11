@@ -67,6 +67,9 @@ record envelope. Replay validates that sequence numbers increase by one in
 journal order. The sequence number is a replay integrity aid; the stable
 journal offset remains the durable position identifier.
 
+When a committed record is referenced outside the raw journal envelope, this
+contract names its replay sequence as `journal_sequence`.
+
 ## Record Envelope
 
 Each journal record has a minimal envelope containing:
@@ -147,6 +150,20 @@ If a `MessageDelivered` record references a missing raw object during replay,
 replay must treat the condition as journal/object-store inconsistency requiring
 repair or operator-visible failure. It must not synthesize delivered mail from
 missing raw bytes.
+
+## Delivery Occurrence Identity Boundary
+
+For replay and materialization, `journal_offset` plus `journal_sequence`
+identifies a committed delivery/projection occurrence. That occurrence identity
+belongs to the journal and its projected state, not to the immutable raw object.
+
+`object_key` identifies immutable raw RFC 5322 bytes only. It is not a delivered
+message occurrence identity. The same `object_key` may back multiple committed
+`MessageDelivered` records and therefore multiple deliveries or projections.
+
+This boundary does not define duplicate suppression, retry idempotency, same RFC
+Message-ID policy, or broader duplicate policy. Those policies require later
+contracts before implementation.
 
 ## Raw Object Immutability
 

@@ -97,6 +97,16 @@ def main() -> None:
         "## Object Identity",
         r"different bytes returns different object keys",
     )
+    assert_section_matches(
+        sections,
+        "## Object Identity",
+        r"identity only inside the object-store API",
+    )
+    assert_section_matches(
+        sections,
+        "## Object Identity",
+        r"does not identify a delivered-message occurrence",
+    )
 
     assert_in_section(
         sections,

@@ -19,6 +19,7 @@ REQUIRED_SECTIONS = [
     "## Durability Semantics",
     "## Replay Behavior",
     "## Object Store Consistency Boundary",
+    "## Delivery Occurrence Identity Boundary",
     "## Raw Object Immutability",
 ]
 
@@ -244,6 +245,27 @@ def main() -> None:
         sections,
         "## Object Store Consistency Boundary",
         r"must not synthesize delivered mail from\s+missing raw bytes",
+    )
+
+    assert_section_matches(
+        sections,
+        "## Delivery Occurrence Identity Boundary",
+        r"`journal_offset` plus `journal_sequence` identifies a committed delivery/projection occurrence",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Occurrence Identity Boundary",
+        r"`object_key` identifies immutable raw RFC 5322 bytes only",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Occurrence Identity Boundary",
+        r"same `object_key` may back multiple committed `MessageDelivered` records",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Occurrence Identity Boundary",
+        r"does not define duplicate suppression, retry idempotency, same RFC Message-ID policy, or broader duplicate policy",
     )
 
     assert_section_matches(

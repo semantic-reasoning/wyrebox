@@ -50,6 +50,17 @@ contract.
 Object references in schema records must never imply raw byte rewrites. A raw
 object may be shared by many memberships without changing the object bytes.
 
+An object key identifies immutable raw RFC 5322 bytes only. It does not identify
+a delivered-message occurrence. The same object key may back multiple committed
+MessageDelivered records, and materialized message or membership rows must not
+treat object identity as delivery occurrence identity.
+
+For replay and materialized projections, journal location is the delivery
+occurrence boundary: `journal_offset` plus `journal_sequence` identifies a
+committed delivery/projection occurrence. This contract does not define
+duplicate suppression, retry idempotency, same RFC Message-ID policy, or broader
+duplicate policy.
+
 ## Required Materialized Schema Objects
 
 A first-phase materialized schema must provide, at minimum, these logical tables

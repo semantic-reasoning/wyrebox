@@ -113,6 +113,26 @@ def main() -> None:
         "## Stable Identity And Reference Model",
         r"immutable content.*object key",
     )
+    assert_section_matches(
+        sections,
+        "## Stable Identity And Reference Model",
+        r"object key identifies immutable raw RFC 5322 bytes only",
+    )
+    assert_section_matches(
+        sections,
+        "## Stable Identity And Reference Model",
+        r"same object key may back multiple committed MessageDelivered records",
+    )
+    assert_section_matches(
+        sections,
+        "## Stable Identity And Reference Model",
+        r"journal_offset.*journal_sequence.*committed delivery/projection occurrence",
+    )
+    assert_section_matches(
+        sections,
+        "## Stable Identity And Reference Model",
+        r"does not define duplicate suppression, retry idempotency, same RFC Message-ID policy, or broader duplicate policy",
+    )
 
     for table in [
         "accounts",
