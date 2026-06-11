@@ -11,3 +11,9 @@ wyrebox_daemon_runtime_get_default_socket_path (void)
 {
   return WYREBOX_DAEMON_DEFAULT_SOCKET_PATH;
 }
+
+const char *
+wyrebox_daemon_runtime_get_default_fact_dump_dir (void)
+{
+  return WYREBOX_DAEMON_DEFAULT_FACT_DUMP_DIR;
+}
