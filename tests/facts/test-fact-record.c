@@ -800,18 +800,24 @@ test_fact_record_wirelog_dump_directory_propagates_write_failure (void)
   };
   g_autoptr (GError) error = NULL;
   g_autoptr (GPtrArray) records = NULL;
+  g_autofree char *root = g_dir_make_tmp ("wyrebox-fact-record-XXXXXX", NULL);
+  g_autofree char *missing_path = NULL;
   g_autoptr (GFile) directory = NULL;
   g_autoptr (GFile) output = NULL;
 
+  g_assert_nonnull (root);
+  missing_path = g_build_filename (root, "missing", NULL);
   records = g_ptr_array_new_with_free_func (test_fact_record_free);
   g_ptr_array_add (records,
       test_fact_record_new ("participant", args, "header:to"));
-  directory = g_file_new_for_path ("/no/such/wyrebox");
+  directory = g_file_new_for_path (missing_path);
 
   output = wyrebox_fact_record_array_write_wirelog_dump (records,
       directory, "mail-1", 7, NULL, &error);
   g_assert_null (output);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+
+  remove_tree (root);
 }
 
 int
