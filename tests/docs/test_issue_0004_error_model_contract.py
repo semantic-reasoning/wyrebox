@@ -128,7 +128,7 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Dovecot Visible Mapping",
-        r"LIST.*SELECT.*fetch.*search.*flag.*IMAP-visible temporary backend failure",
+        r"LIST.*SELECT.*fetch.*search.*flag.*keyword.*IMAP-visible temporary backend failure",
     )
     assert_section_matches(
         sections,
@@ -168,7 +168,7 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Durability Boundary",
-        r"flag and fact mutations.*durable journal append",
+        r"flag, keyword, and fact mutations.*durable journal append",
     )
     assert_section_matches(
         sections,

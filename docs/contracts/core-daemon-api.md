@@ -16,6 +16,7 @@ This contract defines:
 - Delivery ingestion operation contract.
 - Mailbox LIST/SELECT operation contract.
 - Message FETCH operation contract.
+- Flag/keyword update operation contract.
 - State authority boundaries for Postfix helpers, Dovecot plugins, and local tools.
 
 It does not define concrete command payload schemas, daemon runtime internals, or
@@ -260,6 +261,68 @@ Wirelog mutation, object-store metadata mutation, raw object rewrite, direct
 journal append, direct journal write, or mutation journal append surfaces to
 Dovecot plugins or local callers. It accepts message FETCH inputs only.
 
+## Flag Keyword Update Operation Contract
+
+Flag/keyword update is a Dovecot-facing STORE-style mutation over the Cap'n
+Proto-over-UDS daemon API. This section defines operation behavior only; it
+does not define concrete `.capnp` schemas, field layouts, generated code, or
+Dovecot backend implementation.
+
+Every flag/keyword update request carries request and caller identity
+sufficient for `wyreboxd` to authorize and correlate the operation:
+
+- required `request_id`;
+- Dovecot/IMAP operation correlation ID where the caller stack can supply one;
+- caller/account identity;
+- stable selected-mailbox identity for an ordinary mailbox or virtual mailbox;
+- selected-mailbox `UIDVALIDITY` or equivalent selection epoch; and
+- mailbox-scoped UID or equivalent message reference within that selected
+  mailbox context.
+
+The caller/account identity scopes all access. The selected mailbox identity
+and mailbox-scoped UID/message reference are the mutation boundary. A
+flag/keyword update must not affect messages outside the authorized selected
+mailbox or virtual mailbox view, even when the same raw message object appears
+in multiple ordinary or virtual mailbox contexts.
+
+Flag/keyword update supports operation types for requested IMAP system flag and
+user keyword changes:
+
+- set the supplied system flags and user keywords;
+- clear the supplied system flags and user keywords; and
+- replace the current mailbox-scoped system flag and user keyword set with the
+  supplied values.
+
+The operation changes daemon-owned mailbox membership state only. It never
+rewrites raw RFC 5322 objects, never alters canonical object bytes, and never
+stores flags or keywords inside the raw message object.
+
+Dovecot-visible success is valid only after the corresponding flag/keyword
+mutation has reached the durable mutation-journal boundary. A success response
+includes `journal_offset` or an equivalent durable marker so the Dovecot caller
+path and logs can correlate the accepted mutation with durable state.
+
+Flag/keyword update error behavior is governed by
+`docs/contracts/error-model.md`:
+
+- an absent mailbox, selected mailbox outside the authorized scope, or absent
+  message reference in scope is `not found`;
+- account, mailbox, message, or view authorization failure is
+  `permission denied`;
+- stale `UIDVALIDITY`, stale selected-mailbox context, invalid selected state,
+  or a message reference that is not valid for that selected mailbox is
+  `conflict`;
+- transient mutation-journal, materialized-state, or daemon API failure is
+  `temporary backend failure` in the Dovecot caller path; and
+- ambiguous transport outcomes are not success.
+
+Flag/keyword update is daemon-mediated. It may cause daemon-owned journaled
+flag/keyword state mutation only through this operation. It does not expose
+arbitrary SQL, write SQL, DuckDB mutation, Wirelog mutation, object-store
+metadata mutation, raw object rewrite, direct journal append, direct journal
+write, or direct object-store/journal mutation surfaces to Dovecot plugins or
+local callers. It accepts flag/keyword update inputs only.
+
 ## State Authority Boundary
 
 `wyreboxd` remains the only mutable owner in the first architecture slice.
@@ -282,14 +345,14 @@ contract intentionally defines no runtime implementation details.
 Command payload schemas and operation groups are deferred to later issue-0004
 units:
 
-- flag/keyword update
 - search
 - fact insert/retract
 - Wirelog predicate query
 - safe DuckDB query templates
 
-Query-safety policy details are also deferred in this slice; in this slice, no
-arbitrary write SQL is allowed over the daemon API.
+Concrete flag/keyword `.capnp` schemas and field layouts are deferred, along
+with query-safety policy details. In this slice, no arbitrary write SQL is
+allowed over the daemon API.
 
 ## Out Of Scope
 

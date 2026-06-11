@@ -19,6 +19,7 @@ REQUIRED_SECTIONS = [
     "## Delivery Ingestion Operation Contract",
     "## Mailbox List Select Operation Contract",
     "## Message Fetch Operation Contract",
+    "## Flag Keyword Update Operation Contract",
     "## State Authority Boundary",
     "## Deferred Operation Payloads",
     "## Out Of Scope",
@@ -158,6 +159,71 @@ FETCH_FORBIDDEN_EXAMPLES = [
     "FETCH may write directly to the journal.",
 ]
 
+FLAG_KEYWORD_FORBIDDEN_SURFACES = [
+    r"arbitrary SQL",
+    r"write SQL",
+    r"DuckDB mutation",
+    r"Wirelog mutation",
+    r"object-store metadata mutation",
+    r"raw object rewrite",
+    r"raw message byte rewrite",
+    r"raw RFC 5322 object rewrite",
+    r"canonical object byte alteration",
+    r"direct journal append",
+    r"direct journal write",
+    r"direct object-store/journal mutation",
+]
+
+FLAG_KEYWORD_FORBIDDEN_SURFACE_PATTERNS = [
+    rf"(?<!not )\b(?:{DELIVERY_FORBIDDEN_SURFACE_VERBS})\b(?:\s+\S+){{0,8}}\s+{surface}"
+    for surface in FLAG_KEYWORD_FORBIDDEN_SURFACES
+]
+
+FLAG_KEYWORD_FORBIDDEN_MODAL_PATTERNS = [
+    rf"\b(may|can|must|should)\b\s+\b(expose|allow|permit|provide|accept|support|execute|enable|grant)\b.*{surface}"
+    for surface in FLAG_KEYWORD_FORBIDDEN_SURFACES
+]
+
+FLAG_KEYWORD_FORBIDDEN_DIRECT_ACTION_PATTERNS = [
+    r"\b(may|can|must|should|will)\b\s+mutate\s+DuckDB",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+Wirelog",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+object-store metadata",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+raw objects",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+journal state",
+    r"\b(may|can|must|should|will)\b\s+rewrite\s+raw message bytes",
+    r"\b(may|can|must|should|will)\b\s+rewrite\s+raw RFC 5322 objects",
+    r"\b(may|can|must|should|will)\b\s+alter\s+canonical object bytes",
+    r"\b(may|can|must|should|will)\b\s+append\s+mutation journal records",
+    r"\b(may|can|must|should|will)\b\s+append\s+to\s+the\s+mutation journal",
+    r"\b(may|can|must|should|will)\b\s+write\s+directly\s+to\s+the\s+journal",
+    r"\b(returns?|reports?|acknowledges?|surfaces?)\s+(?:Dovecot-visible\s+)?success\b.{0,80}before\s+durable\s+journal\s+append",
+    r"\b(may|can|must|should|will)\b\s+(?:\w+\s+){0,6}(?:return|report|acknowledge|surface)\s+(?:Dovecot-visible\s+)?success\b.{0,80}before\s+durable\s+journal\s+append",
+]
+
+FLAG_KEYWORD_FORBIDDEN_EXAMPLES = [
+    "Flag/keyword update exposes arbitrary SQL.",
+    "Flag/keyword update accepts write SQL from Dovecot.",
+    "Flag/keyword update enables DuckDB mutation by plugins.",
+    "Flag/keyword update supports Wirelog mutation by plugins.",
+    "Flag/keyword update provides object-store metadata mutation access.",
+    "Flag/keyword update grants direct journal append access.",
+    "Flag/keyword update allows direct journal write access.",
+    "Flag/keyword update exposes direct object-store/journal mutation surfaces.",
+    "Flag/keyword update may mutate DuckDB.",
+    "Flag/keyword update may mutate Wirelog.",
+    "Flag/keyword update may mutate object-store metadata.",
+    "Flag/keyword update may mutate raw objects.",
+    "Flag/keyword update may mutate journal state.",
+    "Flag/keyword update may rewrite raw message bytes.",
+    "Flag/keyword update may rewrite raw RFC 5322 objects.",
+    "Flag/keyword update may alter canonical object bytes.",
+    "Flag/keyword update may append mutation journal records.",
+    "Flag/keyword update may append to the mutation journal.",
+    "Flag/keyword update may write directly to the journal.",
+    "Flag/keyword update returns success before durable journal append.",
+    "Flag/keyword update may return Dovecot-visible success before durable journal append.",
+]
+
 
 def section_map(text: str) -> dict[str, str]:
     matches = list(re.finditer(r"^## .+$", text, flags=re.MULTILINE))
@@ -232,6 +298,11 @@ def main() -> None:
         sections,
         "## Scope",
         r"Message FETCH operation contract",
+    )
+    assert_section_matches(
+        sections,
+        "## Scope",
+        r"Flag/keyword update operation contract",
     )
     assert_section_matches(
         sections,
@@ -656,6 +727,119 @@ def main() -> None:
 
     assert_section_matches(
         sections,
+        "## Flag Keyword Update Operation Contract",
+        r"Dovecot-facing STORE-style mutation",
+    )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"Cap'n Proto-over-UDS",
+    )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"does not define concrete `.capnp` schemas, field layouts, generated code, or Dovecot backend implementation",
+    )
+    for identity_field in [
+        "request_id",
+        "Dovecot/IMAP operation correlation",
+        "caller/account identity",
+        "stable selected-mailbox identity",
+        "UIDVALIDITY",
+        "UID",
+        "message reference",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Flag Keyword Update Operation Contract",
+            identity_field,
+        )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"caller/account identity.*scopes all access",
+    )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"selected mailbox identity.*mailbox-scoped UID/message reference.*mutation boundary",
+    )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"must not affect messages outside the authorized selected mailbox or virtual mailbox view",
+    )
+    for operation_type in [
+        "set the supplied system flags and user keywords",
+        "clear the supplied system flags and user keywords",
+        "replace the current mailbox-scoped system flag and user keyword set",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Flag Keyword Update Operation Contract",
+            operation_type,
+        )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"never rewrites raw RFC 5322 objects",
+    )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"never alters canonical object bytes",
+    )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"never stores flags or keywords inside the raw message object",
+    )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"Dovecot-visible success.*only after.*durable mutation-journal boundary",
+    )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"journal_offset.*equivalent durable marker",
+    )
+    for error_case in [
+        "not found",
+        "permission denied",
+        "conflict",
+        "temporary backend failure",
+        "docs/contracts/error-model.md",
+        "ambiguous transport outcomes are not success",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Flag Keyword Update Operation Contract",
+            error_case,
+        )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"stale `UIDVALIDITY`.*stale selected-mailbox context.*invalid selected state",
+    )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"daemon-mediated",
+    )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"daemon-owned journaled flag/keyword state mutation only through this operation",
+    )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"does not expose arbitrary SQL, write SQL, DuckDB mutation, Wirelog mutation, object-store metadata mutation, raw object rewrite, direct journal append, direct journal write, or direct object-store/journal mutation surfaces",
+    )
+
+    assert_section_matches(
+        sections,
         "## State Authority Boundary",
         r"wyreboxd.*only mutable owner",
     )
@@ -676,13 +860,17 @@ def main() -> None:
     )
 
     for operation in [
-        "flag/keyword update",
         "search",
         "fact insert/retract",
         "Wirelog predicate query",
         "safe DuckDB query templates",
     ]:
         assert_in_section(sections, "## Deferred Operation Payloads", operation)
+    assert_section_matches(
+        sections,
+        "## Deferred Operation Payloads",
+        r"Concrete flag/keyword `.capnp` schemas and field layouts are deferred",
+    )
     assert_section_matches(
         sections,
         "## Deferred Operation Payloads",
@@ -782,6 +970,31 @@ def main() -> None:
             FETCH_FORBIDDEN_SURFACE_PATTERNS
             + FETCH_FORBIDDEN_MODAL_PATTERNS
             + FETCH_FORBIDDEN_DIRECT_ACTION_PATTERNS,
+        )
+    for pattern in FLAG_KEYWORD_FORBIDDEN_SURFACE_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## Flag Keyword Update Operation Contract",
+            pattern,
+        )
+    for pattern in FLAG_KEYWORD_FORBIDDEN_MODAL_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## Flag Keyword Update Operation Contract",
+            pattern,
+        )
+    for pattern in FLAG_KEYWORD_FORBIDDEN_DIRECT_ACTION_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## Flag Keyword Update Operation Contract",
+            pattern,
+        )
+    for example in FLAG_KEYWORD_FORBIDDEN_EXAMPLES:
+        assert_any_pattern_matches(
+            sections["## Flag Keyword Update Operation Contract"] + "\n" + example,
+            FLAG_KEYWORD_FORBIDDEN_SURFACE_PATTERNS
+            + FLAG_KEYWORD_FORBIDDEN_MODAL_PATTERNS
+            + FLAG_KEYWORD_FORBIDDEN_DIRECT_ACTION_PATTERNS,
         )
 
 

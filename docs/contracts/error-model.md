@@ -62,7 +62,7 @@ For delivery operations:
 
 ## Dovecot Visible Mapping
 
-For Dovecot-visible LIST, SELECT, fetch, search, and flag operations:
+For Dovecot-visible LIST, SELECT, fetch, search, flag, and keyword operations:
 
 - Transport/access and temporary conditions map to IMAP-visible temporary backend
   failure.
@@ -90,7 +90,7 @@ result must remain temporary and must not be converted into any success state.
 Delivery success is valid only after all required durability steps complete:
 
 - durable raw object storage and durable journal append for delivery; and
-- durable journal append for flag and fact mutations.
+- durable journal append for flag, keyword, and fact mutations.
 
 This contract does not weaken the mutation-journal requirement that commit
 success is contingent on durable journal append and recovery-safe ordering.
