@@ -14,3 +14,17 @@ test(
     'WYREBOX_EML_FIXTURE_DIR': eml_fixture_dir,
   },
 )
+
+eml_metadata_test = executable(
+  'test-eml-metadata',
+  'test-eml-metadata.c',
+  dependencies: [wyrebox_dep],
+)
+
+test(
+  'eml metadata',
+  eml_metadata_test,
+  env: {
+    'WYREBOX_EML_FIXTURE_DIR': eml_fixture_dir,
+  },
+)
