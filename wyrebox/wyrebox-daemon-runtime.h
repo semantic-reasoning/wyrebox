@@ -16,6 +16,10 @@ const char *wyrebox_daemon_runtime_get_default_socket_path (void);
 
 const char *wyrebox_daemon_runtime_get_default_fact_dump_dir (void);
 
+/*
+ * Returns: (transfer full): caller-owned runtime fact dump directory file.
+ * Free with g_object_unref().
+ */
 GFile *wyrebox_daemon_runtime_get_default_fact_dump_file (void);
 
 G_END_DECLS

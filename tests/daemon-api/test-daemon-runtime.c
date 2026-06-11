@@ -29,7 +29,8 @@ test_default_fact_dump_file_is_owned_gfile (void)
 {
   g_autoptr (GFile) first = NULL;
   g_autoptr (GFile) second = NULL;
-  g_autofree char *path = NULL;
+  g_autofree char *first_path = NULL;
+  g_autofree char *second_path = NULL;
 
   first = wyrebox_daemon_runtime_get_default_fact_dump_file ();
   second = wyrebox_daemon_runtime_get_default_fact_dump_file ();
@@ -38,8 +39,10 @@ test_default_fact_dump_file_is_owned_gfile (void)
   g_assert_nonnull (second);
   g_assert_true (first != second);
 
-  path = g_file_get_path (first);
-  g_assert_cmpstr (path, ==, "/run/wyrebox/facts");
+  first_path = g_file_get_path (first);
+  second_path = g_file_get_path (second);
+  g_assert_cmpstr (first_path, ==, "/run/wyrebox/facts");
+  g_assert_cmpstr (second_path, ==, "/run/wyrebox/facts");
 }
 
 int
