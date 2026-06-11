@@ -1,5 +1,6 @@
 #include "wyrebox-fact-record.h"
 
+#include <limits.h>
 #include <string.h>
 
 #include <gio/gio.h>
@@ -753,6 +754,35 @@ test_fact_record_wirelog_dump_filename_allows_zero_sequence (void)
 }
 
 static void
+test_fact_record_wirelog_dump_filename_accepts_maximum_identifier (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autofree char *batch_id = NULL;
+  g_autofree char *filename = NULL;
+
+  batch_id = g_strnfill (NAME_MAX - 24, 'a');
+  filename =
+      wyrebox_fact_record_build_wirelog_dump_filename (batch_id, 1, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (filename);
+  g_assert_cmpuint (strlen (filename), ==, NAME_MAX);
+}
+
+static void
+test_fact_record_wirelog_dump_filename_rejects_too_long_identifier (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autofree char *batch_id = NULL;
+  g_autofree char *filename = NULL;
+
+  batch_id = g_strnfill (NAME_MAX - 23, 'a');
+  filename =
+      wyrebox_fact_record_build_wirelog_dump_filename (batch_id, 1, &error);
+  g_assert_null (filename);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
 test_fact_record_writes_wirelog_dump_to_directory (void)
 {
   const char *args[] = {
@@ -894,6 +924,12 @@ main (int argc, char **argv)
   g_test_add_func ("/facts/fact-record/"
       "wirelog-dump-filename-allows-zero-sequence",
       test_fact_record_wirelog_dump_filename_allows_zero_sequence);
+  g_test_add_func ("/facts/fact-record/"
+      "wirelog-dump-filename-accepts-maximum-identifier",
+      test_fact_record_wirelog_dump_filename_accepts_maximum_identifier);
+  g_test_add_func ("/facts/fact-record/"
+      "wirelog-dump-filename-rejects-too-long-identifier",
+      test_fact_record_wirelog_dump_filename_rejects_too_long_identifier);
   g_test_add_func ("/facts/fact-record/writes-wirelog-dump-to-directory",
       test_fact_record_writes_wirelog_dump_to_directory);
   g_test_add_func ("/facts/fact-record/"

@@ -1,10 +1,12 @@
 #include "wyrebox-fact-record.h"
 
+#include <limits.h>
 #include <string.h>
 
 #include <gio/gio.h>
 
 #define WYREBOX_FACT_CONFIDENCE_EXACT 1000000u
+#define WYREBOX_WIRELOG_DUMP_FILENAME_FIXED_BYTES 24u
 
 void
 wyrebox_fact_record_clear (WyreboxFactRecord *record)
@@ -368,6 +370,13 @@ wyrebox_fact_record_build_wirelog_dump_filename (const char *batch_id,
       g_string_append_c (sanitized, *cursor);
     else
       g_string_append_c (sanitized, '_');
+  }
+
+  if (sanitized->len > NAME_MAX - WYREBOX_WIRELOG_DUMP_FILENAME_FIXED_BYTES) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "Wirelog dump batch id is too long");
+    return NULL;
   }
 
   return g_strdup_printf ("%020" G_GUINT64_FORMAT "-%s.wl",
