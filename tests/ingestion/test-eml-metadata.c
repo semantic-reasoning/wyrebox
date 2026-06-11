@@ -135,6 +135,42 @@ test_unfolds_header_continuations (void)
 }
 
 static void
+test_preserves_final_selected_header_byte (void)
+{
+  static const char message_id_last_raw[] =
+      "From: Sender <sender@example.test>\r\n"
+      "Message-ID: <last@example.test>\r\n" "\r\n" "Body";
+  static const char subject_last_raw[] =
+      "Message-ID: <subject-prefix@example.test>\r\n"
+      "Subject: Last header\r\n" "\r\n" "Body";
+
+  {
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
+
+    bytes = g_bytes_new_static (message_id_last_raw,
+        strlen (message_id_last_raw));
+
+    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (metadata.message_id, ==, "<last@example.test>");
+  }
+
+  {
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
+
+    bytes = g_bytes_new_static (subject_last_raw, strlen (subject_last_raw));
+
+    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (metadata.subject, ==, "Last header");
+  }
+}
+
+static void
 test_missing_header_body_separator_is_invalid (void)
 {
   static const char raw[] =
@@ -165,6 +201,8 @@ main (int argc, char **argv)
       test_non_ascii_headers_preserve_rfc2047_values);
   g_test_add_func ("/ingestion/eml-metadata/header-continuations",
       test_unfolds_header_continuations);
+  g_test_add_func ("/ingestion/eml-metadata/final-selected-header-byte",
+      test_preserves_final_selected_header_byte);
   g_test_add_func ("/ingestion/eml-metadata/missing-separator",
       test_missing_header_body_separator_is_invalid);
 

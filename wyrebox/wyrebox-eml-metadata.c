@@ -149,15 +149,24 @@ wyrebox_eml_metadata_parse_bytes (GBytes *bytes,
     gsize line_start = offset;
     gsize line_end = offset;
     gsize line_len = 0;
+    gboolean has_line_terminator = FALSE;
     const guint8 *line = NULL;
     const guint8 *colon = NULL;
 
-    while (line_end + 1 < header_len &&
-        !(data[line_end] == '\r' && data[line_end + 1] == '\n'))
+    while (line_end + 1 < header_len) {
+      if (data[line_end] == '\r' && data[line_end + 1] == '\n') {
+        has_line_terminator = TRUE;
+        break;
+      }
+
       line_end++;
+    }
 
     line = data + line_start;
-    line_len = line_end - line_start;
+    if (has_line_terminator)
+      line_len = line_end - line_start;
+    else
+      line_len = header_len - line_start;
 
     if (line_len > 0 &&
         (line[0] == ' ' || line[0] == '\t') && current_value != NULL) {
@@ -173,7 +182,7 @@ wyrebox_eml_metadata_parse_bytes (GBytes *bytes,
             line, line_len, colon);
     }
 
-    if (line_end + 1 < header_len)
+    if (has_line_terminator)
       offset = line_end + 2;
     else
       offset = header_len;
