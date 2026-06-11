@@ -650,6 +650,49 @@ test_fact_record_wirelog_file_writer_serializes_before_replace (void)
   remove_tree (root);
 }
 
+static void
+test_fact_record_wirelog_file_readback_preserves_batch_format (void)
+{
+  const char *participant_args[] = {
+    "mail\"1",
+    "line\\one\nline\ttwo",
+    NULL,
+  };
+  const char *sender_args[] = {
+    "mail-1",
+    "example.test",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autofree char *root = g_dir_make_tmp ("wyrebox-fact-record-XXXXXX", NULL);
+  g_autofree char *path = NULL;
+  g_autoptr (GFile) file = NULL;
+  g_autofree char *contents = NULL;
+  gsize length = 0;
+  const char *expected =
+      "participant(\"mail\\\"1\", \"line\\\\one\\nline\\ttwo\").\n"
+      "sender_domain(\"mail-1\", \"example.test\").\n";
+
+  g_assert_nonnull (root);
+  path = g_build_filename (root, "facts.wl", NULL);
+  file = g_file_new_for_path (path);
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  g_ptr_array_add (records,
+      test_fact_record_new ("participant", participant_args, "header:to"));
+  g_ptr_array_add (records,
+      test_fact_record_new ("sender_domain", sender_args, "header:from"));
+
+  g_assert_true (wyrebox_fact_record_array_write_wirelog_fact_file (records,
+          file, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (g_file_get_contents (path, &contents, &length, &error));
+  g_assert_no_error (error);
+  g_assert_cmpmem (contents, length, expected, strlen (expected));
+
+  remove_tree (root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -707,6 +750,9 @@ main (int argc, char **argv)
   g_test_add_func ("/facts/fact-record/"
       "wirelog-file-writer-serializes-before-replace",
       test_fact_record_wirelog_file_writer_serializes_before_replace);
+  g_test_add_func ("/facts/fact-record/"
+      "wirelog-file-readback-preserves-batch-format",
+      test_fact_record_wirelog_file_readback_preserves_batch_format);
 
   return g_test_run ();
 }
