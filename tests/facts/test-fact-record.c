@@ -729,6 +729,29 @@ test_fact_record_wirelog_dump_filename_rejects_missing_identifier (void)
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 }
 
+static void
+test_fact_record_wirelog_dump_filename_rejects_null_identifier (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autofree char *filename = NULL;
+
+  filename = wyrebox_fact_record_build_wirelog_dump_filename (NULL, 7, &error);
+  g_assert_null (filename);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
+test_fact_record_wirelog_dump_filename_allows_zero_sequence (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autofree char *filename = NULL;
+
+  filename =
+      wyrebox_fact_record_build_wirelog_dump_filename ("bootstrap", 0, &error);
+  g_assert_no_error (error);
+  g_assert_cmpstr (filename, ==, "00000000000000000000-bootstrap.wl");
+}
+
 int
 main (int argc, char **argv)
 {
@@ -797,6 +820,12 @@ main (int argc, char **argv)
   g_test_add_func ("/facts/fact-record/"
       "wirelog-dump-filename-rejects-missing-identifier",
       test_fact_record_wirelog_dump_filename_rejects_missing_identifier);
+  g_test_add_func ("/facts/fact-record/"
+      "wirelog-dump-filename-rejects-null-identifier",
+      test_fact_record_wirelog_dump_filename_rejects_null_identifier);
+  g_test_add_func ("/facts/fact-record/"
+      "wirelog-dump-filename-allows-zero-sequence",
+      test_fact_record_wirelog_dump_filename_allows_zero_sequence);
 
   return g_test_run ();
 }
