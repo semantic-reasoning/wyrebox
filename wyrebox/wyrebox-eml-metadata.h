@@ -33,6 +33,8 @@ typedef struct
   char *cc;
   char *bcc;
   char *date;
+  char *in_reply_to;
+  char *references;
 
   /*
    * Size of the raw RFC 5322 message bytes supplied to the parser.

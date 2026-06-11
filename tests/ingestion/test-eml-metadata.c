@@ -135,6 +135,31 @@ test_unfolds_header_continuations (void)
 }
 
 static void
+test_preserves_thread_reference_headers (void)
+{
+  static const char raw[] =
+      "From: Reply <reply@example.test>\r\n"
+      "To: Parent <parent@example.test>\r\n"
+      "Subject: Re: parent\r\n"
+      "Date: Thu, 11 Jun 2026 01:00:00 +0000\r\n"
+      "Message-ID: <reply@example.test>\r\n"
+      "In-Reply-To: <parent@example.test>\r\n"
+      "References: <root@example.test>\r\n"
+      " <parent@example.test>\r\n" "\r\n" "Body.\r\n";
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) bytes = NULL;
+  g_auto (WyreboxEmlMetadata) metadata = { 0 };
+
+  bytes = g_bytes_new_static (raw, strlen (raw));
+
+  g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (metadata.in_reply_to, ==, "<parent@example.test>");
+  g_assert_cmpstr (metadata.references, ==,
+      "<root@example.test> <parent@example.test>");
+}
+
+static void
 test_preserves_final_selected_header_byte (void)
 {
   static const char message_id_last_raw[] =
@@ -201,6 +226,8 @@ main (int argc, char **argv)
       test_non_ascii_headers_preserve_rfc2047_values);
   g_test_add_func ("/ingestion/eml-metadata/header-continuations",
       test_unfolds_header_continuations);
+  g_test_add_func ("/ingestion/eml-metadata/thread-reference-headers",
+      test_preserves_thread_reference_headers);
   g_test_add_func ("/ingestion/eml-metadata/final-selected-header-byte",
       test_preserves_final_selected_header_byte);
   g_test_add_func ("/ingestion/eml-metadata/missing-separator",

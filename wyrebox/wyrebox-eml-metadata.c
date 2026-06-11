@@ -17,6 +17,8 @@ wyrebox_eml_metadata_clear (WyreboxEmlMetadata *metadata)
   g_clear_pointer (&metadata->cc, g_free);
   g_clear_pointer (&metadata->bcc, g_free);
   g_clear_pointer (&metadata->date, g_free);
+  g_clear_pointer (&metadata->in_reply_to, g_free);
+  g_clear_pointer (&metadata->references, g_free);
   metadata->size_bytes = 0;
   metadata->duplicate_message_id_count = 0;
 }
@@ -77,6 +79,10 @@ commit_header (WyreboxEmlMetadata *metadata, const char *name, GString *value)
     set_first_value (&metadata->bcc, value);
   } else if (g_ascii_strcasecmp (name, "Date") == 0) {
     set_first_value (&metadata->date, value);
+  } else if (g_ascii_strcasecmp (name, "In-Reply-To") == 0) {
+    set_first_value (&metadata->in_reply_to, value);
+  } else if (g_ascii_strcasecmp (name, "References") == 0) {
+    set_first_value (&metadata->references, value);
   }
 }
 
@@ -198,6 +204,8 @@ wyrebox_eml_metadata_parse_bytes (GBytes *bytes,
   metadata.cc = NULL;
   metadata.bcc = NULL;
   metadata.date = NULL;
+  metadata.in_reply_to = NULL;
+  metadata.references = NULL;
   metadata.size_bytes = 0;
   metadata.duplicate_message_id_count = 0;
 
