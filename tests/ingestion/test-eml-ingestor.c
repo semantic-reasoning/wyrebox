@@ -1,5 +1,8 @@
 #include "wyrebox-eml-ingestor.h"
+#include "wyrebox-journal-reader.h"
+#include "wyrebox-journal-writer.h"
 #include "wyrebox-local-object-store.h"
+#include "wyrebox-message-delivered-payload.h"
 
 #include <glib.h>
 #include <glib/gstdio.h>
@@ -83,6 +86,8 @@ test_ingests_raw_fixture_into_object_store (void)
   g_assert_true (g_regex_match_simple ("^sha256:[0-9a-f]{64}$",
           result.object_key, 0, 0));
   g_assert_cmpuint (result.size_bytes, ==, input_size);
+  g_assert_cmpuint (result.journal_offset, ==, 0);
+  g_assert_cmpuint (result.journal_sequence, ==, 0);
 
   output = wyrebox_local_object_store_get_bytes (store, result.object_key,
       &error);
@@ -93,6 +98,88 @@ test_ingests_raw_fixture_into_object_store (void)
   remove_tree (root);
 }
 
+static void
+test_ingests_raw_fixture_and_appends_message_delivered_journal (void)
+{
+  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-eml-ingestor-objects-XXXXXX", NULL);
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-eml-ingestor-journal-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) input = NULL;
+  g_autoptr (GBytes) output = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+  g_auto (WyreboxEmlIngestResult) result = { 0 };
+  g_auto (WyreboxJournalRecord) record = { 0 };
+  g_auto (WyreboxMessageDeliveredPayload) decoded = { 0 };
+  gboolean eof = FALSE;
+  gsize input_size = 0;
+
+  g_assert_nonnull (fixture_dir);
+  g_assert_nonnull (object_root);
+  g_assert_nonnull (journal_root);
+
+  input = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
+  input_size = g_bytes_get_size (input);
+  store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+
+  ingestor = wyrebox_eml_ingestor_new_with_journal (store, writer);
+  g_assert_nonnull (ingestor);
+
+  g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, input,
+          &result, &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (result.object_key);
+  g_assert_true (g_regex_match_simple ("^sha256:[0-9a-f]{64}$",
+          result.object_key, 0, 0));
+  g_assert_cmpuint (result.size_bytes, ==, input_size);
+  g_assert_cmpuint (result.journal_offset, ==, 0);
+  g_assert_cmpuint (result.journal_sequence, ==, 1);
+
+  output = wyrebox_local_object_store_get_bytes (store, result.object_key,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (output);
+  assert_bytes_equal (output, input);
+
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  g_assert_true (wyrebox_journal_reader_read_next (reader,
+          &record, &eof, &error));
+  g_assert_no_error (error);
+  g_assert_false (eof);
+  g_assert_cmpint (record.event_type,
+      ==, WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED);
+  g_assert_cmpuint (record.offset, ==, result.journal_offset);
+  g_assert_cmpuint (record.sequence, ==, result.journal_sequence);
+
+  g_assert_true (wyrebox_message_delivered_payload_decode (record.payload,
+          &decoded, &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (decoded.object_key, ==, result.object_key);
+  g_assert_cmpuint (decoded.size_bytes, ==, result.size_bytes);
+
+  g_assert_false (wyrebox_journal_reader_read_next (reader,
+          &record, &eof, &error));
+  g_assert_no_error (error);
+  g_assert_true (eof);
+
+  remove_tree (object_root);
+  remove_tree (journal_root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -100,6 +187,8 @@ main (int argc, char **argv)
 
   g_test_add_func ("/ingestion/eml-ingestor/raw-fixture-into-object-store",
       test_ingests_raw_fixture_into_object_store);
+  g_test_add_func ("/ingestion/eml-ingestor/message-delivered-journal",
+      test_ingests_raw_fixture_and_appends_message_delivered_journal);
 
   return g_test_run ();
 }
