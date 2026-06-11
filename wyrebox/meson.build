@@ -1,5 +1,6 @@
 wyrebox_sources = files(
   'wyrebox-local-object-store.c',
+  'wyrebox-journal-writer.c',
 )
 
 wyrebox_inc = include_directories('.')

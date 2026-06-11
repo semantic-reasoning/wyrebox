@@ -56,3 +56,4 @@ test(
 )
 
 subdir('tests/object-store')
+subdir('tests/journal')
