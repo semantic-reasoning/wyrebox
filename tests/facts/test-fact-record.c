@@ -502,6 +502,31 @@ test_fact_record_wirelog_batch_write_and_close_propagates_close_error (void)
 }
 
 static void
+    test_fact_record_wirelog_batch_write_and_close_keeps_stream_on_validation_error
+    (void)
+{
+  const char *args[] = {
+    "mail-1",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autoptr (GOutputStream) stream = NULL;
+  WyreboxFactRecord *record = NULL;
+
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  record = test_fact_record_new ("participant", args, "header:to");
+  g_clear_pointer (&record->predicate, g_free);
+  g_ptr_array_add (records, record);
+  stream = test_output_stream_new (FALSE, FALSE);
+
+  g_assert_false (wyrebox_fact_record_array_write_wirelog_facts_and_close
+      (records, stream, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpuint (((TestOutputStream *) stream)->close_calls, ==, 0);
+}
+
+static void
 test_fact_record_writes_wirelog_batch_to_file (void)
 {
   const char *args[] = {
@@ -669,6 +694,9 @@ main (int argc, char **argv)
   g_test_add_func ("/facts/fact-record/"
       "wirelog-batch-write-and-close-propagates-close-error",
       test_fact_record_wirelog_batch_write_and_close_propagates_close_error);
+  g_test_add_func ("/facts/fact-record/"
+      "wirelog-batch-write-and-close-keeps-stream-on-validation-error",
+      test_fact_record_wirelog_batch_write_and_close_keeps_stream_on_validation_error);
   g_test_add_func ("/facts/fact-record/writes-wirelog-batch-to-file",
       test_fact_record_writes_wirelog_batch_to_file);
   g_test_add_func ("/facts/fact-record/wirelog-file-writer-replaces-existing",

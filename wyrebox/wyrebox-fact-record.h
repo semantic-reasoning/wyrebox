@@ -62,6 +62,14 @@ gboolean wyrebox_fact_record_array_write_wirelog_facts (GPtrArray *records,
     GCancellable *cancellable,
     GError **error);
 
+/*
+ * Writes records and then closes stream.
+ *
+ * If record validation or serialization fails before any write is attempted,
+ * stream is not closed and remains owned by the caller. Once a write is
+ * attempted, the stream is closed on both success and failure; write errors
+ * keep precedence over best-effort close errors.
+ */
 gboolean wyrebox_fact_record_array_write_wirelog_facts_and_close (
     GPtrArray *records,
     GOutputStream *stream,
