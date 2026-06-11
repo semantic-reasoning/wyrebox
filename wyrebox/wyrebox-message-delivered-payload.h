@@ -2,6 +2,8 @@
 
 #include <glib-object.h>
 
+#include "wyrebox-eml-metadata.h"
+
 typedef struct
 {
   /*
@@ -16,6 +18,29 @@ typedef struct
    * Size of the delivered raw RFC 5322 bytes, in bytes.
    */
   guint64 size_bytes;
+
+  /*
+   * Caller-supplied internal delivery date as Unix microseconds. Zero means
+   * absent/unknown at this boundary; this codec stores but does not parse it.
+   */
+  guint64 internal_date_unix_us;
+
+  /*
+   * Owned nullable parsed EML metadata fields. Values are raw unfolded header
+   * values supplied by the caller, not parsed or normalized by this codec.
+   */
+  char *message_id;
+  char *subject;
+  char *from;
+  char *to;
+  char *cc;
+  char *bcc;
+  char *date;
+
+  /*
+   * Number of additional Message-ID headers after the first canonical value.
+   */
+  guint duplicate_message_id_count;
 } WyreboxMessageDeliveredPayload;
 
 /* *INDENT-OFF* */
@@ -34,6 +59,19 @@ void wyrebox_message_delivered_payload_clear (
  */
 GBytes *wyrebox_message_delivered_payload_encode (const char *object_key,
     guint64 size_bytes,
+    GError **error);
+
+/*
+ * @metadata: (nullable): parsed EML metadata to copy into the payload.
+ * @internal_date_unix_us: caller-supplied internal delivery date as Unix
+ *   microseconds, or zero when absent/unknown.
+ *
+ * Returns: (transfer full): encoded MessageDelivered journal payload bytes.
+ */
+GBytes *wyrebox_message_delivered_payload_encode_full (const char *object_key,
+    guint64 size_bytes,
+    const WyreboxEmlMetadata *metadata,
+    guint64 internal_date_unix_us,
     GError **error);
 
 /*
