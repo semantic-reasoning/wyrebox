@@ -23,6 +23,7 @@ REQUIRED_SECTIONS = [
     "## Flag Keyword Update Operation Contract",
     "## Fact Insert Retract Mutation Operation Contract",
     "## Wirelog Predicate Query Operation Contract",
+    "## DuckDB Query Template Operation Contract",
     "## State Authority Boundary",
     "## Deferred Operation Payloads",
     "## Out Of Scope",
@@ -415,6 +416,78 @@ WIRELOG_QUERY_FORBIDDEN_EXAMPLES = [
     "Wirelog predicate query may write directly to the journal.",
 ]
 
+DUCKDB_QUERY_TEMPLATE_FORBIDDEN_SURFACES = [
+    r"arbitrary SQL",
+    r"raw DuckDB query strings?",
+    r"raw DuckDB SQL",
+    r"write SQL",
+    r"DDL",
+    r"DML",
+    r"direct DuckDB query execution",
+    r"DuckDB mutation",
+    r"Wirelog mutation",
+    r"Wirelog query",
+    r"object-store metadata mutation",
+    r"raw object mutation",
+    r"raw object rewrite",
+    r"raw message byte rewrite",
+    r"direct journal append",
+    r"direct journal write",
+    r"mutation journal append surface",
+]
+
+DUCKDB_QUERY_TEMPLATE_FORBIDDEN_SURFACE_PATTERNS = [
+    rf"(?<!not )\b(?:{DELIVERY_FORBIDDEN_SURFACE_VERBS})\b(?:\s+\S+){{0,8}}\s+{surface}"
+    for surface in DUCKDB_QUERY_TEMPLATE_FORBIDDEN_SURFACES
+]
+
+DUCKDB_QUERY_TEMPLATE_FORBIDDEN_MODAL_PATTERNS = [
+    rf"\b(may|can|must|should)\b\s+\b(expose|allow|permit|provide|accept|support|execute|enable|grant)\b.*{surface}"
+    for surface in DUCKDB_QUERY_TEMPLATE_FORBIDDEN_SURFACES
+]
+
+DUCKDB_QUERY_TEMPLATE_FORBIDDEN_DIRECT_ACTION_PATTERNS = [
+    r"\b(may|can|must|should|will)\b\s+mutate\s+DuckDB",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+Wirelog",
+    r"\b(may|can|must|should|will)\b\s+query\s+Wirelog",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+object-store metadata",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+raw objects",
+    r"\b(may|can|must|should|will)\b\s+rewrite\s+raw message bytes",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+journal state",
+    r"\b(may|can|must|should|will)\b\s+append\s+mutation journal records",
+    r"\b(may|can|must|should|will)\b\s+append\s+to\s+the\s+mutation journal",
+    r"\b(may|can|must|should|will)\b\s+write\s+directly\s+to\s+the\s+journal",
+]
+
+DUCKDB_QUERY_TEMPLATE_FORBIDDEN_EXAMPLES = [
+    "DuckDB query template exposes arbitrary SQL.",
+    "DuckDB query template accepts raw DuckDB query strings.",
+    "DuckDB query template accepts raw DuckDB SQL.",
+    "DuckDB query template accepts write SQL.",
+    "DuckDB query template accepts DDL.",
+    "DuckDB query template accepts DML.",
+    "DuckDB query template supports direct DuckDB query execution.",
+    "DuckDB query template enables DuckDB mutation by tools.",
+    "DuckDB query template supports Wirelog mutation.",
+    "DuckDB query template exposes Wirelog query surfaces.",
+    "DuckDB query template provides object-store metadata mutation access.",
+    "DuckDB query template exposes raw object mutation.",
+    "DuckDB query template exposes raw object rewrite.",
+    "DuckDB query template grants direct journal append access.",
+    "DuckDB query template allows direct journal write access.",
+    "DuckDB query template exposes a mutation journal append surface.",
+    "DuckDB query template may mutate DuckDB.",
+    "DuckDB query template may mutate Wirelog.",
+    "DuckDB query template may query Wirelog.",
+    "DuckDB query template may mutate object-store metadata.",
+    "DuckDB query template may mutate raw objects.",
+    "DuckDB query template may rewrite raw message bytes.",
+    "DuckDB query template may mutate journal state.",
+    "DuckDB query template may append mutation journal records.",
+    "DuckDB query template may append to the mutation journal.",
+    "DuckDB query template may write directly to the journal.",
+]
+
 
 def section_map(text: str) -> dict[str, str]:
     matches = list(re.finditer(r"^## .+$", text, flags=re.MULTILINE))
@@ -509,6 +582,11 @@ def main() -> None:
         sections,
         "## Scope",
         r"Wirelog predicate query operation contract",
+    )
+    assert_section_matches(
+        sections,
+        "## Scope",
+        r"DuckDB query-template operation contract",
     )
     assert_section_matches(
         sections,
@@ -1291,7 +1369,7 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Fact Insert Retract Mutation Operation Contract",
-        r"DuckDB query-template API is deferred",
+        r"DuckDB query-template operation is separate",
     )
 
     assert_section_matches(
@@ -1463,7 +1541,179 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Wirelog Predicate Query Operation Contract",
-        r"safe DuckDB query-template API is separate and deferred",
+        r"safe DuckDB query-template operation is separate",
+    )
+
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"read-only daemon operation",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"authorized local tools/skills",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"Cap'n Proto-over-UDS",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"not a Dovecot IMAP client operation",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"not a Wirelog predicate query operation",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"does not define concrete `.capnp` schemas, field layouts, generated code, template catalog implementation, DuckDB integration, or query execution code",
+    )
+    for identity_field in [
+        "request_id",
+        "caller/tool identity",
+        "authorization/audit identity",
+        "operation correlation",
+    ]:
+        assert_section_matches(
+            sections,
+            "## DuckDB Query Template Operation Contract",
+            identity_field,
+        )
+    for input_field in [
+        "known query-template/catalog identity",
+        "typed parameters",
+        "daemon-owned catalog",
+        "operation inputs",
+    ]:
+        assert_section_matches(
+            sections,
+            "## DuckDB Query Template Operation Contract",
+            input_field,
+        )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"no arbitrary SQL text, raw DuckDB query strings, write SQL, DDL, or DML",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"Authorization scope.*caller/tool identity, template, catalog, account, tenant, source",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"must not be able to query templates or data outside that scope",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"daemon-owned and cataloged",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"read-only templates",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"may read daemon-owned DuckDB materialized state",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"structured rows and columns",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"typed values",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"bounded, pageable, or streamed",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"chunks or cursors.*request_id.*query-template identity",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"must not infer success from partial chunks alone",
+    )
+    for error_case in [
+        "permission denied",
+        "not found",
+        "conflict",
+        "permanent failure",
+        "temporary backend failure",
+        "docs/contracts/error-model.md",
+        "ambiguous transport outcomes are not success",
+    ]:
+        assert_section_matches(
+            sections,
+            "## DuckDB Query Template Operation Contract",
+            error_case,
+        )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"unauthorized caller, template, catalog, account, tenant, or source scope failure",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"unknown template/catalog.*not found.*conflict",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"disabled template/catalog.*conflict",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"validation, type, parameter, or catalog errors",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"transient DuckDB, materialized-state, or daemon API failures",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"does not append mutation journal records",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"does not mutate DuckDB, Wirelog, object-store metadata, raw objects, or journal state",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"does not expose arbitrary SQL, raw DuckDB query strings, write SQL, DDL/DML, direct DuckDB query execution, DuckDB mutation, Wirelog mutation/query, object-store metadata mutation, direct journal append/write, or mutation journal append surfaces",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"Concrete DuckDB query-template `.capnp` schemas and field layouts are deferred",
+    )
+    assert_section_matches(
+        sections,
+        "## DuckDB Query Template Operation Contract",
+        r"template catalog implementation is deferred",
     )
 
     assert_section_matches(
@@ -1490,7 +1740,8 @@ def main() -> None:
     for operation in [
         "concrete fact mutation `.capnp` schemas and field layouts",
         "concrete Wirelog predicate query `.capnp` schemas and field layouts",
-        "safe DuckDB query-template API",
+        "concrete DuckDB query-template `.capnp` schemas and field layouts",
+        "template catalog implementation",
     ]:
         assert_in_section(sections, "## Deferred Operation Payloads", operation)
     assert_section_matches(
@@ -1516,7 +1767,12 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Deferred Operation Payloads",
-        r"Safe DuckDB query-template API remains deferred",
+        r"Concrete DuckDB query-template `.capnp` schemas and field layouts are deferred",
+    )
+    assert_section_matches(
+        sections,
+        "## Deferred Operation Payloads",
+        r"template catalog implementation is deferred",
     )
     assert_section_matches(
         sections,
@@ -1526,7 +1782,8 @@ def main() -> None:
 
     for excluded in [
         "Dovecot implementation",
-        "DuckDB query-template API",
+        "concrete DuckDB query-template schemas",
+        "template catalog implementation",
         "concrete daemon implementation",
         "full .capnp generation",
     ]:
@@ -1720,6 +1977,33 @@ def main() -> None:
             WIRELOG_QUERY_FORBIDDEN_SURFACE_PATTERNS
             + WIRELOG_QUERY_FORBIDDEN_MODAL_PATTERNS
             + WIRELOG_QUERY_FORBIDDEN_DIRECT_ACTION_PATTERNS,
+        )
+    for pattern in DUCKDB_QUERY_TEMPLATE_FORBIDDEN_SURFACE_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## DuckDB Query Template Operation Contract",
+            pattern,
+        )
+    for pattern in DUCKDB_QUERY_TEMPLATE_FORBIDDEN_MODAL_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## DuckDB Query Template Operation Contract",
+            pattern,
+        )
+    for pattern in DUCKDB_QUERY_TEMPLATE_FORBIDDEN_DIRECT_ACTION_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## DuckDB Query Template Operation Contract",
+            pattern,
+        )
+    for example in DUCKDB_QUERY_TEMPLATE_FORBIDDEN_EXAMPLES:
+        assert_any_pattern_matches(
+            sections["## DuckDB Query Template Operation Contract"]
+            + "\n"
+            + example,
+            DUCKDB_QUERY_TEMPLATE_FORBIDDEN_SURFACE_PATTERNS
+            + DUCKDB_QUERY_TEMPLATE_FORBIDDEN_MODAL_PATTERNS
+            + DUCKDB_QUERY_TEMPLATE_FORBIDDEN_DIRECT_ACTION_PATTERNS,
         )
 
 

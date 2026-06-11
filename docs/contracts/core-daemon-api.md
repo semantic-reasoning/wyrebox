@@ -20,6 +20,7 @@ This contract defines:
 - Flag/keyword update operation contract.
 - Fact insert/retract mutation operation contract.
 - Wirelog predicate query operation contract.
+- DuckDB query-template operation contract.
 - State authority boundaries for Postfix helpers, Dovecot plugins, and local tools.
 
 It does not define concrete command payload schemas, daemon runtime internals, or
@@ -441,7 +442,7 @@ inputs only.
 
 Concrete fact mutation `.capnp` schemas and field layouts are deferred.
 Concrete Wirelog predicate query `.capnp` schemas and field layouts are
-deferred. DuckDB query-template API is deferred.
+deferred. DuckDB query-template operation is separate.
 
 ## Wirelog Predicate Query Operation Contract
 
@@ -510,7 +511,82 @@ journal append surfaces to callers. It accepts Wirelog predicate query inputs
 only.
 
 Concrete Wirelog predicate query `.capnp` schemas and field layouts are
-deferred. The safe DuckDB query-template API is separate and deferred.
+deferred. The safe DuckDB query-template operation is separate.
+
+## DuckDB Query Template Operation Contract
+
+The DuckDB query-template operation is a read-only daemon operation for
+authorized local tools/skills over the Cap'n Proto-over-UDS daemon API. It is
+not a Dovecot IMAP client operation, not a Wirelog predicate query operation,
+and not a mutation operation.
+
+This section defines operation behavior only; it does not define concrete
+`.capnp` schemas, field layouts, generated code, template catalog
+implementation, DuckDB integration, or query execution code.
+
+Every DuckDB query-template request carries request and caller identity
+sufficient for `wyreboxd` to authorize, audit, and correlate the operation:
+
+- required `request_id`;
+- caller/tool identity;
+- authorization/audit identity; and
+- optional operation correlation supplied by the local tool/skill.
+
+The operation input is a known query-template/catalog identity plus typed
+parameters. Template identity is resolved through daemon-owned catalog state,
+and parameters are operation inputs typed according to that catalog. The caller
+does not submit arbitrary SQL text, raw DuckDB query strings, write SQL, DDL,
+or DML. The boundary is explicit: no arbitrary SQL text, raw DuckDB query
+strings, write SQL, DDL, or DML.
+
+Only authorized callers may query templates and data. Authorization scope
+controls the caller/tool identity, template, catalog, account, tenant, source,
+and operational scope that may be queried. A caller authorized for one
+template, catalog, account, tenant, source, or operational scope must not be
+able to query templates or data outside that scope through this operation.
+
+Query templates are daemon-owned and cataloged read-only templates. The
+operation may read daemon-owned DuckDB materialized state and indexes needed to
+evaluate the selected template, but it is not a caller-controlled database
+execution surface.
+
+Successful query results return structured rows and columns with typed values.
+Result schemas are associated with the query-template/catalog identity selected
+for the request. Results may be bounded, pageable, or streamed by later
+concrete payload slices. If streamed result chunks or cursors are used, every
+chunk and cursor is correlatable to the original `request_id` and
+query-template identity, and completion requires a definitive end response or
+definitive error response for that request/query. A caller must not infer
+success from partial chunks alone.
+
+DuckDB query-template error behavior is governed by
+`docs/contracts/error-model.md`:
+
+- an unauthorized caller, template, catalog, account, tenant, or source scope
+  failure is `permission denied`;
+- an unknown template/catalog is `not found` or `conflict` according to
+  operation-aware catalog semantics selected by the concrete schema slice;
+- a disabled template/catalog is `conflict` when catalog state exists but is
+  not queryable for this operation;
+- non-retryable validation, type, parameter, or catalog errors are
+  `permanent failure`;
+- transient DuckDB, materialized-state, or daemon API failures are
+  `temporary backend failure`; and
+- ambiguous transport outcomes are not success.
+
+DuckDB query-template operation is read-only. It does not append mutation journal
+records, and it does not mutate DuckDB, Wirelog, object-store metadata, raw
+objects, or journal state. It may read daemon-owned DuckDB materialized state
+needed to authorize and evaluate the structured template query.
+
+This operation does not expose arbitrary SQL, raw DuckDB query strings, write
+SQL, DDL/DML, direct DuckDB query execution, DuckDB mutation, Wirelog
+mutation/query, object-store metadata mutation, direct journal append/write, or
+mutation journal append surfaces to callers. It accepts DuckDB query-template
+inputs only.
+
+Concrete DuckDB query-template `.capnp` schemas and field layouts are
+deferred. The template catalog implementation is deferred.
 
 ## State Authority Boundary
 
@@ -536,15 +612,16 @@ issue-0004 units:
 
 - concrete fact mutation `.capnp` schemas and field layouts
 - concrete Wirelog predicate query `.capnp` schemas and field layouts
-- safe DuckDB query-template API
+- concrete DuckDB query-template `.capnp` schemas and field layouts
+- template catalog implementation
 
 Concrete SEARCH `.capnp` schemas, field layouts, and criteria payloads are
 deferred. Concrete flag/keyword `.capnp` schemas and field layouts are
 deferred. Concrete fact mutation `.capnp` schemas and field layouts are
 deferred. Concrete Wirelog predicate query `.capnp` schemas and field layouts
-are deferred. Safe DuckDB query-template API remains deferred, along with
-query-safety policy details. In this slice, no arbitrary write SQL is allowed
-over the daemon API.
+are deferred. Concrete DuckDB query-template `.capnp` schemas and field layouts
+are deferred. The template catalog implementation is deferred. In this slice,
+no arbitrary write SQL is allowed over the daemon API.
 
 ## Out Of Scope
 
@@ -554,7 +631,8 @@ The following are out of scope for this slice:
 - concrete request/response/error/query payload schemas
 - TCP, TLS, HTTP, LMTP, and remote authentication
 - Dovecot implementation
-- DuckDB query-template API
+- concrete DuckDB query-template schemas
+- template catalog implementation
 - concrete daemon implementation
 - full .capnp generation
 - public remote API exposure
