@@ -695,7 +695,22 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Request Identity And Correlation",
-        r"journal_offset",
+        r"operation-specific durable receipts or markers",
+    )
+    assert_section_matches(
+        sections,
+        "## Request Identity And Correlation",
+        r"Delivery ingestion.*durable receipt.*defined in its operation contract",
+    )
+    assert_section_forbidden(
+        sections,
+        "## Request Identity And Correlation",
+        r"durable mutation operations?.*journal_offset.*journal_sequence",
+    )
+    assert_section_forbidden(
+        sections,
+        "## Request Identity And Correlation",
+        r"journal_sequence",
     )
 
     assert_section_matches(
@@ -764,7 +779,12 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Delivery Ingestion Operation Contract",
-        r"journal_offset.*equivalent durable marker",
+        r"delivery ingestion success.*journal_offset.*journal_sequence",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Ingestion Operation Contract",
+        r"journal_offset.*journal_sequence.*durable mutation position",
     )
     assert_section_matches(
         sections,
@@ -1205,6 +1225,11 @@ def main() -> None:
         "## Flag Keyword Update Operation Contract",
         r"journal_offset.*equivalent durable marker",
     )
+    assert_section_forbidden(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"journal_offset.*journal_sequence",
+    )
     for error_case in [
         "not found",
         "permission denied",
@@ -1306,6 +1331,11 @@ def main() -> None:
         sections,
         "## Fact Insert Retract Mutation Operation Contract",
         r"journal_offset.*equivalent durable marker",
+    )
+    assert_section_forbidden(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"journal_offset.*journal_sequence",
     )
     for error_case in [
         "permission denied",

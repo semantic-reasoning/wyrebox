@@ -40,6 +40,7 @@ struct SuccessFrame {
   durableMarker @1 :Text;
   journalOffset @2 :UInt64;
   summary @3 :Text;
+  journalSequence @4 :UInt64;
 }
 
 struct ErrorFrame {

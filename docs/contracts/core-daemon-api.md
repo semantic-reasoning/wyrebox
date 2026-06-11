@@ -76,8 +76,9 @@ Every request uses request identity at the envelope level:
 - required `request_id`.
 - `delivery_id` and queue identifiers where available for delivery ingress.
 - IMAP operation correlation IDs where the caller stack can supply them.
-- for durable mutation operations, daemon success responses include `journal_offset`
-  (or equivalent durable marker) when the caller path can surface it.
+- durable responses expose operation-specific durable receipts or markers when
+  the caller path can surface them. Delivery ingestion's durable receipt is
+  defined in its operation contract below.
 
 These identifiers are used for log correlation, retry de-duplication support, and
 error-path inspection.
@@ -126,9 +127,9 @@ steps are complete:
 - durable raw object-store commit of the canonical original payload; and
 - durable append of the corresponding mutation journal entry.
 
-The success response includes a durable receipt, such as `journal_offset` or an
-equivalent durable marker, that lets the caller and logs correlate accepted
-delivery with the durable mutation position.
+The delivery ingestion success response includes a durable receipt with both
+`journal_offset` and `journal_sequence`, letting the caller and logs correlate
+accepted delivery with the durable mutation position.
 
 Retry and permanent failure semantics are governed by
 `docs/contracts/error-model.md`: temporary failures are retryable; permanent

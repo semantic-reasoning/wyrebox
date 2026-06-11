@@ -29,6 +29,7 @@ REQUIRED_IDENTITY_FIELDS = [
     "correlationId",
     "durableMarker",
     "journalOffset",
+    "journalSequence",
 ]
 
 REQUIRED_ERROR_CLASSES = [
@@ -81,6 +82,21 @@ FORBIDDEN_IMPLEMENTATION_TERMS = [
 def assert_contains_all(text: str, needles: list[str], label: str) -> None:
     missing = [needle for needle in needles if needle not in text]
     assert not missing, f"missing {label}: " + ", ".join(missing)
+
+
+def assert_success_frame_fields(text: str) -> None:
+    start = text.index("struct SuccessFrame {")
+    end = text.index("\n}", start)
+    success_frame = text[start:end]
+
+    expected_fields = [
+        "requestId @0 :Text;",
+        "durableMarker @1 :Text;",
+        "journalOffset @2 :UInt64;",
+        "summary @3 :Text;",
+        "journalSequence @4 :UInt64;",
+    ]
+    assert_contains_all(success_frame, expected_fields, "success frame fields")
 
 
 def parse_args() -> argparse.Namespace:
@@ -159,6 +175,7 @@ def main() -> None:
 
     assert_contains_all(text, REQUIRED_TOP_LEVEL, "top-level schema types")
     assert_contains_all(text, REQUIRED_IDENTITY_FIELDS, "identity and durability fields")
+    assert_success_frame_fields(text)
     assert_contains_all(text, REQUIRED_ERROR_CLASSES, "error classes")
     assert_contains_all(text, REQUIRED_OPERATION_GROUPS, "operation groups")
     assert_contains_all(text, REQUIRED_STREAM_FIELDS, "stream/chunk fields")
