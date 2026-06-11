@@ -16,6 +16,7 @@ REQUIRED_SECTIONS = [
     "## Cap'n Proto Framing Boundary",
     "## Request Identity And Correlation",
     "## Caller-Observed Success Semantics",
+    "## Delivery Ingestion Operation Contract",
     "## State Authority Boundary",
     "## Deferred Operation Payloads",
     "## Out Of Scope",
@@ -66,6 +67,11 @@ def main() -> None:
         sections,
         "## Scope",
         r"command payload schemas",
+    )
+    assert_section_matches(
+        sections,
+        "## Scope",
+        r"Delivery ingestion operation contract",
     )
     assert_section_matches(
         sections,
@@ -193,6 +199,84 @@ def main() -> None:
         r"not.*silently promoted",
     )
 
+    for required_field in [
+        "request_id",
+        "delivery_id",
+        "queue ID",
+        "envelope sender",
+        "recipients",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Delivery Ingestion Operation Contract",
+            required_field,
+        )
+    assert_section_matches(
+        sections,
+        "## Delivery Ingestion Operation Contract",
+        r"Cap'n Proto-over-UDS",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Ingestion Operation Contract",
+        r"does not define concrete `.capnp` field layouts or generated code",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Ingestion Operation Contract",
+        r"raw RFC 5322 message payload has an explicit transfer boundary",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Ingestion Operation Contract",
+        r"exact payload bytes.*API framing.*canonical original message object",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Ingestion Operation Contract",
+        r"must not rewrite raw message bytes",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Ingestion Operation Contract",
+        r"success response.*only after.*durable",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Ingestion Operation Contract",
+        r"durable raw object-store commit.*durable append.*mutation journal",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Ingestion Operation Contract",
+        r"journal_offset.*equivalent durable marker",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Ingestion Operation Contract",
+        r"docs/contracts/error-model.md",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Ingestion Operation Contract",
+        r"temporary failures are retryable",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Ingestion Operation Contract",
+        r"permanent failure.*explicit non-retryable validation, configuration, or policy errors",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Ingestion Operation Contract",
+        r"ambiguous communication is not delivery success",
+    )
+    assert_section_matches(
+        sections,
+        "## Delivery Ingestion Operation Contract",
+        r"does not expose arbitrary SQL, write SQL, DuckDB mutation, Wirelog fact mutation, object-store metadata mutation, or direct journal append",
+    )
+
     assert_section_matches(
         sections,
         "## State Authority Boundary",
@@ -215,7 +299,6 @@ def main() -> None:
     )
 
     for operation in [
-        "delivery ingestion",
         "fetch",
         "mailbox list/select",
         "flag/keyword update",
@@ -232,6 +315,14 @@ def main() -> None:
     )
 
     for excluded in [
+        "Dovecot fetch/list/search",
+        "fact/query APIs",
+        "concrete daemon implementation",
+        "full .capnp generation",
+    ]:
+        assert_in_section(sections, "## Out Of Scope", excluded)
+
+    for excluded in [
         "concrete Cap'n Proto message layouts",
         "daemon internals",
         "public remote API",
@@ -246,6 +337,8 @@ def main() -> None:
     for forbidden in [
         r"command-specific schema",
         r"full SQL support",
+        r"delivery ingestion.*(may|can|must|should) expose arbitrary SQL",
+        r"delivery ingestion.*(may|can|must|should) expose write SQL",
     ]:
         assert_forbidden(text, forbidden)
 

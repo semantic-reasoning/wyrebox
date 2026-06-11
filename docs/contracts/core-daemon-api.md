@@ -13,6 +13,7 @@ This contract defines:
 - Cap'n Proto envelope/framing categories.
 - Request identity and correlation fields exposed to callers.
 - Caller-observed success semantics.
+- Delivery ingestion operation contract.
 - State authority boundaries for Postfix helpers, Dovecot plugins, and local tools.
 
 It does not define command payload schemas, daemon runtime internals, or command
@@ -92,6 +93,46 @@ caller must not treat the operation as success without the definitive response.
 Permanent validation or configuration failures remain explicit errors and are not
 silently promoted.
 
+## Delivery Ingestion Operation Contract
+
+Delivery ingestion is the first operation contract for Postfix ingress helpers.
+It is a daemon API operation over the Cap'n Proto-over-UDS transport; this
+section does not define concrete `.capnp` field layouts or generated code.
+
+Every delivery ingestion request carries ingress identity fields:
+
+- required `request_id`;
+- required `delivery_id`;
+- queue ID when the Postfix caller has one available;
+- envelope sender; and
+- one or more recipients.
+
+The raw RFC 5322 message payload has an explicit transfer boundary. The caller
+sends the exact payload bytes through the API framing, and `wyreboxd` stores
+those bytes as the canonical original message object. Delivery ingestion must
+not rewrite raw message bytes for flags, mailbox membership, facts, search, or
+virtual views.
+
+A delivery ingestion success response is valid only after both required durable
+steps are complete:
+
+- durable raw object-store commit of the canonical original payload; and
+- durable append of the corresponding mutation journal entry.
+
+The success response includes a durable receipt, such as `journal_offset` or an
+equivalent durable marker, that lets the caller and logs correlate accepted
+delivery with the durable mutation position.
+
+Retry and permanent failure semantics are governed by
+`docs/contracts/error-model.md`: temporary failures are retryable; permanent
+failure is reserved for explicit non-retryable validation, configuration, or
+policy errors; and response loss, connection loss, timeout, or other ambiguous
+communication is not delivery success.
+
+This operation does not expose arbitrary SQL, write SQL, DuckDB mutation,
+Wirelog fact mutation, object-store metadata mutation, or direct journal append
+surfaces to helpers. It accepts delivery-ingestion inputs only.
+
 ## State Authority Boundary
 
 `wyreboxd` remains the only mutable owner in the first architecture slice.
@@ -114,7 +155,6 @@ contract intentionally defines no runtime implementation details.
 Command payload schemas and operation groups are deferred to later issue-0004
 units:
 
-- delivery ingestion
 - fetch
 - mailbox list/select
 - flag/keyword update
@@ -133,5 +173,9 @@ The following are out of scope for this slice:
 - concrete Cap'n Proto message layouts
 - concrete request/response/error/query payload schemas
 - TCP, TLS, HTTP, LMTP, and remote authentication
+- Dovecot fetch/list/search operation contracts
+- fact/query APIs
+- concrete daemon implementation
+- full .capnp generation
 - public remote API exposure
 - daemon internals, including replay internals and storage-engine startup logic
