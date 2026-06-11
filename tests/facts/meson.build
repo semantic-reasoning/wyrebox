@@ -4,4 +4,11 @@ fact_record_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+deterministic_fact_extractor_test = executable(
+  'test-deterministic-fact-extractor',
+  'test-deterministic-fact-extractor.c',
+  dependencies: [wyrebox_dep],
+)
+
 test('fact record', fact_record_test)
+test('deterministic fact extractor', deterministic_fact_extractor_test)

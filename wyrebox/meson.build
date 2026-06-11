@@ -5,6 +5,7 @@ wyrebox_sources = files(
   'wyrebox-daemon-success-receipt.c',
   'wyrebox-delivery-projection.c',
   'wyrebox-delivery-replay-validator.c',
+  'wyrebox-deterministic-fact-extractor.c',
   'wyrebox-fact-record.c',
   'wyrebox-schema-metadata-store.c',
   'wyrebox-eml-ingestor.c',
