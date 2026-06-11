@@ -1,0 +1,6 @@
+option(
+  'capnp',
+  type: 'feature',
+  value: 'auto',
+  description: 'Cap\'n Proto compiler for schema syntax validation',
+)

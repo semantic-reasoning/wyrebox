@@ -6,6 +6,25 @@ project('wyrebox',
 )
 
 python = find_program('python3')
+capnp_option = get_option('capnp')
+capnp = find_program('capnp', required: capnp_option)
+
+capnp_schema_args = files('tests/docs/test_issue_0004_daemon_api_schema.py')
+if capnp.found()
+  capnp_schema_args += [
+    '--capnp-mode=validate',
+    '--capnp-path=' + capnp.full_path(),
+  ]
+  capnp_summary = capnp.full_path()
+elif capnp_option.disabled()
+  capnp_schema_args += ['--capnp-mode=skip']
+  capnp_summary = 'disabled; schema syntax validation skipped'
+else
+  capnp_schema_args += ['--capnp-mode=skip']
+  capnp_summary = 'not found; schema syntax validation skipped'
+endif
+
+summary('capnp', capnp_summary, section: 'Toolchain')
 
 glib_dep = dependency('glib-2.0', version: '>=2.74')
 gobject_dep = dependency('gobject-2.0', version: '>=2.74')
@@ -82,7 +101,7 @@ test(
 test(
   'docs issue 0004 daemon api schema',
   python,
-  args: files('tests/docs/test_issue_0004_daemon_api_schema.py'),
+  args: capnp_schema_args,
 )
 
 subdir('tests/object-store')

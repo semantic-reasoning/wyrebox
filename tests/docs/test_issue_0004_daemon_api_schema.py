@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import argparse
 from pathlib import Path
 import shutil
 import subprocess
@@ -7,6 +8,7 @@ import subprocess
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = REPO_ROOT / "wyrebox" / "wyrebox-daemon-api.capnp"
+CAPNP_OUTPUT_FLAG = "-ocapnp"
 
 REQUIRED_TOP_LEVEL = [
     "struct RequestFrame",
@@ -81,14 +83,61 @@ def assert_contains_all(text: str, needles: list[str], label: str) -> None:
     assert not missing, f"missing {label}: " + ", ".join(missing)
 
 
-def run_capnp_syntax_check() -> None:
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--capnp-mode",
+        choices=("auto", "validate", "skip"),
+        default="auto",
+        help=(
+            "schema compiler validation policy; Meson passes validate or skip, "
+            "auto is for direct script execution"
+        ),
+    )
+    parser.add_argument(
+        "--capnp-path",
+        help="path to capnp when --capnp-mode=validate",
+    )
+    return parser.parse_args()
+
+
+def capnp_compile_command(capnp: str) -> list[str]:
+    command = [
+        capnp,
+        "compile",
+        CAPNP_OUTPUT_FLAG,
+        str(SCHEMA_PATH.relative_to(REPO_ROOT)),
+    ]
+    assert "-o-" not in command, "capnp validation must not use the null output flag"
+    return command
+
+
+def resolve_capnp_path(args: argparse.Namespace) -> str | None:
+    if args.capnp_mode == "skip":
+        print("capnp mode skip; skipping schema compiler syntax validation")
+        return None
+
+    if args.capnp_mode == "validate":
+        assert args.capnp_path, "--capnp-mode=validate requires --capnp-path"
+        return args.capnp_path
+
     capnp = shutil.which("capnp")
     if capnp is None:
-        print("capnp not found; skipping schema syntax validation")
-        return
+        print(
+            "capnp mode auto; capnp not found; "
+            "skipping schema compiler syntax validation"
+        )
+        return None
+
+    print(f"capnp mode auto; validating schema with {capnp}")
+    return capnp
+
+
+def run_capnp_syntax_check(capnp: str) -> None:
+    command = capnp_compile_command(capnp)
 
     result = subprocess.run(
-        [capnp, "compile", "-ocapnp", str(SCHEMA_PATH.relative_to(REPO_ROOT))],
+        command,
         cwd=REPO_ROOT,
         text=True,
         stdout=subprocess.PIPE,
@@ -102,6 +151,8 @@ def run_capnp_syntax_check() -> None:
 
 
 def main() -> None:
+    args = parse_args()
+
     assert SCHEMA_PATH.is_file(), f"missing schema: {SCHEMA_PATH}"
 
     text = SCHEMA_PATH.read_text(encoding="utf-8")
@@ -115,7 +166,11 @@ def main() -> None:
     forbidden = [term for term in FORBIDDEN_IMPLEMENTATION_TERMS if term in text]
     assert not forbidden, "schema contains forbidden terms: " + ", ".join(forbidden)
 
-    run_capnp_syntax_check()
+    assert "-o-" not in capnp_compile_command("capnp")
+
+    capnp = resolve_capnp_path(args)
+    if capnp is not None:
+        run_capnp_syntax_check(capnp)
 
 
 if __name__ == "__main__":
