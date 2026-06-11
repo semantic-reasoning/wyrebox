@@ -29,3 +29,9 @@ test(
   python,
   args: files('tests/docs/test_issue_0001_postfix_dovecot_verification_spike.py'),
 )
+
+test(
+  'docs issue 0002 linux runtime contract',
+  python,
+  args: files('tests/docs/test_issue_0002_linux_runtime_contract.py'),
+)
