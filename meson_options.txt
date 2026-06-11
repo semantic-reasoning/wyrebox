@@ -4,3 +4,10 @@ option(
   value: 'auto',
   description: 'Cap\'n Proto compiler for schema syntax validation',
 )
+
+option(
+  'duckdb',
+  type: 'feature',
+  value: 'auto',
+  description: 'DuckDB dependency for future materialized query/index stores',
+)

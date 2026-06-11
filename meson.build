@@ -6,6 +6,8 @@ project('wyrebox',
 )
 
 python = find_program('python3')
+cc = meson.get_compiler('c')
+
 capnp_option = get_option('capnp')
 capnp = find_program('capnp', required: capnp_option)
 
@@ -25,6 +27,80 @@ else
 endif
 
 summary('capnp', capnp_summary, section: 'Toolchain')
+
+duckdb_option = get_option('duckdb')
+duckdb_found = false
+duckdb_deps = []
+duckdb_api_probe = '''
+  #include <stddef.h>
+  #include <duckdb.h>
+
+  int
+  main (void)
+  {
+    duckdb_database db = NULL;
+
+    if (duckdb_open (NULL, &db) == DuckDBSuccess)
+      duckdb_close (&db);
+
+    return 0;
+  }
+'''
+
+if duckdb_option.disabled()
+  duckdb_summary = 'disabled'
+else
+  duckdb_pkg_dep = dependency(
+    'duckdb',
+    method: 'pkg-config',
+    required: false,
+  )
+  if duckdb_pkg_dep.found()
+    duckdb_api_usable = cc.links(
+      duckdb_api_probe,
+      name: 'DuckDB C API via pkg-config',
+      dependencies: duckdb_pkg_dep,
+    )
+    if duckdb_api_usable
+      duckdb_found = true
+      duckdb_deps = [duckdb_pkg_dep]
+      duckdb_summary = 'enabled via pkg-config'
+    elif duckdb_option.enabled()
+      error('DuckDB dependency requested with -Dduckdb=enabled, but ' +
+        'pkg-config found duckdb without a compile/link usable C API.')
+    else
+      duckdb_summary = (
+        'not found; DuckDB integration disabled ' +
+        '(pkg-config found duckdb, but the C API probe failed)'
+      )
+    endif
+  else
+    duckdb_lib_dep = cc.find_library('duckdb', required: false)
+    duckdb_api_usable = false
+
+    if duckdb_lib_dep.found()
+      duckdb_api_usable = cc.links(
+        duckdb_api_probe,
+        name: 'DuckDB C API via library/header detection',
+        dependencies: duckdb_lib_dep,
+      )
+    endif
+
+    if duckdb_api_usable
+      duckdb_found = true
+      duckdb_deps = [duckdb_lib_dep]
+      duckdb_summary = 'enabled via library/header detection'
+    elif duckdb_option.enabled()
+      error('DuckDB dependency requested with -Dduckdb=enabled, but ' +
+        'pkg-config did not find duckdb and fallback detection did not ' +
+        'find a compile/link usable duckdb.h and libduckdb C API.')
+    else
+      duckdb_summary = 'not found; DuckDB integration disabled'
+    endif
+  endif
+endif
+
+summary('duckdb', duckdb_summary, section: 'Dependencies')
 
 glib_dep = dependency('glib-2.0', version: '>=2.74')
 gobject_dep = dependency('gobject-2.0', version: '>=2.74')
