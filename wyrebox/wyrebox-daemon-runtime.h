@@ -1,5 +1,6 @@
 #pragma once
 
+#include <gio/gio.h>
 #include <glib.h>
 
 /* *INDENT-OFF* */
@@ -14,6 +15,8 @@ const char *wyrebox_daemon_runtime_get_default_runtime_dir (void);
 const char *wyrebox_daemon_runtime_get_default_socket_path (void);
 
 const char *wyrebox_daemon_runtime_get_default_fact_dump_dir (void);
+
+GFile *wyrebox_daemon_runtime_get_default_fact_dump_file (void);
 
 G_END_DECLS
 /* *INDENT-ON* */

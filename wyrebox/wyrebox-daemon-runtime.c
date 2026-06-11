@@ -17,3 +17,9 @@ wyrebox_daemon_runtime_get_default_fact_dump_dir (void)
 {
   return WYREBOX_DAEMON_DEFAULT_FACT_DUMP_DIR;
 }
+
+GFile *
+wyrebox_daemon_runtime_get_default_fact_dump_file (void)
+{
+  return g_file_new_for_path (WYREBOX_DAEMON_DEFAULT_FACT_DUMP_DIR);
+}
