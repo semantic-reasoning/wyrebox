@@ -3,9 +3,11 @@
  */
 
 #include "wyrebox-schema-metadata-store.h"
+#include "wyrebox-build-config.h"
 
 #include <gio/gio.h>
 #include <glib.h>
+#include <string.h>
 
 static void
 set_materialization_checkpoint_fields (WyreboxSchemaMigrationMetadataState
@@ -161,6 +163,26 @@ test_save_failure_preserves_prior_state (void)
   g_assert_cmpuint (loaded.schema_version, ==, base_state.schema_version);
 }
 
+static void
+test_duckdb_factory_fails_fast_until_implemented (void)
+{
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+
+  store =
+      wyrebox_schema_metadata_store_new_duckdb ("/tmp/wyrebox-schema.duckdb",
+      &error);
+
+  g_assert_null (store);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
+
+#if WYREBOX_HAVE_DUCKDB
+  g_assert_nonnull (strstr (error->message, "not implemented"));
+#else
+  g_assert_nonnull (strstr (error->message, "not enabled"));
+#endif
+}
+
 int
 main (int argc, char **argv)
 {
@@ -179,6 +201,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/migration/schema-metadata-store/save-failure-preserves-state",
       test_save_failure_preserves_prior_state);
+  g_test_add_func
+      ("/migration/schema-metadata-store/duckdb-factory-fails-fast",
+      test_duckdb_factory_fails_fast_until_implemented);
 
   return g_test_run ();
 }

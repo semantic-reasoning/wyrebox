@@ -41,6 +41,24 @@ WyreboxSchemaMetadataStore *
 wyrebox_schema_metadata_store_new_memory (void);
 
 /*
+ * Construct a DuckDB-backed metadata store for @path.
+ *
+ * Ownership/error behavior:
+ * - @path must be non-NULL and is not retained by this call.
+ * - On success, returns a non-floating GObject reference owned by the caller.
+ * - On failure, returns NULL and sets @error when provided.
+ *
+ * DuckDB metadata persistence is not implemented yet. Until it is implemented,
+ * this constructor fails with G_IO_ERROR_NOT_SUPPORTED instead of returning a
+ * placeholder or in-memory fallback store.
+ *
+ * Returns: (transfer full): a non-floating GObject reference owned by the
+ * caller, or NULL with @error set.
+ */
+WyreboxSchemaMetadataStore *
+wyrebox_schema_metadata_store_new_duckdb (const gchar *path, GError **error);
+
+/*
  * Load the persisted schema metadata state into @out_state.
  *
  * On success, @out_state is always initialized. If nothing has been saved
