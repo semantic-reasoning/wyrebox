@@ -1,0 +1,52 @@
+#!/bin/sh
+# WyreBox code style formatter based on wyrelog's GStreamer gst-indent wrapper.
+# Run twice for idempotency.
+
+INDENT=""
+for i in gnuindent gindent indent; do
+  if command -v "$i" > /dev/null 2>&1; then
+    version=$("$i" --version 2>&1 | head -1)
+    case "$version" in
+      *GNU*) INDENT="$i"; break ;;
+    esac
+  fi
+done
+
+if [ -z "$INDENT" ]; then
+  echo "GNU indent not found. Install it (e.g., apt install indent)." >&2
+  exit 1
+fi
+
+for f in "$@"; do
+  "$INDENT" \
+    --braces-on-if-line \
+    --case-brace-indentation0 \
+    --case-indentation2 \
+    --braces-after-struct-decl-line \
+    --line-length80 \
+    --no-tabs \
+    --cuddle-else \
+    --dont-line-up-parentheses \
+    --continuation-indentation4 \
+    --honour-newlines \
+    --tab-size8 \
+    --indent-level2 \
+    --leave-preprocessor-space \
+    "$f" || exit $?
+
+  "$INDENT" \
+    --braces-on-if-line \
+    --case-brace-indentation0 \
+    --case-indentation2 \
+    --braces-after-struct-decl-line \
+    --line-length80 \
+    --no-tabs \
+    --cuddle-else \
+    --dont-line-up-parentheses \
+    --continuation-indentation4 \
+    --honour-newlines \
+    --tab-size8 \
+    --indent-level2 \
+    --leave-preprocessor-space \
+    "$f" || exit $?
+done

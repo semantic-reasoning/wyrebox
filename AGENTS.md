@@ -29,6 +29,11 @@ WyreBox provides:
 - C implementation style: GLib/GObject.
 - Cleanup style: use `g_autoptr`, `g_autofree`, `g_auto`, and related cleanup macros
   aggressively.
+- Code formatting follows wyrelog's GStreamer `gst-indent` style:
+  - 2-space indentation.
+  - No tabs.
+  - 80-column line target.
+  - Run `./tools/gst-indent <changed-c-or-h-files>` on changed C/H files.
 - Daemon socket: `/run/wyrebox/wyrebox.sock`.
 - Daemon API wire format: Cap'n Proto over Unix domain sockets.
 - Canonical write path: append-only write-ahead journal.
@@ -63,6 +68,7 @@ WyreBox provides:
 - Prefer GLib primitives for errors, logging, main-loop integration, collections, and
   memory ownership where they fit.
 - Do not add manual cleanup ladders when `g_auto*` can express ownership clearly.
+- Keep C and header files formatted with `./tools/gst-indent` before committing.
 - Keep Dovecot ABI and allocation rules in mind. Use GObject wrappers at WyreBox
   boundaries where compatible, but do not fight Dovecot's required ownership model.
 
