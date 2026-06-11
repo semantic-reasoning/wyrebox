@@ -61,5 +61,11 @@ test(
   args: files('tests/docs/test_issue_0003_core_schema_contract.py'),
 )
 
+test(
+  'docs issue 0003 gobject core components contract',
+  python,
+  args: files('tests/docs/test_issue_0003_gobject_core_components_contract.py'),
+)
+
 subdir('tests/object-store')
 subdir('tests/journal')
