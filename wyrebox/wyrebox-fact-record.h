@@ -62,6 +62,12 @@ gboolean wyrebox_fact_record_array_write_wirelog_facts (GPtrArray *records,
     GCancellable *cancellable,
     GError **error);
 
+gboolean wyrebox_fact_record_array_write_wirelog_facts_and_close (
+    GPtrArray *records,
+    GOutputStream *stream,
+    GCancellable *cancellable,
+    GError **error);
+
 gboolean wyrebox_fact_record_array_write_wirelog_fact_file (GPtrArray *records,
     GFile *file,
     GCancellable *cancellable,

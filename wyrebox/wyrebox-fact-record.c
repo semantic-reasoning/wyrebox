@@ -283,13 +283,47 @@ wyrebox_fact_record_array_write_wirelog_facts (GPtrArray *records,
       text, strlen (text), &bytes_written, cancellable, error);
 }
 
+static gboolean
+write_wirelog_text_and_close (GOutputStream *stream,
+    const char *text, GCancellable *cancellable, GError **error)
+{
+  g_autoptr (GError) close_error = NULL;
+  gsize bytes_written = 0;
+
+  g_return_val_if_fail (stream != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (!g_output_stream_write_all (stream,
+          text, strlen (text), &bytes_written, cancellable, error)) {
+    (void) g_output_stream_close (stream, cancellable, &close_error);
+    return FALSE;
+  }
+
+  return g_output_stream_close (stream, cancellable, error);
+}
+
+gboolean
+wyrebox_fact_record_array_write_wirelog_facts_and_close (GPtrArray *records,
+    GOutputStream *stream, GCancellable *cancellable, GError **error)
+{
+  g_autofree char *text = NULL;
+
+  g_return_val_if_fail (stream != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  text = wyrebox_fact_record_array_to_wirelog_facts (records, error);
+  if (text == NULL)
+    return FALSE;
+
+  return write_wirelog_text_and_close (stream, text, cancellable, error);
+}
+
 gboolean
 wyrebox_fact_record_array_write_wirelog_fact_file (GPtrArray *records,
     GFile *file, GCancellable *cancellable, GError **error)
 {
   g_autoptr (GFileOutputStream) stream = NULL;
   g_autofree char *text = NULL;
-  gsize bytes_written = 0;
 
   g_return_val_if_fail (file != NULL, FALSE);
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
@@ -303,9 +337,6 @@ wyrebox_fact_record_array_write_wirelog_fact_file (GPtrArray *records,
   if (stream == NULL)
     return FALSE;
 
-  if (!g_output_stream_write_all (G_OUTPUT_STREAM (stream),
-          text, strlen (text), &bytes_written, cancellable, error))
-    return FALSE;
-
-  return g_output_stream_close (G_OUTPUT_STREAM (stream), cancellable, error);
+  return write_wirelog_text_and_close (G_OUTPUT_STREAM (stream),
+      text, cancellable, error);
 }

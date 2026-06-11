@@ -27,6 +27,82 @@ remove_tree (const char *path)
   (void) g_rmdir (path);
 }
 
+typedef struct
+{
+  GOutputStream parent_instance;
+  gboolean fail_write;
+  gboolean fail_close;
+  guint close_calls;
+} TestOutputStream;
+
+typedef struct
+{
+  GOutputStreamClass parent_class;
+} TestOutputStreamClass;
+
+G_DEFINE_TYPE (TestOutputStream, test_output_stream, G_TYPE_OUTPUT_STREAM)
+     static gssize
+         test_output_stream_write_fn (GOutputStream *stream,
+    const void *buffer, gsize count, GCancellable *cancellable, GError **error)
+{
+  TestOutputStream *self = (TestOutputStream *) stream;
+
+  (void) buffer;
+  (void) count;
+  (void) cancellable;
+
+  if (self->fail_write) {
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "forced write failure");
+    return -1;
+  }
+
+  return (gssize) count;
+}
+
+static gboolean
+test_output_stream_close_fn (GOutputStream *stream,
+    GCancellable *cancellable, GError **error)
+{
+  TestOutputStream *self = (TestOutputStream *) stream;
+
+  (void) cancellable;
+
+  self->close_calls++;
+  if (self->fail_close) {
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "forced close failure");
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static void
+test_output_stream_class_init (TestOutputStreamClass *klass)
+{
+  GOutputStreamClass *stream_class = G_OUTPUT_STREAM_CLASS (klass);
+
+  stream_class->write_fn = test_output_stream_write_fn;
+  stream_class->close_fn = test_output_stream_close_fn;
+}
+
+static void
+test_output_stream_init (TestOutputStream *self)
+{
+  (void) self;
+}
+
+static GOutputStream *
+test_output_stream_new (gboolean fail_write, gboolean fail_close)
+{
+  TestOutputStream *stream = NULL;
+
+  stream = g_object_new (test_output_stream_get_type (), NULL);
+  stream->fail_write = fail_write;
+  stream->fail_close = fail_close;
+
+  return G_OUTPUT_STREAM (stream);
+}
+
 static void
 test_fact_record_copies_owned_fields (void)
 {
@@ -380,6 +456,52 @@ test_fact_record_wirelog_batch_write_propagates_stream_failure (void)
 }
 
 static void
+test_fact_record_wirelog_batch_write_and_close_preserves_write_error (void)
+{
+  const char *args[] = {
+    "mail-1",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autoptr (GOutputStream) stream = NULL;
+
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  g_ptr_array_add (records,
+      test_fact_record_new ("participant", args, "header:to"));
+  stream = test_output_stream_new (TRUE, TRUE);
+
+  g_assert_false (wyrebox_fact_record_array_write_wirelog_facts_and_close
+      (records, stream, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+  g_assert_cmpstr (error->message, ==, "forced write failure");
+  g_assert_cmpuint (((TestOutputStream *) stream)->close_calls, ==, 1);
+}
+
+static void
+test_fact_record_wirelog_batch_write_and_close_propagates_close_error (void)
+{
+  const char *args[] = {
+    "mail-1",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autoptr (GOutputStream) stream = NULL;
+
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  g_ptr_array_add (records,
+      test_fact_record_new ("participant", args, "header:to"));
+  stream = test_output_stream_new (FALSE, TRUE);
+
+  g_assert_false (wyrebox_fact_record_array_write_wirelog_facts_and_close
+      (records, stream, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+  g_assert_cmpstr (error->message, ==, "forced close failure");
+  g_assert_cmpuint (((TestOutputStream *) stream)->close_calls, ==, 1);
+}
+
+static void
 test_fact_record_writes_wirelog_batch_to_file (void)
 {
   const char *args[] = {
@@ -541,6 +663,12 @@ main (int argc, char **argv)
   g_test_add_func ("/facts/fact-record/"
       "wirelog-batch-write-propagates-stream-failure",
       test_fact_record_wirelog_batch_write_propagates_stream_failure);
+  g_test_add_func ("/facts/fact-record/"
+      "wirelog-batch-write-and-close-preserves-write-error",
+      test_fact_record_wirelog_batch_write_and_close_preserves_write_error);
+  g_test_add_func ("/facts/fact-record/"
+      "wirelog-batch-write-and-close-propagates-close-error",
+      test_fact_record_wirelog_batch_write_and_close_propagates_close_error);
   g_test_add_func ("/facts/fact-record/writes-wirelog-batch-to-file",
       test_fact_record_writes_wirelog_batch_to_file);
   g_test_add_func ("/facts/fact-record/wirelog-file-writer-replaces-existing",
