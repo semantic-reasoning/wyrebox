@@ -78,10 +78,18 @@ WyreboxEmlIngestor *wyrebox_eml_ingestor_new_with_journal (
  *   wyrebox_eml_ingest_result_clear().
  *
  * Stores @bytes as an immutable raw object and reports its object key, size,
- * and journal location. When no journal writer is configured, journal_offset
- * and journal_sequence are returned as 0. This boundary does not parse,
- * materialize, allocate UIDs, or define duplicate policy beyond the
- * deterministic object-store key behavior.
+ * and journal location. When no journal writer is configured, this is a raw
+ * object-store-only path: metadata is not parsed, and journal_offset and
+ * journal_sequence are returned as 0.
+ *
+ * When a journal writer is configured, ingestion first parses metadata needed
+ * for the MessageDelivered event. Metadata parse failure returns FALSE before
+ * raw object storage. Successful journaled ingestion then stores the immutable
+ * raw object, appends MessageDelivered durably, and returns the journal
+ * location.
+ *
+ * This boundary does not materialize, allocate UIDs, or define duplicate policy
+ * beyond the deterministic object-store key behavior.
  */
 gboolean wyrebox_eml_ingestor_ingest_bytes (WyreboxEmlIngestor *self,
     GBytes *bytes,

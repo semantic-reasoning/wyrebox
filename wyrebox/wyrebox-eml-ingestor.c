@@ -93,16 +93,16 @@ wyrebox_eml_ingestor_ingest_bytes (WyreboxEmlIngestor *self,
   g_return_val_if_fail (out_result != NULL, FALSE);
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  if (!wyrebox_local_object_store_put_bytes (self->object_store, bytes,
-          &result.object_key, error))
-    return FALSE;
-
   result.size_bytes = (guint64) g_bytes_get_size (bytes);
 
   if (self->journal_writer != NULL) {
     g_auto (WyreboxEmlMetadata) metadata = { 0 };
 
     if (!wyrebox_eml_metadata_parse_bytes (bytes, &metadata, error))
+      return FALSE;
+
+    if (!wyrebox_local_object_store_put_bytes (self->object_store, bytes,
+            &result.object_key, error))
       return FALSE;
 
     payload = wyrebox_message_delivered_payload_encode_full (result.object_key,
@@ -113,6 +113,10 @@ wyrebox_eml_ingestor_ingest_bytes (WyreboxEmlIngestor *self,
     if (!wyrebox_journal_writer_append (self->journal_writer,
             WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
             payload, &result.journal_offset, &result.journal_sequence, error))
+      return FALSE;
+  } else {
+    if (!wyrebox_local_object_store_put_bytes (self->object_store, bytes,
+            &result.object_key, error))
       return FALSE;
   }
 

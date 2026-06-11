@@ -55,6 +55,18 @@ assert_bytes_equal (GBytes *actual, GBytes *expected)
   g_assert_cmpmem (actual_data, actual_size, expected_data, expected_size);
 }
 
+static char *
+compute_sha256_object_key (GBytes *bytes)
+{
+  gsize size = 0;
+  const guint8 *data = g_bytes_get_data (bytes, &size);
+  g_autoptr (GChecksum) checksum = g_checksum_new (G_CHECKSUM_SHA256);
+
+  g_checksum_update (checksum, data, size);
+
+  return g_strdup_printf ("sha256:%s", g_checksum_get_string (checksum));
+}
+
 static void
 test_ingests_raw_fixture_into_object_store (void)
 {
@@ -203,6 +215,8 @@ test_journaled_ingest_rejects_missing_header_separator (void)
   g_autoptr (GError) error = NULL;
   g_autoptr (GBytes) input =
       g_bytes_new_static (malformed, sizeof (malformed) - 1);
+  g_autoptr (GBytes) output = NULL;
+  g_autofree char *expected_key = NULL;
   g_autoptr (WyreboxLocalObjectStore) store = NULL;
   g_autoptr (WyreboxJournalWriter) writer = NULL;
   g_autoptr (WyreboxJournalReader) reader = NULL;
@@ -224,6 +238,7 @@ test_journaled_ingest_rejects_missing_header_separator (void)
 
   ingestor = wyrebox_eml_ingestor_new_with_journal (store, writer);
   g_assert_nonnull (ingestor);
+  expected_key = compute_sha256_object_key (input);
 
   g_assert_false (wyrebox_eml_ingestor_ingest_bytes (ingestor, input,
           &result, &error));
@@ -233,6 +248,11 @@ test_journaled_ingest_rejects_missing_header_separator (void)
   g_assert_cmpuint (result.size_bytes, ==, 0);
   g_assert_cmpuint (result.journal_offset, ==, 0);
   g_assert_cmpuint (result.journal_sequence, ==, 0);
+
+  output = wyrebox_local_object_store_get_bytes (store, expected_key, &error);
+  g_assert_null (output);
+  g_assert_error (error, G_FILE_ERROR, G_FILE_ERROR_NOENT);
+  g_clear_error (&error);
 
   reader = wyrebox_journal_reader_new (journal_root, &error);
   g_assert_no_error (error);
