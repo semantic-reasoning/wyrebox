@@ -23,3 +23,9 @@ test(
   python,
   args: files('tests/docs/test_issue_0001_mailbox_storage_model_contract.py'),
 )
+
+test(
+  'docs issue 0001 postfix dovecot verification spike',
+  python,
+  args: files('tests/docs/test_issue_0001_postfix_dovecot_verification_spike.py'),
+)
