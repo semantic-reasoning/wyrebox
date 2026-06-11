@@ -10,6 +10,7 @@ static const char *valid_object_key =
 #define V2_OBJECT_KEY_LEN_OFFSET 28
 #define V2_OBJECT_KEY_OFFSET 30
 #define V1_OBJECT_KEY_LEN_OFFSET 16
+#define V1_OBJECT_KEY_OFFSET 18
 
 static const guint8 golden_v1_payload[] = {
   'W', 'Y', 'R', 'E', 'M', 'D', 'P', '1',
@@ -245,6 +246,25 @@ test_rejects_v1_malformed_payload_length (void)
 }
 
 static void
+test_rejects_v1_object_key_with_nul_padding (void)
+{
+  g_autoptr (GBytes) malformed = NULL;
+  g_autofree guint8 *copy = NULL;
+  gsize payload_size = sizeof (golden_v1_payload);
+  guint16 padded_object_key_len = strlen (valid_object_key) + 1;
+
+  copy = g_malloc (payload_size + 1);
+  memcpy (copy, golden_v1_payload, payload_size);
+  copy[V1_OBJECT_KEY_LEN_OFFSET] = (guint8) (padded_object_key_len & 0xff);
+  copy[V1_OBJECT_KEY_LEN_OFFSET + 1] =
+      (guint8) ((padded_object_key_len >> 8) & 0xff);
+  copy[V1_OBJECT_KEY_OFFSET + strlen (valid_object_key)] = '\0';
+  malformed = g_bytes_new_take (g_steal_pointer (&copy), payload_size + 1);
+
+  assert_decode_fails_invalid_data (malformed);
+}
+
+static void
 test_rejects_invalid_prefix_on_decode (void)
 {
   g_autoptr (GError) error = NULL;
@@ -282,6 +302,36 @@ test_rejects_wrong_object_key_length_on_decode (void)
   copy = g_memdup2 (encoded_data, encoded_size);
   copy[V2_OBJECT_KEY_LEN_OFFSET] = 0x46;
   malformed = g_bytes_new_take (g_steal_pointer (&copy), encoded_size);
+
+  assert_decode_fails_invalid_data (malformed);
+}
+
+static void
+test_rejects_v2_object_key_with_nul_padding (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+  g_autoptr (GBytes) malformed = NULL;
+  g_autofree guint8 *copy = NULL;
+  const guint8 *encoded_data = NULL;
+  gsize encoded_size = 0;
+  gsize object_key_len = strlen (valid_object_key);
+  gsize metadata_offset = V2_OBJECT_KEY_OFFSET + object_key_len;
+  guint16 padded_object_key_len = object_key_len + 1;
+
+  encoded = wyrebox_message_delivered_payload_encode (valid_object_key,
+      12345, &error);
+  g_assert_no_error (error);
+  encoded_data = g_bytes_get_data (encoded, &encoded_size);
+  copy = g_malloc (encoded_size + 1);
+  memcpy (copy, encoded_data, metadata_offset);
+  copy[V2_OBJECT_KEY_LEN_OFFSET] = (guint8) (padded_object_key_len & 0xff);
+  copy[V2_OBJECT_KEY_LEN_OFFSET + 1] =
+      (guint8) ((padded_object_key_len >> 8) & 0xff);
+  copy[metadata_offset] = '\0';
+  memcpy (copy + metadata_offset + 1, encoded_data + metadata_offset,
+      encoded_size - metadata_offset);
+  malformed = g_bytes_new_take (g_steal_pointer (&copy), encoded_size + 1);
 
   assert_decode_fails_invalid_data (malformed);
 }
@@ -382,6 +432,31 @@ test_rejects_truncated_object_key_body (void)
 }
 
 static void
+test_rejects_metadata_string_with_embedded_nul (void)
+{
+  WyreboxEmlMetadata metadata = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+  g_autoptr (GBytes) malformed = NULL;
+  g_autofree guint8 *copy = NULL;
+  const guint8 *encoded_data = NULL;
+  gsize encoded_size = 0;
+  gsize message_id_offset = V2_OBJECT_KEY_OFFSET + strlen (valid_object_key);
+
+  metadata.message_id = "abc";
+
+  encoded = wyrebox_message_delivered_payload_encode_full (valid_object_key,
+      12345, &metadata, 0, &error);
+  g_assert_no_error (error);
+  encoded_data = g_bytes_get_data (encoded, &encoded_size);
+  copy = g_memdup2 (encoded_data, encoded_size);
+  copy[message_id_offset + sizeof (guint32) + 1] = '\0';
+  malformed = g_bytes_new_take (g_steal_pointer (&copy), encoded_size);
+
+  assert_decode_fails_invalid_data (malformed);
+}
+
+static void
 test_rejects_truncated_metadata_string_body (void)
 {
   WyreboxEmlMetadata metadata = { 0 };
@@ -431,12 +506,18 @@ main (int argc, char **argv)
   g_test_add_func
       ("/message-delivered-payload/rejects-v1-malformed-payload-length",
       test_rejects_v1_malformed_payload_length);
+  g_test_add_func ("/message-delivered-payload/"
+      "rejects-v1-object-key-with-nul-padding",
+      test_rejects_v1_object_key_with_nul_padding);
   g_test_add_func
       ("/message-delivered-payload/rejects-invalid-prefix-on-decode",
       test_rejects_invalid_prefix_on_decode);
   g_test_add_func ("/message-delivered-payload/"
       "rejects-wrong-object-key-length-on-decode",
       test_rejects_wrong_object_key_length_on_decode);
+  g_test_add_func ("/message-delivered-payload/"
+      "rejects-v2-object-key-with-nul-padding",
+      test_rejects_v2_object_key_with_nul_padding);
   g_test_add_func ("/message-delivered-payload/rejects-uppercase-hex-on-decode",
       test_rejects_uppercase_hex_on_decode);
   g_test_add_func ("/message-delivered-payload/rejects-trailing-bytes",
@@ -451,6 +532,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/message-delivered-payload/rejects-truncated-metadata-string-body",
       test_rejects_truncated_metadata_string_body);
+  g_test_add_func ("/message-delivered-payload/"
+      "rejects-metadata-string-with-embedded-nul",
+      test_rejects_metadata_string_with_embedded_nul);
   g_test_add_func ("/message-delivered-payload/rejects-empty-payload",
       test_rejects_empty_payload);
 

@@ -187,6 +187,14 @@ read_nullable_string (const guint8 *data,
     return FALSE;
   }
 
+  if (memchr (data + *offset, '\0', value_len) != NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "MessageDelivered metadata string contains embedded NUL");
+    return FALSE;
+  }
+
   *out_value = g_strndup ((const char *) data + *offset, value_len);
   *offset += value_len;
 
@@ -261,11 +269,9 @@ decode_v1_payload (const guint8 *data,
   }
 
   object_key_len = read_u16_le (data + 16);
-  if (object_key_len == 0) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "MessageDelivered payload object key is empty");
+  if (object_key_len != WYREBOX_SHA256_OBJECT_KEY_LEN) {
+    set_invalid_object_key_error (error, G_IO_ERROR_INVALID_DATA);
+    g_prefix_error (error, "invalid MessageDelivered payload: ");
     return FALSE;
   }
 
@@ -316,11 +322,9 @@ decode_v2_payload (const guint8 *data,
   internal_date_unix_us = read_u64_le (data + 16);
   duplicate_message_id_count = read_u32_le (data + 24);
   object_key_len = read_u16_le (data + 28);
-  if (object_key_len == 0) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "MessageDelivered payload object key is empty");
+  if (object_key_len != WYREBOX_SHA256_OBJECT_KEY_LEN) {
+    set_invalid_object_key_error (error, G_IO_ERROR_INVALID_DATA);
+    g_prefix_error (error, "invalid MessageDelivered payload: ");
     return FALSE;
   }
 
