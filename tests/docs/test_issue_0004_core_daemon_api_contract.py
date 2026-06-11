@@ -22,6 +22,40 @@ REQUIRED_SECTIONS = [
     "## Out Of Scope",
 ]
 
+DELIVERY_FORBIDDEN_SURFACES = [
+    r"arbitrary SQL",
+    r"write SQL",
+    r"DuckDB mutation",
+    r"Wirelog fact mutation",
+    r"object-store metadata mutation",
+    r"direct journal append",
+]
+
+DELIVERY_FORBIDDEN_SURFACE_VERBS = (
+    r"exposes?|allows?|permits?|provides?|accepts?|supports?|executes?|enables?|grants?"
+)
+
+DELIVERY_FORBIDDEN_SURFACE_PATTERNS = [
+    rf"(?<!not )\b(?:{DELIVERY_FORBIDDEN_SURFACE_VERBS})\b(?:\s+\S+){{0,8}}\s+{surface}"
+    for surface in DELIVERY_FORBIDDEN_SURFACES
+]
+
+DELIVERY_FORBIDDEN_MODAL_PATTERNS = [
+    rf"\b(may|can|must|should)\b\s+\b(expose|allow|permit|provide|accept|support|execute|enable|grant)\b.*{surface}"
+    for surface in DELIVERY_FORBIDDEN_SURFACES
+]
+
+DELIVERY_FORBIDDEN_EXAMPLES = [
+    "Delivery ingestion exposes arbitrary SQL.",
+    "Delivery ingestion accepts arbitrary SQL from helpers.",
+    "Delivery ingestion supports write SQL for helpers.",
+    "Delivery ingestion executes arbitrary SQL supplied by helpers.",
+    "Delivery ingestion enables DuckDB mutation by helpers.",
+    "Delivery ingestion exposes Wirelog fact mutation surfaces.",
+    "Delivery ingestion provides object-store metadata mutation access.",
+    "Delivery ingestion grants helpers direct journal append access.",
+]
+
 
 def section_map(text: str) -> dict[str, str]:
     matches = list(re.finditer(r"^## .+$", text, flags=re.MULTILINE))
@@ -58,6 +92,12 @@ def assert_section_forbidden(
     assert not re.search(pattern, sections[section], re.IGNORECASE | re.DOTALL), (
         f"{section} contains forbidden language: {pattern}"
     )
+
+
+def assert_any_pattern_matches(text: str, patterns: list[str]) -> None:
+    assert any(
+        re.search(pattern, text, re.IGNORECASE | re.DOTALL) for pattern in patterns
+    ), f"forbidden example was not rejected by guard patterns: {text}"
 
 
 def main() -> None:
@@ -348,24 +388,22 @@ def main() -> None:
     ]:
         assert_forbidden(text, forbidden)
 
-    delivery_forbidden_surfaces = [
-        r"arbitrary SQL",
-        r"write SQL",
-        r"DuckDB mutation",
-        r"Wirelog fact mutation",
-        r"object-store metadata mutation",
-        r"direct journal append",
-    ]
-    for surface in delivery_forbidden_surfaces:
+    for pattern in DELIVERY_FORBIDDEN_SURFACE_PATTERNS:
         assert_section_forbidden(
             sections,
             "## Delivery Ingestion Operation Contract",
-            rf"(?<!not )\b(exposes?|allows?|permits?|provides?)\b\s+(?:direct\s+)?(?:access\s+to\s+)?{surface}",
+            pattern,
         )
+    for pattern in DELIVERY_FORBIDDEN_MODAL_PATTERNS:
         assert_section_forbidden(
             sections,
             "## Delivery Ingestion Operation Contract",
-            rf"\b(may|can|must|should)\b\s+\b(expose|allow|permit|provide)\b.*{surface}",
+            pattern,
+        )
+    for example in DELIVERY_FORBIDDEN_EXAMPLES:
+        assert_any_pattern_matches(
+            sections["## Delivery Ingestion Operation Contract"] + "\n" + example,
+            DELIVERY_FORBIDDEN_SURFACE_PATTERNS + DELIVERY_FORBIDDEN_MODAL_PATTERNS,
         )
 
 
