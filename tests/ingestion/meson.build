@@ -7,9 +7,23 @@ eml_ingestor_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+delivery_replay_validator_test = executable(
+  'test-delivery-replay-validator',
+  'test-delivery-replay-validator.c',
+  dependencies: [wyrebox_dep],
+)
+
 test(
   'eml ingestor',
   eml_ingestor_test,
+  env: {
+    'WYREBOX_EML_FIXTURE_DIR': eml_fixture_dir,
+  },
+)
+
+test(
+  'delivery replay validator',
+  delivery_replay_validator_test,
   env: {
     'WYREBOX_EML_FIXTURE_DIR': eml_fixture_dir,
   },

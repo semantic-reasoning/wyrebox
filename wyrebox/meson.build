@@ -1,5 +1,6 @@
 wyrebox_sources = files(
   'wyrebox-local-object-store.c',
+  'wyrebox-delivery-replay-validator.c',
   'wyrebox-eml-ingestor.c',
   'wyrebox-eml-metadata.c',
   'wyrebox-message-delivered-payload.c',
