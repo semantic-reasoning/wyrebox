@@ -1,5 +1,6 @@
 wyrebox_sources = files(
   'wyrebox-local-object-store.c',
+  'wyrebox-daemon-request-identity.c',
   'wyrebox-daemon-success-receipt.c',
   'wyrebox-delivery-projection.c',
   'wyrebox-delivery-replay-validator.c',
