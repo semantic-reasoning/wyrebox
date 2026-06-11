@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 
 #include <glib.h>
+#include <glib-unix.h>
 #include <gio/gio.h>
 
 #define WYREBOX_JOURNAL_SEGMENT_NAME "00000000000000000000.wbj"
@@ -106,6 +107,50 @@ write_all (int fd, const guint8 *data, gsize size, GError **error)
   return TRUE;
 }
 
+static gboolean
+fsync_directory_path (const char *path, GError **error)
+{
+  g_autofd int fd = -1;
+
+  fd = open (path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (fd < 0) {
+    int saved_errno = errno;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        g_io_error_from_errno (saved_errno),
+        "failed to open directory %s for fsync: %s",
+        path, g_strerror (saved_errno));
+    return FALSE;
+  }
+
+  if (fsync (fd) != 0) {
+    int saved_errno = errno;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        g_io_error_from_errno (saved_errno),
+        "failed to fsync directory %s: %s", path, g_strerror (saved_errno));
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
+fsync_journal_root_setup (const char *journal_root_dir, GError **error)
+{
+  g_autofree char *journal_parent_dir = g_path_get_dirname (journal_root_dir);
+
+  if (!fsync_directory_path (journal_parent_dir, error))
+    return FALSE;
+
+  if (!fsync_directory_path (journal_root_dir, error))
+    return FALSE;
+
+  return TRUE;
+}
+
 static void
 wyrebox_journal_writer_finalize (GObject *object)
 {
@@ -162,6 +207,9 @@ wyrebox_journal_writer_new (const char *journal_root_dir, GError **error)
     return NULL;
   }
 
+  if (!fsync_journal_root_setup (journal_root_dir, error))
+    return NULL;
+
   segment_path = g_build_filename (journal_root_dir,
       WYREBOX_JOURNAL_SEGMENT_NAME, NULL);
 
@@ -195,6 +243,11 @@ wyrebox_journal_writer_new (const char *journal_root_dir, GError **error)
         G_IO_ERROR,
         G_IO_ERROR_NOT_SUPPORTED,
         "journal does not support rotated or non-empty segments");
+    return NULL;
+  }
+
+  if (!fsync_directory_path (journal_root_dir, error)) {
+    (void) close (fd);
     return NULL;
   }
 
