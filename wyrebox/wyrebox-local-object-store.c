@@ -131,6 +131,70 @@ write_all(int fd, const guint8 *data, gsize size, GError **error)
   return TRUE;
 }
 
+static gboolean
+fsync_directory_path(const char *path, GError **error)
+{
+  g_autofd int fd = -1;
+
+  fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (fd < 0) {
+    int saved_errno = errno;
+
+    g_set_error(error,
+                G_IO_ERROR,
+                g_io_error_from_errno(saved_errno),
+                "failed to open directory %s for fsync: %s",
+                path,
+                g_strerror(saved_errno));
+    return FALSE;
+  }
+
+  if (fsync(fd) != 0) {
+    int saved_errno = errno;
+
+    g_set_error(error,
+                G_IO_ERROR,
+                g_io_error_from_errno(saved_errno),
+                "failed to fsync directory %s: %s",
+                path,
+                g_strerror(saved_errno));
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static void
+fsync_directory_path_best_effort(const char *path)
+{
+  g_autoptr(GError) ignored_error = NULL;
+
+  (void) fsync_directory_path(path, &ignored_error);
+}
+
+static gboolean
+fsync_object_root_setup(const char *root_dir,
+                        const char *objects_dir,
+                        GError **error)
+{
+  g_autofree char *objects_parent_dir = g_path_get_dirname(objects_dir);
+  g_autofree char *root_parent_dir = g_path_get_dirname(root_dir);
+
+  if (!fsync_directory_path(root_parent_dir, error))
+    return FALSE;
+
+  if (!fsync_directory_path(root_dir, error))
+    return FALSE;
+
+  if (!fsync_directory_path(objects_parent_dir, error))
+    return FALSE;
+
+  if (!fsync_directory_path(objects_dir, error))
+    return FALSE;
+
+  return TRUE;
+}
+
 WyreboxLocalObjectStore *
 wyrebox_local_object_store_new(const char *root_dir, GError **error)
 {
@@ -160,6 +224,9 @@ wyrebox_local_object_store_new(const char *root_dir, GError **error)
     return NULL;
   }
 
+  if (!fsync_object_root_setup(root_dir, objects_dir, error))
+    return NULL;
+
   self = g_object_new(WYREBOX_TYPE_LOCAL_OBJECT_STORE, NULL);
   self->root_dir = g_strdup(root_dir);
 
@@ -175,6 +242,7 @@ wyrebox_local_object_store_put_bytes(WyreboxLocalObjectStore *self,
   g_autofree char *hex = NULL;
   g_autofree char *path = NULL;
   g_autofree char *parent_dir = NULL;
+  g_autofree char *hash_root_dir = NULL;
   g_autofree char *temp_path = NULL;
   g_autofd int fd = -1;
   gsize size = 0;
@@ -189,6 +257,7 @@ wyrebox_local_object_store_put_bytes(WyreboxLocalObjectStore *self,
   hex = checksum_bytes(bytes);
   path = build_object_path(self, hex);
   parent_dir = g_path_get_dirname(path);
+  hash_root_dir = g_path_get_dirname(parent_dir);
 
   if (g_mkdir_with_parents(parent_dir, 0700) != 0) {
     int saved_errno = errno;
@@ -202,7 +271,13 @@ wyrebox_local_object_store_put_bytes(WyreboxLocalObjectStore *self,
     return FALSE;
   }
 
+  if (!fsync_directory_path(hash_root_dir, error))
+    return FALSE;
+
   if (g_file_test(path, G_FILE_TEST_EXISTS)) {
+    if (!fsync_directory_path(parent_dir, error))
+      return FALSE;
+
     *out_object_key = g_strdup_printf("sha256:%s", hex);
     return TRUE;
   }
@@ -224,6 +299,7 @@ wyrebox_local_object_store_put_bytes(WyreboxLocalObjectStore *self,
   data = g_bytes_get_data(bytes, &size);
   if (!write_all(fd, data, size, error)) {
     (void) g_unlink(temp_path);
+    fsync_directory_path_best_effort(parent_dir);
     return FALSE;
   }
 
@@ -237,6 +313,7 @@ wyrebox_local_object_store_put_bytes(WyreboxLocalObjectStore *self,
                 temp_path,
                 g_strerror(saved_errno));
     (void) g_unlink(temp_path);
+    fsync_directory_path_best_effort(parent_dir);
     return FALSE;
   }
 
@@ -250,6 +327,7 @@ wyrebox_local_object_store_put_bytes(WyreboxLocalObjectStore *self,
                 temp_path,
                 g_strerror(saved_errno));
     (void) g_unlink(temp_path);
+    fsync_directory_path_best_effort(parent_dir);
     return FALSE;
   }
 
@@ -257,8 +335,12 @@ wyrebox_local_object_store_put_bytes(WyreboxLocalObjectStore *self,
     int saved_errno = errno;
 
     (void) g_unlink(temp_path);
+    fsync_directory_path_best_effort(parent_dir);
 
     if (saved_errno == EEXIST) {
+      if (!fsync_directory_path(parent_dir, error))
+        return FALSE;
+
       *out_object_key = g_strdup_printf("sha256:%s", hex);
       return TRUE;
     }
@@ -273,6 +355,8 @@ wyrebox_local_object_store_put_bytes(WyreboxLocalObjectStore *self,
   }
 
   (void) g_unlink(temp_path);
+  if (!fsync_directory_path(parent_dir, error))
+    return FALSE;
 
   *out_object_key = g_strdup_printf("sha256:%s", hex);
   return TRUE;

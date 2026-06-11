@@ -117,6 +117,40 @@ test_duplicate_put_is_idempotent_and_does_not_rewrite(void)
 }
 
 static void
+test_put_creates_sharded_object_without_temp_leftover(void)
+{
+  const guint8 message[] = "Subject: layout\r\n\r\nstored once\r\n";
+  g_autofree char *root = g_dir_make_tmp("wyrebox-object-store-XXXXXX", NULL);
+  g_autoptr(GError) error = NULL;
+  g_autoptr(WyreboxLocalObjectStore) store = NULL;
+  g_autoptr(GBytes) input = g_bytes_new_static(message, sizeof(message) - 1);
+  g_autofree char *key = NULL;
+  g_autofree char *path = NULL;
+  g_autofree char *parent_dir = NULL;
+  g_autoptr(GDir) dir = NULL;
+  const char *entry = NULL;
+
+  g_assert_nonnull(root);
+  store = wyrebox_local_object_store_new(root, &error);
+  g_assert_no_error(error);
+  g_assert_nonnull(store);
+
+  g_assert_true(wyrebox_local_object_store_put_bytes(store, input, &key, &error));
+  g_assert_no_error(error);
+  path = object_path_for_key(root, key);
+  parent_dir = g_path_get_dirname(path);
+  g_assert_true(g_file_test(path, G_FILE_TEST_IS_REGULAR));
+
+  dir = g_dir_open(parent_dir, 0, &error);
+  g_assert_no_error(error);
+  g_assert_nonnull(dir);
+  while ((entry = g_dir_read_name(dir)) != NULL)
+    g_assert_false(g_str_has_prefix(entry, ".tmp-object-"));
+
+  remove_tree(root);
+}
+
+static void
 test_different_bytes_produce_different_keys(void)
 {
   const guint8 first[] = "Subject: one\r\n\r\none\r\n";
@@ -194,6 +228,8 @@ main(int argc, char **argv)
                   test_round_trip_preserves_bytes);
   g_test_add_func("/object-store/duplicate-put-is-idempotent",
                   test_duplicate_put_is_idempotent_and_does_not_rewrite);
+  g_test_add_func("/object-store/put-creates-sharded-object-without-temp-leftover",
+                  test_put_creates_sharded_object_without_temp_leftover);
   g_test_add_func("/object-store/different-bytes-produce-different-keys",
                   test_different_bytes_produce_different_keys);
   g_test_add_func("/object-store/invalid-key-fails", test_invalid_key_fails);
