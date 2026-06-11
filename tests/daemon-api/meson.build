@@ -28,8 +28,15 @@ daemon_error_frame_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_response_frame_test = executable(
+  'test-daemon-response-frame',
+  'test-daemon-response-frame.c',
+  dependencies: [wyrebox_dep],
+)
+
 test('daemon success receipt', daemon_success_receipt_test)
 test('daemon request identity', daemon_request_identity_test)
 test('daemon runtime', daemon_runtime_test)
 test('daemon error', daemon_error_test)
 test('daemon error frame', daemon_error_frame_test)
+test('daemon response frame', daemon_response_frame_test)
