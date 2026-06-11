@@ -190,7 +190,9 @@ gboolean wyrebox_schema_migration_evaluate_to_current (
 /*
  * Load schema metadata from @metadata_store, apply a transient
  * materialization checkpoint precondition, evaluate to the current schema
- * version, and persist updated metadata only when evaluation succeeds.
+ * version, and persist updated metadata only when evaluation succeeds with
+ * durable-state changes. The transient
+ * @checkpoint_precondition_satisfied flag is never persisted.
  *
  * Ownership:
  * - @self and @metadata_store are non-floating references owned by the caller.

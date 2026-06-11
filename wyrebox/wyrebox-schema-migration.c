@@ -368,12 +368,32 @@ wyrebox_schema_migration_evaluate_to_current (WyreboxSchemaMigration *self,
       wyrebox_schema_migration_get_current_schema_version (), error);
 }
 
+static gboolean
+wyrebox_schema_migration_state_matches_persisted_metadata (const
+    WyreboxSchemaMigrationMetadataState *state,
+    const WyreboxSchemaMigrationMetadataState *persisted_state)
+{
+  g_return_val_if_fail (state != NULL, FALSE);
+  g_return_val_if_fail (persisted_state != NULL, FALSE);
+
+  return state->schema_version_present ==
+      persisted_state->schema_version_present
+      && state->schema_version == persisted_state->schema_version
+      && state->materialization_checkpoint_present ==
+      persisted_state->materialization_checkpoint_present
+      && state->materialization_checkpoint_journal_offset ==
+      persisted_state->materialization_checkpoint_journal_offset
+      && state->materialization_checkpoint_sequence ==
+      persisted_state->materialization_checkpoint_sequence;
+}
+
 gboolean
 wyrebox_schema_migration_run_store_to_current (WyreboxSchemaMigration *self,
     WyreboxSchemaMetadataStore *metadata_store,
     gboolean checkpoint_precondition_satisfied, GError **error)
 {
   g_auto (WyreboxSchemaMigrationMetadataState) state = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) persisted_state = { 0 };
 
   g_return_val_if_fail (WYREBOX_IS_SCHEMA_MIGRATION (self), FALSE);
   g_return_val_if_fail (WYREBOX_IS_SCHEMA_METADATA_STORE (metadata_store),
@@ -383,10 +403,16 @@ wyrebox_schema_migration_run_store_to_current (WyreboxSchemaMigration *self,
   if (!wyrebox_schema_metadata_store_load (metadata_store, &state, error))
     return FALSE;
 
+  persisted_state = state;
   state.checkpoint_precondition_satisfied = checkpoint_precondition_satisfied;
 
   if (!wyrebox_schema_migration_evaluate_to_current (self, &state, error))
     return FALSE;
 
+  if (wyrebox_schema_migration_state_matches_persisted_metadata (&state,
+          &persisted_state))
+    return TRUE;
+
+  state.checkpoint_precondition_satisfied = FALSE;
   return wyrebox_schema_metadata_store_save (metadata_store, &state, error);
 }
