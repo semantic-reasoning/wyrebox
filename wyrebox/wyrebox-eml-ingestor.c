@@ -1,5 +1,6 @@
 #include "wyrebox-eml-ingestor.h"
 
+#include "wyrebox-eml-metadata.h"
 #include "wyrebox-message-delivered-payload.h"
 
 struct _WyreboxEmlIngestor
@@ -99,8 +100,13 @@ wyrebox_eml_ingestor_ingest_bytes (WyreboxEmlIngestor *self,
   result.size_bytes = (guint64) g_bytes_get_size (bytes);
 
   if (self->journal_writer != NULL) {
-    payload = wyrebox_message_delivered_payload_encode (result.object_key,
-        result.size_bytes, error);
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
+
+    if (!wyrebox_eml_metadata_parse_bytes (bytes, &metadata, error))
+      return FALSE;
+
+    payload = wyrebox_message_delivered_payload_encode_full (result.object_key,
+        result.size_bytes, &metadata, 0, error);
     if (payload == NULL)
       return FALSE;
 

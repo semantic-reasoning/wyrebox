@@ -4,6 +4,7 @@
 #include "wyrebox-local-object-store.h"
 #include "wyrebox-message-delivered-payload.h"
 
+#include <gio/gio.h>
 #include <glib.h>
 #include <glib/gstdio.h>
 
@@ -170,6 +171,13 @@ test_ingests_raw_fixture_and_appends_message_delivered_journal (void)
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.object_key, ==, result.object_key);
   g_assert_cmpuint (decoded.size_bytes, ==, result.size_bytes);
+  g_assert_cmpuint (decoded.internal_date_unix_us, ==, 0);
+  g_assert_cmpstr (decoded.message_id, ==, "<simple-crlf@example.test>");
+  g_assert_cmpstr (decoded.subject, ==, "CRLF fixture");
+  g_assert_cmpstr (decoded.from, ==, "Alice <alice@example.test>");
+  g_assert_cmpstr (decoded.to, ==, "Bob <bob@example.test>");
+  g_assert_cmpstr (decoded.date, ==, "Tue, 02 Jun 2026 12:34:56 +0000");
+  g_assert_cmpuint (decoded.duplicate_message_id_count, ==, 0);
 
   g_assert_false (wyrebox_journal_reader_read_next (reader,
           &record, &eof, &error));
@@ -178,6 +186,107 @@ test_ingests_raw_fixture_and_appends_message_delivered_journal (void)
 
   remove_tree (object_root);
   remove_tree (journal_root);
+}
+
+static void
+test_journaled_ingest_rejects_missing_header_separator (void)
+{
+  static const char malformed[] =
+      "From: Alice <alice@example.test>\r\n"
+      "Subject: Missing separator\r\n"
+      "Message-ID: <missing-separator@example.test>\r\n"
+      "This line is still parsed as a header without CRLFCRLF";
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-eml-ingestor-objects-XXXXXX", NULL);
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-eml-ingestor-journal-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) input =
+      g_bytes_new_static (malformed, sizeof (malformed) - 1);
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+  g_auto (WyreboxEmlIngestResult) result = { 0 };
+  g_auto (WyreboxJournalRecord) record = { 0 };
+  gboolean eof = FALSE;
+
+  g_assert_nonnull (object_root);
+  g_assert_nonnull (journal_root);
+
+  store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+
+  ingestor = wyrebox_eml_ingestor_new_with_journal (store, writer);
+  g_assert_nonnull (ingestor);
+
+  g_assert_false (wyrebox_eml_ingestor_ingest_bytes (ingestor, input,
+          &result, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_clear_error (&error);
+  g_assert_null (result.object_key);
+  g_assert_cmpuint (result.size_bytes, ==, 0);
+  g_assert_cmpuint (result.journal_offset, ==, 0);
+  g_assert_cmpuint (result.journal_sequence, ==, 0);
+
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+  g_assert_false (wyrebox_journal_reader_read_next (reader,
+          &record, &eof, &error));
+  g_assert_no_error (error);
+  g_assert_true (eof);
+
+  remove_tree (object_root);
+  remove_tree (journal_root);
+}
+
+static void
+test_no_journal_ingest_preserves_raw_malformed_bytes (void)
+{
+  static const char malformed[] =
+      "From: Alice <alice@example.test>\r\n"
+      "Subject: Missing separator\r\n"
+      "Message-ID: <missing-separator@example.test>\r\n"
+      "This object-store-only path does not parse metadata";
+  g_autofree char *root = g_dir_make_tmp ("wyrebox-eml-ingestor-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) input =
+      g_bytes_new_static (malformed, sizeof (malformed) - 1);
+  g_autoptr (GBytes) output = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+  g_auto (WyreboxEmlIngestResult) result = { 0 };
+
+  g_assert_nonnull (root);
+
+  store = wyrebox_local_object_store_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  ingestor = wyrebox_eml_ingestor_new (store);
+  g_assert_nonnull (ingestor);
+
+  g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, input,
+          &result, &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (result.object_key);
+  g_assert_cmpuint (result.size_bytes, ==, g_bytes_get_size (input));
+  g_assert_cmpuint (result.journal_offset, ==, 0);
+  g_assert_cmpuint (result.journal_sequence, ==, 0);
+
+  output = wyrebox_local_object_store_get_bytes (store, result.object_key,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (output);
+  assert_bytes_equal (output, input);
+
+  remove_tree (root);
 }
 
 int
@@ -189,6 +298,12 @@ main (int argc, char **argv)
       test_ingests_raw_fixture_into_object_store);
   g_test_add_func ("/ingestion/eml-ingestor/message-delivered-journal",
       test_ingests_raw_fixture_and_appends_message_delivered_journal);
+  g_test_add_func ("/ingestion/eml-ingestor/"
+      "journaled-rejects-missing-header-separator",
+      test_journaled_ingest_rejects_missing_header_separator);
+  g_test_add_func ("/ingestion/eml-ingestor/"
+      "no-journal-preserves-raw-malformed-bytes",
+      test_no_journal_ingest_preserves_raw_malformed_bytes);
 
   return g_test_run ();
 }
