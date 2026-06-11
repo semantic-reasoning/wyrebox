@@ -1,5 +1,7 @@
 #include "wyrebox-fact-record.h"
 
+#include <string.h>
+
 #include <gio/gio.h>
 #include <glib.h>
 
@@ -272,6 +274,89 @@ test_fact_record_wirelog_batch_rejects_null_record (void)
   g_assert_true (g_strrstr (error->message, "index 1") != NULL);
 }
 
+static void
+test_fact_record_writes_wirelog_batch_to_stream (void)
+{
+  const char *sender_args[] = {
+    "mail-1",
+    "example.test",
+    NULL,
+  };
+  const char *participant_args[] = {
+    "mail-1",
+    "Alice <alice@example.test>",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autoptr (GOutputStream) stream = NULL;
+  gconstpointer data = NULL;
+  gsize size = 0;
+
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  g_ptr_array_add (records,
+      test_fact_record_new ("sender_domain", sender_args, "header:from"));
+  g_ptr_array_add (records,
+      test_fact_record_new ("participant", participant_args, "header:from"));
+  stream = g_memory_output_stream_new_resizable ();
+
+  g_assert_true (wyrebox_fact_record_array_write_wirelog_facts (records,
+          stream, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (g_output_stream_close (stream, NULL, &error));
+  g_assert_no_error (error);
+
+  data = g_memory_output_stream_get_data (G_MEMORY_OUTPUT_STREAM (stream));
+  size = g_memory_output_stream_get_data_size (G_MEMORY_OUTPUT_STREAM (stream));
+  g_assert_cmpmem (data, size,
+      "sender_domain(\"mail-1\", \"example.test\").\n"
+      "participant(\"mail-1\", \"Alice <alice@example.test>\").\n",
+      strlen ("sender_domain(\"mail-1\", \"example.test\").\n"
+          "participant(\"mail-1\", \"Alice <alice@example.test>\").\n"));
+}
+
+static void
+test_fact_record_writes_empty_wirelog_batch_to_stream (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autoptr (GOutputStream) stream = NULL;
+
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  stream = g_memory_output_stream_new_resizable ();
+
+  g_assert_true (wyrebox_fact_record_array_write_wirelog_facts (records,
+          stream, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (g_output_stream_close (stream, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (g_memory_output_stream_get_data_size (G_MEMORY_OUTPUT_STREAM
+          (stream)), ==, 0);
+}
+
+static void
+test_fact_record_wirelog_batch_write_propagates_stream_failure (void)
+{
+  const char *args[] = {
+    "mail-1",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autoptr (GOutputStream) stream = NULL;
+
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  g_ptr_array_add (records,
+      test_fact_record_new ("participant", args, "header:to"));
+  stream = g_memory_output_stream_new_resizable ();
+  g_assert_true (g_output_stream_close (stream, NULL, &error));
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_fact_record_array_write_wirelog_facts (records,
+          stream, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_CLOSED);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -303,6 +388,13 @@ main (int argc, char **argv)
       test_fact_record_wirelog_batch_propagates_invalid_record);
   g_test_add_func ("/facts/fact-record/wirelog-batch-rejects-null-record",
       test_fact_record_wirelog_batch_rejects_null_record);
+  g_test_add_func ("/facts/fact-record/writes-wirelog-batch-to-stream",
+      test_fact_record_writes_wirelog_batch_to_stream);
+  g_test_add_func ("/facts/fact-record/writes-empty-wirelog-batch-to-stream",
+      test_fact_record_writes_empty_wirelog_batch_to_stream);
+  g_test_add_func ("/facts/fact-record/"
+      "wirelog-batch-write-propagates-stream-failure",
+      test_fact_record_wirelog_batch_write_propagates_stream_failure);
 
   return g_test_run ();
 }

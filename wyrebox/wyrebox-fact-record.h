@@ -1,5 +1,6 @@
 #pragma once
 
+#include <gio/gio.h>
 #include <glib-object.h>
 
 /* *INDENT-OFF* */
@@ -54,6 +55,11 @@ char *wyrebox_fact_record_to_wirelog_fact (const WyreboxFactRecord *record,
     GError **error);
 
 char *wyrebox_fact_record_array_to_wirelog_facts (GPtrArray *records,
+    GError **error);
+
+gboolean wyrebox_fact_record_array_write_wirelog_facts (GPtrArray *records,
+    GOutputStream *stream,
+    GCancellable *cancellable,
     GError **error);
 
 G_END_DECLS

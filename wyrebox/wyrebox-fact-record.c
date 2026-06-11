@@ -264,3 +264,21 @@ wyrebox_fact_record_array_to_wirelog_facts (GPtrArray *records, GError **error)
 
   return g_string_free (g_steal_pointer (&builder), FALSE);
 }
+
+gboolean
+wyrebox_fact_record_array_write_wirelog_facts (GPtrArray *records,
+    GOutputStream *stream, GCancellable *cancellable, GError **error)
+{
+  g_autofree char *text = NULL;
+  gsize bytes_written = 0;
+
+  g_return_val_if_fail (stream != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  text = wyrebox_fact_record_array_to_wirelog_facts (records, error);
+  if (text == NULL)
+    return FALSE;
+
+  return g_output_stream_write_all (stream,
+      text, strlen (text), &bytes_written, cancellable, error);
+}
