@@ -67,5 +67,11 @@ test(
   args: files('tests/docs/test_issue_0003_gobject_core_components_contract.py'),
 )
 
+test(
+  'docs issue 0004 error model contract',
+  python,
+  args: files('tests/docs/test_issue_0004_error_model_contract.py'),
+)
+
 subdir('tests/object-store')
 subdir('tests/journal')
