@@ -1,0 +1,3 @@
+#pragma once
+
+#define WYREBOX_HAVE_DUCKDB @WYREBOX_HAVE_DUCKDB@

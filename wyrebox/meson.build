@@ -11,6 +11,15 @@ wyrebox_sources = files(
   'wyrebox-schema-migration.c',
 )
 
+wyrebox_build_config = configuration_data()
+wyrebox_build_config.set10('WYREBOX_HAVE_DUCKDB', duckdb_found)
+
+configure_file(
+  input: 'wyrebox-build-config.h.in',
+  output: 'wyrebox-build-config.h',
+  configuration: wyrebox_build_config,
+)
+
 wyrebox_inc = include_directories('.')
 
 wyrebox_lib = static_library(
