@@ -28,6 +28,33 @@ endif
 
 summary('capnp', capnp_summary, section: 'Toolchain')
 
+capnp_serialization_option = get_option('capnp_serialization')
+capnp_serialization_found = false
+capnp_serialization_compiler = find_program('capnp', required: false)
+capnpc_cpp = find_program('capnpc-c++', required: false)
+capnp_dep = dependency('capnp', method: 'pkg-config', required: false)
+capnpc_dep = dependency('capnpc', method: 'pkg-config', required: false)
+kj_dep = dependency('kj', method: 'pkg-config', required: false)
+
+if capnp_serialization_option.disabled()
+  capnp_serialization_summary = 'disabled'
+elif capnp_serialization_compiler.found() and capnpc_cpp.found() and \
+    capnp_dep.found() and capnpc_dep.found() and kj_dep.found()
+  capnp_serialization_found = true
+  capnp_serialization_summary = 'enabled'
+elif capnp_serialization_option.enabled()
+  error('Cap\'n Proto serialization requested with ' +
+    '-Dcapnp_serialization=enabled, but capnp, capnpc-c++, and the ' +
+    'capnp/capnpc/kj pkg-config runtime dependencies were not all found.')
+else
+  capnp_serialization_summary = (
+    'not found; generated API serialization disabled'
+  )
+endif
+
+summary('capnp serialization', capnp_serialization_summary,
+  section: 'Toolchain')
+
 duckdb_option = get_option('duckdb')
 duckdb_found = false
 duckdb_deps = []

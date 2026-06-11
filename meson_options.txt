@@ -6,6 +6,13 @@ option(
 )
 
 option(
+  'capnp_serialization',
+  type: 'feature',
+  value: 'auto',
+  description: 'Cap\'n Proto compiler and runtime for generated API serialization',
+)
+
+option(
   'duckdb',
   type: 'feature',
   value: 'auto',

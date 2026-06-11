@@ -21,6 +21,8 @@ wyrebox_sources = files(
 
 wyrebox_build_config = configuration_data()
 wyrebox_build_config.set10('WYREBOX_HAVE_DUCKDB', duckdb_found)
+wyrebox_build_config.set10('WYREBOX_HAVE_CAPNP_SERIALIZATION',
+  capnp_serialization_found)
 
 configure_file(
   input: 'wyrebox-build-config.h.in',
