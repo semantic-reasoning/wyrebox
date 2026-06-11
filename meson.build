@@ -49,4 +49,10 @@ test(
   args: files('tests/docs/test_issue_0003_object_store_contract.py'),
 )
 
+test(
+  'docs issue 0003 mutation journal contract',
+  python,
+  args: files('tests/docs/test_issue_0003_mutation_journal_contract.py'),
+)
+
 subdir('tests/object-store')
