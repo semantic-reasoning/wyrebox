@@ -1,0 +1,10 @@
+From: Alice <alice@example.test>
+To: Bob <bob@example.test>
+Subject: CRLF fixture
+Date: Tue, 02 Jun 2026 12:34:56 +0000
+Message-ID: <simple-crlf@example.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+
+Hello from a CRLF-only message.
+The blank line above separates headers from body.

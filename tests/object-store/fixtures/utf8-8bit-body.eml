@@ -1,0 +1,11 @@
+From: Sender <sender@example.test>
+To: Recipient <recipient@example.test>
+Subject: UTF-8 body fixture
+Date: Wed, 03 Jun 2026 08:15:00 +0000
+Message-ID: <utf8-8bit-body@example.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+Café résumé naïve touché.
+Hangul sample: 안녕하세요.

@@ -1,0 +1,23 @@
+From: Attachments <attachments@example.test>
+To: Archive <archive@example.test>
+Subject: Multipart fixture
+Date: Thu, 04 Jun 2026 21:00:00 +0000
+Message-ID: <multipart-attachment-like@example.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="wyrebox-boundary-0005"
+
+This is a multipart message in MIME format.
+
+--wyrebox-boundary-0005
+Content-Type: text/plain; charset=us-ascii
+
+Plain body before the attachment-like part.
+
+--wyrebox-boundary-0005
+Content-Type: application/octet-stream; name="sample.bin"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="sample.bin"
+
+AAECAwQFBgcICQoLDA0ODw==
+
+--wyrebox-boundary-0005--
