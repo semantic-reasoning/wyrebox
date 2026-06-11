@@ -81,5 +81,9 @@ gboolean wyrebox_fact_record_array_write_wirelog_fact_file (GPtrArray *records,
     GCancellable *cancellable,
     GError **error);
 
+char *wyrebox_fact_record_build_wirelog_dump_filename (const char *batch_id,
+    guint64 journal_sequence,
+    GError **error);
+
 G_END_DECLS
 /* *INDENT-ON* */

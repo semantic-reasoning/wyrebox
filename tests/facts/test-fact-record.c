@@ -693,6 +693,42 @@ test_fact_record_wirelog_file_readback_preserves_batch_format (void)
   remove_tree (root);
 }
 
+static void
+test_fact_record_builds_wirelog_dump_filename (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autofree char *filename = NULL;
+
+  filename =
+      wyrebox_fact_record_build_wirelog_dump_filename ("mail-1", 42, &error);
+  g_assert_no_error (error);
+  g_assert_cmpstr (filename, ==, "00000000000000000042-mail-1.wl");
+}
+
+static void
+test_fact_record_wirelog_dump_filename_sanitizes_identifier (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autofree char *filename = NULL;
+
+  filename =
+      wyrebox_fact_record_build_wirelog_dump_filename ("../mail id/one", 7,
+      &error);
+  g_assert_no_error (error);
+  g_assert_cmpstr (filename, ==, "00000000000000000007-___mail_id_one.wl");
+}
+
+static void
+test_fact_record_wirelog_dump_filename_rejects_missing_identifier (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autofree char *filename = NULL;
+
+  filename = wyrebox_fact_record_build_wirelog_dump_filename ("", 7, &error);
+  g_assert_null (filename);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -753,6 +789,14 @@ main (int argc, char **argv)
   g_test_add_func ("/facts/fact-record/"
       "wirelog-file-readback-preserves-batch-format",
       test_fact_record_wirelog_file_readback_preserves_batch_format);
+  g_test_add_func ("/facts/fact-record/builds-wirelog-dump-filename",
+      test_fact_record_builds_wirelog_dump_filename);
+  g_test_add_func ("/facts/fact-record/"
+      "wirelog-dump-filename-sanitizes-identifier",
+      test_fact_record_wirelog_dump_filename_sanitizes_identifier);
+  g_test_add_func ("/facts/fact-record/"
+      "wirelog-dump-filename-rejects-missing-identifier",
+      test_fact_record_wirelog_dump_filename_rejects_missing_identifier);
 
   return g_test_run ();
 }

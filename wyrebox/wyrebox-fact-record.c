@@ -340,3 +340,36 @@ wyrebox_fact_record_array_write_wirelog_fact_file (GPtrArray *records,
   return write_wirelog_text_and_close (G_OUTPUT_STREAM (stream),
       text, cancellable, error);
 }
+
+static gboolean
+is_dump_filename_char (char value)
+{
+  return g_ascii_isalnum (value) || value == '_' || value == '-';
+}
+
+char *
+wyrebox_fact_record_build_wirelog_dump_filename (const char *batch_id,
+    guint64 journal_sequence, GError **error)
+{
+  g_autoptr (GString) sanitized = NULL;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  if (batch_id == NULL || batch_id[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "Wirelog dump batch id is required");
+    return NULL;
+  }
+
+  sanitized = g_string_new (NULL);
+  for (const char *cursor = batch_id; *cursor != '\0'; cursor++) {
+    if (is_dump_filename_char (*cursor))
+      g_string_append_c (sanitized, *cursor);
+    else
+      g_string_append_c (sanitized, '_');
+  }
+
+  return g_strdup_printf ("%020" G_GUINT64_FORMAT "-%s.wl",
+      journal_sequence, sanitized->str);
+}
