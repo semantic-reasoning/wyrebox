@@ -11,3 +11,9 @@ test(
   python,
   args: files('tests/docs/test_issue_0001_postfix_ingress_adr.py'),
 )
+
+test(
+  'docs issue 0001 dovecot boundary adr',
+  python,
+  args: files('tests/docs/test_issue_0001_dovecot_boundary_adr.py'),
+)
