@@ -35,6 +35,8 @@ mutation source for flags, mailbox moves, facts, or virtual views.
 
 Stable identifiers at contract level are:
 
+- `account_id`: account owner boundary for mailbox hierarchy and authorization
+  scope.
 - `message_id`: message entity identity owned by WyreBox.
 - `object_id`: immutable object identity from content.
 - `mailbox_id`: mailbox identity for each ordinary mailbox.
@@ -53,13 +55,25 @@ object may be shared by many memberships without changing the object bytes.
 A first-phase materialized schema must provide, at minimum, these logical tables
 and views:
 
+- `accounts`: account catalog keyed by `account_id`; this is the owner boundary
+  for ordinary mailboxes, virtual views, messages, object references, and
+  membership visibility.
 - `objects`: immutable object metadata keyed by `object_id`.
 - `messages`: message records keyed by `message_id`, referencing
   `objects.object_id`.
-- `mailbox_memberships`: message-to-mailbox or message-to-view links, carrying
-  mailbox-scoped state such as UID, internal date, and fetch visibility.
+- `mailboxes`: ordinary mailbox catalog keyed by `mailbox_id`, referencing
+  `accounts.account_id`, and carrying the stable IMAP-visible hierarchy name
+  plus identity and visibility state for LIST and SELECT behavior.
+- `derived_views`: virtual mailbox view catalog keyed by `view_id`, referencing
+  `accounts.account_id`, carrying the IMAP-visible view name, definition or rule
+  reference, and identity and visibility state for virtual LIST and SELECT
+  behavior.
+- `mailbox_memberships`: message-to-ordinary-mailbox links referencing
+  `messages.message_id` and `mailboxes.mailbox_id`, carrying mailbox-scoped
+  state such as UID, internal date, and fetch visibility.
 - `mailbox_uid_state`: per-mailbox and per-view UID namespace state, including
-  `uidnext` and `uidvalidity`.
+  `uidnext` and `uidvalidity`, referencing either `mailboxes.mailbox_id` or
+  `derived_views.view_id`.
 - `message_flags`: mailbox-scoped flags materialized from canonical mutation
   records.
 - `message_keywords`: mailbox-scoped keywords materialized from canonical
@@ -67,19 +81,24 @@ and views:
 - `message_facts`: fact rows materialized from fact mutation records and derived
   sources.
 - `derived_view_memberships`: Wirelog-derived membership rows for virtual mailbox
-  views.
+  views, referencing `derived_views.view_id` and `messages.message_id`.
 - `schema_metadata`: schema contract metadata including schema version.
 - `materialization_checkpoint`: progress and replay position of canonical replay,
   including last journal byte offset and sequence.
 
-`mailbox_memberships` and `derived_view_memberships` are the required
-distinction between ordinary and virtual exposures.
+`mailboxes` and `derived_views` are the required identity catalogs for ordinary
+and virtual exposures. `mailbox_memberships` and `derived_view_memberships` are
+membership rows that reference those catalogs.
 
 ## Mailbox And Virtual Mailbox UID Contract
 
 Each ordinary mailbox and each virtual mailbox has its own UID namespace.
 Each namespace owns its own `UIDNEXT` and `UIDVALIDITY` state in
 `mailbox_uid_state`.
+
+Ordinary and virtual names are account-scoped IMAP-visible names stored through
+the `mailboxes` and `derived_views` catalogs. Membership and UID rows must refer
+to those catalogs rather than inventing mailbox identity from membership rows.
 
 Virtual mailboxes are first-class WyreBox views and expose memberships through
 `derived_view_memberships`.
@@ -113,9 +132,9 @@ journal plus object-store inputs and Wirelog fact/rule-derived sources where
 applicable.
 
 Replay must converge on equivalent `objects`, `messages`, `mailbox_memberships`,
-`message_flags`, `message_keywords`, `mailbox_uid_state`, `message_facts`,
-`derived_view_memberships`, and `schema_metadata` content for the same accepted
-journal prefix.
+`accounts`, `mailboxes`, `derived_views`, `message_flags`, `message_keywords`,
+`mailbox_uid_state`, `message_facts`, `derived_view_memberships`, and
+`schema_metadata` content for the same accepted journal prefix.
 
 `materialization_checkpoint` must track durable replay position and allow restart
 to continue from the last fully materialized position.

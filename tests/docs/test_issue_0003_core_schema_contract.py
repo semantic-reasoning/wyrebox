@@ -115,6 +115,9 @@ def main() -> None:
     )
 
     for table in [
+        "accounts",
+        "mailboxes",
+        "derived_views",
         "messages",
         "objects",
         "mailbox_memberships",
@@ -130,6 +133,42 @@ def main() -> None:
 
     assert_section_matches(
         sections,
+        "## Required Materialized Schema Objects",
+        r"`accounts`.*account_id.*owner boundary",
+    )
+    assert_section_matches(
+        sections,
+        "## Required Materialized Schema Objects",
+        r"`mailboxes`.*mailbox_id.*account_id.*IMAP-visible hierarchy name",
+    )
+    assert_section_matches(
+        sections,
+        "## Required Materialized Schema Objects",
+        r"`derived_views`.*view_id.*account_id.*IMAP-visible view name",
+    )
+    assert_section_matches(
+        sections,
+        "## Required Materialized Schema Objects",
+        r"`derived_views`.*definition.*rule",
+    )
+    assert_section_matches(
+        sections,
+        "## Required Materialized Schema Objects",
+        r"`mailbox_uid_state`.*referencing either `mailboxes\.mailbox_id` or\s+`derived_views\.view_id`",
+    )
+    assert_section_matches(
+        sections,
+        "## Required Materialized Schema Objects",
+        r"`mailbox_memberships`.*referencing\s+`messages\.message_id` and `mailboxes\.mailbox_id`",
+    )
+    assert_section_matches(
+        sections,
+        "## Required Materialized Schema Objects",
+        r"`derived_view_memberships`.*referencing `derived_views\.view_id` and `messages\.message_id`",
+    )
+
+    assert_section_matches(
+        sections,
         "## Mailbox And Virtual Mailbox UID Contract",
         r"each virtual mailbox.*own.*UID namespace",
     )
@@ -142,6 +181,11 @@ def main() -> None:
         sections,
         "## Mailbox And Virtual Mailbox UID Contract",
         r"Wirelog-derived",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox And Virtual Mailbox UID Contract",
+        r"account-scoped.*IMAP-visible",
     )
     assert_section_matches(
         sections,
@@ -190,6 +234,11 @@ def main() -> None:
         sections,
         "## Restart And Replay Regeneration Expectations",
         r"journal plus object-store inputs",
+    )
+    assert_section_matches(
+        sections,
+        "## Restart And Replay Regeneration Expectations",
+        r"accounts.*mailboxes.*derived_views",
     )
     assert_section_matches(
         sections,
