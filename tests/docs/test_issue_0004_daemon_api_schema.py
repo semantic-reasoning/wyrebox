@@ -88,7 +88,7 @@ def run_capnp_syntax_check() -> None:
         return
 
     result = subprocess.run(
-        [capnp, "compile", "-o-", str(SCHEMA_PATH.relative_to(REPO_ROOT))],
+        [capnp, "compile", "-ocapnp", str(SCHEMA_PATH.relative_to(REPO_ROOT))],
         cwd=REPO_ROOT,
         text=True,
         stdout=subprocess.PIPE,
