@@ -57,6 +57,35 @@ assert_bytes_equal (GBytes *actual, GBytes *expected)
 }
 
 static void
+assert_fixture_has_crlf_line_endings (const char *name, GBytes *bytes)
+{
+  gsize size = 0;
+  const guint8 *data = g_bytes_get_data (bytes, &size);
+  gboolean found_crlf = FALSE;
+
+  for (gsize i = 0; i < size; i++) {
+    if (data[i] == '\n') {
+      if (i == 0 || data[i - 1] != '\r') {
+        g_autofree char *message = g_strdup_printf ("%s contains bare LF at "
+            "byte %" G_GSIZE_FORMAT, name, i);
+
+        g_assertion_message (G_LOG_DOMAIN, __FILE__, __LINE__, G_STRFUNC,
+            message);
+      }
+
+      found_crlf = TRUE;
+    }
+  }
+
+  if (!found_crlf) {
+    g_autofree char *message = g_strdup_printf ("%s contains no CRLF line "
+        "endings", name);
+
+    g_assertion_message (G_LOG_DOMAIN, __FILE__, __LINE__, G_STRFUNC, message);
+  }
+}
+
+static void
 test_eml_fixtures_round_trip_byte_for_byte (void)
 {
   const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
@@ -77,6 +106,8 @@ test_eml_fixtures_round_trip_byte_for_byte (void)
     g_autoptr (GBytes) output = NULL;
 
     g_test_message ("round-tripping %s", fixture_names[i]);
+    assert_fixture_has_crlf_line_endings (fixture_names[i], input);
+
     g_assert_true (wyrebox_local_object_store_put_bytes (store, input, &key,
             &error));
     g_assert_no_error (error);
