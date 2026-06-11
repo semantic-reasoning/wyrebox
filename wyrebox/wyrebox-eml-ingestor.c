@@ -106,7 +106,7 @@ wyrebox_eml_ingestor_ingest_bytes (WyreboxEmlIngestor *self,
       return FALSE;
 
     payload = wyrebox_message_delivered_payload_encode_full (result.object_key,
-        result.size_bytes, &metadata, 0, error);
+        result.size_bytes, &metadata, (guint64) g_get_real_time (), error);
     if (payload == NULL)
       return FALSE;
 

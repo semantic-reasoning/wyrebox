@@ -59,6 +59,7 @@ assert_delivery_record_fields (const WyreboxDeliveryProjectionRecord *record,
   g_assert_cmpuint (record->journal_sequence, ==, sequence);
   g_assert_cmpstr (record->object_key, ==, object_key);
   g_assert_cmpuint (record->size_bytes, ==, size_bytes);
+  g_assert_cmpuint (record->internal_date_unix_us, >, 0);
   g_assert_cmpstr (record->rfc_message_id, ==, message_id);
   g_assert_cmpstr (record->subject, ==, subject);
   g_assert_cmpstr (record->from, ==, from);

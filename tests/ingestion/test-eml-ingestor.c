@@ -130,6 +130,8 @@ test_ingests_raw_fixture_and_appends_message_delivered_journal (void)
   g_auto (WyreboxJournalRecord) record = { 0 };
   g_auto (WyreboxMessageDeliveredPayload) decoded = { 0 };
   gboolean eof = FALSE;
+  gint64 before_ingest_us = 0;
+  gint64 after_ingest_us = 0;
   gsize input_size = 0;
 
   g_assert_nonnull (fixture_dir);
@@ -149,8 +151,10 @@ test_ingests_raw_fixture_and_appends_message_delivered_journal (void)
   ingestor = wyrebox_eml_ingestor_new_with_journal (store, writer);
   g_assert_nonnull (ingestor);
 
+  before_ingest_us = g_get_real_time ();
   g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, input,
           &result, &error));
+  after_ingest_us = g_get_real_time ();
   g_assert_no_error (error);
   g_assert_nonnull (result.object_key);
   g_assert_true (g_regex_match_simple ("^sha256:[0-9a-f]{64}$",
@@ -183,7 +187,10 @@ test_ingests_raw_fixture_and_appends_message_delivered_journal (void)
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.object_key, ==, result.object_key);
   g_assert_cmpuint (decoded.size_bytes, ==, result.size_bytes);
-  g_assert_cmpuint (decoded.internal_date_unix_us, ==, 0);
+  g_assert_cmpuint (decoded.internal_date_unix_us, >=,
+      (guint64) before_ingest_us);
+  g_assert_cmpuint (decoded.internal_date_unix_us, <=,
+      (guint64) after_ingest_us);
   g_assert_cmpstr (decoded.message_id, ==, "<simple-crlf@example.test>");
   g_assert_cmpstr (decoded.subject, ==, "CRLF fixture");
   g_assert_cmpstr (decoded.from, ==, "Alice <alice@example.test>");

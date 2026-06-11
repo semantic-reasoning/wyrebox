@@ -85,8 +85,8 @@ WyreboxEmlIngestor *wyrebox_eml_ingestor_new_with_journal (
  * When a journal writer is configured, ingestion first parses metadata needed
  * for the MessageDelivered event. Metadata parse failure returns FALSE before
  * raw object storage. Successful journaled ingestion then stores the immutable
- * raw object, appends MessageDelivered durably, and returns the journal
- * location.
+ * raw object, appends MessageDelivered durably with the current server time as
+ * internal date, and returns the journal location.
  *
  * This boundary does not materialize, allocate UIDs, or define duplicate policy
  * beyond the deterministic object-store key behavior.
