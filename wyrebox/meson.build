@@ -1,5 +1,6 @@
 wyrebox_sources = files(
   'wyrebox-local-object-store.c',
+  'wyrebox-eml-ingestor.c',
   'wyrebox-journal-writer.c',
   'wyrebox-journal-reader.c',
 )
