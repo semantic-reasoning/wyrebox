@@ -21,6 +21,7 @@ REQUIRED_SECTIONS = [
     "## Message Fetch Operation Contract",
     "## Message Search Operation Contract",
     "## Flag Keyword Update Operation Contract",
+    "## Fact Insert Retract Mutation Operation Contract",
     "## State Authority Boundary",
     "## Deferred Operation Payloads",
     "## Out Of Scope",
@@ -282,6 +283,66 @@ FLAG_KEYWORD_FORBIDDEN_EXAMPLES = [
     "Flag/keyword update may return Dovecot-visible success before durable journal append.",
 ]
 
+FACT_MUTATION_FORBIDDEN_SURFACES = [
+    r"arbitrary SQL",
+    r"write SQL",
+    r"SQL/write SQL",
+    r"DuckDB mutation",
+    r"direct DuckDB writes",
+    r"object-store metadata mutation",
+    r"direct journal append",
+    r"direct journal write",
+    r"direct journal append/write",
+    r"direct Wirelog mutable handles",
+    r"arbitrary Datalog/Wirelog mutation text",
+    r"arbitrary Wirelog mutation text",
+    r"arbitrary Datalog mutation text",
+    r"Datalog text",
+    r"Wirelog text",
+]
+
+FACT_MUTATION_FORBIDDEN_SURFACE_PATTERNS = [
+    rf"(?<!not )\b(?:{DELIVERY_FORBIDDEN_SURFACE_VERBS})\b(?:\s+\S+){{0,8}}\s+{surface}"
+    for surface in FACT_MUTATION_FORBIDDEN_SURFACES
+]
+
+FACT_MUTATION_FORBIDDEN_MODAL_PATTERNS = [
+    rf"\b(may|can|must|should)\b\s+\b(expose|allow|permit|provide|accept|support|execute|enable|grant)\b.*{surface}"
+    for surface in FACT_MUTATION_FORBIDDEN_SURFACES
+]
+
+FACT_MUTATION_FORBIDDEN_DIRECT_ACTION_PATTERNS = [
+    r"\b(may|can|must|should|will)\b\s+mutate\s+DuckDB",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+object-store metadata",
+    r"\b(may|can|must|should|will)\b\s+append\s+directly\s+to\s+the\s+journal",
+    r"\b(may|can|must|should|will)\b\s+write\s+directly\s+to\s+the\s+journal",
+    r"\b(returns?|reports?|acknowledges?|surfaces?)\s+success\b.{0,80}before\s+durable\s+(?:mutation\s+)?journal\s+append",
+    r"\b(may|can|must|should|will)\b\s+(?:\w+\s+){0,6}(?:return|report|acknowledge|surface)\s+success\b.{0,80}before\s+durable\s+(?:mutation\s+)?journal\s+append",
+]
+
+FACT_MUTATION_FORBIDDEN_EXAMPLES = [
+    "Fact mutation exposes arbitrary SQL.",
+    "Fact mutation accepts write SQL from tools.",
+    "Fact mutation accepts SQL/write SQL.",
+    "Fact mutation enables DuckDB mutation by tools.",
+    "Fact mutation supports direct DuckDB writes.",
+    "Fact mutation provides object-store metadata mutation access.",
+    "Fact mutation grants direct journal append access.",
+    "Fact mutation allows direct journal write access.",
+    "Fact mutation supports direct journal append/write.",
+    "Fact mutation exposes direct Wirelog mutable handles.",
+    "Fact mutation accepts arbitrary Datalog/Wirelog mutation text.",
+    "Fact mutation accepts arbitrary Wirelog mutation text.",
+    "Fact mutation accepts arbitrary Datalog mutation text.",
+    "Fact mutation accepts Datalog text.",
+    "Fact mutation accepts Wirelog text.",
+    "Fact mutation may mutate DuckDB.",
+    "Fact mutation may mutate object-store metadata.",
+    "Fact mutation may append directly to the journal.",
+    "Fact mutation may write directly to the journal.",
+    "Fact mutation returns success before durable journal append.",
+]
+
 
 def section_map(text: str) -> dict[str, str]:
     matches = list(re.finditer(r"^## .+$", text, flags=re.MULTILINE))
@@ -366,6 +427,11 @@ def main() -> None:
         sections,
         "## Scope",
         r"Flag/keyword update operation contract",
+    )
+    assert_section_matches(
+        sections,
+        "## Scope",
+        r"Fact insert/retract mutation operation contract",
     )
     assert_section_matches(
         sections,
@@ -1020,6 +1086,134 @@ def main() -> None:
 
     assert_section_matches(
         sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"authorized local tools/skills",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"not a Dovecot IMAP client operation",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"Cap'n Proto-over-UDS",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"does not define concrete `.capnp` schemas, field layouts, generated code, Wirelog integration, or storage/query implementation",
+    )
+    for identity_field in [
+        "request_id",
+        "caller/tool identity",
+        "authorization/audit identity",
+        "operation correlation",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Fact Insert Retract Mutation Operation Contract",
+            identity_field,
+        )
+    for input_field in [
+        "structured fact records",
+        "known predicate/catalog identity",
+        "typed arguments",
+        "insert",
+        "retract",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Fact Insert Retract Mutation Operation Contract",
+            input_field,
+        )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"no arbitrary Wirelog or Datalog text",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"predicate/catalog scope.*controls which facts can be inserted or retracted",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"only authorized callers may mutate facts",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"success.*only after.*durable mutation journal append",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"journal_offset.*equivalent durable marker",
+    )
+    for error_case in [
+        "permission denied",
+        "not found",
+        "conflict",
+        "permanent failure",
+        "temporary backend failure",
+        "docs/contracts/error-model.md",
+        "ambiguous transport outcomes are not success",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Fact Insert Retract Mutation Operation Contract",
+            error_case,
+        )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"unauthorized caller.*predicate scope",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"retracting an absent or non-matching fact.*not found or conflict",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"validation, catalog, or type errors",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"transient journal, Wirelog, materialized-state, or daemon API failures",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"daemon-mediated",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"may cause daemon-owned fact/Wirelog-derived state mutation only through this explicit operation",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"does not expose arbitrary Datalog/Wirelog mutation text, SQL/write SQL, direct DuckDB writes, object-store metadata mutation, direct journal append/write, or direct Wirelog mutable handles",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"Concrete fact mutation `.capnp` schemas and field layouts are deferred",
+    )
+    assert_section_matches(
+        sections,
+        "## Fact Insert Retract Mutation Operation Contract",
+        r"Wirelog predicate query API and DuckDB query-template API are deferred",
+    )
+
+    assert_section_matches(
+        sections,
         "## State Authority Boundary",
         r"wyreboxd.*only mutable owner",
     )
@@ -1040,9 +1234,9 @@ def main() -> None:
     )
 
     for operation in [
-        "fact insert/retract",
-        "Wirelog predicate query",
-        "safe DuckDB query templates",
+        "concrete fact mutation `.capnp` schemas and field layouts",
+        "Wirelog predicate query API",
+        "safe DuckDB query-template API",
     ]:
         assert_in_section(sections, "## Deferred Operation Payloads", operation)
     assert_section_matches(
@@ -1058,12 +1252,23 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Deferred Operation Payloads",
+        r"Concrete fact mutation `.capnp` schemas and field layouts are deferred",
+    )
+    assert_section_matches(
+        sections,
+        "## Deferred Operation Payloads",
+        r"Wirelog predicate query API and safe DuckDB query-template API remain deferred",
+    )
+    assert_section_matches(
+        sections,
+        "## Deferred Operation Payloads",
         r"no arbitrary write SQL",
     )
 
     for excluded in [
         "Dovecot implementation",
-        "fact/query APIs",
+        "Wirelog predicate query API",
+        "DuckDB query-template API",
         "concrete daemon implementation",
         "full .capnp generation",
     ]:
@@ -1203,6 +1408,33 @@ def main() -> None:
             FLAG_KEYWORD_FORBIDDEN_SURFACE_PATTERNS
             + FLAG_KEYWORD_FORBIDDEN_MODAL_PATTERNS
             + FLAG_KEYWORD_FORBIDDEN_DIRECT_ACTION_PATTERNS,
+        )
+    for pattern in FACT_MUTATION_FORBIDDEN_SURFACE_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## Fact Insert Retract Mutation Operation Contract",
+            pattern,
+        )
+    for pattern in FACT_MUTATION_FORBIDDEN_MODAL_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## Fact Insert Retract Mutation Operation Contract",
+            pattern,
+        )
+    for pattern in FACT_MUTATION_FORBIDDEN_DIRECT_ACTION_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## Fact Insert Retract Mutation Operation Contract",
+            pattern,
+        )
+    for example in FACT_MUTATION_FORBIDDEN_EXAMPLES:
+        assert_any_pattern_matches(
+            sections["## Fact Insert Retract Mutation Operation Contract"]
+            + "\n"
+            + example,
+            FACT_MUTATION_FORBIDDEN_SURFACE_PATTERNS
+            + FACT_MUTATION_FORBIDDEN_MODAL_PATTERNS
+            + FACT_MUTATION_FORBIDDEN_DIRECT_ACTION_PATTERNS,
         )
 
 

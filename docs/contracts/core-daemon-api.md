@@ -18,6 +18,7 @@ This contract defines:
 - Message FETCH operation contract.
 - Message SEARCH operation contract.
 - Flag/keyword update operation contract.
+- Fact insert/retract mutation operation contract.
 - State authority boundaries for Postfix helpers, Dovecot plugins, and local tools.
 
 It does not define concrete command payload schemas, daemon runtime internals, or
@@ -382,6 +383,64 @@ metadata mutation, raw object rewrite, direct journal append, direct journal
 write, or direct object-store/journal mutation surfaces to Dovecot plugins or
 local callers. It accepts flag/keyword update inputs only.
 
+## Fact Insert Retract Mutation Operation Contract
+
+Fact insert/retract mutation is an explicit daemon operation for authorized
+local tools/skills over the Cap'n Proto-over-UDS daemon API. It is not a
+Dovecot IMAP client operation, and Dovecot plugins do not use it to implement
+ordinary IMAP LIST, SELECT, FETCH, SEARCH, STORE, or mailbox visibility.
+
+This section defines operation behavior only; it does not define concrete
+`.capnp` schemas, field layouts, generated code, Wirelog integration, or
+storage/query implementation.
+
+Every fact mutation request carries request and caller identity sufficient for
+`wyreboxd` to authorize, audit, and correlate the operation:
+
+- required `request_id`;
+- caller/tool identity;
+- authorization/audit identity; and
+- optional operation correlation supplied by the local tool/skill.
+
+The operation input is one or more structured fact records. Each fact record
+uses a known predicate/catalog identity and typed arguments defined by daemon
+catalog state. The operation type is explicit: insert or retract. The request
+accepts structured fact mutation inputs only; no arbitrary Wirelog or Datalog
+text is accepted.
+
+Only authorized callers may mutate facts. Predicate/catalog scope controls
+which facts can be inserted or retracted by each caller/tool identity. A caller
+authorized for one predicate, catalog, account, tenant, source, or operational
+scope must not be able to mutate facts outside that scope through this
+operation.
+
+Success is valid only after the corresponding fact mutation has reached durable
+mutation journal append. A success response includes `journal_offset` or an
+equivalent durable marker so the local tool/skill path and audit logs can
+correlate the accepted fact mutation with durable state.
+
+Fact insert/retract error behavior is governed by
+`docs/contracts/error-model.md`:
+
+- an unauthorized caller or predicate scope failure is `permission denied`;
+- retracting an absent or non-matching fact maps to not found or conflict,
+  depending on the operation-aware retract semantics selected by the concrete
+  schema slice;
+- non-retryable validation, catalog, or type errors are `permanent failure`;
+- transient journal, Wirelog, materialized-state, or daemon API failures are
+  `temporary backend failure`; and
+- ambiguous transport outcomes are not success.
+
+Fact mutation is daemon-mediated. It may cause daemon-owned
+fact/Wirelog-derived state mutation only through this explicit operation. It
+does not expose arbitrary Datalog/Wirelog mutation text, SQL/write SQL, direct
+DuckDB writes, object-store metadata mutation, direct journal append/write, or
+direct Wirelog mutable handles to callers. It accepts fact insert/retract
+inputs only.
+
+Concrete fact mutation `.capnp` schemas and field layouts are deferred.
+Wirelog predicate query API and DuckDB query-template API are deferred.
+
 ## State Authority Boundary
 
 `wyreboxd` remains the only mutable owner in the first architecture slice.
@@ -401,15 +460,17 @@ contract intentionally defines no runtime implementation details.
 
 ## Deferred Operation Payloads
 
-Command payload schemas and operation groups are deferred to later issue-0004
-units:
+Command payload schemas and later query operation groups are deferred to later
+issue-0004 units:
 
-- fact insert/retract
-- Wirelog predicate query
-- safe DuckDB query templates
+- concrete fact mutation `.capnp` schemas and field layouts
+- Wirelog predicate query API
+- safe DuckDB query-template API
 
 Concrete SEARCH `.capnp` schemas, field layouts, and criteria payloads are
 deferred. Concrete flag/keyword `.capnp` schemas and field layouts are
+deferred. Concrete fact mutation `.capnp` schemas and field layouts are
+deferred. Wirelog predicate query API and safe DuckDB query-template API remain
 deferred, along with query-safety policy details. In this slice, no arbitrary
 write SQL is allowed over the daemon API.
 
@@ -421,7 +482,8 @@ The following are out of scope for this slice:
 - concrete request/response/error/query payload schemas
 - TCP, TLS, HTTP, LMTP, and remote authentication
 - Dovecot implementation
-- fact/query APIs
+- Wirelog predicate query API
+- DuckDB query-template API
 - concrete daemon implementation
 - full .capnp generation
 - public remote API exposure
