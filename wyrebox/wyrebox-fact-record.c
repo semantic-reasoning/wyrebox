@@ -246,6 +246,14 @@ wyrebox_fact_record_array_to_wirelog_facts (GPtrArray *records, GError **error)
     const WyreboxFactRecord *record = g_ptr_array_index (records, index);
     g_autofree char *line = NULL;
 
+    if (record == NULL) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "fact record at index %u is required", index);
+      return NULL;
+    }
+
     line = wyrebox_fact_record_to_wirelog_fact (record, error);
     if (line == NULL)
       return NULL;

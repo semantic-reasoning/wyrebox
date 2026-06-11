@@ -250,6 +250,28 @@ test_fact_record_wirelog_batch_propagates_invalid_record (void)
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 }
 
+static void
+test_fact_record_wirelog_batch_rejects_null_record (void)
+{
+  const char *args[] = {
+    "mail-1",
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) records = NULL;
+  g_autofree char *text = NULL;
+
+  records = g_ptr_array_new_with_free_func (test_fact_record_free);
+  g_ptr_array_add (records,
+      test_fact_record_new ("participant", args, "header:to"));
+  g_ptr_array_add (records, NULL);
+
+  text = wyrebox_fact_record_array_to_wirelog_facts (records, &error);
+  g_assert_null (text);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_true (g_strrstr (error->message, "index 1") != NULL);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -279,6 +301,8 @@ main (int argc, char **argv)
   g_test_add_func ("/facts/fact-record/"
       "wirelog-batch-propagates-invalid-record",
       test_fact_record_wirelog_batch_propagates_invalid_record);
+  g_test_add_func ("/facts/fact-record/wirelog-batch-rejects-null-record",
+      test_fact_record_wirelog_batch_rejects_null_record);
 
   return g_test_run ();
 }
