@@ -128,12 +128,17 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Dovecot Visible Mapping",
-        r"fetch.*search.*flag.*IMAP-visible temporary backend failure",
+        r"LIST.*SELECT.*fetch.*search.*flag.*IMAP-visible temporary backend failure",
     )
     assert_section_matches(
         sections,
         "## Dovecot Visible Mapping",
         r"Not found and conflict.*operation-aware",
+    )
+    assert_section_matches(
+        sections,
+        "## Dovecot Visible Mapping",
+        r"SELECT.*non-selectable.*Conflict.*selection-state conflict.*not success",
     )
     assert_section_matches(
         sections,

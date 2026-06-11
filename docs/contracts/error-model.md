@@ -62,13 +62,15 @@ For delivery operations:
 
 ## Dovecot Visible Mapping
 
-For Dovecot-visible fetch, search, and flag operations:
+For Dovecot-visible LIST, SELECT, fetch, search, and flag operations:
 
 - Transport/access and temporary conditions map to IMAP-visible temporary backend
   failure.
 - Not found and conflict outcomes are operation-aware (for example, dependent on
   mailbox, message, or state transitions) but are not tied to a fixed IMAP
   tagged response text.
+- SELECT of a non-selectable hierarchy or container maps to Conflict as an
+  operation-aware selection-state conflict, not success.
 - No direct state fallback is consulted from API-level failures.
 
 ## Ambiguous Results

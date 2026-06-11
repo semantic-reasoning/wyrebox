@@ -185,8 +185,8 @@ Mailbox LIST and SELECT error behavior is governed by
 - a mailbox absent from the authorized account scope is `not found`;
 - account or mailbox authorization failure is an authorization/permission
   outcome;
-- SELECT of a non-selectable hierarchy or container is a non-selectable
-  operation error, not success; and
+- SELECT of a non-selectable hierarchy or container is Conflict as an
+  operation-aware selection-state conflict, not success; and
 - temporary backend failure remains a temporary failure visible to the Dovecot
   caller path.
 

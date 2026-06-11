@@ -85,6 +85,21 @@ MAILBOX_FORBIDDEN_EXAMPLES = [
     "Mailbox LIST provides object-store metadata mutation access.",
     "Mailbox SELECT grants direct journal append access.",
     "Mailbox SELECT allows direct journal write access.",
+    "Mailbox SELECT may mutate DuckDB.",
+    "Mailbox SELECT may mutate Wirelog.",
+    "Mailbox SELECT may mutate object-store metadata.",
+    "Mailbox SELECT may mutate journal state.",
+    "Mailbox SELECT may append mutation journal records.",
+    "Mailbox SELECT may write directly to the journal.",
+]
+
+MAILBOX_FORBIDDEN_DIRECT_ACTION_PATTERNS = [
+    r"\b(may|can|must|should|will)\b\s+mutate\s+DuckDB",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+Wirelog",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+object-store metadata",
+    r"\b(may|can|must|should|will)\b\s+mutate\s+journal state",
+    r"\b(may|can|must|should|will)\b\s+append\s+mutation journal records",
+    r"\b(may|can|must|should|will)\b\s+write\s+directly\s+to\s+the\s+journal",
 ]
 
 
@@ -428,7 +443,6 @@ def main() -> None:
         )
     for error_case in [
         "not found",
-        "non-selectable",
         "authorization",
         "temporary backend failure",
         "docs/contracts/error-model.md",
@@ -438,6 +452,11 @@ def main() -> None:
             "## Mailbox List Select Operation Contract",
             error_case,
         )
+    assert_section_matches(
+        sections,
+        "## Mailbox List Select Operation Contract",
+        r"non-selectable.*Conflict.*selection-state conflict.*not success",
+    )
     assert_section_matches(
         sections,
         "## Mailbox List Select Operation Contract",
@@ -550,10 +569,18 @@ def main() -> None:
             "## Mailbox List Select Operation Contract",
             pattern,
         )
+    for pattern in MAILBOX_FORBIDDEN_DIRECT_ACTION_PATTERNS:
+        assert_section_forbidden(
+            sections,
+            "## Mailbox List Select Operation Contract",
+            pattern,
+        )
     for example in MAILBOX_FORBIDDEN_EXAMPLES:
         assert_any_pattern_matches(
             sections["## Mailbox List Select Operation Contract"] + "\n" + example,
-            MAILBOX_FORBIDDEN_SURFACE_PATTERNS + MAILBOX_FORBIDDEN_MODAL_PATTERNS,
+            MAILBOX_FORBIDDEN_SURFACE_PATTERNS
+            + MAILBOX_FORBIDDEN_MODAL_PATTERNS
+            + MAILBOX_FORBIDDEN_DIRECT_ACTION_PATTERNS,
         )
 
 
