@@ -5,10 +5,18 @@
 #include "wyrebox-schema-metadata-store.h"
 #include "wyrebox-build-config.h"
 
+#include <duckdb.h>
 #include <gio/gio.h>
 #include <glib.h>
 #include <glib/gstdio.h>
 #include <string.h>
+
+typedef struct
+{
+  const gchar *name;
+  const gchar *type;
+  gboolean not_null;
+} TestDuckdbBootstrapColumn;
 
 static void
 remove_directory_tree (const char *path)
@@ -31,6 +39,105 @@ remove_directory_tree (const char *path)
   }
 
   (void) g_rmdir (path);
+}
+
+static void
+duckdb_result_clear (duckdb_result *result)
+{
+  duckdb_destroy_result (result);
+}
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_result, duckdb_result_clear)
+/* *INDENT-ON* */
+
+static void
+assert_bootstrap_table_schema (duckdb_connection connection,
+    const gchar *table_name, const TestDuckdbBootstrapColumn *columns,
+    gsize column_count)
+{
+  g_auto (duckdb_result) result = { 0 };
+  g_autofree gchar *query = NULL;
+  idx_t row_count = 0;
+
+  query = g_strdup_printf ("PRAGMA table_info('%s');", table_name);
+  g_assert_cmpint (duckdb_query (connection, query, &result), ==,
+      DuckDBSuccess);
+  g_assert_cmpint (duckdb_column_count (&result), ==, 6);
+  g_assert_cmpuint (duckdb_row_count (&result), ==, column_count);
+
+  row_count = duckdb_row_count (&result);
+  for (idx_t row = 0; row < row_count; row++) {
+    const char *actual_name = duckdb_value_varchar (&result, 1, row);
+    const char *actual_type = duckdb_value_varchar (&result, 2, row);
+    gboolean actual_not_null = duckdb_value_int64 (&result, 3, row);
+
+    g_assert_cmpstr (actual_name, ==, columns[row].name);
+    g_assert_cmpstr (actual_type, ==, columns[row].type);
+    g_assert_cmpint (actual_not_null, ==, columns[row].not_null ? 1 : 0);
+  }
+}
+
+static void
+assert_bootstrap_catalog_schema (const gchar *path)
+{
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+  static const TestDuckdbBootstrapColumn accounts_columns[] = {
+    {"account_id", "VARCHAR", TRUE},
+  };
+  static const TestDuckdbBootstrapColumn objects_columns[] = {
+    {"object_id", "VARCHAR", TRUE},
+    {"size_bytes", "UBIGINT", TRUE},
+  };
+  static const TestDuckdbBootstrapColumn messages_columns[] = {
+    {"message_id", "VARCHAR", TRUE},
+    {"account_id", "VARCHAR", TRUE},
+    {"object_id", "VARCHAR", TRUE},
+    {"journal_offset", "UBIGINT", TRUE},
+    {"journal_sequence", "UBIGINT", TRUE},
+  };
+  static const TestDuckdbBootstrapColumn mailboxes_columns[] = {
+    {"mailbox_id", "VARCHAR", TRUE},
+    {"account_id", "VARCHAR", TRUE},
+    {"imap_name", "VARCHAR", TRUE},
+    {"is_selectable", "BOOLEAN", TRUE},
+    {"is_visible", "BOOLEAN", TRUE},
+  };
+  static const TestDuckdbBootstrapColumn derived_views_columns[] = {
+    {"view_id", "VARCHAR", TRUE},
+    {"account_id", "VARCHAR", TRUE},
+    {"imap_name", "VARCHAR", TRUE},
+    {"definition_ref", "VARCHAR", TRUE},
+    {"is_selectable", "BOOLEAN", TRUE},
+    {"is_visible", "BOOLEAN", TRUE},
+  };
+  static const TestDuckdbBootstrapColumn mailbox_uid_state_columns[] = {
+    {"account_id", "VARCHAR", TRUE},
+    {"namespace_kind", "VARCHAR", TRUE},
+    {"namespace_id", "VARCHAR", TRUE},
+    {"uidnext", "UBIGINT", TRUE},
+    {"uidvalidity", "UBIGINT", TRUE},
+  };
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  assert_bootstrap_table_schema (connection, "accounts",
+      accounts_columns, G_N_ELEMENTS (accounts_columns));
+  assert_bootstrap_table_schema (connection, "objects",
+      objects_columns, G_N_ELEMENTS (objects_columns));
+  assert_bootstrap_table_schema (connection, "messages",
+      messages_columns, G_N_ELEMENTS (messages_columns));
+  assert_bootstrap_table_schema (connection, "mailboxes",
+      mailboxes_columns, G_N_ELEMENTS (mailboxes_columns));
+  assert_bootstrap_table_schema (connection, "derived_views",
+      derived_views_columns, G_N_ELEMENTS (derived_views_columns));
+  assert_bootstrap_table_schema (connection, "mailbox_uid_state",
+      mailbox_uid_state_columns, G_N_ELEMENTS (mailbox_uid_state_columns));
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
 }
 
 static void
@@ -281,6 +388,62 @@ test_duckdb_store_accepts_legacy_bootstrap_migration_operation (void)
 }
 
 static void
+test_duckdb_store_legacy_bootstrap_creates_catalog_tables (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
+          0,
+          wyrebox_schema_migration_get_first_supported_schema_version (),
+          &error));
+  g_assert_no_error (error);
+
+  assert_bootstrap_catalog_schema (path);
+
+  g_clear_object (&store);
+  remove_directory_tree (root);
+}
+
+static void
+test_duckdb_store_legacy_bootstrap_creates_catalog_tables_twice (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
+          0,
+          wyrebox_schema_migration_get_first_supported_schema_version (),
+          &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
+          0,
+          wyrebox_schema_migration_get_first_supported_schema_version (),
+          &error));
+  g_assert_no_error (error);
+
+  assert_bootstrap_catalog_schema (path);
+
+  g_clear_object (&store);
+  remove_directory_tree (root);
+}
+
+static void
 test_duckdb_store_schema_version_roundtrip (void)
 {
   g_autofree char *root = NULL;
@@ -460,6 +623,14 @@ main (int argc, char **argv)
   g_test_add_func ("/migration/schema-metadata-store/duckdb-store/"
       "accepts-legacy-bootstrap-operation",
       test_duckdb_store_accepts_legacy_bootstrap_migration_operation);
+  g_test_add_func
+      ("/migration/schema-metadata-store/duckdb-store/"
+      "legacy-bootstrap-creates-catalog-tables",
+      test_duckdb_store_legacy_bootstrap_creates_catalog_tables);
+  g_test_add_func
+      ("/migration/schema-metadata-store/duckdb-store/"
+      "legacy-bootstrap-creates-catalog-tables-twice",
+      test_duckdb_store_legacy_bootstrap_creates_catalog_tables_twice);
   g_test_add_func
       ("/migration/schema-metadata-store/duckdb-store/schema-version-roundtrip",
       test_duckdb_store_schema_version_roundtrip);

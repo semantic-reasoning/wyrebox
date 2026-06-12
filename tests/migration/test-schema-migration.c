@@ -5,6 +5,7 @@
 #include "wyrebox-schema-migration.h"
 #include "wyrebox-schema-metadata-store.h"
 
+#include <duckdb.h>
 #include <glib.h>
 #include <gio/gio.h>
 #include <glib-object.h>
@@ -52,6 +53,33 @@ make_duckdb_path (char **out_root)
 
   *out_root = g_steal_pointer (&root);
   return g_build_filename (*out_root, "schema.duckdb", NULL);
+}
+
+static void
+assert_bootstrap_catalog_tables_exist (const gchar *path)
+{
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+
+  static const char *tables[] = { "accounts", "objects", "messages",
+    "mailboxes", "derived_views", "mailbox_uid_state"
+  };
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  for (gsize i = 0; i < G_N_ELEMENTS (tables); i++) {
+    duckdb_result result = { 0 };
+    g_autofree gchar *query = NULL;
+
+    query = g_strdup_printf ("PRAGMA table_info('%s');", tables[i]);
+    g_assert_cmpint (duckdb_query (connection, query, &result), ==,
+        DuckDBSuccess);
+    duckdb_destroy_result (&result);
+  }
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
 }
 
 typedef struct _TestSchemaMetadataStoreSpy TestSchemaMetadataStoreSpy;
@@ -764,6 +792,7 @@ static void
   g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
           store, TRUE, &error));
   g_assert_no_error (error);
+  assert_bootstrap_catalog_tables_exist (path);
   g_clear_object (&store);
 
   store = wyrebox_schema_metadata_store_new_duckdb (path, &error);

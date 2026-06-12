@@ -293,6 +293,52 @@ duckdb_store_create_schema (WyreboxSchemaMetadataStoreDuckdb *self,
 }
 
 static gboolean
+duckdb_store_create_bootstrap_catalog (WyreboxSchemaMetadataStoreDuckdb *self,
+    GError **error)
+{
+  return duckdb_store_query (self,
+      "CREATE TABLE IF NOT EXISTS accounts ("
+      "account_id VARCHAR PRIMARY KEY" ");", error)
+      && duckdb_store_query (self,
+      "CREATE TABLE IF NOT EXISTS objects ("
+      "object_id VARCHAR PRIMARY KEY,"
+      "size_bytes UBIGINT NOT NULL" ");", error)
+      && duckdb_store_query (self,
+      "CREATE TABLE IF NOT EXISTS messages ("
+      "message_id VARCHAR PRIMARY KEY,"
+      "account_id VARCHAR NOT NULL,"
+      "object_id VARCHAR NOT NULL,"
+      "journal_offset UBIGINT NOT NULL,"
+      "journal_sequence UBIGINT NOT NULL" ");", error)
+      && duckdb_store_query (self,
+      "CREATE TABLE IF NOT EXISTS mailboxes ("
+      "mailbox_id VARCHAR PRIMARY KEY,"
+      "account_id VARCHAR NOT NULL,"
+      "imap_name VARCHAR NOT NULL,"
+      "is_selectable BOOLEAN NOT NULL,"
+      "is_visible BOOLEAN NOT NULL,"
+      "UNIQUE(account_id, imap_name)" ");", error)
+      && duckdb_store_query (self,
+      "CREATE TABLE IF NOT EXISTS derived_views ("
+      "view_id VARCHAR PRIMARY KEY,"
+      "account_id VARCHAR NOT NULL,"
+      "imap_name VARCHAR NOT NULL,"
+      "definition_ref VARCHAR NOT NULL,"
+      "is_selectable BOOLEAN NOT NULL,"
+      "is_visible BOOLEAN NOT NULL,"
+      "UNIQUE(account_id, imap_name)" ");", error)
+      && duckdb_store_query (self,
+      "CREATE TABLE IF NOT EXISTS mailbox_uid_state ("
+      "account_id VARCHAR NOT NULL,"
+      "namespace_kind VARCHAR NOT NULL "
+      "CHECK(namespace_kind IN ('mailbox','derived_view')),"
+      "namespace_id VARCHAR NOT NULL,"
+      "uidnext UBIGINT NOT NULL CHECK(uidnext >= 1),"
+      "uidvalidity UBIGINT NOT NULL CHECK(uidvalidity >= 1),"
+      "PRIMARY KEY(account_id, namespace_kind, namespace_id)" ");", error);
+}
+
+static gboolean
 duckdb_store_load_schema_metadata (WyreboxSchemaMetadataStoreDuckdb *self,
     WyreboxSchemaMigrationMetadataState *out_state, GError **error)
 {
@@ -516,14 +562,33 @@ static gboolean
     WyreboxSchemaMetadataStoreMigrationOperation operation,
     guint64 source_version, guint64 target_version, GError ** error)
 {
-  (void) self;
+  WyreboxSchemaMetadataStoreDuckdb *duckdb_store = NULL;
+
+  g_return_val_if_fail (g_type_check_instance_is_a (
+          (GTypeInstance *) self,
+          wyrebox_schema_metadata_store_duckdb_get_type ()), FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  duckdb_store = (WyreboxSchemaMetadataStoreDuckdb *) self;
   (void) source_version;
   (void) target_version;
 
-  if (operation ==
+  if (operation !=
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP)
-    return TRUE;
+    goto unsupported;
 
+  if (!duckdb_store_query (duckdb_store, "BEGIN TRANSACTION;", error))
+    return FALSE;
+
+  if (!duckdb_store_create_bootstrap_catalog (duckdb_store, error) ||
+      !duckdb_store_query (duckdb_store, "COMMIT;", error)) {
+    duckdb_store_rollback_quietly (duckdb_store);
+    return FALSE;
+  }
+
+  return TRUE;
+
+unsupported:
   g_set_error (error,
       G_IO_ERROR,
       G_IO_ERROR_NOT_SUPPORTED,
