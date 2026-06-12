@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <sys/stat.h>
 
+#define ACCEPT_RETRY_DELAY_MS 250
+
 struct _WyreboxDaemonSocketListener
 {
   GObject parent_instance;
@@ -13,6 +15,7 @@ struct _WyreboxDaemonSocketListener
   char *socket_path;
   GSocketListener *listener;
   GCancellable *accept_cancellable;
+  guint accept_retry_source_id;
   gboolean started;
   guint accept_generation;
 
@@ -29,12 +32,24 @@ typedef struct
 {
   GWeakRef listener_ref;
   guint generation;
+  guint source_id;
 } AcceptLoopData;
 
 G_DEFINE_TYPE (WyreboxDaemonSocketListener, wyrebox_daemon_socket_listener,
     G_TYPE_OBJECT);
 
 static void arm_accept_loop (WyreboxDaemonSocketListener * self);
+
+static AcceptLoopData *
+accept_loop_data_new (WyreboxDaemonSocketListener *self, guint generation)
+{
+  AcceptLoopData *data = g_new0 (AcceptLoopData, 1);
+
+  g_weak_ref_init (&data->listener_ref, self);
+  data->generation = generation;
+
+  return data;
+}
 
 static void
 accept_loop_data_free (AcceptLoopData *data)
@@ -104,11 +119,64 @@ unlink_created_socket_path (WyreboxDaemonSocketListener *self)
   self->created_inode_valid = FALSE;
 }
 
+static void
+cancel_accept_retry (WyreboxDaemonSocketListener *self)
+{
+  if (self->accept_retry_source_id == 0)
+    return;
+
+  g_source_remove (self->accept_retry_source_id);
+  self->accept_retry_source_id = 0;
+}
+
 static gboolean
 accept_error_is_expected_after_stop (const GError *error)
 {
   return g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)
       || g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CLOSED);
+}
+
+static const char *
+error_message_or_unknown (const GError *error)
+{
+  return error != NULL ? error->message : "unknown error";
+}
+
+static gboolean
+retry_accept_loop (gpointer user_data)
+{
+  AcceptLoopData *data = user_data;
+  g_autoptr (WyreboxDaemonSocketListener) self = NULL;
+
+  self = g_weak_ref_get (&data->listener_ref);
+  if (self == NULL)
+    return G_SOURCE_REMOVE;
+
+  if (self->accept_retry_source_id == data->source_id)
+    self->accept_retry_source_id = 0;
+
+  if (self->started
+      && self->accept_generation == data->generation && self->listener != NULL)
+    arm_accept_loop (self);
+
+  return G_SOURCE_REMOVE;
+}
+
+static void
+schedule_accept_retry (WyreboxDaemonSocketListener *self, guint generation)
+{
+  AcceptLoopData *data = NULL;
+
+  if (!self->started
+      || self->accept_generation != generation
+      || self->listener == NULL || self->accept_retry_source_id != 0)
+    return;
+
+  data = accept_loop_data_new (self, generation);
+  self->accept_retry_source_id = g_timeout_add_full (G_PRIORITY_DEFAULT,
+      ACCEPT_RETRY_DELAY_MS, retry_accept_loop, data,
+      (GDestroyNotify) accept_loop_data_free);
+  data->source_id = self->accept_retry_source_id;
 }
 
 static void
@@ -128,8 +196,17 @@ accepted_connection_ready (GObject *source_object,
   self = g_weak_ref_get (&data->listener_ref);
 
   if (connection == NULL) {
-    if (!accept_error_is_expected_after_stop (error))
-      g_warning ("daemon socket accept failed: %s", error->message);
+    if (!accept_error_is_expected_after_stop (error)) {
+      if (self != NULL
+          && self->started && self->accept_generation == data->generation) {
+        g_warning ("daemon socket accept failed: %s; retrying in %u ms",
+            error_message_or_unknown (error), ACCEPT_RETRY_DELAY_MS);
+        schedule_accept_retry (self, data->generation);
+      } else {
+        g_warning ("daemon socket accept failed: %s",
+            error_message_or_unknown (error));
+      }
+    }
 
     accept_loop_data_free (data);
     return;
@@ -165,9 +242,7 @@ arm_accept_loop (WyreboxDaemonSocketListener *self)
   if (!self->started || self->listener == NULL)
     return;
 
-  data = g_new0 (AcceptLoopData, 1);
-  g_weak_ref_init (&data->listener_ref, self);
-  data->generation = self->accept_generation;
+  data = accept_loop_data_new (self, self->accept_generation);
 
   g_socket_listener_accept_async (self->listener,
       self->accept_cancellable, accepted_connection_ready, data);
@@ -333,6 +408,7 @@ wyrebox_daemon_socket_listener_finalize (GObject *object)
   g_autoptr (GError) local_error = NULL;
 
   (void) wyrebox_daemon_socket_listener_stop (self, &local_error);
+  cancel_accept_retry (self);
 
   if (self->connection_handler_destroy_notify != NULL)
     self->connection_handler_destroy_notify (self->connection_handler_data);
@@ -482,11 +558,14 @@ wyrebox_daemon_socket_listener_stop (WyreboxDaemonSocketListener *self,
   g_return_val_if_fail (WYREBOX_IS_DAEMON_SOCKET_LISTENER (self), FALSE);
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  if (!self->started)
+  if (!self->started) {
+    cancel_accept_retry (self);
     return TRUE;
+  }
 
   self->started = FALSE;
   self->accept_generation++;
+  cancel_accept_retry (self);
   g_cancellable_cancel (self->accept_cancellable);
   g_socket_listener_close (self->listener);
   g_clear_object (&self->listener);
