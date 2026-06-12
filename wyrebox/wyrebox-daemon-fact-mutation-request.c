@@ -162,10 +162,8 @@ wyrebox_daemon_fact_mutation_kind_from_wire_name (const char *wire_name,
 }
 
 gboolean
-wyrebox_daemon_fact_mutation_to_event (
-    WyreboxDaemonFactMutationKind mutation,
-    WyreboxJournalEventType *event_type,
-    GError **error)
+wyrebox_daemon_fact_mutation_to_event (WyreboxDaemonFactMutationKind mutation,
+    WyreboxJournalEventType *event_type, GError **error)
 {
   g_return_val_if_fail (event_type != NULL, FALSE);
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
@@ -187,10 +185,9 @@ wyrebox_daemon_fact_mutation_to_event (
 }
 
 gboolean
-wyrebox_daemon_fact_request_get_event (
-    const WyreboxDaemonFactMutationRequest *request,
-    WyreboxJournalEventType *event_type,
-    GError **error)
+wyrebox_daemon_fact_mutation_request_get_event (const
+    WyreboxDaemonFactMutationRequest *request,
+    WyreboxJournalEventType *event_type, GError **error)
 {
   g_return_val_if_fail (request != NULL, FALSE);
   g_return_val_if_fail (event_type != NULL, FALSE);
@@ -205,8 +202,8 @@ wyrebox_daemon_fact_request_get_event (
     return FALSE;
   }
 
-  return wyrebox_daemon_fact_mutation_to_event (
-      request->mutation, event_type, error);
+  return wyrebox_daemon_fact_mutation_to_event (request->mutation, event_type,
+      error);
 }
 
 gboolean

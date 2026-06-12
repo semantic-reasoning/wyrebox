@@ -40,7 +40,7 @@ gboolean wyrebox_daemon_fact_mutation_to_event (
     WyreboxJournalEventType *event_type,
     GError **error);
 
-gboolean wyrebox_daemon_fact_request_get_event (
+gboolean wyrebox_daemon_fact_mutation_request_get_event (
     const WyreboxDaemonFactMutationRequest *request,
     WyreboxJournalEventType *event_type,
     GError **error);

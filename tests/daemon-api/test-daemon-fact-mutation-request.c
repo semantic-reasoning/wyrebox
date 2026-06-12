@@ -241,7 +241,7 @@ test_fact_mutation_request_gets_journal_event (void)
           "project_mention", "account-1", args, &error));
   g_assert_no_error (error);
 
-  g_assert_true (wyrebox_daemon_fact_request_get_event
+  g_assert_true (wyrebox_daemon_fact_mutation_request_get_event
       (&request, &event_type, &error));
   g_assert_no_error (error);
   g_assert_cmpint (event_type, ==, WYREBOX_JOURNAL_EVENT_FACT_RETRACTED);
@@ -254,7 +254,7 @@ test_fact_mutation_request_rejects_uninitialized_journal_event (void)
   g_autoptr (GError) error = NULL;
   g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
 
-  g_assert_false (wyrebox_daemon_fact_request_get_event
+  g_assert_false (wyrebox_daemon_fact_mutation_request_get_event
       (&request, &event_type, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_cmpint (event_type, ==, WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED);
