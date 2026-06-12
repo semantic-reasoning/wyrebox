@@ -281,6 +281,275 @@ test_rejects_invalid_dictionary_rules (void)
 }
 
 static void
+test_extracts_subject_amount_candidate_from_capture_group (void)
+{
+  WyreboxEmlMetadata metadata = {
+    .subject = "Invoice total USD 1234.56 due",
+  };
+  const WyreboxDeterministicFactRegexRule rules[] = {
+    {
+          .field = "subject",
+          .rule_id = "subject-usd-amount",
+          .predicate = "amount_candidate",
+          .pattern = "USD[ ]+([0-9]+[.][0-9]{2})",
+          .capture_group = 1,
+        },
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) facts = NULL;
+
+  facts =
+      wyrebox_deterministic_fact_extract_from_metadata_with_regex
+      ("mail-regex-amount", &metadata, 1800000000000000, rules,
+      G_N_ELEMENTS (rules), &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (facts);
+  g_assert_cmpuint (facts->len, ==, 1);
+
+  assert_fact (fact_at (facts, 0),
+      "amount_candidate", "mail-regex-amount", "1234.56",
+      "regex:subject:subject-usd-amount");
+}
+
+static void
+test_extracts_subject_reference_candidate_from_full_match (void)
+{
+  WyreboxEmlMetadata metadata = {
+    .subject = "Re: Project handoff REF-2026-0042 ready",
+  };
+  const WyreboxDeterministicFactRegexRule rules[] = {
+    {
+          .field = "subject",
+          .rule_id = "subject-reference",
+          .predicate = "reference_candidate",
+          .pattern = "REF-[0-9]{4}-[0-9]{4}",
+          .capture_group = 0,
+        },
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) facts = NULL;
+
+  facts =
+      wyrebox_deterministic_fact_extract_from_metadata_with_regex
+      ("mail-regex-reference", &metadata, 1800000000000000, rules,
+      G_N_ELEMENTS (rules), &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (facts);
+  g_assert_cmpuint (facts->len, ==, 1);
+
+  assert_fact (fact_at (facts, 0),
+      "reference_candidate", "mail-regex-reference", "REF-2026-0042",
+      "regex:subject:subject-reference");
+}
+
+static void
+test_no_match_and_empty_capture_emit_no_regex_facts (void)
+{
+  WyreboxEmlMetadata metadata = {
+    .subject = "No candidate here",
+  };
+  const WyreboxDeterministicFactRegexRule rules[] = {
+    {
+          .field = "subject",
+          .rule_id = "subject-miss",
+          .predicate = "amount_candidate",
+          .pattern = "USD[ ]+([0-9]+)",
+          .capture_group = 1,
+        },
+    {
+          .field = "subject",
+          .rule_id = "empty-capture",
+          .predicate = "reference_candidate",
+          .pattern = "(No)(x*) candidate",
+          .capture_group = 2,
+        },
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) facts = NULL;
+
+  facts =
+      wyrebox_deterministic_fact_extract_from_metadata_with_regex
+      ("mail-regex-none", &metadata, 1800000000000000, rules,
+      G_N_ELEMENTS (rules), &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (facts);
+  g_assert_cmpuint (facts->len, ==, 0);
+}
+
+static void
+test_regex_rules_emit_in_rule_order_then_match_order (void)
+{
+  WyreboxEmlMetadata metadata = {
+    .subject = "Refs ABC-001 and ABC-002 cost USD 10 and USD 20",
+  };
+  const WyreboxDeterministicFactRegexRule rules[] = {
+    {
+          .field = "subject",
+          .rule_id = "amounts",
+          .predicate = "amount_candidate",
+          .pattern = "USD[ ]+([0-9]+)",
+          .capture_group = 1,
+        },
+    {
+          .field = "subject",
+          .rule_id = "references",
+          .predicate = "reference_candidate",
+          .pattern = "ABC-[0-9]+",
+          .capture_group = 0,
+        },
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) facts = NULL;
+
+  facts =
+      wyrebox_deterministic_fact_extract_from_metadata_with_regex
+      ("mail-regex-order", &metadata, 1800000000000000, rules,
+      G_N_ELEMENTS (rules), &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (facts);
+  g_assert_cmpuint (facts->len, ==, 4);
+
+  assert_fact (fact_at (facts, 0),
+      "amount_candidate", "mail-regex-order", "10", "regex:subject:amounts");
+  assert_fact (fact_at (facts, 1),
+      "amount_candidate", "mail-regex-order", "20", "regex:subject:amounts");
+  assert_fact (fact_at (facts, 2),
+      "reference_candidate", "mail-regex-order", "ABC-001",
+      "regex:subject:references");
+  assert_fact (fact_at (facts, 3),
+      "reference_candidate", "mail-regex-order", "ABC-002",
+      "regex:subject:references");
+}
+
+static void
+test_regex_facts_append_after_header_and_dictionary_facts (void)
+{
+  WyreboxEmlMetadata metadata = {
+    .message_id = "<mail-combined@example.test>",
+    .subject = "Project Alpha invoice USD 42",
+    .from = "Sender <sender@example.test>",
+  };
+  const WyreboxDeterministicFactDictionaryRule dictionary_rules[] = {
+    {
+          .field = "subject",
+          .rule_id = "project-alpha",
+          .match_text = "alpha",
+          .canonical_project_key = "project-alpha",
+        },
+  };
+  const WyreboxDeterministicFactRegexRule regex_rules[] = {
+    {
+          .field = "subject",
+          .rule_id = "subject-amount",
+          .predicate = "amount_candidate",
+          .pattern = "USD[ ]+([0-9]+)",
+          .capture_group = 1,
+        },
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) facts = NULL;
+
+  facts =
+      wyrebox_deterministic_fact_extract_from_metadata_with_rules
+      ("mail-combined", &metadata, 1800000000000000, dictionary_rules,
+      G_N_ELEMENTS (dictionary_rules), regex_rules, G_N_ELEMENTS (regex_rules),
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (facts);
+  g_assert_cmpuint (facts->len, ==, 5);
+
+  assert_fact (fact_at (facts, 0),
+      "message_id", "mail-combined", "<mail-combined@example.test>",
+      "header:message-id");
+  assert_fact (fact_at (facts, 3),
+      "project_keyword", "mail-combined", "project-alpha",
+      "dictionary:subject:project-alpha");
+  assert_fact (fact_at (facts, 4),
+      "amount_candidate", "mail-combined", "42",
+      "regex:subject:subject-amount");
+}
+
+static void
+test_rejects_invalid_regex_rules (void)
+{
+  WyreboxEmlMetadata metadata = {
+    .subject = "Project Alpha USD 42",
+  };
+  const WyreboxDeterministicFactRegexRule invalid_rules[] = {
+    {
+          .field = "subject",
+          .rule_id = "",
+          .predicate = "amount_candidate",
+          .pattern = "USD[ ]+([0-9]+)",
+          .capture_group = 1,
+        },
+    {
+          .field = "date",
+          .rule_id = "unsupported-field",
+          .predicate = "date_candidate",
+          .pattern = "[0-9]{4}-[0-9]{2}-[0-9]{2}",
+          .capture_group = 0,
+        },
+    {
+          .field = "subject",
+          .rule_id = "unsupported-predicate",
+          .predicate = "project_keyword",
+          .pattern = "Alpha",
+          .capture_group = 0,
+        },
+    {
+          .field = "subject",
+          .rule_id = "empty-pattern",
+          .predicate = "reference_candidate",
+          .pattern = "",
+          .capture_group = 0,
+        },
+    {
+          .field = "subject",
+          .rule_id = "invalid-pattern",
+          .predicate = "reference_candidate",
+          .pattern = "(",
+          .capture_group = 0,
+        },
+    {
+          .field = "subject",
+          .rule_id = "bad-capture",
+          .predicate = "amount_candidate",
+          .pattern = "USD[ ]+([0-9]+)",
+          .capture_group = 2,
+        },
+  };
+
+  for (guint i = 0; i < G_N_ELEMENTS (invalid_rules); i++) {
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GPtrArray) facts = NULL;
+
+    facts =
+        wyrebox_deterministic_fact_extract_from_metadata_with_regex
+        ("mail-invalid-regex", &metadata, 1800000000000000, &invalid_rules[i],
+        1, &error);
+    g_assert_null (facts);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  }
+}
+
+static void
+test_rejects_null_regex_rules_with_nonzero_count (void)
+{
+  WyreboxEmlMetadata metadata = {
+    .subject = "Project Alpha USD 42",
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) facts = NULL;
+
+  facts =
+      wyrebox_deterministic_fact_extract_from_metadata_with_regex
+      ("mail-null-regex", &metadata, 1800000000000000, NULL, 1, &error);
+  g_assert_null (facts);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
 test_rejects_missing_mail_id (void)
 {
   WyreboxEmlMetadata metadata = {
@@ -333,6 +602,26 @@ main (int argc, char **argv)
   g_test_add_func ("/facts/deterministic-extractor/"
       "rejects-invalid-dictionary-rules",
       test_rejects_invalid_dictionary_rules);
+  g_test_add_func ("/facts/deterministic-extractor/"
+      "regex-subject-amount-capture",
+      test_extracts_subject_amount_candidate_from_capture_group);
+  g_test_add_func ("/facts/deterministic-extractor/"
+      "regex-subject-reference-full-match",
+      test_extracts_subject_reference_candidate_from_full_match);
+  g_test_add_func ("/facts/deterministic-extractor/"
+      "regex-no-match-and-empty-capture",
+      test_no_match_and_empty_capture_emit_no_regex_facts);
+  g_test_add_func ("/facts/deterministic-extractor/"
+      "regex-rule-order-then-match-order",
+      test_regex_rules_emit_in_rule_order_then_match_order);
+  g_test_add_func ("/facts/deterministic-extractor/"
+      "regex-after-header-and-dictionary",
+      test_regex_facts_append_after_header_and_dictionary_facts);
+  g_test_add_func ("/facts/deterministic-extractor/"
+      "rejects-invalid-regex-rules", test_rejects_invalid_regex_rules);
+  g_test_add_func ("/facts/deterministic-extractor/"
+      "rejects-null-regex-rules-with-nonzero-count",
+      test_rejects_null_regex_rules_with_nonzero_count);
   g_test_add_func ("/facts/deterministic-extractor/rejects-missing-mail-id",
       test_rejects_missing_mail_id);
   g_test_add_func ("/facts/deterministic-extractor/rejects-missing-created-at",
