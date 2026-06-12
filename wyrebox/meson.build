@@ -11,6 +11,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-fact-mutation-dispatcher.c',
   'daemon/wyrebox-daemon-fact-mutation-service.c',
   'daemon/wyrebox-daemon-fact-mutation-request.c',
+  'daemon/wyrebox-daemon-connection-server.c',
   'daemon/wyrebox-daemon-frame-io.c',
   'daemon/wyrebox-daemon-request-adapter.c',
   'daemon/wyrebox-daemon-runtime.c',
