@@ -50,6 +50,10 @@ void wyrebox_daemon_mailbox_list_result_clear (
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDaemonMailboxListResult,
     wyrebox_daemon_mailbox_list_result_clear)
 
+/*
+ * Initializes @entry from borrowed string arguments and deep-copies all string
+ * fields. On failure, leaves any existing contents of @entry unchanged.
+ */
 gboolean wyrebox_daemon_mailbox_list_entry_init (
     WyreboxDaemonMailboxListEntry *entry,
     WyreboxDaemonMailboxListEntryKind kind,

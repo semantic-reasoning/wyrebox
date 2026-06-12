@@ -131,6 +131,15 @@ test_mailbox_list_result_rejects_invalid_entry_fields (void)
 
   g_clear_error (&error);
   g_assert_false (wyrebox_daemon_mailbox_list_result_append_entry (&result,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "mailbox-inbox", "INBOX", "//", NULL, TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries (&result),
+      ==, 0);
+
+  g_clear_error (&error);
+  g_assert_false (wyrebox_daemon_mailbox_list_result_append_entry (&result,
           (WyreboxDaemonMailboxListEntryKind) 99,
           "mailbox-inbox", "INBOX", "/", NULL, TRUE,
           WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN, &error));
@@ -175,6 +184,34 @@ test_mailbox_list_entry_reinitializes (void)
       WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN);
 }
 
+static void
+test_mailbox_list_entry_failure_preserves_existing_contents (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonMailboxListEntry) entry = { 0 };
+
+  g_assert_true (wyrebox_daemon_mailbox_list_entry_init (&entry,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "mailbox-1", "Archive", "/", "\\Archive", TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, &error));
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_daemon_mailbox_list_entry_init (&entry,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
+          "view-1", "Smart/Invoices", "//", NULL, FALSE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  g_assert_cmpint (entry.kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  g_assert_cmpstr (entry.mailbox_id, ==, "mailbox-1");
+  g_assert_cmpstr (entry.mailbox_name, ==, "Archive");
+  g_assert_cmpstr (entry.hierarchy_delimiter, ==, "/");
+  g_assert_cmpstr (entry.special_use, ==, "\\Archive");
+  g_assert_true (entry.is_selectable);
+  g_assert_cmpint (entry.child_state, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -193,6 +230,9 @@ main (int argc, char **argv)
       test_mailbox_list_result_rejects_invalid_entry_fields);
   g_test_add_func ("/daemon-api/mailbox-list-result/entry-reinitializes",
       test_mailbox_list_entry_reinitializes);
+  g_test_add_func ("/daemon-api/mailbox-list-result/"
+      "entry-failure-preserves-existing-contents",
+      test_mailbox_list_entry_failure_preserves_existing_contents);
 
   return g_test_run ();
 }

@@ -48,6 +48,28 @@ validate_optional_text (const char *value,
 }
 
 static gboolean
+validate_hierarchy_delimiter (const char *value, GError **error)
+{
+  if (value == NULL || *value == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "mailbox LIST hierarchy_delimiter is required");
+    return FALSE;
+  }
+
+  if (value[1] != '\0' || g_ascii_iscntrl (value[0])) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "mailbox LIST hierarchy_delimiter must be a single non-control character");
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
 validate_entry_kind (WyreboxDaemonMailboxListEntryKind kind, GError **error)
 {
   switch (kind) {
@@ -127,8 +149,7 @@ wyrebox_daemon_mailbox_list_entry_init (WyreboxDaemonMailboxListEntry *entry,
   if (!validate_required_text (mailbox_name, "mailbox_name", error))
     return FALSE;
 
-  if (!validate_required_text (hierarchy_delimiter, "hierarchy_delimiter",
-          error))
+  if (!validate_hierarchy_delimiter (hierarchy_delimiter, error))
     return FALSE;
 
   if (!validate_optional_text (special_use, "special_use", error))
