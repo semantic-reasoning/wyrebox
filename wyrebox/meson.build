@@ -20,13 +20,13 @@ wyrebox_sources = files(
   'wyrebox-delivery-replay-validator.c',
   'wyrebox-deterministic-fact-extractor.c',
   'wyrebox-fact-record.c',
-  'wyrebox-schema-metadata-store.c',
+  'schema/wyrebox-schema-metadata-store.c',
   'wyrebox-eml-ingestor.c',
   'wyrebox-eml-metadata.c',
   'journal/wyrebox-message-delivered-payload.c',
   'journal/wyrebox-journal-writer.c',
   'journal/wyrebox-journal-reader.c',
-  'wyrebox-schema-migration.c',
+  'schema/wyrebox-schema-migration.c',
 )
 
 wyrebox_build_config = configuration_data()
@@ -44,6 +44,7 @@ wyrebox_inc = include_directories(
   '.',
   'object-store',
   'journal',
+  'schema',
 )
 
 wyrebox_lib = static_library(
