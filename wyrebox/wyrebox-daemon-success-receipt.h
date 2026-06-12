@@ -1,5 +1,6 @@
 #pragma once
 
+#include "wyrebox-daemon-fact-mutation-request.h"
 #include "wyrebox-eml-ingestor.h"
 
 #include <glib-object.h>
@@ -56,6 +57,14 @@ gboolean wyrebox_daemon_success_receipt_init_delivery_ingestion (
     WyreboxDaemonSuccessReceipt *receipt,
     const char *request_id,
     const WyreboxEmlIngestResult *ingest_result,
+    GError **error);
+
+gboolean wyrebox_daemon_success_receipt_init_fact_mutation (
+    WyreboxDaemonSuccessReceipt *receipt,
+    const char *request_id,
+    const WyreboxDaemonFactMutationRequest *request,
+    guint64 journal_offset,
+    guint64 journal_sequence,
     GError **error);
 
 G_END_DECLS
