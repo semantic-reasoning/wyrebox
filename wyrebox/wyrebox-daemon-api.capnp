@@ -24,6 +24,7 @@ struct ResponseFrame {
     success @2 :SuccessFrame;
     error @3 :ErrorFrame;
     streamChunk @4 :StreamChunkFrame;
+    mailboxList @5 :MailboxListResponse;
   }
 }
 
@@ -80,6 +81,32 @@ struct DeliveryIngestionRequest {
 struct MailboxListRequest {
   accountIdentity @0 :Text;
   namespacePrefix @1 :Text;
+}
+
+struct MailboxListResponse {
+  requestId @0 :Text;
+  entries @1 :List(MailboxListEntry);
+}
+
+struct MailboxListEntry {
+  kind @0 :MailboxListEntryKind;
+  mailboxId @1 :Text;
+  mailboxName @2 :Text;
+  hierarchyDelimiter @3 :Text;
+  specialUse @4 :Text;
+  selectable @5 :Bool;
+  childState @6 :MailboxListChildState;
+}
+
+enum MailboxListEntryKind {
+  ordinary @0;
+  virtual @1;
+}
+
+enum MailboxListChildState {
+  unknown @0;
+  hasChildren @1;
+  hasNoChildren @2;
 }
 
 struct MailboxSelectRequest {

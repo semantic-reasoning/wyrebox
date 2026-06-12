@@ -46,6 +46,10 @@ REQUIRED_OPERATION_GROUPS = [
     "struct DeliveryIngestionRequest",
     "mailboxList",
     "struct MailboxListRequest",
+    "struct MailboxListResponse",
+    "struct MailboxListEntry",
+    "enum MailboxListEntryKind",
+    "enum MailboxListChildState",
     "mailboxSelect",
     "struct MailboxSelectRequest",
     "messageFetch",
@@ -68,6 +72,24 @@ REQUIRED_STREAM_FIELDS = [
     "chunkIndex",
     "bytes",
     "endOfStream",
+]
+
+REQUIRED_MAILBOX_LIST_RESPONSE_FIELDS = [
+    "mailboxList @5 :MailboxListResponse;",
+    "requestId @0 :Text;",
+    "entries @1 :List(MailboxListEntry);",
+    "kind @0 :MailboxListEntryKind;",
+    "mailboxId @1 :Text;",
+    "mailboxName @2 :Text;",
+    "hierarchyDelimiter @3 :Text;",
+    "specialUse @4 :Text;",
+    "selectable @5 :Bool;",
+    "childState @6 :MailboxListChildState;",
+    "ordinary @0;",
+    "virtual @1;",
+    "unknown @0;",
+    "hasChildren @1;",
+    "hasNoChildren @2;",
 ]
 
 FORBIDDEN_IMPLEMENTATION_TERMS = [
@@ -97,6 +119,62 @@ def assert_success_frame_fields(text: str) -> None:
         "journalSequence @4 :UInt64;",
     ]
     assert_contains_all(success_frame, expected_fields, "success frame fields")
+
+
+def assert_mailbox_list_response_fields(text: str) -> None:
+    response_frame_start = text.index("struct ResponseFrame {")
+    response_frame_end = text.index("\n}", response_frame_start)
+    response_frame = text[response_frame_start:response_frame_end]
+
+    mailbox_response_start = text.index("struct MailboxListResponse {")
+    mailbox_response_end = text.index("\n}", mailbox_response_start)
+    mailbox_response = text[mailbox_response_start:mailbox_response_end]
+
+    mailbox_entry_start = text.index("struct MailboxListEntry {")
+    mailbox_entry_end = text.index("\n}", mailbox_entry_start)
+    mailbox_entry = text[mailbox_entry_start:mailbox_entry_end]
+
+    entry_kind_start = text.index("enum MailboxListEntryKind {")
+    entry_kind_end = text.index("\n}", entry_kind_start)
+    entry_kind = text[entry_kind_start:entry_kind_end]
+
+    child_state_start = text.index("enum MailboxListChildState {")
+    child_state_end = text.index("\n}", child_state_start)
+    child_state = text[child_state_start:child_state_end]
+
+    assert_contains_all(
+        response_frame,
+        ["mailboxList @5 :MailboxListResponse;"],
+        "mailbox LIST response union field",
+    )
+    assert_contains_all(
+        mailbox_response,
+        ["requestId @0 :Text;", "entries @1 :List(MailboxListEntry);"],
+        "mailbox LIST response fields",
+    )
+    assert_contains_all(
+        mailbox_entry,
+        [
+            "kind @0 :MailboxListEntryKind;",
+            "mailboxId @1 :Text;",
+            "mailboxName @2 :Text;",
+            "hierarchyDelimiter @3 :Text;",
+            "specialUse @4 :Text;",
+            "selectable @5 :Bool;",
+            "childState @6 :MailboxListChildState;",
+        ],
+        "mailbox LIST entry fields",
+    )
+    assert_contains_all(
+        entry_kind,
+        ["ordinary @0;", "virtual @1;"],
+        "mailbox LIST entry kinds",
+    )
+    assert_contains_all(
+        child_state,
+        ["unknown @0;", "hasChildren @1;", "hasNoChildren @2;"],
+        "mailbox LIST child states",
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -179,6 +257,7 @@ def main() -> None:
     assert_contains_all(text, REQUIRED_ERROR_CLASSES, "error classes")
     assert_contains_all(text, REQUIRED_OPERATION_GROUPS, "operation groups")
     assert_contains_all(text, REQUIRED_STREAM_FIELDS, "stream/chunk fields")
+    assert_mailbox_list_response_fields(text)
 
     forbidden = [term for term in FORBIDDEN_IMPLEMENTATION_TERMS if term in text]
     assert not forbidden, "schema contains forbidden terms: " + ", ".join(forbidden)
