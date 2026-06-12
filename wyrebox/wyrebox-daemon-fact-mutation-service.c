@@ -95,9 +95,9 @@ wyrebox_daemon_fact_mutation_service_new (WyreboxJournalWriter *journal_writer)
   return self;
 }
 
-gboolean
-wyrebox_daemon_fact_mutation_service_handle (WyreboxDaemonFactMutationService
-    *self, const char *request_id, const char *correlation_id,
+static gboolean
+handle_authorized_fact_mutation (WyreboxDaemonFactMutationService
+    *self, const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonFactMutationRequest *request,
     WyreboxDaemonResponseFrame *out_frame, GError **error)
 {
@@ -105,11 +105,12 @@ wyrebox_daemon_fact_mutation_service_handle (WyreboxDaemonFactMutationService
   guint64 journal_sequence = 0;
 
   g_return_val_if_fail (WYREBOX_IS_DAEMON_FACT_MUTATION_SERVICE (self), FALSE);
+  g_return_val_if_fail (identity != NULL, FALSE);
   g_return_val_if_fail (request != NULL, FALSE);
   g_return_val_if_fail (out_frame != NULL, FALSE);
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  if (!validate_request_id (request_id, error))
+  if (!validate_request_id (identity->request_id, error))
     return FALSE;
 
   if (!wyrebox_daemon_fact_mutation_request_append_journal (request,
@@ -117,8 +118,8 @@ wyrebox_daemon_fact_mutation_service_handle (WyreboxDaemonFactMutationService
     return FALSE;
 
   return wyrebox_daemon_response_frame_init_fact_mutation_success (out_frame,
-      request_id, correlation_id, request, journal_offset, journal_sequence,
-      error);
+      identity->request_id, identity->correlation_id, request, journal_offset,
+      journal_sequence, error);
 }
 
 gboolean
@@ -137,7 +138,6 @@ gboolean
   if (!authorize_fact_mutation_identity (identity, request, error))
     return FALSE;
 
-  return wyrebox_daemon_fact_mutation_service_handle (self,
-      identity->request_id, identity->correlation_id, request, out_frame,
+  return handle_authorized_fact_mutation (self, identity, request, out_frame,
       error);
 }

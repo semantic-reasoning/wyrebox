@@ -21,14 +21,6 @@ G_DECLARE_FINAL_TYPE (WyreboxDaemonFactMutationService,
 WyreboxDaemonFactMutationService *wyrebox_daemon_fact_mutation_service_new (
     WyreboxJournalWriter *journal_writer);
 
-gboolean wyrebox_daemon_fact_mutation_service_handle (
-    WyreboxDaemonFactMutationService *self,
-    const char *request_id,
-    const char *correlation_id,
-    const WyreboxDaemonFactMutationRequest *request,
-    WyreboxDaemonResponseFrame *out_frame,
-    GError **error);
-
 gboolean wyrebox_daemon_fact_mutation_service_handle_identity (
     WyreboxDaemonFactMutationService *self,
     const WyreboxDaemonRequestIdentity *identity,
