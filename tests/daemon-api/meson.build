@@ -107,22 +107,6 @@ daemon_frame_io_test = executable(
 )
 
 if capnp_serialization_found
-  daemon_api_capnp_schema = custom_target(
-    'daemon-api-capnp-schema',
-    input: files('../../wyrebox/wyrebox-daemon-api.capnp'),
-    output: [
-      'wyrebox-daemon-api.capnp.c++',
-      'wyrebox-daemon-api.capnp.h',
-    ],
-    command: [
-      capnp_serialization_compiler,
-      'compile',
-      '-oc++:@OUTDIR@',
-      '--src-prefix=' + meson.project_source_root() / 'wyrebox',
-      '@INPUT@',
-    ],
-  )
-
   daemon_api_capnp_smoke_test = executable(
     'test-daemon-api-capnp-smoke',
     [
@@ -130,7 +114,17 @@ if capnp_serialization_found
       daemon_api_capnp_schema,
     ],
     dependencies: [capnp_dep, kj_dep],
-    include_directories: include_directories(meson.current_build_dir()),
+    include_directories: daemon_api_capnp_schema_include,
+  )
+
+  daemon_api_capnp_codec_test = executable(
+    'test-daemon-capnp-codec',
+    [
+      'test-daemon-capnp-codec.cc',
+      daemon_api_capnp_schema,
+    ],
+    dependencies: [wyrebox_dep, capnp_dep, kj_dep],
+    include_directories: [daemon_api_capnp_schema_include],
   )
 endif
 
@@ -154,4 +148,5 @@ test('daemon request adapter', daemon_request_adapter_test)
 test('daemon frame io', daemon_frame_io_test)
 if capnp_serialization_found
   test('daemon api capnp smoke', daemon_api_capnp_smoke_test)
+  test('daemon capnp codec', daemon_api_capnp_codec_test)
 endif

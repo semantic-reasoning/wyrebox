@@ -74,6 +74,26 @@ endif
 summary('capnp serialization', capnp_serialization_summary,
   section: 'Toolchain')
 
+if capnp_serialization_found
+  daemon_api_capnp_schema = custom_target(
+    'daemon-api-capnp-schema',
+    input: files('wyrebox/wyrebox-daemon-api.capnp'),
+    output: [
+      'wyrebox-daemon-api.capnp.c++',
+      'wyrebox-daemon-api.capnp.h',
+    ],
+    command: [
+      capnp_serialization_compiler,
+      'compile',
+      '-oc++:@OUTDIR@',
+      '--src-prefix=' + meson.project_source_root() / 'wyrebox',
+      '@INPUT@',
+    ],
+  )
+
+  daemon_api_capnp_schema_include = include_directories('.')
+endif
+
 duckdb_found = false
 duckdb_deps = []
 duckdb_api_probe = '''
