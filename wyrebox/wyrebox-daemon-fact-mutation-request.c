@@ -6,8 +6,7 @@
 static gboolean
 is_supported_mutation (WyreboxDaemonFactMutationKind mutation)
 {
-  return mutation == WYREBOX_DAEMON_FACT_MUTATION_INSERT ||
-      mutation == WYREBOX_DAEMON_FACT_MUTATION_RETRACT;
+  return wyrebox_daemon_fact_mutation_kind_to_wire_name (mutation) != NULL;
 }
 
 static gboolean
@@ -101,6 +100,43 @@ wyrebox_daemon_fact_mutation_request_clear (WyreboxDaemonFactMutationRequest
   g_clear_pointer (&request->predicate_id, g_free);
   g_clear_pointer (&request->scope_id, g_free);
   g_clear_pointer (&request->arguments, g_strfreev);
+}
+
+const char *
+wyrebox_daemon_fact_mutation_kind_to_wire_name (WyreboxDaemonFactMutationKind
+    mutation)
+{
+  switch (mutation) {
+    case WYREBOX_DAEMON_FACT_MUTATION_INSERT:
+      return "insert";
+    case WYREBOX_DAEMON_FACT_MUTATION_RETRACT:
+      return "retract";
+    default:
+      return NULL;
+  }
+}
+
+gboolean
+wyrebox_daemon_fact_mutation_kind_from_wire_name (const char *wire_name,
+    WyreboxDaemonFactMutationKind *mutation, GError **error)
+{
+  g_return_val_if_fail (mutation != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (g_strcmp0 (wire_name, "insert") == 0) {
+    *mutation = WYREBOX_DAEMON_FACT_MUTATION_INSERT;
+    return TRUE;
+  }
+
+  if (g_strcmp0 (wire_name, "retract") == 0) {
+    *mutation = WYREBOX_DAEMON_FACT_MUTATION_RETRACT;
+    return TRUE;
+  }
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_INVALID_ARGUMENT, "unsupported fact mutation wire name");
+  return FALSE;
 }
 
 gboolean

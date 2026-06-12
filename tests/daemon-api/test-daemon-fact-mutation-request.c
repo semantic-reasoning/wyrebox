@@ -136,6 +136,41 @@ test_fact_mutation_request_init_replaces_existing_value (void)
   g_assert_null (request.arguments[2]);
 }
 
+static void
+test_fact_mutation_kind_converts_to_wire_name (void)
+{
+  g_assert_cmpstr (wyrebox_daemon_fact_mutation_kind_to_wire_name
+      (WYREBOX_DAEMON_FACT_MUTATION_INSERT), ==, "insert");
+  g_assert_cmpstr (wyrebox_daemon_fact_mutation_kind_to_wire_name
+      (WYREBOX_DAEMON_FACT_MUTATION_RETRACT), ==, "retract");
+  g_assert_null (wyrebox_daemon_fact_mutation_kind_to_wire_name (
+          (WyreboxDaemonFactMutationKind) 99));
+}
+
+static void
+test_fact_mutation_kind_parses_wire_name (void)
+{
+  WyreboxDaemonFactMutationKind mutation = WYREBOX_DAEMON_FACT_MUTATION_INSERT;
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_fact_mutation_kind_from_wire_name ("retract",
+          &mutation, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (mutation, ==, WYREBOX_DAEMON_FACT_MUTATION_RETRACT);
+}
+
+static void
+test_fact_mutation_kind_rejects_unknown_wire_name (void)
+{
+  WyreboxDaemonFactMutationKind mutation = WYREBOX_DAEMON_FACT_MUTATION_INSERT;
+  g_autoptr (GError) error = NULL;
+
+  g_assert_false (wyrebox_daemon_fact_mutation_kind_from_wire_name ("delete",
+          &mutation, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpint (mutation, ==, WYREBOX_DAEMON_FACT_MUTATION_INSERT);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -165,6 +200,14 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/fact-mutation-request/"
       "init-replaces-existing-value",
       test_fact_mutation_request_init_replaces_existing_value);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "kind-converts-to-wire-name",
+      test_fact_mutation_kind_converts_to_wire_name);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "kind-parses-wire-name", test_fact_mutation_kind_parses_wire_name);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "kind-rejects-unknown-wire-name",
+      test_fact_mutation_kind_rejects_unknown_wire_name);
 
   return g_test_run ();
 }

@@ -25,6 +25,14 @@ void wyrebox_daemon_fact_mutation_request_clear (
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDaemonFactMutationRequest,
     wyrebox_daemon_fact_mutation_request_clear)
 
+const char *wyrebox_daemon_fact_mutation_kind_to_wire_name (
+    WyreboxDaemonFactMutationKind mutation);
+
+gboolean wyrebox_daemon_fact_mutation_kind_from_wire_name (
+    const char *wire_name,
+    WyreboxDaemonFactMutationKind *mutation,
+    GError **error);
+
 gboolean wyrebox_daemon_fact_mutation_request_init (
     WyreboxDaemonFactMutationRequest *request,
     WyreboxDaemonFactMutationKind mutation,
