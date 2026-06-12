@@ -35,8 +35,13 @@ gboolean wyrebox_daemon_fact_mutation_kind_from_wire_name (
     WyreboxDaemonFactMutationKind *mutation,
     GError **error);
 
-gboolean wyrebox_daemon_fact_mutation_kind_to_journal_event_type (
+gboolean wyrebox_daemon_fact_mutation_to_event (
     WyreboxDaemonFactMutationKind mutation,
+    WyreboxJournalEventType *event_type,
+    GError **error);
+
+gboolean wyrebox_daemon_fact_request_get_event (
+    const WyreboxDaemonFactMutationRequest *request,
     WyreboxJournalEventType *event_type,
     GError **error);
 
