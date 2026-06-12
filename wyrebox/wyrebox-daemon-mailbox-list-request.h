@@ -7,6 +7,9 @@ G_BEGIN_DECLS
 
 typedef struct
 {
+  /*
+   * Strings are owned by the request and are released by clear().
+   */
   char *account_identity;
   char *namespace_prefix;
 } WyreboxDaemonMailboxListRequest;

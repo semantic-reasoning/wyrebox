@@ -47,6 +47,38 @@ validate_optional_text (const char *value,
   return TRUE;
 }
 
+static gboolean
+validate_entry_kind (WyreboxDaemonMailboxListEntryKind kind, GError **error)
+{
+  switch (kind) {
+    case WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY:
+    case WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL:
+      return TRUE;
+    default:
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT, "mailbox LIST entry kind is invalid");
+      return FALSE;
+  }
+}
+
+static gboolean
+validate_child_state (WyreboxDaemonMailboxListChildState child_state,
+    GError **error)
+{
+  switch (child_state) {
+    case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN:
+    case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN:
+    case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN:
+      return TRUE;
+    default:
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT, "mailbox LIST child state is invalid");
+      return FALSE;
+  }
+}
+
 static void
 free_entry_pointer (gpointer data)
 {
@@ -64,22 +96,30 @@ wyrebox_daemon_mailbox_list_entry_clear (WyreboxDaemonMailboxListEntry *entry)
 
   g_clear_pointer (&entry->mailbox_id, g_free);
   g_clear_pointer (&entry->mailbox_name, g_free);
+  g_clear_pointer (&entry->hierarchy_delimiter, g_free);
   g_clear_pointer (&entry->special_use, g_free);
+  entry->kind = WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
   entry->is_selectable = FALSE;
-  entry->is_virtual = FALSE;
+  entry->child_state = WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN;
 }
 
 gboolean
 wyrebox_daemon_mailbox_list_entry_init (WyreboxDaemonMailboxListEntry *entry,
+    WyreboxDaemonMailboxListEntryKind kind,
     const char *mailbox_id,
     const char *mailbox_name,
+    const char *hierarchy_delimiter,
     const char *special_use,
-    gboolean is_selectable, gboolean is_virtual, GError **error)
+    gboolean is_selectable,
+    WyreboxDaemonMailboxListChildState child_state, GError **error)
 {
   g_auto (WyreboxDaemonMailboxListEntry) next = { 0 };
 
   g_return_val_if_fail (entry != NULL, FALSE);
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (!validate_entry_kind (kind, error))
+    return FALSE;
 
   if (!validate_required_text (mailbox_id, "mailbox_id", error))
     return FALSE;
@@ -87,20 +127,30 @@ wyrebox_daemon_mailbox_list_entry_init (WyreboxDaemonMailboxListEntry *entry,
   if (!validate_required_text (mailbox_name, "mailbox_name", error))
     return FALSE;
 
+  if (!validate_required_text (hierarchy_delimiter, "hierarchy_delimiter",
+          error))
+    return FALSE;
+
   if (!validate_optional_text (special_use, "special_use", error))
     return FALSE;
 
+  if (!validate_child_state (child_state, error))
+    return FALSE;
+
+  next.kind = kind;
   next.mailbox_id = g_strdup (mailbox_id);
   next.mailbox_name = g_strdup (mailbox_name);
+  next.hierarchy_delimiter = g_strdup (hierarchy_delimiter);
   if (special_use != NULL && *special_use != '\0')
     next.special_use = g_strdup (special_use);
   next.is_selectable = is_selectable;
-  next.is_virtual = is_virtual;
+  next.child_state = child_state;
 
   wyrebox_daemon_mailbox_list_entry_clear (entry);
   *entry = next;
   next.mailbox_id = NULL;
   next.mailbox_name = NULL;
+  next.hierarchy_delimiter = NULL;
   next.special_use = NULL;
 
   return TRUE;
@@ -128,9 +178,14 @@ wyrebox_daemon_mailbox_list_result_init_empty (WyreboxDaemonMailboxListResult
 
 gboolean
 wyrebox_daemon_mailbox_list_result_append_entry (WyreboxDaemonMailboxListResult
-    *result, const char *mailbox_id, const char *mailbox_name,
-    const char *special_use, gboolean is_selectable, gboolean is_virtual,
-    GError **error)
+    *result,
+    WyreboxDaemonMailboxListEntryKind kind,
+    const char *mailbox_id,
+    const char *mailbox_name,
+    const char *hierarchy_delimiter,
+    const char *special_use,
+    gboolean is_selectable,
+    WyreboxDaemonMailboxListChildState child_state, GError **error)
 {
   g_auto (WyreboxDaemonMailboxListEntry) next = { 0 };
   WyreboxDaemonMailboxListEntry *entry = NULL;
@@ -139,15 +194,16 @@ wyrebox_daemon_mailbox_list_result_append_entry (WyreboxDaemonMailboxListResult
   g_return_val_if_fail (result->entries != NULL, FALSE);
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  if (!wyrebox_daemon_mailbox_list_entry_init (&next,
-          mailbox_id, mailbox_name, special_use, is_selectable, is_virtual,
-          error))
+  if (!wyrebox_daemon_mailbox_list_entry_init (&next, kind,
+          mailbox_id, mailbox_name, hierarchy_delimiter, special_use,
+          is_selectable, child_state, error))
     return FALSE;
 
   entry = g_new0 (WyreboxDaemonMailboxListEntry, 1);
   *entry = next;
   next.mailbox_id = NULL;
   next.mailbox_name = NULL;
+  next.hierarchy_delimiter = NULL;
   next.special_use = NULL;
 
   g_ptr_array_add (result->entries, entry);

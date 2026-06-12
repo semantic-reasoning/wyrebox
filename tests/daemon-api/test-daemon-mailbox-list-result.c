@@ -23,18 +23,23 @@ test_mailbox_list_result_appends_inbox_entry (void)
 
   wyrebox_daemon_mailbox_list_result_init_empty (&result);
   g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
-          "mailbox-inbox", "INBOX", "\\Inbox", TRUE, FALSE, &error));
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "mailbox-inbox", "INBOX", "/", "\\Inbox", TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, &error));
   g_assert_no_error (error);
 
   g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries (&result),
       ==, 1);
   entry = wyrebox_daemon_mailbox_list_result_get_entry (&result, 0);
   g_assert_nonnull (entry);
+  g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
   g_assert_cmpstr (entry->mailbox_id, ==, "mailbox-inbox");
   g_assert_cmpstr (entry->mailbox_name, ==, "INBOX");
+  g_assert_cmpstr (entry->hierarchy_delimiter, ==, "/");
   g_assert_cmpstr (entry->special_use, ==, "\\Inbox");
   g_assert_true (entry->is_selectable);
-  g_assert_false (entry->is_virtual);
+  g_assert_cmpint (entry->child_state, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN);
 }
 
 static void
@@ -45,20 +50,25 @@ test_mailbox_list_result_deep_copies_entry_fields (void)
   const WyreboxDaemonMailboxListEntry *entry = NULL;
   char mailbox_id[] = "mailbox-1";
   char mailbox_name[] = "Projects";
+  char hierarchy_delimiter[] = "/";
   char special_use[] = "\\Archive";
 
   wyrebox_daemon_mailbox_list_result_init_empty (&result);
   g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
-          mailbox_id, mailbox_name, special_use, TRUE, FALSE, &error));
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          mailbox_id, mailbox_name, hierarchy_delimiter, special_use, TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN, &error));
   g_assert_no_error (error);
 
   mailbox_id[0] = 'X';
   mailbox_name[0] = 'X';
+  hierarchy_delimiter[0] = '.';
   special_use[1] = 'X';
 
   entry = wyrebox_daemon_mailbox_list_result_get_entry (&result, 0);
   g_assert_cmpstr (entry->mailbox_id, ==, "mailbox-1");
   g_assert_cmpstr (entry->mailbox_name, ==, "Projects");
+  g_assert_cmpstr (entry->hierarchy_delimiter, ==, "/");
   g_assert_cmpstr (entry->special_use, ==, "\\Archive");
 }
 
@@ -71,14 +81,19 @@ test_mailbox_list_result_represents_virtual_mailbox (void)
 
   wyrebox_daemon_mailbox_list_result_init_empty (&result);
   g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
-          "view-project-a", "Projects/Project A", NULL, TRUE, TRUE, &error));
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
+          "view-project-a", "Projects/Project A", "/", NULL, TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN, &error));
   g_assert_no_error (error);
 
   entry = wyrebox_daemon_mailbox_list_result_get_entry (&result, 0);
   g_assert_nonnull (entry);
+  g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
+  g_assert_cmpstr (entry->hierarchy_delimiter, ==, "/");
   g_assert_cmpstr (entry->special_use, ==, NULL);
   g_assert_true (entry->is_selectable);
-  g_assert_true (entry->is_virtual);
+  g_assert_cmpint (entry->child_state, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN);
 }
 
 static void
@@ -89,14 +104,45 @@ test_mailbox_list_result_rejects_invalid_entry_fields (void)
 
   wyrebox_daemon_mailbox_list_result_init_empty (&result);
   g_assert_false (wyrebox_daemon_mailbox_list_result_append_entry (&result,
-          "", "INBOX", NULL, TRUE, FALSE, &error));
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "", "INBOX", "/", NULL, TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries (&result),
       ==, 0);
 
   g_clear_error (&error);
   g_assert_false (wyrebox_daemon_mailbox_list_result_append_entry (&result,
-          "mailbox-inbox", "INBOX\n", NULL, TRUE, FALSE, &error));
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "mailbox-inbox", "INBOX\n", "/", NULL, TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries (&result),
+      ==, 0);
+
+  g_clear_error (&error);
+  g_assert_false (wyrebox_daemon_mailbox_list_result_append_entry (&result,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "mailbox-inbox", "INBOX", "\n", NULL, TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries (&result),
+      ==, 0);
+
+  g_clear_error (&error);
+  g_assert_false (wyrebox_daemon_mailbox_list_result_append_entry (&result,
+          (WyreboxDaemonMailboxListEntryKind) 99,
+          "mailbox-inbox", "INBOX", "/", NULL, TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries (&result),
+      ==, 0);
+
+  g_clear_error (&error);
+  g_assert_false (wyrebox_daemon_mailbox_list_result_append_entry (&result,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "mailbox-inbox", "INBOX", "/", NULL, TRUE,
+          (WyreboxDaemonMailboxListChildState) 99, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries (&result),
       ==, 0);
@@ -109,17 +155,24 @@ test_mailbox_list_entry_reinitializes (void)
   g_auto (WyreboxDaemonMailboxListEntry) entry = { 0 };
 
   g_assert_true (wyrebox_daemon_mailbox_list_entry_init (&entry,
-          "mailbox-1", "Archive", "\\Archive", TRUE, FALSE, &error));
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "mailbox-1", "Archive", "/", "\\Archive", TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_mailbox_list_entry_init (&entry,
-          "view-1", "Smart/Invoices", NULL, FALSE, TRUE, &error));
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
+          "view-1", "Smart/Invoices", "/", NULL, FALSE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN, &error));
   g_assert_no_error (error);
 
+  g_assert_cmpint (entry.kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
   g_assert_cmpstr (entry.mailbox_id, ==, "view-1");
   g_assert_cmpstr (entry.mailbox_name, ==, "Smart/Invoices");
+  g_assert_cmpstr (entry.hierarchy_delimiter, ==, "/");
   g_assert_cmpstr (entry.special_use, ==, NULL);
   g_assert_false (entry.is_selectable);
-  g_assert_true (entry.is_virtual);
+  g_assert_cmpint (entry.child_state, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN);
 }
 
 int
