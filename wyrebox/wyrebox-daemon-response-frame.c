@@ -98,8 +98,15 @@ copy_mailbox_list_result (WyreboxDaemonMailboxListResult *dest,
     const WyreboxDaemonMailboxListEntry *entry =
         wyrebox_daemon_mailbox_list_result_get_entry (src, i);
 
-    if (entry == NULL ||
-        !wyrebox_daemon_mailbox_list_result_append_entry (dest,
+    if (entry == NULL) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "mailbox LIST response contains invalid entry");
+      return FALSE;
+    }
+
+    if (!wyrebox_daemon_mailbox_list_result_append_entry (dest,
             entry->kind, entry->mailbox_id, entry->mailbox_name,
             entry->hierarchy_delimiter, entry->special_use,
             entry->is_selectable, entry->child_state, error))
@@ -186,10 +193,8 @@ wyrebox_daemon_response_frame_init_error (WyreboxDaemonResponseFrame *frame,
 }
 
 gboolean
-wyrebox_daemon_response_frame_init_mailbox_list (
-    WyreboxDaemonResponseFrame *frame,
-    const char *request_id,
-    const char *correlation_id,
+wyrebox_daemon_response_frame_init_mailbox_list (WyreboxDaemonResponseFrame
+    *frame, const char *request_id, const char *correlation_id,
     const WyreboxDaemonMailboxListResult *mailbox_list, GError **error)
 {
   g_auto (WyreboxDaemonResponseFrame) next = { 0 };
@@ -219,14 +224,11 @@ wyrebox_daemon_response_frame_init_mailbox_list (
 }
 
 gboolean
-wyrebox_daemon_response_frame_init_fact_mutation_success (
-    WyreboxDaemonResponseFrame *frame,
-    const char *request_id,
+    wyrebox_daemon_response_frame_init_fact_mutation_success
+    (WyreboxDaemonResponseFrame * frame, const char *request_id,
     const char *correlation_id,
-    const WyreboxDaemonFactMutationRequest *request,
-    guint64 journal_offset,
-    guint64 journal_sequence,
-    GError **error)
+    const WyreboxDaemonFactMutationRequest * request, guint64 journal_offset,
+    guint64 journal_sequence, GError ** error)
 {
   g_auto (WyreboxDaemonSuccessReceipt) receipt = { 0 };
 

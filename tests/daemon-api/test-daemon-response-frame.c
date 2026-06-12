@@ -37,8 +37,7 @@ make_mailbox_list_result (void)
   g_assert_no_error (error);
 
   return (WyreboxDaemonMailboxListResult) {
-    .entries = g_steal_pointer (&result.entries),
-  };
+  .entries = g_steal_pointer (&result.entries),};
 }
 
 static void
@@ -198,6 +197,32 @@ test_response_frame_rejects_invalid_mailbox_list_payload (void)
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_NONE);
   wyrebox_daemon_mailbox_list_result_clear (&result);
+}
+
+static void
+test_response_frame_rejects_malformed_mailbox_list_entry (void)
+{
+  g_auto (WyreboxDaemonMailboxListResult) result = make_mailbox_list_result ();
+  g_auto (WyreboxDaemonMailboxListResult) malformed = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_response_frame_init_mailbox_list (&frame,
+          "request-list", "stable-correlation", &result, &error));
+  g_assert_no_error (error);
+
+  malformed.entries = g_ptr_array_new ();
+  g_ptr_array_add (malformed.entries, NULL);
+
+  g_assert_false (wyrebox_daemon_response_frame_init_mailbox_list (&frame,
+          "request-malformed", NULL, &malformed, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_LIST);
+  g_assert_cmpstr (frame.request_id, ==, "request-list");
+  g_assert_cmpstr (frame.correlation_id, ==, "stable-correlation");
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
+      (&frame.mailbox_list), ==, 2);
 }
 
 static void
@@ -427,6 +452,9 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/response-frame/"
       "rejects-invalid-mailbox-list",
       test_response_frame_rejects_invalid_mailbox_list_payload);
+  g_test_add_func ("/daemon-api/response-frame/"
+      "rejects-malformed-mailbox-list-entry",
+      test_response_frame_rejects_malformed_mailbox_list_entry);
   g_test_add_func ("/daemon-api/response-frame/success-then-error-exclusive",
       test_response_frame_success_then_error_is_mutually_exclusive);
   g_test_add_func ("/daemon-api/response-frame/"

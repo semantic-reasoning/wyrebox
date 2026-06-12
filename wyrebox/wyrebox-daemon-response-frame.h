@@ -25,7 +25,7 @@ typedef struct
   char *correlation_id;
 
   /*
-   * Exactly one payload is active when kind is SUCCESS or ERROR.
+   * Exactly one payload is active when kind is not NONE.
    */
   WyreboxDaemonResponseFrameKind kind;
   WyreboxDaemonSuccessReceipt success;
