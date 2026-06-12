@@ -16,9 +16,11 @@ wyrebox_daemon_success_receipt_clear (WyreboxDaemonSuccessReceipt *receipt)
 }
 
 gboolean
-    wyrebox_daemon_success_receipt_init_delivery_ingestion
-    (WyreboxDaemonSuccessReceipt * receipt, const char *request_id,
-    const WyreboxEmlIngestResult * ingest_result, GError ** error)
+wyrebox_daemon_success_receipt_init_delivery_ingestion (
+    WyreboxDaemonSuccessReceipt *receipt,
+    const char *request_id,
+    const WyreboxEmlIngestResult *ingest_result,
+    GError **error)
 {
   g_auto (WyreboxDaemonSuccessReceipt) next = { 0 };
 
