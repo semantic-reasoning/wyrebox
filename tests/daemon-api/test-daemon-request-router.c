@@ -20,7 +20,7 @@ route_without_wirelog (WyreboxDaemonDeliveryIngestionService *delivery,
     WyreboxDaemonResponseFrame *out, GError **error)
 {
   return wyrebox_daemon_request_router_route (delivery, fact, list, select,
-      fetch, search, NULL, flag, frame, out, error);
+      fetch, search, NULL, NULL, flag, frame, out, error);
 }
 
 static gboolean
@@ -29,7 +29,16 @@ route_with_wirelog (WyreboxDaemonWirelogPredicateQueryService *wirelog,
     WyreboxDaemonResponseFrame *out, GError **error)
 {
   return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
-      NULL, wirelog, NULL, frame, out, error);
+      NULL, wirelog, NULL, NULL, frame, out, error);
+}
+
+static gboolean
+route_with_duckdb_query_template (WyreboxDaemonDuckDBQueryTemplateService
+    *duckdb, const WyreboxDaemonDecodedRequestFrame *frame,
+    WyreboxDaemonResponseFrame *out, GError **error)
+{
+  return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
+      NULL, NULL, duckdb, NULL, frame, out, error);
 }
 
 #define wyrebox_daemon_request_router_route route_without_wirelog
@@ -154,6 +163,29 @@ query_wirelog_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
   g_assert_cmpstr (identity->account_identity, ==, "account-1");
   g_assert_cmpstr (request->query_id, ==, "query-1");
   g_assert_cmpstr (request->predicate_id, ==, "project_mention");
+  g_assert_cmpstr (request->scope_id, ==, "account-1");
+
+  *was_called = TRUE;
+  return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+      identity->request_id,
+      NULL, request->query_id, identity->correlation_id, 0, bytes, TRUE, error);
+}
+
+static gboolean
+query_duckdb_template_fixture (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDuckDBQueryTemplateRequest *request,
+    WyreboxDaemonStreamChunkFrame *out_chunk, gpointer user_data,
+    GError **error)
+{
+  gboolean *was_called = user_data;
+  g_autoptr (GBytes) bytes =
+      g_bytes_new_static ("duckdb-rows", strlen ("duckdb-rows"));
+
+  g_assert_cmpstr (identity->request_id, ==, "request-duckdb-query");
+  g_assert_cmpstr (identity->caller_identity, ==, "skill");
+  g_assert_cmpstr (identity->account_identity, ==, "account-1");
+  g_assert_cmpstr (request->query_id, ==, "query-1");
+  g_assert_cmpstr (request->template_id, ==, "template.summary");
   g_assert_cmpstr (request->scope_id, ==, "account-1");
 
   *was_called = TRUE;
@@ -1238,6 +1270,111 @@ test_request_router_rejects_missing_wirelog_predicate_query_service (void)
 }
 
 static void
+test_request_router_routes_duckdb_query_template (void)
+{
+  gboolean was_called = FALSE;
+  const char *parameters[] = { "mail-1", NULL };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (&request,
+          "query-1", "template.summary", "account-1", parameters, &error));
+  g_assert_no_error (error);
+
+  request_frame.request_id = "request-duckdb-query";
+  request_frame.caller_identity = "skill";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "duckdb-tool";
+  request_frame.correlation_id = "duckdb-query-1";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE;
+  request_frame.duckdb_query_template = &request;
+
+  service = wyrebox_daemon_duckdb_query_template_service_new
+      (query_duckdb_template_fixture, &was_called, NULL);
+  g_assert_nonnull (service);
+
+  g_assert_true (route_with_duckdb_query_template (service, &request_frame,
+          &frame, &error));
+  g_assert_no_error (error);
+  g_assert_true (was_called);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpstr (frame.request_id, ==, "request-duckdb-query");
+  g_assert_cmpstr (frame.correlation_id, ==, "duckdb-query-1");
+  g_assert_cmpstr (frame.stream_chunk.query_id, ==, "query-1");
+  g_assert_null (frame.stream_chunk.message_id);
+  g_assert_true (frame.stream_chunk.end_of_stream);
+}
+
+static void
+test_request_router_rejects_missing_duckdb_query_template_payload (void)
+{
+  gboolean was_called = FALSE;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  request_frame.request_id = "request-duckdb-query";
+  request_frame.caller_identity = "skill";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "duckdb-tool";
+  request_frame.correlation_id = "duckdb-query-1";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE;
+  request_frame.duckdb_query_template = NULL;
+
+  service = wyrebox_daemon_duckdb_query_template_service_new
+      (query_duckdb_template_fixture, &was_called, NULL);
+  g_assert_nonnull (service);
+
+  g_assert_true (route_with_duckdb_query_template (service, &request_frame,
+          &frame, &error));
+  g_assert_no_error (error);
+  g_assert_false (was_called);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpstr (frame.request_id, ==, "request-duckdb-query");
+  g_assert_cmpstr (frame.correlation_id, ==, "duckdb-query-1");
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+}
+
+static void
+test_request_router_rejects_missing_duckdb_query_template_service (void)
+{
+  const char *parameters[] = { NULL };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (&request,
+          "query-1", "template.summary", "account-1", parameters, &error));
+  g_assert_no_error (error);
+
+  request_frame.request_id = "request-duckdb-query";
+  request_frame.caller_identity = "skill";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "duckdb-tool";
+  request_frame.correlation_id = "duckdb-query-1";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE;
+  request_frame.duckdb_query_template = &request;
+
+  g_assert_true (route_with_duckdb_query_template (NULL, &request_frame,
+          &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpstr (frame.request_id, ==, "request-duckdb-query");
+  g_assert_cmpstr (frame.correlation_id, ==, "duckdb-query-1");
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+}
+
+static void
 test_request_router_routes_flag_keyword_update (void)
 {
   gboolean was_called = FALSE;
@@ -1432,6 +1569,14 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/request-router/"
       "rejects-missing-wirelog-predicate-query-service",
       test_request_router_rejects_missing_wirelog_predicate_query_service);
+  g_test_add_func ("/daemon-api/request-router/routes-duckdb-query-template",
+      test_request_router_routes_duckdb_query_template);
+  g_test_add_func ("/daemon-api/request-router/"
+      "rejects-missing-duckdb-query-template-payload",
+      test_request_router_rejects_missing_duckdb_query_template_payload);
+  g_test_add_func ("/daemon-api/request-router/"
+      "rejects-missing-duckdb-query-template-service",
+      test_request_router_rejects_missing_duckdb_query_template_service);
   g_test_add_func ("/daemon-api/request-router/routes-flag-keyword-update",
       test_request_router_routes_flag_keyword_update);
   g_test_add_func ("/daemon-api/request-router/"

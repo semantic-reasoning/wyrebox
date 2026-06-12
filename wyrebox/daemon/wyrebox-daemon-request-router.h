@@ -5,6 +5,7 @@
 #include "wyrebox-daemon-mailbox-list-dispatcher.h"
 #include "wyrebox-daemon-mailbox-select-dispatcher.h"
 #include "wyrebox-daemon-delivery-ingestion-dispatcher.h"
+#include "wyrebox-daemon-duckdb-query-template-dispatcher.h"
 #include "wyrebox-daemon-wirelog-predicate-query-dispatcher.h"
 #include "wyrebox-daemon-flag-keyword-update-dispatcher.h"
 #include "wyrebox-daemon-message-search-dispatcher.h"
@@ -24,6 +25,7 @@ typedef enum {
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_MUTATION,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FLAG_KEYWORD_UPDATE,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY,
+  WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE,
 } WyreboxDaemonRequestFrameOperation;
 
 typedef struct
@@ -43,6 +45,7 @@ typedef struct
   const WyreboxDaemonDeliveryIngestionRequest *delivery_ingestion;
   const WyreboxDaemonFlagKeywordUpdateRequest *flag_keyword_update;
   const WyreboxDaemonWirelogPredicateQueryRequest *wirelog_predicate_query;
+  const WyreboxDaemonDuckDBQueryTemplateRequest *duckdb_query_template;
 } WyreboxDaemonDecodedRequestFrame;
 
 gboolean wyrebox_daemon_request_router_route (
@@ -53,6 +56,7 @@ gboolean wyrebox_daemon_request_router_route (
     WyreboxDaemonMessageFetchService *message_fetch_service,
     WyreboxDaemonMessageSearchService *message_search_service,
     WyreboxDaemonWirelogPredicateQueryService *wirelog_predicate_query_service,
+    WyreboxDaemonDuckDBQueryTemplateService *duckdb_query_template_service,
     WyreboxDaemonFlagKeywordUpdateService *flag_keyword_update_service,
     const WyreboxDaemonDecodedRequestFrame *request_frame,
     WyreboxDaemonResponseFrame *out_frame,

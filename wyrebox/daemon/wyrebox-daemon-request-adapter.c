@@ -14,6 +14,7 @@ struct _WyreboxDaemonRequestAdapter
   WyreboxDaemonMessageFetchService *message_fetch_service;
   WyreboxDaemonMessageSearchService *message_search_service;
   WyreboxDaemonWirelogPredicateQueryService *wirelog_predicate_query_service;
+  WyreboxDaemonDuckDBQueryTemplateService *duckdb_query_template_service;
   WyreboxDaemonFlagKeywordUpdateService *flag_keyword_update_service;
 
     WyreboxDaemonRequestAdapterDecodeRequestFrameCallback
@@ -73,6 +74,7 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDaemonRequestAdapterDecodedState,
   g_clear_object (&self->message_fetch_service);
   g_clear_object (&self->message_search_service);
   g_clear_object (&self->wirelog_predicate_query_service);
+  g_clear_object (&self->duckdb_query_template_service);
   g_clear_object (&self->flag_keyword_update_service);
 
   G_OBJECT_CLASS (wyrebox_daemon_request_adapter_parent_class)->finalize
@@ -173,6 +175,19 @@ wyrebox_daemon_request_adapter_new (WyreboxDaemonDeliveryIngestionService
   return self;
 }
 
+void wyrebox_daemon_request_adapter_set_duckdb_query_template_service
+    (WyreboxDaemonRequestAdapter * self,
+    WyreboxDaemonDuckDBQueryTemplateService * duckdb_query_template_service)
+{
+  g_return_if_fail (WYREBOX_IS_DAEMON_REQUEST_ADAPTER (self));
+  g_return_if_fail (duckdb_query_template_service == NULL
+      || WYREBOX_IS_DAEMON_DUCKDB_QUERY_TEMPLATE_SERVICE
+      (duckdb_query_template_service));
+
+  g_set_object (&self->duckdb_query_template_service,
+      duckdb_query_template_service);
+}
+
 GBytes *
 wyrebox_daemon_request_adapter_handle_payload (const
     WyreboxDaemonPeerCredentials *peer_credentials, GBytes *request,
@@ -207,6 +222,7 @@ wyrebox_daemon_request_adapter_handle_payload (const
           self->message_fetch_service,
           self->message_search_service,
           self->wirelog_predicate_query_service,
+          self->duckdb_query_template_service,
           self->flag_keyword_update_service,
           &decoded_request, &response_frame, &local_error))
     goto route_failed;
