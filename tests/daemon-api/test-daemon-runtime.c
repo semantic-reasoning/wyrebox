@@ -45,6 +45,23 @@ test_default_fact_dump_file_is_owned_gfile (void)
   g_assert_cmpstr (second_path, ==, "/run/wyrebox/facts");
 }
 
+static void
+test_default_runtime_paths_share_runtime_root (void)
+{
+  g_autofree char *socket_dir = NULL;
+  g_autofree char *fact_dump_parent = NULL;
+
+  socket_dir =
+      g_path_get_dirname (wyrebox_daemon_runtime_get_default_socket_path ());
+  fact_dump_parent =
+      g_path_get_dirname (wyrebox_daemon_runtime_get_default_fact_dump_dir ());
+
+  g_assert_cmpstr (socket_dir, ==,
+      wyrebox_daemon_runtime_get_default_runtime_dir ());
+  g_assert_cmpstr (fact_dump_parent, ==,
+      wyrebox_daemon_runtime_get_default_runtime_dir ());
+}
+
 int
 main (int argc, char **argv)
 {
@@ -58,6 +75,8 @@ main (int argc, char **argv)
       test_default_fact_dump_dir_is_under_run_wyrebox);
   g_test_add_func ("/daemon-api/runtime/default-fact-dump-file-owned",
       test_default_fact_dump_file_is_owned_gfile);
+  g_test_add_func ("/daemon-api/runtime/default-paths-share-root",
+      test_default_runtime_paths_share_runtime_root);
 
   return g_test_run ();
 }
