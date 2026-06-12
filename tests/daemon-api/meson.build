@@ -94,6 +94,18 @@ daemon_message_search_dispatcher_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_delivery_ingestion_request_test = executable(
+  'test-daemon-delivery-ingestion-request',
+  'test-daemon-delivery-ingestion-request.c',
+  dependencies: [wyrebox_dep],
+)
+
+daemon_delivery_ingestion_dispatcher_test = executable(
+  'test-daemon-delivery-ingestion-dispatcher',
+  'test-daemon-delivery-ingestion-dispatcher.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_flag_keyword_update_request_test = executable(
   'test-daemon-flag-keyword-update-request',
   'test-daemon-flag-keyword-update-request.c',
@@ -204,6 +216,9 @@ test('daemon message fetch request', daemon_message_fetch_request_test)
 test('daemon message fetch dispatcher', daemon_message_fetch_dispatcher_test)
 test('daemon message search request', daemon_message_search_request_test)
 test('daemon message search dispatcher', daemon_message_search_dispatcher_test)
+test('daemon delivery ingestion request', daemon_delivery_ingestion_request_test)
+test('daemon delivery ingestion dispatcher',
+  daemon_delivery_ingestion_dispatcher_test)
 test('daemon flag keyword update request', daemon_flag_keyword_update_request_test)
 test('daemon flag keyword update dispatcher',
   daemon_flag_keyword_update_dispatcher_test)

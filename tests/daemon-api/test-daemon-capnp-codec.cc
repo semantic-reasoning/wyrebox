@@ -2089,7 +2089,7 @@ assert_request_adapter_callbacks_are_usable (void)
       NULL);
   g_assert_nonnull (service);
 
-  adapter = wyrebox_daemon_request_adapter_new (NULL,
+  adapter = wyrebox_daemon_request_adapter_new (NULL, NULL,
       service,
       NULL,
       NULL,
@@ -2145,7 +2145,7 @@ assert_request_adapter_routes_mailbox_select (void)
       NULL);
   g_assert_nonnull (service);
 
-  adapter = wyrebox_daemon_request_adapter_new (NULL,
+  adapter = wyrebox_daemon_request_adapter_new (NULL, NULL,
           NULL,
           service,
           NULL,
@@ -2220,7 +2220,7 @@ assert_request_adapter_routes_fact_mutation (void)
   service = wyrebox_daemon_fact_mutation_service_new (writer);
   g_assert_nonnull (service);
 
-  adapter = wyrebox_daemon_request_adapter_new (service,
+  adapter = wyrebox_daemon_request_adapter_new (NULL, service,
       NULL,
       NULL,
       NULL,
@@ -2287,7 +2287,7 @@ assert_request_adapter_routes_message_fetch (void)
   g_assert_nonnull (service);
 
   adapter =
-      wyrebox_daemon_request_adapter_new (NULL,
+      wyrebox_daemon_request_adapter_new (NULL, NULL,
           NULL,
           NULL,
           service,
@@ -2362,7 +2362,7 @@ assert_request_adapter_routes_message_search (void)
       NULL);
   g_assert_nonnull (service);
 
-  adapter = wyrebox_daemon_request_adapter_new (NULL,
+  adapter = wyrebox_daemon_request_adapter_new (NULL, NULL,
       NULL,
       NULL,
       NULL,
@@ -2433,7 +2433,7 @@ assert_request_adapter_routes_flag_keyword_update (void)
       update_flag_keyword_fixture, &was_called, NULL);
   g_assert_nonnull (service);
 
-  adapter = wyrebox_daemon_request_adapter_new (NULL,
+  adapter = wyrebox_daemon_request_adapter_new (NULL, NULL,
       NULL,
       NULL,
       NULL,

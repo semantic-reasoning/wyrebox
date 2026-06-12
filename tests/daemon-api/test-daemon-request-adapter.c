@@ -1,4 +1,6 @@
 #include "wyrebox-daemon-fact-mutation-request.h"
+#include "wyrebox-daemon-delivery-ingestion-request.h"
+#include "wyrebox-daemon-delivery-ingestion-service.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-request-router.h"
 #include "wyrebox-daemon-flag-keyword-update-request.h"
@@ -17,6 +19,7 @@ typedef enum
   TEST_REQUEST_ADAPTER_SCENARIO_FACT_MUTATION_SUCCESS,
   TEST_REQUEST_ADAPTER_SCENARIO_FACT_MUTATION_UNAUTHORIZED,
   TEST_REQUEST_ADAPTER_SCENARIO_FACT_MUTATION_MISSING_PAYLOAD,
+  TEST_REQUEST_ADAPTER_SCENARIO_DELIVERY_INGESTION_SUCCESS,
   TEST_REQUEST_ADAPTER_SCENARIO_MESSAGE_SEARCH_SUCCESS,
   TEST_REQUEST_ADAPTER_SCENARIO_FLAG_KEYWORD_UPDATE_SUCCESS,
   TEST_REQUEST_ADAPTER_SCENARIO_DECODE_FAIL,
@@ -42,6 +45,7 @@ typedef struct
   TestRequestAdapterScenario scenario;
   WyreboxDaemonMailboxListRequest mailbox_list_request;
   WyreboxDaemonFactMutationRequest fact_mutation_request;
+  WyreboxDaemonDeliveryIngestionRequest delivery_ingestion_request;
   WyreboxDaemonMessageSearchRequest message_search_request;
   WyreboxDaemonFlagKeywordUpdateRequest flag_keyword_update_request;
 } TestRequestAdapterDecodedState;
@@ -145,6 +149,10 @@ test_request_adapter_clear_decoded_state (gpointer user_data)
       wyrebox_daemon_fact_mutation_request_clear
           (&state->fact_mutation_request);
       break;
+    case TEST_REQUEST_ADAPTER_SCENARIO_DELIVERY_INGESTION_SUCCESS:
+      wyrebox_daemon_delivery_ingestion_request_clear
+          (&state->delivery_ingestion_request);
+      break;
     case TEST_REQUEST_ADAPTER_SCENARIO_MESSAGE_SEARCH_SUCCESS:
       wyrebox_daemon_message_search_request_clear
           (&state->message_search_request);
@@ -182,6 +190,7 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
   out_request->mailbox_list = NULL;
   out_request->mailbox_select = NULL;
   out_request->fact_mutation = NULL;
+  out_request->delivery_ingestion = NULL;
   out_request->message_fetch = NULL;
   out_request->message_search = NULL;
   out_request->flag_keyword_update = NULL;
@@ -263,6 +272,27 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
           WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_MUTATION;
       out_request->fact_mutation = NULL;
       return TRUE;
+
+    case TEST_REQUEST_ADAPTER_SCENARIO_DELIVERY_INGESTION_SUCCESS:{
+      const gchar *recipients[] = { "alice@example.com", NULL };
+      g_autoptr (GBytes) message = NULL;
+
+      message = g_bytes_new_static ("message-bytes", 12);
+      out_request->request_id = "request-delivery";
+      out_request->caller_identity = "postfix";
+      out_request->account_identity = "account-1";
+      out_request->tool_identity = "postfix";
+      out_request->correlation_id = "corr-postfix";
+      if (!wyrebox_daemon_delivery_ingestion_request_init
+          (&decoded_state->delivery_ingestion_request,
+              "delivery-123", "queue-1", NULL, recipients, message, error))
+        return FALSE;
+      out_request->operation =
+          WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION;
+      out_request->delivery_ingestion =
+          &decoded_state->delivery_ingestion_request;
+      return TRUE;
+    }
 
     case TEST_REQUEST_ADAPTER_SCENARIO_FLAG_KEYWORD_UPDATE_SUCCESS:{
       const char *system_flags[] = { "\\Seen", NULL };
@@ -401,6 +431,33 @@ search_messages_fixture (const WyreboxDaemonRequestIdentity *identity,
 }
 
 static gboolean
+ingest_delivery_fixture (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDeliveryIngestionRequest *request,
+    WyreboxEmlIngestResult *out_result, gpointer user_data, GError **error)
+{
+  gboolean *was_called = user_data;
+
+  g_assert_cmpstr (identity->request_id, ==, "request-delivery");
+  g_assert_cmpstr (identity->caller_identity, ==, "postfix");
+  g_assert_cmpstr (identity->account_identity, ==, "account-1");
+  g_assert_cmpstr (identity->tool_identity, ==, "postfix");
+  g_assert_cmpstr (request->delivery_id, ==, "delivery-123");
+  g_assert_cmpuint (g_bytes_get_size (request->message_bytes), ==, 12);
+
+  if (was_called != NULL)
+    *was_called = TRUE;
+
+  out_result->object_key =
+      g_strdup
+      ("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+  out_result->size_bytes = 12;
+  out_result->journal_offset = 4096;
+  out_result->journal_sequence = 7;
+
+  return TRUE;
+}
+
+static gboolean
 update_flag_keyword_fixture (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonFlagKeywordUpdateRequest *request,
     WyreboxDaemonSuccessReceipt *out_receipt, gpointer user_data,
@@ -465,9 +522,8 @@ test_request_adapter_routes_mailbox_list (void)
   g_assert_nonnull (mailbox_list_service);
 
   adapter =
-      wyrebox_daemon_request_adapter_new (NULL, mailbox_list_service, NULL,
-      NULL, NULL, NULL,
-      test_request_adapter_decode, &codec_state, NULL,
+      wyrebox_daemon_request_adapter_new (NULL, NULL, mailbox_list_service,
+      NULL, NULL, NULL, NULL, test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
 
@@ -479,6 +535,60 @@ test_request_adapter_routes_mailbox_list (void)
   g_assert_nonnull (response);
   assert_bytes_equal (response, "encoded-mailbox-list");
   g_assert_true (mailbox_list_was_called);
+  g_assert_true (codec_state.peer_credentials_seen);
+  g_assert_cmpuint (codec_state.decode_calls, ==, 1);
+  g_assert_cmpuint (codec_state.encode_calls, ==, 1);
+  g_assert_cmpuint (codec_state.clear_calls, ==, 1);
+}
+
+static void
+test_request_adapter_routes_delivery_ingestion (void)
+{
+  TestRequestAdapterCodecState codec_state = {
+    .scenario = TEST_REQUEST_ADAPTER_SCENARIO_DELIVERY_INGESTION_SUCCESS,
+    .request_payload = "request-delivery",
+    .request_id = "request-delivery",
+    .expected_peer_credentials = {
+          .uid = 1500,
+          .gid = 1600,
+          .pid = 1700,
+        },
+    .expected_peer_credentials_match = TRUE,
+  };
+  const WyreboxDaemonPeerCredentials credentials = {
+    .uid = 1500,
+    .gid = 1600,
+    .pid = 1700,
+  };
+  gboolean was_called = FALSE;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDeliveryIngestionService)
+      delivery_ingestion_service = NULL;
+  g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+  g_autoptr (GBytes) request = NULL;
+  g_autoptr (GBytes) response = NULL;
+
+  delivery_ingestion_service =
+      wyrebox_daemon_delivery_ingestion_service_new (ingest_delivery_fixture,
+      &was_called, NULL);
+  g_assert_nonnull (delivery_ingestion_service);
+
+  adapter =
+      wyrebox_daemon_request_adapter_new (delivery_ingestion_service, NULL,
+      NULL, NULL,
+      NULL, NULL, NULL,
+      test_request_adapter_decode, &codec_state, NULL,
+      test_request_adapter_encode, &codec_state, NULL);
+  g_assert_nonnull (adapter);
+
+  request = g_bytes_new_static ("request-delivery",
+      strlen ("request-delivery"));
+  response = wyrebox_daemon_request_adapter_handle_payload (&credentials,
+      request, adapter, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (response);
+  assert_bytes_equal (response, "encoded-success");
+  g_assert_true (was_called);
   g_assert_true (codec_state.peer_credentials_seen);
   g_assert_cmpuint (codec_state.decode_calls, ==, 1);
   g_assert_cmpuint (codec_state.encode_calls, ==, 1);
@@ -522,9 +632,8 @@ test_request_adapter_routes_fact_mutation (void)
   g_assert_nonnull (fact_mutation_service);
 
   adapter =
-      wyrebox_daemon_request_adapter_new (fact_mutation_service, NULL, NULL,
-      NULL, NULL, NULL,
-      test_request_adapter_decode, &codec_state, NULL,
+      wyrebox_daemon_request_adapter_new (NULL, fact_mutation_service, NULL,
+      NULL, NULL, NULL, NULL, test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
 
@@ -580,9 +689,8 @@ test_request_adapter_rejects_unauthorized_fact_mutation (void)
   g_assert_nonnull (fact_mutation_service);
 
   adapter =
-      wyrebox_daemon_request_adapter_new (fact_mutation_service, NULL, NULL,
-      NULL, NULL, NULL,
-      test_request_adapter_decode, &codec_state, NULL,
+      wyrebox_daemon_request_adapter_new (NULL, fact_mutation_service, NULL,
+      NULL, NULL, NULL, NULL, test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
 
@@ -638,9 +746,8 @@ test_request_adapter_rejects_missing_fact_mutation_payload (void)
   g_assert_nonnull (fact_mutation_service);
 
   adapter =
-      wyrebox_daemon_request_adapter_new (fact_mutation_service, NULL, NULL,
-      NULL, NULL, NULL,
-      test_request_adapter_decode, &codec_state, NULL,
+      wyrebox_daemon_request_adapter_new (NULL, fact_mutation_service, NULL,
+      NULL, NULL, NULL, NULL, test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
 
@@ -683,7 +790,7 @@ test_request_adapter_decode_failure_skips_router_and_encoder (void)
   g_autoptr (GBytes) request = NULL;
   g_autoptr (GBytes) response = NULL;
 
-  adapter = wyrebox_daemon_request_adapter_new (NULL, NULL, NULL,
+  adapter = wyrebox_daemon_request_adapter_new (NULL, NULL, NULL, NULL,
       NULL, NULL, NULL,
       test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
@@ -732,7 +839,7 @@ test_request_adapter_routes_message_search (void)
   g_assert_nonnull (message_search_service);
 
   adapter =
-      wyrebox_daemon_request_adapter_new (NULL,
+      wyrebox_daemon_request_adapter_new (NULL, NULL,
       NULL,
       NULL,
       NULL,
@@ -788,7 +895,7 @@ test_request_adapter_routes_flag_keyword_update (void)
   g_assert_nonnull (flag_keyword_update_service);
 
   adapter =
-      wyrebox_daemon_request_adapter_new (NULL,
+      wyrebox_daemon_request_adapter_new (NULL, NULL,
       NULL,
       NULL,
       NULL,
@@ -845,9 +952,8 @@ test_request_adapter_encode_failure_is_propagated (void)
   g_assert_nonnull (mailbox_list_service);
 
   adapter =
-      wyrebox_daemon_request_adapter_new (NULL, mailbox_list_service, NULL,
-      NULL, NULL, NULL,
-      test_request_adapter_decode, &codec_state, NULL,
+      wyrebox_daemon_request_adapter_new (NULL, NULL, mailbox_list_service,
+      NULL, NULL, NULL, NULL, test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
 
@@ -870,6 +976,8 @@ main (int argc, char **argv)
 
   g_test_add_func ("/daemon-api/request-adapter/routes-mailbox-list",
       test_request_adapter_routes_mailbox_list);
+  g_test_add_func ("/daemon-api/request-adapter/routes-delivery-ingestion",
+      test_request_adapter_routes_delivery_ingestion);
   g_test_add_func ("/daemon-api/request-adapter/routes-fact-mutation",
       test_request_adapter_routes_fact_mutation);
   g_test_add_func ("/daemon-api/request-adapter/"

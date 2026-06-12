@@ -1,5 +1,6 @@
 #include "wyrebox-daemon-request-router.h"
 #include "wyrebox-daemon-flag-keyword-update-request.h"
+#include "wyrebox-daemon-delivery-ingestion-request.h"
 #include "wyrebox-journal-reader.h"
 
 #include <gio/gio.h>
@@ -189,6 +190,33 @@ search_messages_fixture (const WyreboxDaemonRequestIdentity *identity,
       NULL, "query-1", identity->correlation_id, 0, bytes, TRUE, error);
 }
 
+static gboolean
+ingest_delivery_fixture (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDeliveryIngestionRequest *request,
+    WyreboxEmlIngestResult *out_result, gpointer user_data, GError **error)
+{
+  gboolean *was_called = user_data;
+
+  g_assert_cmpstr (identity->request_id, ==, "request-delivery");
+  g_assert_cmpstr (identity->caller_identity, ==, "postfix");
+  g_assert_cmpstr (identity->account_identity, ==, "account-1");
+  g_assert_cmpstr (identity->tool_identity, ==, "postfix");
+  g_assert_cmpstr (request->delivery_id, ==, "delivery-123");
+  g_assert_cmpstr (request->queue_id, ==, "queue-1");
+  g_assert_cmpstr (request->recipients[0], ==, "alice@example.com");
+  g_assert_cmpuint (g_bytes_get_size (request->message_bytes), ==, 12);
+
+  if (was_called != NULL)
+    *was_called = TRUE;
+
+  out_result->object_key = g_strdup ("sha256:"
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+  out_result->size_bytes = 12;
+  out_result->journal_offset = 8192;
+  out_result->journal_sequence = 9;
+  return TRUE;
+}
+
 static void
 test_request_router_routes_fact_mutation (void)
 {
@@ -222,8 +250,8 @@ test_request_router_routes_fact_mutation (void)
   service = wyrebox_daemon_fact_mutation_service_new (writer);
   g_assert_nonnull (service);
 
-  g_assert_true (wyrebox_daemon_request_router_route (service, NULL, NULL, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, service, NULL, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
   g_assert_cmpstr (frame.request_id, ==, "request-1");
@@ -266,8 +294,8 @@ test_request_router_rejects_unauthorized_fact_mutation_with_error_frame (void)
   service = wyrebox_daemon_fact_mutation_service_new (writer);
   g_assert_nonnull (service);
 
-  g_assert_true (wyrebox_daemon_request_router_route (service, NULL, NULL, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, service, NULL, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
   g_assert_cmpstr (frame.request_id, ==, "request-1");
@@ -306,8 +334,8 @@ test_request_router_rejects_missing_fact_mutation_payload (void)
   service = wyrebox_daemon_fact_mutation_service_new (writer);
   g_assert_nonnull (service);
 
-  g_assert_true (wyrebox_daemon_request_router_route (service, NULL, NULL, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, service, NULL, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
   g_assert_cmpstr (frame.request_id, ==, "request-1");
@@ -345,8 +373,8 @@ test_request_router_rejects_unsupported_operation_with_error_frame (void)
   service = wyrebox_daemon_fact_mutation_service_new (writer);
   g_assert_nonnull (service);
 
-  g_assert_true (wyrebox_daemon_request_router_route (service, NULL, NULL, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, service, NULL, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
   g_assert_cmpstr (frame.request_id, ==, "request-1");
@@ -392,8 +420,8 @@ test_request_router_rejects_missing_request_id_without_error_frame (void)
   service = wyrebox_daemon_fact_mutation_service_new (writer);
   g_assert_nonnull (service);
 
-  g_assert_false (wyrebox_daemon_request_router_route (service, NULL, NULL,
-          NULL, NULL, NULL, &request_frame, &frame, &error));
+  g_assert_false (wyrebox_daemon_request_router_route (NULL, service, NULL,
+          NULL, NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_NONE);
 
@@ -428,8 +456,8 @@ test_request_router_routes_mailbox_list (void)
       &was_called, NULL);
   g_assert_nonnull (service);
 
-  g_assert_true (wyrebox_daemon_request_router_route (NULL, service, NULL, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, service, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_true (was_called);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_LIST);
@@ -467,8 +495,8 @@ test_request_router_rejects_missing_mailbox_list_payload (void)
       &was_called, NULL);
   g_assert_nonnull (service);
 
-  g_assert_true (wyrebox_daemon_request_router_route (NULL, service, NULL, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, service, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_false (was_called);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
@@ -504,8 +532,8 @@ test_request_router_rejects_unauthorized_mailbox_list_with_error_frame (void)
       &was_called, NULL);
   g_assert_nonnull (service);
 
-  g_assert_true (wyrebox_daemon_request_router_route (NULL, service, NULL, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, service, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_false (was_called);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
@@ -534,7 +562,7 @@ test_request_router_rejects_missing_mailbox_list_service (void)
   request_frame.mailbox_list = &request;
 
   g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
   g_assert_cmpstr (frame.request_id, ==, "request-list");
@@ -568,8 +596,8 @@ test_request_router_rejects_mailbox_list_account_mismatch (void)
       &was_called, NULL);
   g_assert_nonnull (service);
 
-  g_assert_true (wyrebox_daemon_request_router_route (NULL, service, NULL, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, service, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_false (was_called);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
@@ -603,8 +631,8 @@ test_request_router_rejects_mailbox_list_missing_request_id_without_frame (void)
       &was_called, NULL);
   g_assert_nonnull (service);
 
-  g_assert_false (wyrebox_daemon_request_router_route (NULL, service, NULL,
-          NULL, NULL, NULL, &request_frame, &frame, &error));
+  g_assert_false (wyrebox_daemon_request_router_route (NULL, NULL, service,
+          NULL, NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_false (was_called);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_NONE);
@@ -637,8 +665,8 @@ test_request_router_converts_silent_mailbox_list_failure_to_error_frame (void)
       &was_called, NULL);
   g_assert_nonnull (service);
 
-  g_assert_true (wyrebox_daemon_request_router_route (NULL, service, NULL, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, service, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_true (was_called);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
@@ -673,8 +701,8 @@ test_request_router_routes_mailbox_select (void)
       &was_called, NULL);
   g_assert_nonnull (service);
 
-  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, service, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, service,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_true (was_called);
   g_assert_cmpint (frame.kind, ==,
@@ -709,8 +737,8 @@ test_request_router_rejects_missing_mailbox_select_payload (void)
       &was_called, NULL);
   g_assert_nonnull (service);
 
-  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, service, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, service,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_false (was_called);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
@@ -742,7 +770,7 @@ test_request_router_rejects_missing_mailbox_select_service (void)
   request_frame.mailbox_select = &request;
 
   g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
   g_assert_cmpstr (frame.request_id, ==, "request-select");
@@ -777,8 +805,8 @@ test_request_router_routes_message_fetch (void)
       &was_called, NULL);
   g_assert_nonnull (service);
 
-  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, service,
-          NULL, NULL, &request_frame, &frame, &error));
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL,
+          service, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_true (was_called);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
@@ -811,8 +839,8 @@ test_request_router_rejects_missing_message_fetch_payload (void)
       &was_called, NULL);
   g_assert_nonnull (service);
 
-  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, service,
-          NULL, NULL, &request_frame, &frame, &error));
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL,
+          service, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_false (was_called);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
@@ -844,7 +872,7 @@ test_request_router_rejects_missing_message_fetch_service (void)
   request_frame.message_fetch = &request;
 
   g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
   g_assert_cmpstr (frame.request_id, ==, "request-fetch");
@@ -880,7 +908,7 @@ test_request_router_routes_message_search (void)
   g_assert_nonnull (service);
 
   g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL,
-          service, NULL, &request_frame, &frame, &error));
+          NULL, service, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_true (was_called);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
@@ -914,7 +942,7 @@ test_request_router_rejects_missing_message_search_payload (void)
   g_assert_nonnull (service);
 
   g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL,
-          service, NULL, &request_frame, &frame, &error));
+          NULL, service, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_false (was_called);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
@@ -946,10 +974,115 @@ test_request_router_rejects_missing_message_search_service (void)
   request_frame.message_search = &request;
 
   g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
   g_assert_cmpstr (frame.request_id, ==, "request-search");
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+}
+
+static void
+test_request_router_routes_delivery_ingestion (void)
+{
+  gboolean was_called = FALSE;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDeliveryIngestionService) service = NULL;
+  g_auto (WyreboxDaemonDeliveryIngestionRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+  const char *recipients[] = { "alice@example.com", NULL };
+  g_autoptr (GBytes) message = g_bytes_new_static ("message-bytes", 12);
+
+  g_assert_true (wyrebox_daemon_delivery_ingestion_request_init (&request,
+          "delivery-123", "queue-1", NULL, recipients, message, &error));
+  g_assert_no_error (error);
+
+  request_frame.request_id = "request-delivery";
+  request_frame.caller_identity = "postfix";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "postfix";
+  request_frame.correlation_id = "postfix-delivery-1";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION;
+  request_frame.delivery_ingestion = &request;
+
+  service =
+      wyrebox_daemon_delivery_ingestion_service_new (ingest_delivery_fixture,
+      &was_called, NULL);
+  g_assert_nonnull (service);
+
+  g_assert_true (wyrebox_daemon_request_router_route (service, NULL, NULL, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_true (was_called);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+  g_assert_cmpstr (frame.request_id, ==, "request-delivery");
+  g_assert_cmpstr (frame.correlation_id, ==, "postfix-delivery-1");
+  g_assert_cmpstr (frame.success.durable_marker, ==, "journal:8192:9");
+}
+
+static void
+test_request_router_rejects_missing_delivery_ingestion_payload (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDeliveryIngestionService) service = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  service =
+      wyrebox_daemon_delivery_ingestion_service_new (ingest_delivery_fixture,
+      NULL, NULL);
+  g_assert_nonnull (service);
+
+  request_frame.request_id = "request-delivery";
+  request_frame.caller_identity = "postfix";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "postfix";
+  request_frame.correlation_id = "postfix-delivery-1";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION;
+  request_frame.delivery_ingestion = NULL;
+
+  g_assert_true (wyrebox_daemon_request_router_route (service, NULL, NULL, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpstr (frame.request_id, ==, "request-delivery");
+  g_assert_cmpstr (frame.correlation_id, ==, "postfix-delivery-1");
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+}
+
+static void
+test_request_router_rejects_missing_delivery_ingestion_service (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonDeliveryIngestionRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+  const char *recipients[] = { "alice@example.com", NULL };
+  g_autoptr (GBytes) message = g_bytes_new_static ("message-bytes", 12);
+
+  g_assert_true (wyrebox_daemon_delivery_ingestion_request_init (&request,
+          "delivery-123", "queue-1", NULL, recipients, message, &error));
+  g_assert_no_error (error);
+
+  request_frame.request_id = "request-delivery";
+  request_frame.caller_identity = "postfix";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "postfix";
+  request_frame.correlation_id = "postfix-delivery-1";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION;
+  request_frame.delivery_ingestion = &request;
+
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpstr (frame.request_id, ==, "request-delivery");
+  g_assert_cmpstr (frame.correlation_id, ==, "postfix-delivery-1");
   g_assert_cmpint (frame.error.error_class, ==,
       WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
 }
@@ -990,7 +1123,7 @@ test_request_router_routes_flag_keyword_update (void)
   g_assert_nonnull (service);
 
   g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL,
-          NULL, service, &request_frame, &frame, &error));
+          NULL, NULL, service, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_true (was_called);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
@@ -1022,7 +1155,7 @@ test_request_router_rejects_missing_flag_keyword_update_payload (void)
   request_frame.flag_keyword_update = NULL;
 
   g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL,
-          NULL, service, &request_frame, &frame, &error));
+          NULL, NULL, service, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_false (was_called);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
@@ -1061,7 +1194,7 @@ test_request_router_rejects_missing_flag_keyword_update_service (void)
   request_frame.flag_keyword_update = &request;
 
   g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL,
-          NULL, NULL, &request_frame, &frame, &error));
+          NULL, NULL, NULL, &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
   g_assert_cmpstr (frame.request_id, ==, "request-flag-keyword");
@@ -1133,6 +1266,14 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/request-router/"
       "rejects-missing-message-search-service",
       test_request_router_rejects_missing_message_search_service);
+  g_test_add_func ("/daemon-api/request-router/routes-delivery-ingestion",
+      test_request_router_routes_delivery_ingestion);
+  g_test_add_func ("/daemon-api/request-router/"
+      "rejects-missing-delivery-ingestion-payload",
+      test_request_router_rejects_missing_delivery_ingestion_payload);
+  g_test_add_func ("/daemon-api/request-router/"
+      "rejects-missing-delivery-ingestion-service",
+      test_request_router_rejects_missing_delivery_ingestion_service);
   g_test_add_func ("/daemon-api/request-router/routes-flag-keyword-update",
       test_request_router_routes_flag_keyword_update);
   g_test_add_func ("/daemon-api/request-router/"
