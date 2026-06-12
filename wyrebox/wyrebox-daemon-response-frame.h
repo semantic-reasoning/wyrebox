@@ -52,5 +52,14 @@ gboolean wyrebox_daemon_response_frame_init_error (
     const char *correlation_id,
     GError **error);
 
+gboolean wyrebox_daemon_response_frame_init_fact_mutation_success (
+    WyreboxDaemonResponseFrame *frame,
+    const char *request_id,
+    const char *correlation_id,
+    const WyreboxDaemonFactMutationRequest *request,
+    guint64 journal_offset,
+    guint64 journal_sequence,
+    GError **error);
+
 G_END_DECLS
 /* *INDENT-ON* */

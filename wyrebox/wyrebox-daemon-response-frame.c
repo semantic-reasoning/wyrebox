@@ -138,3 +138,27 @@ wyrebox_daemon_response_frame_init_error (WyreboxDaemonResponseFrame *frame,
 
   return TRUE;
 }
+
+gboolean
+wyrebox_daemon_response_frame_init_fact_mutation_success (
+    WyreboxDaemonResponseFrame *frame,
+    const char *request_id,
+    const char *correlation_id,
+    const WyreboxDaemonFactMutationRequest *request,
+    guint64 journal_offset,
+    guint64 journal_sequence,
+    GError **error)
+{
+  g_auto (WyreboxDaemonSuccessReceipt) receipt = { 0 };
+
+  g_return_val_if_fail (frame != NULL, FALSE);
+  g_return_val_if_fail (request != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (!wyrebox_daemon_success_receipt_init_fact_mutation (&receipt,
+          request_id, request, journal_offset, journal_sequence, error))
+    return FALSE;
+
+  return wyrebox_daemon_response_frame_init_success (frame,
+      &receipt, correlation_id, error);
+}

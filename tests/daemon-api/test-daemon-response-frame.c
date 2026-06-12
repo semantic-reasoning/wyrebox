@@ -176,6 +176,50 @@ test_response_frame_failure_leaves_existing_contents (void)
   g_assert_cmpstr (frame.success.request_id, ==, "request-success");
 }
 
+static void
+test_response_frame_init_fact_mutation_success (void)
+{
+  const char *args[] = { "mail-1", NULL };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_fact_mutation_request_init (&request,
+          WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+          "project_mention", "account-1", args, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_fact_mutation_success
+      (&frame, "request-1", "correlation-1", &request, 4096, 7, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpstr (frame.request_id, ==, "request-1");
+  g_assert_cmpstr (frame.correlation_id, ==, "correlation-1");
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+  g_assert_cmpstr (frame.success.request_id, ==, "request-1");
+  g_assert_cmpstr (frame.success.durable_marker, ==, "journal:4096:7");
+  g_assert_cmpuint (frame.success.journal_offset, ==, 4096);
+  g_assert_cmpuint (frame.success.journal_sequence, ==, 7);
+  g_assert_cmpstr (frame.success.summary,
+      ==,
+      "fact_mutation mutation=insert predicate_id=project_mention "
+      "scope_id=account-1 argument_count=1");
+}
+
+static void
+test_response_frame_rejects_invalid_fact_mutation_success (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+  g_assert_false (wyrebox_daemon_response_frame_init_fact_mutation_success
+      (&frame, "request-1", NULL, &request, 4096, 7, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_NONE);
+  g_assert_null (frame.request_id);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -195,6 +239,11 @@ main (int argc, char **argv)
       test_response_frame_success_then_error_is_mutually_exclusive);
   g_test_add_func ("/daemon-api/response-frame/failure-leaves-existing",
       test_response_frame_failure_leaves_existing_contents);
+  g_test_add_func ("/daemon-api/response-frame/fact-mutation-success",
+      test_response_frame_init_fact_mutation_success);
+  g_test_add_func ("/daemon-api/response-frame/"
+      "rejects-invalid-fact-mutation-success",
+      test_response_frame_rejects_invalid_fact_mutation_success);
 
   return g_test_run ();
 }
