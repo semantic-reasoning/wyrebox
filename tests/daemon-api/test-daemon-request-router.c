@@ -69,6 +69,18 @@ append_fixture_mailboxes (const WyreboxDaemonRequestIdentity *identity,
   return TRUE;
 }
 
+static gboolean
+fail_mailbox_list_without_error (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMailboxListRequest *request,
+    WyreboxDaemonMailboxListResult *out_result,
+    gpointer user_data, GError **error)
+{
+  gboolean *was_called = user_data;
+
+  *was_called = TRUE;
+  return FALSE;
+}
+
 static void
 test_request_router_routes_fact_mutation (void)
 {
@@ -393,6 +405,139 @@ test_request_router_rejects_unauthorized_mailbox_list_with_error_frame (void)
       WYREBOX_DAEMON_ERROR_PERMISSION_DENIED);
 }
 
+static void
+test_request_router_rejects_missing_mailbox_list_service (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonMailboxListRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_mailbox_list_request_init (&request,
+          "account-1", NULL, &error));
+  g_assert_no_error (error);
+
+  request_frame.request_id = "request-list";
+  request_frame.caller_identity = "dovecot";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "dovecot-storage";
+  request_frame.correlation_id = "imap-list-1";
+  request_frame.operation = WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_LIST;
+  request_frame.mailbox_list = &request;
+
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL,
+          &request_frame, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpstr (frame.request_id, ==, "request-list");
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+}
+
+static void
+test_request_router_rejects_mailbox_list_account_mismatch (void)
+{
+  gboolean was_called = FALSE;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonMailboxListService) service = NULL;
+  g_auto (WyreboxDaemonMailboxListRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_mailbox_list_request_init (&request,
+          "account-2", NULL, &error));
+  g_assert_no_error (error);
+
+  request_frame.request_id = "request-list";
+  request_frame.caller_identity = "dovecot";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "dovecot-storage";
+  request_frame.correlation_id = "imap-list-1";
+  request_frame.operation = WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_LIST;
+  request_frame.mailbox_list = &request;
+
+  service = wyrebox_daemon_mailbox_list_service_new (append_fixture_mailboxes,
+      &was_called, NULL);
+  g_assert_nonnull (service);
+
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, service,
+          &request_frame, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_false (was_called);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMISSION_DENIED);
+}
+
+static void
+test_request_router_rejects_mailbox_list_missing_request_id_without_frame (void)
+{
+  gboolean was_called = FALSE;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonMailboxListService) service = NULL;
+  g_auto (WyreboxDaemonMailboxListRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_mailbox_list_request_init (&request,
+          "account-1", NULL, &error));
+  g_assert_no_error (error);
+
+  request_frame.request_id = "";
+  request_frame.caller_identity = "dovecot";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "dovecot-storage";
+  request_frame.correlation_id = "imap-list-1";
+  request_frame.operation = WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_LIST;
+  request_frame.mailbox_list = &request;
+
+  service = wyrebox_daemon_mailbox_list_service_new (append_fixture_mailboxes,
+      &was_called, NULL);
+  g_assert_nonnull (service);
+
+  g_assert_false (wyrebox_daemon_request_router_route (NULL, service,
+          &request_frame, &frame, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_false (was_called);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_NONE);
+}
+
+static void
+test_request_router_converts_silent_mailbox_list_failure_to_error_frame (void)
+{
+  gboolean was_called = FALSE;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonMailboxListService) service = NULL;
+  g_auto (WyreboxDaemonMailboxListRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_mailbox_list_request_init (&request,
+          "account-1", NULL, &error));
+  g_assert_no_error (error);
+
+  request_frame.request_id = "request-list";
+  request_frame.caller_identity = "dovecot";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "dovecot-storage";
+  request_frame.correlation_id = "imap-list-1";
+  request_frame.operation = WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_LIST;
+  request_frame.mailbox_list = &request;
+
+  service =
+      wyrebox_daemon_mailbox_list_service_new (fail_mailbox_list_without_error,
+      &was_called, NULL);
+  g_assert_nonnull (service);
+
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, service,
+          &request_frame, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_true (was_called);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_INTERNAL_ERROR);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -420,6 +565,18 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/request-router/"
       "rejects-unauthorized-mailbox-list-with-error-frame",
       test_request_router_rejects_unauthorized_mailbox_list_with_error_frame);
+  g_test_add_func ("/daemon-api/request-router/"
+      "rejects-missing-mailbox-list-service",
+      test_request_router_rejects_missing_mailbox_list_service);
+  g_test_add_func ("/daemon-api/request-router/"
+      "rejects-mailbox-list-account-mismatch",
+      test_request_router_rejects_mailbox_list_account_mismatch);
+  g_test_add_func ("/daemon-api/request-router/"
+      "rejects-mailbox-list-missing-request-id-without-frame",
+      test_request_router_rejects_mailbox_list_missing_request_id_without_frame);
+  g_test_add_func ("/daemon-api/request-router/"
+      "converts-silent-mailbox-list-failure-to-error-frame",
+      test_request_router_converts_silent_mailbox_list_failure_to_error_frame);
 
   return g_test_run ();
 }

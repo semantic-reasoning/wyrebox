@@ -50,7 +50,7 @@ wyrebox_daemon_mailbox_list_service_finalize (GObject *object)
   WyreboxDaemonMailboxListService *self =
       WYREBOX_DAEMON_MAILBOX_LIST_SERVICE (object);
 
-  if (self->user_data_destroy != NULL)
+  if (self->user_data_destroy != NULL && self->user_data != NULL)
     self->user_data_destroy (self->user_data);
 
   G_OBJECT_CLASS (wyrebox_daemon_mailbox_list_service_parent_class)->finalize
@@ -105,8 +105,15 @@ gboolean
   if (!authorize_mailbox_list_identity (identity, request, error))
     return FALSE;
 
-  if (!self->func (identity, request, &result, self->user_data, error))
+  if (!self->func (identity, request, &result, self->user_data, error)) {
+    if (error != NULL && *error == NULL) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_FAILED,
+          "mailbox LIST service failed without error detail");
+    }
     return FALSE;
+  }
 
   return wyrebox_daemon_response_frame_init_mailbox_list (out_frame,
       identity->request_id, identity->correlation_id, &result, error);

@@ -10,6 +10,14 @@ init_error_response_from_cause (WyreboxDaemonResponseFrame *out_frame,
     GError **error)
 {
   g_auto (WyreboxDaemonErrorFrame) error_frame = { 0 };
+  g_autoptr (GError) fallback = NULL;
+
+  if (cause == NULL) {
+    g_set_error (&fallback,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED, "mailbox LIST request failed without error detail");
+    cause = fallback;
+  }
 
   if (!wyrebox_daemon_error_frame_init_from_g_error (&error_frame,
           request_id, cause, NULL, error))
