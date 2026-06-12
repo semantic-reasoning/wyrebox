@@ -18,6 +18,8 @@ typedef struct
   gboolean not_null;
 } TestDuckdbBootstrapColumn;
 
+typedef char *TestDuckdbOwnedString;
+
 static void
 remove_directory_tree (const char *path)
 {
@@ -52,6 +54,18 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_result, duckdb_result_clear)
 /* *INDENT-ON* */
 
 static void
+duckdb_owned_string_clear (char **value)
+{
+  if (value != NULL && *value != NULL)
+    duckdb_free (*value);
+}
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (TestDuckdbOwnedString,
+    duckdb_owned_string_clear)
+/* *INDENT-ON* */
+
+static void
 assert_bootstrap_table_schema (duckdb_connection connection,
     const gchar *table_name, const TestDuckdbBootstrapColumn *columns,
     gsize column_count)
@@ -68,8 +82,10 @@ assert_bootstrap_table_schema (duckdb_connection connection,
 
   row_count = duckdb_row_count (&result);
   for (idx_t row = 0; row < row_count; row++) {
-    const char *actual_name = duckdb_value_varchar (&result, 1, row);
-    const char *actual_type = duckdb_value_varchar (&result, 2, row);
+    g_auto (TestDuckdbOwnedString) actual_name =
+        duckdb_value_varchar (&result, 1, row);
+    g_auto (TestDuckdbOwnedString) actual_type =
+        duckdb_value_varchar (&result, 2, row);
     gboolean actual_not_null = duckdb_value_int64 (&result, 3, row);
 
     g_assert_cmpstr (actual_name, ==, columns[row].name);
