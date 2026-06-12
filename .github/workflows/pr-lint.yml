@@ -1,0 +1,46 @@
+name: PR Lint
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pr-lint:
+    name: PR lint
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install formatter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends indent
+
+      - name: Check diff whitespace
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git diff --check "$BASE_SHA...HEAD"
+
+      - name: Check changed C formatting
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          mapfile -d '' changed_files < <(
+            git diff --name-only -z --diff-filter=ACMRT \
+              "$BASE_SHA...HEAD" -- '*.c'
+          )
+
+          if [ "${#changed_files[@]}" -eq 0 ]; then
+            echo "No changed C files."
+            exit 0
+          fi
+
+          ./tools/gst-indent "${changed_files[@]}"
+          git diff --exit-code -- "${changed_files[@]}"
