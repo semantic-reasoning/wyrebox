@@ -2,6 +2,7 @@
 
 #include "wyrebox-daemon-fact-mutation-service.h"
 #include "wyrebox-daemon-mailbox-list-service.h"
+#include "wyrebox-daemon-message-fetch-service.h"
 #include "wyrebox-daemon-peer-credentials.h"
 #include "wyrebox-daemon-request-router.h"
 #include "wyrebox-daemon-response-frame.h"
@@ -36,6 +37,7 @@ WyreboxDaemonRequestAdapter *wyrebox_daemon_request_adapter_new (
     WyreboxDaemonFactMutationService *fact_mutation_service,
     WyreboxDaemonMailboxListService *mailbox_list_service,
     WyreboxDaemonMailboxSelectService *mailbox_select_service,
+    WyreboxDaemonMessageFetchService *message_fetch_service,
     WyreboxDaemonRequestAdapterDecodeRequestFrameCallback
     decode_request_frame_callback,
     gpointer decode_request_frame_user_data,
