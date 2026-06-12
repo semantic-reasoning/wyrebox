@@ -2,6 +2,7 @@
 
 #include "wyrebox-daemon-error-frame.h"
 #include "wyrebox-daemon-fact-mutation-request.h"
+#include "wyrebox-daemon-flag-keyword-update-request.h"
 #include "wyrebox-daemon-mailbox-list-request.h"
 #include "wyrebox-daemon-mailbox-list-result.h"
 #include "wyrebox-daemon-mailbox-select-request.h"
@@ -29,6 +30,7 @@ typedef struct
   WyreboxDaemonMailboxSelectRequest mailbox_select;
   WyreboxDaemonFactMutationRequest fact_mutation;
   WyreboxDaemonMessageFetchRequest message_fetch;
+  WyreboxDaemonFlagKeywordUpdateRequest flag_keyword_update;
 } WyreboxDaemonCapnpDecodedRequestState;
 
 static gboolean
@@ -67,6 +69,7 @@ wyrebox_daemon_capnp_codec_decoded_state_clear (gpointer decoded_state)
   wyrebox_daemon_mailbox_select_request_clear (&state->mailbox_select);
   wyrebox_daemon_fact_mutation_request_clear (&state->fact_mutation);
   wyrebox_daemon_message_fetch_request_clear (&state->message_fetch);
+  wyrebox_daemon_flag_keyword_update_request_clear (&state->flag_keyword_update);
 
   g_free (state);
 }
@@ -147,6 +150,47 @@ map_error_class (WyreboxDaemonErrorClass in, ErrorClass *out)
     default:
       return FALSE;
   }
+}
+
+static gboolean
+map_flag_keyword_update_mode (FlagKeywordUpdateMode in,
+    WyreboxDaemonFlagKeywordUpdateMode *out)
+{
+  switch (in) {
+    case FlagKeywordUpdateMode::SET:
+      *out = WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET;
+      return TRUE;
+    case FlagKeywordUpdateMode::CLEAR:
+      *out = WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_CLEAR;
+      return TRUE;
+    case FlagKeywordUpdateMode::REPLACE:
+      *out = WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_REPLACE;
+      return TRUE;
+    default:
+      return FALSE;
+  }
+}
+
+static gboolean
+decode_strv (const capnp::List<capnp::Text>::Reader &value_list,
+    gchar ***out_values)
+{
+  g_auto (GStrv) copied = NULL;
+  gsize value_count = value_list.size ();
+
+  g_return_val_if_fail (out_values != NULL, FALSE);
+
+  *out_values = NULL;
+
+  if (value_count == 0)
+    return TRUE;
+
+  copied = g_new0 (gchar *, value_count + 1);
+  for (gsize i = 0; i < value_count; i++)
+    copied[i] = g_strdup (value_list[i].cStr ());
+
+  *out_values = g_steal_pointer (&copied);
+  return TRUE;
 }
 
 static gboolean
@@ -317,6 +361,59 @@ decode_message_fetch_request (const RequestFrame::Reader &request_frame,
 }
 
 static gboolean
+decode_flag_keyword_update_request (
+    const RequestFrame::Reader &request_frame,
+    WyreboxDaemonCapnpDecodedRequestState *state,
+    WyreboxDaemonDecodedRequestFrame *out_request_frame,
+    GError **error)
+{
+  auto flag_keyword_update = request_frame.getFlagKeywordUpdate ();
+  WyreboxDaemonFlagKeywordUpdateMode c_mode =
+      WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET;
+  g_auto (GStrv) system_flags = NULL;
+  g_auto (GStrv) user_keywords = NULL;
+
+  if (!decode_request_identity (request_frame, state, error))
+    return FALSE;
+
+  if (!map_flag_keyword_update_mode (flag_keyword_update.getMode (), &c_mode))
+    return set_invalid_argument (error,
+        "unsupported flag keyword update mode");
+
+  if (!decode_strv (flag_keyword_update.getSystemFlags (), &system_flags))
+    return FALSE;
+
+  if (!decode_strv (flag_keyword_update.getUserKeywords (), &user_keywords))
+    return FALSE;
+
+  if (!wyrebox_daemon_flag_keyword_update_request_init (&state->flag_keyword_update,
+          flag_keyword_update.getAccountIdentity ().cStr (),
+          flag_keyword_update.getMailboxId ().cStr (),
+          flag_keyword_update.getUidValidity (),
+          flag_keyword_update.getMailboxUid (),
+          c_mode,
+          (const char * const *) system_flags,
+          (const char * const *) user_keywords,
+          error))
+    return FALSE;
+
+  out_request_frame->request_id = state->request_id;
+  out_request_frame->caller_identity = state->caller_identity;
+  out_request_frame->account_identity = state->account_identity;
+  out_request_frame->tool_identity = state->tool_identity;
+  out_request_frame->correlation_id = state->correlation_id;
+  out_request_frame->operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FLAG_KEYWORD_UPDATE;
+  out_request_frame->mailbox_list = NULL;
+  out_request_frame->mailbox_select = NULL;
+  out_request_frame->fact_mutation = NULL;
+  out_request_frame->message_fetch = NULL;
+  out_request_frame->flag_keyword_update = &state->flag_keyword_update;
+
+  return TRUE;
+}
+
+static gboolean
 decode_request_frame (const capnp::word *words,
     gsize word_count,
     WyreboxDaemonCapnpDecodedRequestState *state,
@@ -351,8 +448,10 @@ decode_request_frame (const capnp::word *words,
         return set_not_supported (error,
             "unsupported request frame: MessageSearch");
       case RequestFrame::FLAG_KEYWORD_UPDATE:
-        return set_not_supported (error,
-            "unsupported request frame: FlagKeywordUpdate");
+        return decode_flag_keyword_update_request (request_frame,
+            state,
+            out_request_frame,
+            error);
       case RequestFrame::FACT_MUTATION:
         return decode_fact_mutation_request (request_frame,
             state,

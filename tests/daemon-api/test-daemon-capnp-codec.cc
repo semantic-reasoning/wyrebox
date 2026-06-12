@@ -8,6 +8,8 @@
 #include "wyrebox-daemon-mailbox-select-service.h"
 #include "wyrebox-daemon-message-fetch-request.h"
 #include "wyrebox-daemon-message-fetch-service.h"
+#include "wyrebox-daemon-flag-keyword-update-request.h"
+#include "wyrebox-daemon-flag-keyword-update-service.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-journal-writer.h"
 
@@ -164,6 +166,61 @@ build_message_fetch_request_bytes (const char *request_id,
 }
 
 static GBytes *
+build_flag_keyword_update_request_bytes (
+    const char *request_id,
+    const char *request_account,
+    const char *flag_account,
+    const char *mailbox_id,
+    guint64 uid_validity,
+    guint64 mailbox_uid,
+    FlagKeywordUpdateMode mode,
+    const char * const *system_flags,
+    const char * const *user_keywords)
+{
+  gsize system_flag_count = 0;
+  gsize user_keyword_count = 0;
+  capnp::MallocMessageBuilder request_builder;
+  auto request_frame = request_builder.initRoot<RequestFrame> ();
+
+  auto identity = request_frame.initIdentity ();
+  identity.setRequestId (request_id);
+  identity.setCallerIdentity ("dovecot");
+  identity.setAccountIdentity (request_account);
+  identity.setToolIdentity ("dovecot-storage");
+  identity.setCorrelationId ("corr-flag");
+
+  auto flag_keyword_update_request = request_frame.initFlagKeywordUpdate ();
+  flag_keyword_update_request.setAccountIdentity (flag_account);
+  flag_keyword_update_request.setMailboxId (mailbox_id);
+  flag_keyword_update_request.setUidValidity (uid_validity);
+  flag_keyword_update_request.setMailboxUid (mailbox_uid);
+  flag_keyword_update_request.setMode (mode);
+
+  if (system_flags != NULL) {
+    while (system_flags[system_flag_count] != NULL)
+      system_flag_count++;
+    auto encoded_system_flags = flag_keyword_update_request.initSystemFlags (
+        system_flag_count);
+    for (guint i = 0; i < system_flag_count; i++)
+      encoded_system_flags.set (i, system_flags[i]);
+  }
+
+  if (user_keywords != NULL) {
+    while (user_keywords[user_keyword_count] != NULL)
+      user_keyword_count++;
+    auto encoded_user_keywords = flag_keyword_update_request.initUserKeywords (
+        user_keyword_count);
+    for (guint i = 0; i < user_keyword_count; i++)
+      encoded_user_keywords.set (i, user_keywords[i]);
+  }
+
+  auto words = capnp::messageToFlatArray (request_builder);
+  auto bytes = words.asBytes ();
+
+  return g_bytes_new (bytes.begin (), bytes.size ());
+}
+
+static GBytes *
 build_delivery_ingestion_request_bytes (void)
 {
   capnp::MallocMessageBuilder request_builder;
@@ -277,6 +334,41 @@ fetch_message_fixture (const WyreboxDaemonRequestIdentity *identity,
       bytes,
       TRUE,
       error);
+}
+
+static gboolean
+update_flag_keyword_fixture (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonFlagKeywordUpdateRequest *request,
+    WyreboxDaemonSuccessReceipt *out_receipt, gpointer user_data,
+    GError **error)
+{
+  gboolean *was_called = static_cast<gboolean *> (user_data);
+
+  g_assert_cmpstr (identity->request_id, ==, "request-flag-keyword");
+  g_assert_cmpstr (identity->caller_identity, ==, "dovecot");
+  g_assert_cmpstr (identity->account_identity, ==, "account-1");
+  g_assert_cmpstr (identity->tool_identity, ==, "dovecot-storage");
+  g_assert_cmpstr (identity->correlation_id, ==, "corr-flag");
+  g_assert_cmpstr (request->account_identity, ==, "account-1");
+  g_assert_cmpstr (request->mailbox_id, ==, "mailbox-inbox");
+  g_assert_cmpuint (request->uid_validity, ==, 77);
+  g_assert_cmpuint (request->mailbox_uid, ==, 42);
+  g_assert_cmpint (request->mode, ==,
+      WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET);
+  g_assert_cmpstr (request->system_flags[0], ==, "\\Seen");
+  g_assert_cmpstr (request->system_flags[1], ==, "\\Flagged");
+  g_assert_cmpstr (request->user_keywords[0], ==, "project");
+  g_assert_cmpstr (request->user_keywords[1], ==, "todo");
+
+  *was_called = TRUE;
+
+  out_receipt->request_id = g_strdup (identity->request_id);
+  out_receipt->durable_marker = g_strdup ("journal:123:456");
+  out_receipt->journal_offset = 123;
+  out_receipt->journal_sequence = 456;
+  out_receipt->summary = g_strdup ("flag keyword update done");
+
+  return TRUE;
 }
 
 static void
@@ -474,6 +566,554 @@ assert_request_bytes_decode_message_fetch (void)
   g_assert_nonnull (decoded_state_clear);
   g_assert_nonnull (decoded_state);
   decoded_state_clear (decoded_state);
+}
+
+static void
+assert_request_bytes_decode_flag_keyword_update_set (void)
+{
+  const char *system_flags[] = { "\\Seen", "\\Flagged", NULL };
+  const char *user_keywords[] = { "project", "todo", NULL };
+  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword",
+      "account-1",
+      "account-1",
+      "mailbox-inbox",
+      77,
+      42,
+      FlagKeywordUpdateMode::SET,
+      system_flags,
+      user_keywords);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (decoded.request_id, ==, "request-flag-keyword");
+  g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
+  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.tool_identity, ==, "dovecot-storage");
+  g_assert_cmpstr (decoded.correlation_id, ==, "corr-flag");
+  g_assert_cmpint (decoded.operation, ==,
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FLAG_KEYWORD_UPDATE);
+  g_assert_nonnull (decoded.flag_keyword_update);
+  g_assert_cmpint (decoded.flag_keyword_update->mode, ==,
+      WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET);
+  g_assert_cmpstr (decoded.flag_keyword_update->system_flags[0], ==, "\\Seen");
+  g_assert_cmpstr (decoded.flag_keyword_update->system_flags[1], ==, "\\Flagged");
+  g_assert_cmpstr (decoded.flag_keyword_update->user_keywords[0], ==, "project");
+  g_assert_cmpstr (decoded.flag_keyword_update->user_keywords[1], ==, "todo");
+
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  decoded_state_clear (decoded_state);
+}
+
+static void
+assert_request_bytes_decode_flag_keyword_update_mode_mapping (void)
+{
+  const char *system_flags[] = { "\\Seen", NULL };
+  const char *user_keywords[] = { "project", NULL };
+  g_autoptr (GBytes) clear_request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword-clear",
+      "account-1",
+      "account-1",
+      "mailbox-inbox",
+      77,
+      42,
+      FlagKeywordUpdateMode::CLEAR,
+      system_flags,
+      user_keywords);
+  g_autoptr (GBytes) replace_request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword-replace",
+      "account-1",
+      "account-1",
+      "mailbox-inbox",
+      77,
+      42,
+      FlagKeywordUpdateMode::REPLACE,
+      NULL,
+      NULL);
+  g_autoptr (GBytes) set_request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword-set",
+      "account-1",
+      "account-1",
+      "mailbox-inbox",
+      77,
+      42,
+      FlagKeywordUpdateMode::SET,
+      system_flags,
+      NULL);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      set_request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.flag_keyword_update->mode, ==,
+      WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET);
+  g_assert_nonnull (decoded_state_clear);
+  decoded_state_clear (decoded_state);
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      clear_request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.flag_keyword_update->mode, ==,
+      WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_CLEAR);
+  g_assert_nonnull (decoded_state_clear);
+  decoded_state_clear (decoded_state);
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      replace_request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.flag_keyword_update->mode, ==,
+      WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_REPLACE);
+  g_assert_nonnull (decoded_state_clear);
+  decoded_state_clear (decoded_state);
+}
+
+static void
+assert_request_bytes_decode_flag_keyword_update_replace_empty_payload (void)
+{
+  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword-replace-empty",
+      "account-1",
+      "account-1",
+      "mailbox-inbox",
+      77,
+      42,
+      FlagKeywordUpdateMode::REPLACE,
+      NULL,
+      NULL);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.flag_keyword_update->mode, ==,
+      WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_REPLACE);
+  g_assert_null (decoded.flag_keyword_update->system_flags);
+  g_assert_null (decoded.flag_keyword_update->user_keywords);
+
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  decoded_state_clear (decoded_state);
+}
+
+static void
+assert_request_bytes_rejects_flag_keyword_update_invalid_mode (void)
+{
+  const char *system_flags[] = { "\\Seen", NULL };
+  g_autoptr (GBytes) request = NULL;
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+  capnp::MallocMessageBuilder request_builder;
+  auto request_frame = request_builder.initRoot<RequestFrame> ();
+  auto identity = request_frame.initIdentity ();
+
+  identity.setRequestId ("request-flag-keyword-invalid-mode");
+  identity.setCallerIdentity ("dovecot");
+  identity.setAccountIdentity ("account-1");
+  identity.setToolIdentity ("dovecot-storage");
+  identity.setCorrelationId ("corr-flag");
+
+  auto flag_keyword_update_request = request_frame.initFlagKeywordUpdate ();
+  flag_keyword_update_request.setAccountIdentity ("account-1");
+  flag_keyword_update_request.setMailboxId ("mailbox-inbox");
+  flag_keyword_update_request.setUidValidity (77);
+  flag_keyword_update_request.setMailboxUid (42);
+  flag_keyword_update_request.setMode (static_cast<FlagKeywordUpdateMode> (99));
+  auto encoded_system_flags = flag_keyword_update_request.initSystemFlags (1);
+  encoded_system_flags.set (0, system_flags[0]);
+
+  auto words = capnp::messageToFlatArray (request_builder);
+  auto bytes = words.asBytes ();
+  request = g_bytes_new (bytes.begin (), bytes.size ());
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_flag_keyword_update_missing_payload_for_set (void)
+{
+  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword-missing-payload",
+      "account-1",
+      "account-1",
+      "mailbox-inbox",
+      77,
+      42,
+      FlagKeywordUpdateMode::SET,
+      NULL,
+      NULL);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_flag_keyword_update_missing_account (void)
+{
+  const char *system_flags[] = { "\\Seen", NULL };
+  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword-missing-account",
+      "account-1",
+      "",
+      "mailbox-inbox",
+      77,
+      42,
+      FlagKeywordUpdateMode::SET,
+      system_flags,
+      NULL);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_flag_keyword_update_missing_mailbox (void)
+{
+  const char *system_flags[] = { "\\Seen", NULL };
+  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword-missing-mailbox",
+      "account-1",
+      "account-1",
+      "",
+      77,
+      42,
+      FlagKeywordUpdateMode::SET,
+      system_flags,
+      NULL);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_flag_keyword_update_zero_uid_validity (void)
+{
+  const char *system_flags[] = { "\\Seen", NULL };
+  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword-zero-uid-validity",
+      "account-1",
+      "account-1",
+      "mailbox-inbox",
+      0,
+      42,
+      FlagKeywordUpdateMode::SET,
+      system_flags,
+      NULL);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_flag_keyword_update_zero_mailbox_uid (void)
+{
+  const char *system_flags[] = { "\\Seen", NULL };
+  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword-zero-mailbox-uid",
+      "account-1",
+      "account-1",
+      "mailbox-inbox",
+      77,
+      0,
+      FlagKeywordUpdateMode::SET,
+      system_flags,
+      NULL);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_flag_keyword_update_unknown_system_flag (void)
+{
+  const char *system_flags[] = { "not-a-system-flag", NULL };
+  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword-unknown-system-flag",
+      "account-1",
+      "account-1",
+      "mailbox-inbox",
+      77,
+      42,
+      FlagKeywordUpdateMode::SET,
+      system_flags,
+      NULL);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_flag_keyword_update_recent_system_flag (void)
+{
+  const char *system_flags[] = { "\\Recent", NULL };
+  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword-recent-system-flag",
+      "account-1",
+      "account-1",
+      "mailbox-inbox",
+      77,
+      42,
+      FlagKeywordUpdateMode::SET,
+      system_flags,
+      NULL);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_flag_keyword_update_system_flag_keyword (void)
+{
+  const char *user_keywords[] = { "\\Seen", NULL };
+  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword-system-flag-keyword",
+      "account-1",
+      "account-1",
+      "mailbox-inbox",
+      77,
+      42,
+      FlagKeywordUpdateMode::SET,
+      NULL,
+      user_keywords);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_flag_keyword_update_invalid_keyword (void)
+{
+  const char *user_keywords[] = { "needs review", NULL };
+  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword-invalid-keyword",
+      "account-1",
+      "account-1",
+      "mailbox-inbox",
+      77,
+      42,
+      FlagKeywordUpdateMode::SET,
+      NULL,
+      user_keywords);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_flag_keyword_update_duplicate_flag (void)
+{
+  const char *system_flags[] = { "\\Seen", "\\Seen", NULL };
+  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword-duplicate-flag",
+      "account-1",
+      "account-1",
+      "mailbox-inbox",
+      77,
+      42,
+      FlagKeywordUpdateMode::SET,
+      system_flags,
+      NULL);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_flag_keyword_update_duplicate_keyword (void)
+{
+  const char *user_keywords[] = { "project", "project", NULL };
+  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
+      "request-flag-keyword-duplicate-keyword",
+      "account-1",
+      "account-1",
+      "mailbox-inbox",
+      77,
+      42,
+      FlagKeywordUpdateMode::SET,
+      NULL,
+      user_keywords);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
 }
 
 static void
@@ -1423,6 +2063,73 @@ assert_request_adapter_routes_message_fetch (void)
   g_assert_true (response_frame.getStreamChunk ().getEndOfStream ());
 }
 
+static void
+assert_request_adapter_routes_flag_keyword_update (void)
+{
+  const char *system_flags[] = { "\\Seen", "\\Flagged", NULL };
+  const char *user_keywords[] = { "project", "todo", NULL };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) request = NULL;
+  g_autoptr (GBytes) response_bytes = NULL;
+  g_autoptr (WyreboxDaemonFlagKeywordUpdateService) service = NULL;
+  g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+  gboolean was_called = FALSE;
+  const WyreboxDaemonPeerCredentials peer_credentials = {
+    .uid = 100,
+    .gid = 101,
+    .pid = 102,
+  };
+
+  service = wyrebox_daemon_flag_keyword_update_service_new (
+      update_flag_keyword_fixture, &was_called, NULL);
+  g_assert_nonnull (service);
+
+  adapter = wyrebox_daemon_request_adapter_new (NULL,
+      NULL,
+      NULL,
+      NULL,
+      service,
+      wyrebox_daemon_capnp_codec_decode_request_frame,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_encode_response_frame,
+      NULL,
+      NULL);
+  g_assert_nonnull (adapter);
+
+  request = build_flag_keyword_update_request_bytes ("request-flag-keyword",
+      "account-1",
+      "account-1",
+      "mailbox-inbox",
+      77,
+      42,
+      FlagKeywordUpdateMode::SET,
+      system_flags,
+      user_keywords);
+
+  response_bytes = wyrebox_daemon_request_adapter_handle_payload (&peer_credentials,
+      request,
+      adapter,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (response_bytes);
+  g_assert_true (was_called);
+
+  gsize size = 0;
+  const guint8 *data = static_cast<const guint8 *> (
+      g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (
+      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  capnp::FlatArrayMessageReader reader (words);
+  auto response_frame = reader.getRoot<ResponseFrame> ();
+  g_assert_true (response_frame.which () == ResponseFrame::SUCCESS);
+  g_assert_cmpstr (response_frame.getSuccess ().getRequestId ().cStr (), ==,
+      "request-flag-keyword");
+  g_assert_cmpstr (response_frame.getSuccess ().getDurableMarker ().cStr (), ==,
+      "journal:123:456");
+  g_assert_cmpuint (response_frame.getSuccess ().getJournalSequence (), ==, 456);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1444,6 +2151,50 @@ main (int argc, char **argv)
       assert_request_bytes_decode_fact_mutation_retract);
   g_test_add_func ("/daemon-api/capnp/codec/decode-message-fetch-valid",
       assert_request_bytes_decode_message_fetch);
+  g_test_add_func ("/daemon-api/capnp/codec/decode-flag-keyword-update-set",
+      assert_request_bytes_decode_flag_keyword_update_set);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/decode-flag-keyword-update-mode-mapping",
+      assert_request_bytes_decode_flag_keyword_update_mode_mapping);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/decode-flag-keyword-update-replace-empty",
+      assert_request_bytes_decode_flag_keyword_update_replace_empty_payload);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-flag-keyword-update-invalid-mode",
+      assert_request_bytes_rejects_flag_keyword_update_invalid_mode);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-flag-keyword-update-missing-payload",
+      assert_request_bytes_rejects_flag_keyword_update_missing_payload_for_set);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-flag-keyword-update-missing-account",
+      assert_request_bytes_rejects_flag_keyword_update_missing_account);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-flag-keyword-update-missing-mailbox",
+      assert_request_bytes_rejects_flag_keyword_update_missing_mailbox);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-flag-keyword-update-zero-uid-validity",
+      assert_request_bytes_rejects_flag_keyword_update_zero_uid_validity);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-flag-keyword-update-zero-mailbox-uid",
+      assert_request_bytes_rejects_flag_keyword_update_zero_mailbox_uid);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-flag-keyword-update-unknown-system-flag",
+      assert_request_bytes_rejects_flag_keyword_update_unknown_system_flag);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-flag-keyword-update-recent-system-flag",
+      assert_request_bytes_rejects_flag_keyword_update_recent_system_flag);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-flag-keyword-update-system-flag-keyword",
+      assert_request_bytes_rejects_flag_keyword_update_system_flag_keyword);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-flag-keyword-update-invalid-keyword",
+      assert_request_bytes_rejects_flag_keyword_update_invalid_keyword);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-flag-keyword-update-duplicate-flag",
+      assert_request_bytes_rejects_flag_keyword_update_duplicate_flag);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-flag-keyword-update-duplicate-keyword",
+      assert_request_bytes_rejects_flag_keyword_update_duplicate_keyword);
   g_test_add_func ("/daemon-api/capnp/codec/reject-message-fetch-empty-account",
       assert_request_bytes_rejects_message_fetch_missing_account_identity);
   g_test_add_func ("/daemon-api/capnp/codec/reject-message-fetch-empty-mailbox",
@@ -1487,6 +2238,8 @@ main (int argc, char **argv)
       assert_request_adapter_routes_fact_mutation);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-message-fetch",
       assert_request_adapter_routes_message_fetch);
+  g_test_add_func ("/daemon-api/capnp/codec/request-adapter-flag-keyword-update",
+      assert_request_adapter_routes_flag_keyword_update);
 
   return g_test_run ();
 }
