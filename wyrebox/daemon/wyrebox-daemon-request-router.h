@@ -4,6 +4,7 @@
 #include "wyrebox-daemon-message-fetch-dispatcher.h"
 #include "wyrebox-daemon-mailbox-list-dispatcher.h"
 #include "wyrebox-daemon-mailbox-select-dispatcher.h"
+#include "wyrebox-daemon-delivery-ingestion-dispatcher.h"
 #include "wyrebox-daemon-flag-keyword-update-dispatcher.h"
 #include "wyrebox-daemon-message-search-dispatcher.h"
 
@@ -18,6 +19,7 @@ typedef enum {
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_SELECT,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_FETCH,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_SEARCH,
+  WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_MUTATION,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FLAG_KEYWORD_UPDATE,
 } WyreboxDaemonRequestFrameOperation;
@@ -36,10 +38,12 @@ typedef struct
   const WyreboxDaemonFactMutationRequest *fact_mutation;
   const WyreboxDaemonMessageFetchRequest *message_fetch;
   const WyreboxDaemonMessageSearchRequest *message_search;
+  const WyreboxDaemonDeliveryIngestionRequest *delivery_ingestion;
   const WyreboxDaemonFlagKeywordUpdateRequest *flag_keyword_update;
 } WyreboxDaemonDecodedRequestFrame;
 
 gboolean wyrebox_daemon_request_router_route (
+    WyreboxDaemonDeliveryIngestionService *delivery_ingestion_service,
     WyreboxDaemonFactMutationService *fact_mutation_service,
     WyreboxDaemonMailboxListService *mailbox_list_service,
     WyreboxDaemonMailboxSelectService *mailbox_select_service,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "wyrebox-daemon-fact-mutation-service.h"
+#include "wyrebox-daemon-delivery-ingestion-service.h"
 #include "wyrebox-daemon-mailbox-list-service.h"
 #include "wyrebox-daemon-message-fetch-service.h"
 #include "wyrebox-daemon-flag-keyword-update-service.h"
@@ -36,6 +37,7 @@ typedef GBytes *(*WyreboxDaemonRequestAdapterEncodeResponseFrameCallback) (
     GError **error);
 
 WyreboxDaemonRequestAdapter *wyrebox_daemon_request_adapter_new (
+    WyreboxDaemonDeliveryIngestionService *delivery_ingestion_service,
     WyreboxDaemonFactMutationService *fact_mutation_service,
     WyreboxDaemonMailboxListService *mailbox_list_service,
     WyreboxDaemonMailboxSelectService *mailbox_select_service,

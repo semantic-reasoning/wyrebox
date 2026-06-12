@@ -7,6 +7,7 @@ struct _WyreboxDaemonRequestAdapter
 {
   GObject parent_instance;
 
+  WyreboxDaemonDeliveryIngestionService *delivery_ingestion_service;
   WyreboxDaemonFactMutationService *fact_mutation_service;
   WyreboxDaemonMailboxListService *mailbox_list_service;
   WyreboxDaemonMailboxSelectService *mailbox_select_service;
@@ -64,6 +65,7 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDaemonRequestAdapterDecodedState,
     self->encode_response_frame_user_data_destroy
         (self->encode_response_frame_user_data);
 
+  g_clear_object (&self->delivery_ingestion_service);
   g_clear_object (&self->fact_mutation_service);
   g_clear_object (&self->mailbox_list_service);
   g_clear_object (&self->mailbox_select_service);
@@ -91,7 +93,8 @@ wyrebox_daemon_request_adapter_init (WyreboxDaemonRequestAdapter *self)
 }
 
 WyreboxDaemonRequestAdapter *
-wyrebox_daemon_request_adapter_new (WyreboxDaemonFactMutationService
+wyrebox_daemon_request_adapter_new (WyreboxDaemonDeliveryIngestionService
+    *delivery_ingestion_service, WyreboxDaemonFactMutationService
     *fact_mutation_service,
     WyreboxDaemonMailboxListService *mailbox_list_service,
     WyreboxDaemonMailboxSelectService *mailbox_select_service,
@@ -107,6 +110,9 @@ wyrebox_daemon_request_adapter_new (WyreboxDaemonFactMutationService
 {
   g_return_val_if_fail (decode_request_frame_callback != NULL, NULL);
   g_return_val_if_fail (encode_response_frame_callback != NULL, NULL);
+  g_return_val_if_fail (delivery_ingestion_service == NULL
+      || WYREBOX_IS_DAEMON_DELIVERY_INGESTION_SERVICE
+      (delivery_ingestion_service), NULL);
   g_return_val_if_fail (fact_mutation_service == NULL
       || WYREBOX_IS_DAEMON_FACT_MUTATION_SERVICE (fact_mutation_service), NULL);
   g_return_val_if_fail (mailbox_list_service == NULL
@@ -126,6 +132,9 @@ wyrebox_daemon_request_adapter_new (WyreboxDaemonFactMutationService
   WyreboxDaemonRequestAdapter *self =
       g_object_new (WYREBOX_TYPE_DAEMON_REQUEST_ADAPTER, NULL);
 
+  if (delivery_ingestion_service != NULL)
+    self->delivery_ingestion_service =
+        g_object_ref (delivery_ingestion_service);
   if (fact_mutation_service != NULL)
     self->fact_mutation_service = g_object_ref (fact_mutation_service);
 
@@ -182,7 +191,8 @@ wyrebox_daemon_request_adapter_handle_payload (const
           self->decode_request_frame_user_data, &local_error))
     goto decode_failed;
 
-  if (!wyrebox_daemon_request_router_route (self->fact_mutation_service,
+  if (!wyrebox_daemon_request_router_route (self->delivery_ingestion_service,
+          self->fact_mutation_service,
           self->mailbox_list_service,
           self->mailbox_select_service,
           self->message_fetch_service,
