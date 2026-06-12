@@ -49,6 +49,27 @@ load_fixture_bytes (const char *fixture_dir, const char *name)
   return g_bytes_new_take (g_steal_pointer (&contents), length);
 }
 
+static char *
+object_path_for_key (const char *root_dir, const char *object_key)
+{
+  const char *hex = object_key + strlen ("sha256:");
+  g_autofree char *prefix = g_strndup (hex, 2);
+  g_autofree char *filename = g_strdup_printf ("%s.eml", hex);
+
+  return g_build_filename (root_dir, "objects", "sha256", prefix, filename,
+      NULL);
+}
+
+static void
+overwrite_object (const char *object_root, const char *object_key,
+    const guint8 *data, gsize size, GError **error)
+{
+  g_autofree char *path = object_path_for_key (object_root, object_key);
+
+  g_assert_true (g_file_set_contents (path, (const gchar *) data,
+          (gssize) size, error));
+}
+
 static void
 assert_delivery_record_fields (const WyreboxDeliveryProjectionRecord *record,
     const char *object_key, guint64 sequence, guint64 size_bytes,
@@ -573,6 +594,161 @@ test_later_failure_clears_partial_projection (void)
   remove_tree (journal_root);
 }
 
+static void
+test_size_mismatch_clears_partial_projection (void)
+{
+  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-delivery-projection-objects-XXXXXX", NULL);
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-delivery-projection-journal-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) first_input = NULL;
+  g_autoptr (GBytes) second_input = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_autoptr (WyreboxDeliveryProjection) projection = NULL;
+  g_auto (WyreboxDeliveryProjectionList) list = { 0 };
+  g_auto (WyreboxEmlIngestResult) first_result = { 0 };
+  g_auto (WyreboxEmlIngestResult) second_result = { 0 };
+  gsize second_size = 0;
+  const guint8 *second_data = NULL;
+  g_autofree guint8 *truncated = NULL;
+
+  g_assert_nonnull (fixture_dir);
+  g_assert_nonnull (object_root);
+  g_assert_nonnull (journal_root);
+
+  first_input = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
+  second_input = load_fixture_bytes (fixture_dir, "missing-message-id.eml");
+
+  store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+
+  ingestor = wyrebox_eml_ingestor_new_with_journal (store, writer);
+  g_assert_nonnull (ingestor);
+  g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, first_input,
+          &first_result, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, second_input,
+          &second_result, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (second_result.journal_sequence, ==, 2);
+
+  second_data = g_bytes_get_data (second_input, &second_size);
+  g_assert_cmpuint (second_size, >, 1);
+  truncated = g_memdup2 (second_data, second_size - 1);
+  g_assert_nonnull (truncated);
+
+  overwrite_object (object_root, second_result.object_key, truncated,
+      second_size - 1, &error);
+  g_assert_no_error (error);
+
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  projection = wyrebox_delivery_projection_new (reader, store);
+  g_assert_nonnull (projection);
+
+  g_assert_false (wyrebox_delivery_projection_replay_all (projection, &list,
+          &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_nonnull (g_strstr_len (error->message, -1, "sequence 2"));
+  g_assert_nonnull (g_strstr_len (error->message, -1, "size"));
+  g_assert_null (list.records);
+
+  g_clear_error (&error);
+  remove_tree (object_root);
+  remove_tree (journal_root);
+}
+
+static void
+test_hash_mismatch_clears_partial_projection (void)
+{
+  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-delivery-projection-objects-XXXXXX", NULL);
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-delivery-projection-journal-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) first_input = NULL;
+  g_autoptr (GBytes) second_input = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_autoptr (WyreboxDeliveryProjection) projection = NULL;
+  g_auto (WyreboxDeliveryProjectionList) list = { 0 };
+  g_auto (WyreboxEmlIngestResult) first_result = { 0 };
+  g_auto (WyreboxEmlIngestResult) second_result = { 0 };
+  gsize second_size = 0;
+  const guint8 *second_data = NULL;
+  g_autofree guint8 *corrupted = NULL;
+
+  g_assert_nonnull (fixture_dir);
+  g_assert_nonnull (object_root);
+  g_assert_nonnull (journal_root);
+
+  first_input = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
+  second_input = load_fixture_bytes (fixture_dir, "missing-message-id.eml");
+
+  store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+
+  ingestor = wyrebox_eml_ingestor_new_with_journal (store, writer);
+  g_assert_nonnull (ingestor);
+  g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, first_input,
+          &first_result, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, second_input,
+          &second_result, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (second_result.journal_sequence, ==, 2);
+
+  second_data = g_bytes_get_data (second_input, &second_size);
+  g_assert_cmpuint (second_size, >, 0);
+  corrupted = g_memdup2 (second_data, second_size);
+  g_assert_nonnull (corrupted);
+  corrupted[0] ^= 0xFF;
+
+  overwrite_object (object_root, second_result.object_key, corrupted,
+      second_size, &error);
+  g_assert_no_error (error);
+
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  projection = wyrebox_delivery_projection_new (reader, store);
+  g_assert_nonnull (projection);
+
+  g_assert_false (wyrebox_delivery_projection_replay_all (projection, &list,
+          &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_nonnull (g_strstr_len (error->message, -1, "sequence 2"));
+  g_assert_nonnull (g_strstr_len (error->message, -1, "SHA-256"));
+  g_assert_null (list.records);
+
+  g_clear_error (&error);
+  remove_tree (object_root);
+  remove_tree (journal_root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -597,6 +773,12 @@ main (int argc, char **argv)
   g_test_add_func ("/ingestion/delivery-projection/"
       "later-failure-clears-partial-projection",
       test_later_failure_clears_partial_projection);
+  g_test_add_func ("/ingestion/delivery-projection/"
+      "size-mismatch-clears-partial-projection",
+      test_size_mismatch_clears_partial_projection);
+  g_test_add_func ("/ingestion/delivery-projection/"
+      "hash-mismatch-clears-partial-projection",
+      test_hash_mismatch_clears_partial_projection);
 
   return g_test_run ();
 }

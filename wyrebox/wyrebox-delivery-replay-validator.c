@@ -4,6 +4,10 @@
 
 #include <gio/gio.h>
 
+#include <string.h>
+
+#define WYREBOX_SHA256_OBJECT_KEY_PREFIX_LEN 7
+
 struct _WyreboxDeliveryReplayValidator
 {
   GObject parent_instance;
@@ -63,7 +67,6 @@ validate_message_delivered_record (WyreboxDeliveryReplayValidator *self,
     WyreboxJournalRecord *record, GError **error)
 {
   g_autoptr (GError) local_error = NULL;
-  g_autoptr (GBytes) object_bytes = NULL;
   g_auto (WyreboxMessageDeliveredPayload) decoded = { 0 };
 
   if (!wyrebox_message_delivered_payload_decode (record->payload,
@@ -78,18 +81,56 @@ validate_message_delivered_record (WyreboxDeliveryReplayValidator *self,
     return FALSE;
   }
 
-  object_bytes = wyrebox_local_object_store_get_bytes (self->object_store,
-      decoded.object_key, &local_error);
-  if (object_bytes == NULL) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "MessageDelivered journal record at sequence %" G_GUINT64_FORMAT
-        " references unavailable raw object %s: %s",
-        record->sequence,
-        decoded.object_key,
-        local_error != NULL ? local_error->message : "unknown error");
-    return FALSE;
+  {
+    g_autoptr (GBytes) object_bytes =
+        wyrebox_local_object_store_get_bytes (self->object_store,
+        decoded.object_key, &local_error);
+    gsize object_size = 0;
+    const guint8 *object_data = NULL;
+    g_autoptr (GChecksum) checksum = NULL;
+    const char *actual = NULL;
+
+    if (object_bytes == NULL) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "MessageDelivered journal record at sequence %"
+          G_GUINT64_FORMAT
+          " references unavailable raw object %s: %s",
+          record->sequence,
+          decoded.object_key,
+          local_error != NULL ? local_error->message : "unknown error");
+      return FALSE;
+    }
+
+    object_data = g_bytes_get_data (object_bytes, &object_size);
+    if (object_size != decoded.size_bytes) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "MessageDelivered journal record at sequence %"
+          G_GUINT64_FORMAT
+          " references raw object %s with mismatched size: expected "
+          "%" G_GUINT64_FORMAT ", got %" G_GSIZE_FORMAT,
+          record->sequence,
+          decoded.object_key, decoded.size_bytes, object_size);
+      return FALSE;
+    }
+
+    checksum = g_checksum_new (G_CHECKSUM_SHA256);
+    g_checksum_update (checksum, object_data, object_size);
+    actual = g_checksum_get_string (checksum);
+    if (g_strcmp0 (actual,
+            decoded.object_key + WYREBOX_SHA256_OBJECT_KEY_PREFIX_LEN) != 0) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "MessageDelivered journal record at sequence %"
+          G_GUINT64_FORMAT
+          " references raw object %s with SHA-256 mismatch",
+          record->sequence, decoded.object_key);
+      return FALSE;
+    }
   }
 
   return TRUE;

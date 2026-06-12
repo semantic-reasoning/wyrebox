@@ -4,6 +4,10 @@
 
 #include <gio/gio.h>
 
+#include <string.h>
+
+#define WYREBOX_SHA256_OBJECT_KEY_PREFIX_LEN 7
+
 struct _WyreboxDeliveryProjection
 {
   GObject parent_instance;
@@ -128,6 +132,62 @@ append_delivered_record (WyreboxDeliveryProjectionList *out_projection,
   g_ptr_array_add (out_projection->records, entry);
 }
 
+static gboolean
+is_message_delivered_object_valid (WyreboxLocalObjectStore *object_store,
+    WyreboxMessageDeliveredPayload *payload, WyreboxJournalRecord *record,
+    GError **error)
+{
+  g_autoptr (GChecksum) checksum = NULL;
+  g_autoptr (GBytes) object_bytes = NULL;
+  g_autoptr (GError) local_error = NULL;
+  gsize object_size = 0;
+  const guint8 *object_data = NULL;
+  const char *actual = NULL;
+
+  object_bytes = wyrebox_local_object_store_get_bytes (object_store,
+      payload->object_key, &local_error);
+  if (object_bytes == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "MessageDelivered record at sequence %" G_GUINT64_FORMAT
+        " references unavailable raw object %s: %s",
+        record->sequence,
+        payload->object_key,
+        local_error != NULL ? local_error->message : "unknown error");
+    return FALSE;
+  }
+
+  object_data = g_bytes_get_data (object_bytes, &object_size);
+  if (object_size != payload->size_bytes) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "MessageDelivered record at sequence %" G_GUINT64_FORMAT
+        " references raw object %s with mismatched size: expected "
+        "%" G_GUINT64_FORMAT ", got %" G_GSIZE_FORMAT,
+        record->sequence,
+        payload->object_key, payload->size_bytes, object_size);
+    return FALSE;
+  }
+
+  checksum = g_checksum_new (G_CHECKSUM_SHA256);
+  g_checksum_update (checksum, object_data, object_size);
+  actual = g_checksum_get_string (checksum);
+  if (g_strcmp0 (actual,
+          payload->object_key + WYREBOX_SHA256_OBJECT_KEY_PREFIX_LEN) != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "MessageDelivered record at sequence %" G_GUINT64_FORMAT
+        " references raw object %s with SHA-256 mismatch",
+        record->sequence, payload->object_key);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
 gboolean
 wyrebox_delivery_projection_replay_all (WyreboxDeliveryProjection *self,
     WyreboxDeliveryProjectionList *out_projection, GError **error)
@@ -145,7 +205,6 @@ wyrebox_delivery_projection_replay_all (WyreboxDeliveryProjection *self,
 
   while (TRUE) {
     g_autoptr (GError) local_error = NULL;
-    g_autoptr (GBytes) object_bytes = NULL;
     g_auto (WyreboxMessageDeliveredPayload) payload = { 0 };
 
     if (!wyrebox_journal_reader_read_next (self->journal_reader,
@@ -180,17 +239,9 @@ wyrebox_delivery_projection_replay_all (WyreboxDeliveryProjection *self,
       return FALSE;
     }
 
-    object_bytes = wyrebox_local_object_store_get_bytes (self->object_store,
-        payload.object_key, &local_error);
-    if (object_bytes == NULL) {
-      g_set_error (error,
-          G_IO_ERROR,
-          G_IO_ERROR_INVALID_DATA,
-          "MessageDelivered record at sequence %" G_GUINT64_FORMAT
-          " references unavailable raw object %s: %s",
-          record.sequence,
-          payload.object_key,
-          local_error != NULL ? local_error->message : "unknown error");
+    if (!is_message_delivered_object_valid (self->object_store,
+            &payload, &record, &local_error)) {
+      g_propagate_error (error, g_steal_pointer (&local_error));
       wyrebox_delivery_projection_list_clear (out_projection);
       return FALSE;
     }
