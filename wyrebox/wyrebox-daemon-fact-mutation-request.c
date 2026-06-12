@@ -3,6 +3,27 @@
 #include <gio/gio.h>
 #include <string.h>
 
+#define WYREBOX_FACT_MUTATION_PAYLOAD_MAGIC "WYREFMP1"
+#define WYREBOX_FACT_MUTATION_PAYLOAD_MAGIC_LEN 8
+#define WYREBOX_FACT_MUTATION_PAYLOAD_HEADER_SIZE 9
+
+static inline void
+write_u32_le (guint8 *dst, guint32 value)
+{
+  dst[0] = (guint8) ((value >> 0) & 0xFF);
+  dst[1] = (guint8) ((value >> 8) & 0xFF);
+  dst[2] = (guint8) ((value >> 16) & 0xFF);
+  dst[3] = (guint8) ((value >> 24) & 0xFF);
+}
+
+static inline guint32
+read_u32_le (const guint8 *buffer)
+{
+  return (guint32) buffer[0] |
+      ((guint32) buffer[1] << 8) |
+      ((guint32) buffer[2] << 16) | ((guint32) buffer[3] << 24);
+}
+
 static gboolean
 is_supported_mutation (WyreboxDaemonFactMutationKind mutation)
 {
@@ -111,6 +132,111 @@ validate_arguments (const char *const *arguments, GError **error)
   return TRUE;
 }
 
+static gboolean
+request_is_initialized (const WyreboxDaemonFactMutationRequest *request)
+{
+  return request != NULL &&
+      request->predicate_id != NULL &&
+      request->scope_id != NULL && request->arguments != NULL;
+}
+
+static gboolean
+checked_add_size (gsize *total, gsize value, GError **error)
+{
+  if (value > G_MAXSIZE - *total) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "FactMutation payload length overflows addressable memory");
+    return FALSE;
+  }
+
+  *total += value;
+  return TRUE;
+}
+
+static gboolean
+checked_add_encoded_string_len (gsize *total, const char *value, GError **error)
+{
+  gsize value_len = 0;
+
+  if (!checked_add_size (total, sizeof (guint32), error))
+    return FALSE;
+
+  value_len = strlen (value);
+  if (value_len > G_MAXUINT32) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "FactMutation string is too large");
+    return FALSE;
+  }
+
+  return checked_add_size (total, value_len, error);
+}
+
+static guint
+count_arguments (char **arguments)
+{
+  guint count = 0;
+
+  while (arguments[count] != NULL)
+    count++;
+
+  return count;
+}
+
+static void
+write_string (guint8 **cursor, const char *value)
+{
+  gsize value_len = strlen (value);
+
+  g_assert (value_len <= G_MAXUINT32);
+
+  write_u32_le (*cursor, (guint32) value_len);
+  *cursor += sizeof (guint32);
+  memcpy (*cursor, value, value_len);
+  *cursor += value_len;
+}
+
+static gboolean
+read_string (const guint8 *data,
+    gsize size, gsize *offset, char **out_value, GError **error)
+{
+  guint32 value_len = 0;
+
+  g_assert (out_value != NULL);
+  *out_value = NULL;
+
+  if (size - *offset < sizeof (guint32)) {
+    g_set_error (error,
+        G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+        "FactMutation payload is truncated");
+    return FALSE;
+  }
+
+  value_len = read_u32_le (data + *offset);
+  *offset += sizeof (guint32);
+
+  if ((gsize) value_len > size - *offset) {
+    g_set_error (error,
+        G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+        "FactMutation payload is truncated");
+    return FALSE;
+  }
+
+  if (memchr (data + *offset, '\0', value_len) != NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA, "FactMutation string contains embedded NUL");
+    return FALSE;
+  }
+
+  *out_value = g_strndup ((const char *) data + *offset, value_len);
+  *offset += value_len;
+
+  return TRUE;
+}
+
 void
 wyrebox_daemon_fact_mutation_request_clear (WyreboxDaemonFactMutationRequest
     *request)
@@ -193,8 +319,7 @@ wyrebox_daemon_fact_mutation_request_get_event (const
   g_return_val_if_fail (event_type != NULL, FALSE);
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  if (request->predicate_id == NULL || request->scope_id == NULL ||
-      request->arguments == NULL) {
+  if (!request_is_initialized (request)) {
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_ARGUMENT,
@@ -204,6 +329,161 @@ wyrebox_daemon_fact_mutation_request_get_event (const
 
   return wyrebox_daemon_fact_mutation_to_event (request->mutation, event_type,
       error);
+}
+
+GBytes *
+wyrebox_daemon_fact_mutation_request_encode (const
+    WyreboxDaemonFactMutationRequest *request, GError **error)
+{
+  g_autofree guint8 *buffer = NULL;
+  guint argument_count = 0;
+  guint8 *cursor = NULL;
+  gsize payload_size = WYREBOX_FACT_MUTATION_PAYLOAD_HEADER_SIZE;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  if (!request_is_initialized (request)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "fact mutation request is not initialized");
+    return NULL;
+  }
+
+  if (!is_supported_mutation (request->mutation)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "unsupported fact mutation kind");
+    return NULL;
+  }
+
+  argument_count = count_arguments (request->arguments);
+  if (!checked_add_encoded_string_len (&payload_size, request->predicate_id,
+          error))
+    return NULL;
+  if (!checked_add_encoded_string_len (&payload_size, request->scope_id, error))
+    return NULL;
+  if (!checked_add_size (&payload_size, sizeof (guint32), error))
+    return NULL;
+
+  for (guint index = 0; index < argument_count; index++) {
+    if (!checked_add_encoded_string_len (&payload_size,
+            request->arguments[index], error))
+      return NULL;
+  }
+
+  buffer = g_malloc (payload_size);
+  cursor = buffer;
+  memcpy (cursor,
+      WYREBOX_FACT_MUTATION_PAYLOAD_MAGIC,
+      WYREBOX_FACT_MUTATION_PAYLOAD_MAGIC_LEN);
+  cursor += WYREBOX_FACT_MUTATION_PAYLOAD_MAGIC_LEN;
+  *cursor = (guint8) request->mutation;
+  cursor++;
+  write_string (&cursor, request->predicate_id);
+  write_string (&cursor, request->scope_id);
+  write_u32_le (cursor, argument_count);
+  cursor += sizeof (guint32);
+
+  for (guint index = 0; index < argument_count; index++)
+    write_string (&cursor, request->arguments[index]);
+
+  g_assert ((gsize) (cursor - buffer) == payload_size);
+
+  return g_bytes_new_take (g_steal_pointer (&buffer), payload_size);
+}
+
+gboolean
+wyrebox_daemon_fact_mutation_request_decode (GBytes *bytes,
+    WyreboxDaemonFactMutationRequest *out_request, GError **error)
+{
+  const guint8 *data = NULL;
+  gsize size = 0;
+  gsize offset = 0;
+  guint32 argument_count = 0;
+  g_autofree char *predicate_id = NULL;
+  g_autofree char *scope_id = NULL;
+  g_auto (WyreboxDaemonFactMutationRequest) decoded = { 0 };
+  g_autoptr (GPtrArray) arguments = NULL;
+  WyreboxDaemonFactMutationKind mutation = WYREBOX_DAEMON_FACT_MUTATION_INSERT;
+
+  g_return_val_if_fail (bytes != NULL, FALSE);
+  g_return_val_if_fail (out_request != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  data = g_bytes_get_data (bytes, &size);
+  if (size < WYREBOX_FACT_MUTATION_PAYLOAD_HEADER_SIZE) {
+    g_set_error (error,
+        G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+        "FactMutation payload is truncated");
+    return FALSE;
+  }
+
+  if (memcmp (data,
+          WYREBOX_FACT_MUTATION_PAYLOAD_MAGIC,
+          WYREBOX_FACT_MUTATION_PAYLOAD_MAGIC_LEN) != 0) {
+    g_set_error (error,
+        G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+        "unsupported FactMutation payload");
+    return FALSE;
+  }
+
+  offset = WYREBOX_FACT_MUTATION_PAYLOAD_MAGIC_LEN;
+  mutation = (WyreboxDaemonFactMutationKind) data[offset];
+  offset++;
+
+  if (!is_supported_mutation (mutation)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA, "unsupported FactMutation mutation kind");
+    return FALSE;
+  }
+
+  if (!read_string (data, size, &offset, &predicate_id, error))
+    return FALSE;
+  if (!read_string (data, size, &offset, &scope_id, error))
+    return FALSE;
+
+  if (size - offset < sizeof (guint32)) {
+    g_set_error (error,
+        G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+        "FactMutation payload is truncated");
+    return FALSE;
+  }
+
+  argument_count = read_u32_le (data + offset);
+  offset += sizeof (guint32);
+  arguments = g_ptr_array_new_with_free_func (g_free);
+
+  for (guint32 index = 0; index < argument_count; index++) {
+    g_autofree char *argument = NULL;
+
+    if (!read_string (data, size, &offset, &argument, error))
+      return FALSE;
+
+    g_ptr_array_add (arguments, g_steal_pointer (&argument));
+  }
+
+  if (offset != size) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "FactMutation payload contains trailing bytes");
+    return FALSE;
+  }
+
+  g_ptr_array_add (arguments, NULL);
+  if (!wyrebox_daemon_fact_mutation_request_init (&decoded,
+          mutation,
+          predicate_id,
+          scope_id, (const char *const *) arguments->pdata, error))
+    return FALSE;
+
+  wyrebox_daemon_fact_mutation_request_clear (out_request);
+  *out_request = decoded;
+  memset (&decoded, 0, sizeof (decoded));
+
+  return TRUE;
 }
 
 gboolean

@@ -45,6 +45,15 @@ gboolean wyrebox_daemon_fact_mutation_request_get_event (
     WyreboxJournalEventType *event_type,
     GError **error);
 
+GBytes *wyrebox_daemon_fact_mutation_request_encode (
+    const WyreboxDaemonFactMutationRequest *request,
+    GError **error);
+
+gboolean wyrebox_daemon_fact_mutation_request_decode (
+    GBytes *bytes,
+    WyreboxDaemonFactMutationRequest *out_request,
+    GError **error);
+
 gboolean wyrebox_daemon_fact_mutation_request_init (
     WyreboxDaemonFactMutationRequest *request,
     WyreboxDaemonFactMutationKind mutation,

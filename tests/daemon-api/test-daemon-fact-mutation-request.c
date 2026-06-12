@@ -2,6 +2,7 @@
 
 #include <gio/gio.h>
 #include <glib.h>
+#include <string.h>
 
 static void
 test_fact_mutation_request_init_copies_insert_fields (void)
@@ -260,6 +261,117 @@ test_fact_mutation_request_rejects_uninitialized_journal_event (void)
   g_assert_cmpint (event_type, ==, WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED);
 }
 
+static void
+test_fact_mutation_request_round_trips_journal_payload (void)
+{
+  const char *args[] = { "mail-1", "project-a", NULL };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+  g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
+  g_auto (WyreboxDaemonFactMutationRequest) decoded = { 0 };
+
+  g_assert_true (wyrebox_daemon_fact_mutation_request_init (&request,
+          WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+          "project_mention", "account-1", args, &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_fact_mutation_request_encode (&request, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  g_assert_true (wyrebox_daemon_fact_mutation_request_decode (encoded,
+          &decoded, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.mutation, ==, WYREBOX_DAEMON_FACT_MUTATION_INSERT);
+  g_assert_cmpstr (decoded.predicate_id, ==, "project_mention");
+  g_assert_cmpstr (decoded.scope_id, ==, "account-1");
+  g_assert_cmpstr (decoded.arguments[0], ==, "mail-1");
+  g_assert_cmpstr (decoded.arguments[1], ==, "project-a");
+  g_assert_null (decoded.arguments[2]);
+}
+
+static void
+test_fact_mutation_request_encoded_format_matches_golden (void)
+{
+  const char *args[] = { "mail-1", NULL };
+  const guint8 expected[] = {
+    'W', 'Y', 'R', 'E', 'F', 'M', 'P', '1',
+    0x01,
+    0x0f, 0x00, 0x00, 0x00,
+    'p', 'r', 'o', 'j', 'e', 'c', 't', '_',
+    'm', 'e', 'n', 't', 'i', 'o', 'n',
+    0x09, 0x00, 0x00, 0x00,
+    'a', 'c', 'c', 'o', 'u', 'n', 't', '-', '1',
+    0x01, 0x00, 0x00, 0x00,
+    0x06, 0x00, 0x00, 0x00,
+    'm', 'a', 'i', 'l', '-', '1',
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+  g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
+  const guint8 *encoded_data = NULL;
+  gsize encoded_size = 0;
+
+  g_assert_true (wyrebox_daemon_fact_mutation_request_init (&request,
+          WYREBOX_DAEMON_FACT_MUTATION_RETRACT,
+          "project_mention", "account-1", args, &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_fact_mutation_request_encode (&request, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  encoded_data = g_bytes_get_data (encoded, &encoded_size);
+  g_assert_cmpuint (encoded_size, ==, sizeof (expected));
+  g_assert_cmpmem (encoded_data, encoded_size, expected, sizeof (expected));
+}
+
+static void
+test_fact_mutation_request_rejects_uninitialized_encode (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+  g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
+
+  encoded = wyrebox_daemon_fact_mutation_request_encode (&request, &error);
+
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
+test_fact_mutation_request_rejects_trailing_payload_bytes (void)
+{
+  const char *args[] = { "mail-1", NULL };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+  g_autoptr (GBytes) malformed = NULL;
+  g_autofree guint8 *copy = NULL;
+  g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
+  g_auto (WyreboxDaemonFactMutationRequest) decoded = { 0 };
+  const guint8 *encoded_data = NULL;
+  gsize encoded_size = 0;
+
+  g_assert_true (wyrebox_daemon_fact_mutation_request_init (&request,
+          WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+          "project_mention", "account-1", args, &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_fact_mutation_request_encode (&request, &error);
+  g_assert_no_error (error);
+  encoded_data = g_bytes_get_data (encoded, &encoded_size);
+
+  copy = g_malloc (encoded_size + 1);
+  memcpy (copy, encoded_data, encoded_size);
+  copy[encoded_size] = 0;
+  malformed = g_bytes_new_take (g_steal_pointer (&copy), encoded_size + 1);
+
+  g_assert_false (wyrebox_daemon_fact_mutation_request_decode (malformed,
+          &decoded, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_null (decoded.predicate_id);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -315,6 +427,18 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/fact-mutation-request/"
       "request-rejects-uninitialized-journal-event",
       test_fact_mutation_request_rejects_uninitialized_journal_event);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "round-trips-journal-payload",
+      test_fact_mutation_request_round_trips_journal_payload);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "encoded-format-matches-golden",
+      test_fact_mutation_request_encoded_format_matches_golden);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "rejects-uninitialized-encode",
+      test_fact_mutation_request_rejects_uninitialized_encode);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "rejects-trailing-payload-bytes",
+      test_fact_mutation_request_rejects_trailing_payload_bytes);
 
   return g_test_run ();
 }
