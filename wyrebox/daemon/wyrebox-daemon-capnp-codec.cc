@@ -1,6 +1,7 @@
 #include "wyrebox-daemon-capnp-codec.h"
 
 #include "wyrebox-daemon-error-frame.h"
+#include "wyrebox-daemon-fact-mutation-request.h"
 #include "wyrebox-daemon-mailbox-list-request.h"
 #include "wyrebox-daemon-mailbox-list-result.h"
 
@@ -22,6 +23,7 @@ typedef struct
   char *correlation_id;
 
   WyreboxDaemonMailboxListRequest mailbox_list;
+  WyreboxDaemonFactMutationRequest fact_mutation;
 } WyreboxDaemonCapnpDecodedRequestState;
 
 static gboolean
@@ -57,8 +59,25 @@ wyrebox_daemon_capnp_codec_decoded_state_clear (gpointer decoded_state)
   g_clear_pointer (&state->tool_identity, g_free);
   g_clear_pointer (&state->correlation_id, g_free);
   wyrebox_daemon_mailbox_list_request_clear (&state->mailbox_list);
+  wyrebox_daemon_fact_mutation_request_clear (&state->fact_mutation);
 
   g_free (state);
+}
+
+static gboolean
+map_fact_mutation_kind (FactMutationKind in,
+    WyreboxDaemonFactMutationKind *out)
+{
+  switch (in) {
+    case FactMutationKind::INSERT:
+      *out = WYREBOX_DAEMON_FACT_MUTATION_INSERT;
+      return TRUE;
+    case FactMutationKind::RETRACT:
+      *out = WYREBOX_DAEMON_FACT_MUTATION_RETRACT;
+      return TRUE;
+    default:
+      return FALSE;
+  }
 }
 
 static gboolean
@@ -124,12 +143,10 @@ map_error_class (WyreboxDaemonErrorClass in, ErrorClass *out)
 }
 
 static gboolean
-decode_mailbox_list_request (const RequestFrame::Reader &request_frame,
+decode_request_identity (const RequestFrame::Reader &request_frame,
     WyreboxDaemonCapnpDecodedRequestState *state,
-    WyreboxDaemonDecodedRequestFrame *out_request_frame,
     GError **error)
 {
-  auto mailbox_list = request_frame.getMailboxList ();
   auto identity = request_frame.getIdentity ();
   const char *request_id = identity.getRequestId ().cStr ();
 
@@ -142,6 +159,20 @@ decode_mailbox_list_request (const RequestFrame::Reader &request_frame,
   state->account_identity = g_strdup (identity.getAccountIdentity ().cStr ());
   state->tool_identity = g_strdup (identity.getToolIdentity ().cStr ());
   state->correlation_id = g_strdup (identity.getCorrelationId ().cStr ());
+
+  return TRUE;
+}
+
+static gboolean
+decode_mailbox_list_request (const RequestFrame::Reader &request_frame,
+    WyreboxDaemonCapnpDecodedRequestState *state,
+    WyreboxDaemonDecodedRequestFrame *out_request_frame,
+    GError **error)
+{
+  auto mailbox_list = request_frame.getMailboxList ();
+
+  if (!decode_request_identity (request_frame, state, error))
+    return FALSE;
 
   if (state->account_identity == NULL || *state->account_identity == '\0')
     return set_invalid_argument (error,
@@ -160,6 +191,49 @@ decode_mailbox_list_request (const RequestFrame::Reader &request_frame,
   out_request_frame->operation = WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_LIST;
   out_request_frame->mailbox_list = &state->mailbox_list;
   out_request_frame->fact_mutation = NULL;
+
+  return TRUE;
+}
+
+static gboolean
+decode_fact_mutation_request (const RequestFrame::Reader &request_frame,
+    WyreboxDaemonCapnpDecodedRequestState *state,
+    WyreboxDaemonDecodedRequestFrame *out_request_frame,
+    GError **error)
+{
+  auto fact_mutation = request_frame.getFactMutation ();
+  auto arguments = fact_mutation.getArguments ();
+  WyreboxDaemonFactMutationKind mutation =
+      WYREBOX_DAEMON_FACT_MUTATION_INSERT;
+  g_auto (GStrv) argument_vector = NULL;
+
+  if (!decode_request_identity (request_frame, state, error))
+    return FALSE;
+
+  if (!map_fact_mutation_kind (fact_mutation.getMutation (), &mutation))
+    return set_invalid_argument (error, "unsupported fact mutation kind");
+
+  argument_vector = g_new0 (char *, arguments.size () + 1);
+  for (guint i = 0; i < arguments.size (); i++)
+    argument_vector[i] = g_strdup (arguments[i].cStr ());
+
+  if (!wyrebox_daemon_fact_mutation_request_init (&state->fact_mutation,
+          mutation,
+          fact_mutation.getPredicateId ().cStr (),
+          fact_mutation.getScopeId ().cStr (),
+          (const char * const *) argument_vector,
+          error))
+    return FALSE;
+
+  out_request_frame->request_id = state->request_id;
+  out_request_frame->caller_identity = state->caller_identity;
+  out_request_frame->account_identity = state->account_identity;
+  out_request_frame->tool_identity = state->tool_identity;
+  out_request_frame->correlation_id = state->correlation_id;
+  out_request_frame->operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_MUTATION;
+  out_request_frame->mailbox_list = NULL;
+  out_request_frame->fact_mutation = &state->fact_mutation;
 
   return TRUE;
 }
@@ -198,8 +272,10 @@ decode_request_frame (const capnp::word *words,
         return set_not_supported (error,
             "unsupported request frame: FlagKeywordUpdate");
       case RequestFrame::FACT_MUTATION:
-        return set_not_supported (error,
-            "unsupported request frame: FactMutation");
+        return decode_fact_mutation_request (request_frame,
+            state,
+            out_request_frame,
+            error);
       case RequestFrame::WIRELOG_PREDICATE_QUERY:
         return set_not_supported (error,
             "unsupported request frame: WirelogPredicateQuery");
@@ -214,6 +290,59 @@ decode_request_frame (const capnp::word *words,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_DATA,
         "request frame decode failed: %s",
+        e.what ());
+  }
+
+  return FALSE;
+}
+
+static gboolean
+encode_success_response (const WyreboxDaemonResponseFrame *response_frame,
+    GBytes **out_bytes,
+    GError **error)
+{
+  try {
+    if (response_frame->request_id == NULL || *response_frame->request_id == '\0')
+      return set_invalid_argument (error, "response frame request_id is required");
+
+    if (response_frame->success.durable_marker == NULL ||
+        *response_frame->success.durable_marker == '\0')
+      return set_invalid_argument (error,
+          "success response durable marker is required");
+
+    if (response_frame->success.summary == NULL ||
+        *response_frame->success.summary == '\0')
+      return set_invalid_argument (error,
+          "success response summary is required");
+
+    capnp::MallocMessageBuilder response_builder;
+    auto response_frame_message = response_builder.initRoot<ResponseFrame> ();
+    auto response_success = response_frame_message.initSuccess ();
+
+    response_frame_message.setRequestId (response_frame->request_id);
+    response_frame_message.setCorrelationId (
+        response_frame->correlation_id != NULL ? response_frame->correlation_id : "");
+
+    response_success.setRequestId (
+        response_frame->success.request_id != NULL &&
+            *response_frame->success.request_id != '\0'
+            ? response_frame->success.request_id
+            : response_frame->request_id);
+    response_success.setDurableMarker (response_frame->success.durable_marker);
+    response_success.setJournalOffset (response_frame->success.journal_offset);
+    response_success.setSummary (response_frame->success.summary);
+    response_success.setJournalSequence (response_frame->success.journal_sequence);
+
+    auto words = capnp::messageToFlatArray (response_builder);
+    auto bytes = words.asBytes ();
+    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+
+    return TRUE;
+  } catch (const std::exception &e) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "success response encode failed: %s",
         e.what ());
   }
 
@@ -412,6 +541,10 @@ wyrebox_daemon_capnp_codec_encode_response_frame (
   g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
   switch (response_frame->kind) {
+    case WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS:
+      if (!encode_success_response (response_frame, &out_bytes, error))
+        return NULL;
+      return g_steal_pointer (&out_bytes);
     case WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_LIST:
       if (!encode_mailbox_list_response (response_frame, &out_bytes, error))
         return NULL;
