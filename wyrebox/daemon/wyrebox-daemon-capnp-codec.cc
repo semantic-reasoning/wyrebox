@@ -1,6 +1,7 @@
 #include "wyrebox-daemon-capnp-codec.h"
 
 #include "wyrebox-daemon-error-frame.h"
+#include "wyrebox-daemon-delivery-ingestion-request.h"
 #include "wyrebox-daemon-fact-mutation-request.h"
 #include "wyrebox-daemon-flag-keyword-update-request.h"
 #include "wyrebox-daemon-mailbox-list-request.h"
@@ -32,6 +33,7 @@ typedef struct
   WyreboxDaemonFactMutationRequest fact_mutation;
   WyreboxDaemonMessageFetchRequest message_fetch;
   WyreboxDaemonMessageSearchRequest message_search;
+  WyreboxDaemonDeliveryIngestionRequest delivery_ingestion;
   WyreboxDaemonFlagKeywordUpdateRequest flag_keyword_update;
 } WyreboxDaemonCapnpDecodedRequestState;
 
@@ -72,6 +74,7 @@ wyrebox_daemon_capnp_codec_decoded_state_clear (gpointer decoded_state)
   wyrebox_daemon_fact_mutation_request_clear (&state->fact_mutation);
   wyrebox_daemon_message_fetch_request_clear (&state->message_fetch);
   wyrebox_daemon_message_search_request_clear (&state->message_search);
+  wyrebox_daemon_delivery_ingestion_request_clear (&state->delivery_ingestion);
   wyrebox_daemon_flag_keyword_update_request_clear (&state->flag_keyword_update);
 
   g_free (state);
@@ -408,6 +411,53 @@ decode_message_search_request (const RequestFrame::Reader &request_frame,
 }
 
 static gboolean
+decode_delivery_ingestion_request (const RequestFrame::Reader &request_frame,
+    WyreboxDaemonCapnpDecodedRequestState *state,
+    WyreboxDaemonDecodedRequestFrame *out_request_frame,
+    GError **error)
+{
+  auto delivery_ingestion = request_frame.getDeliveryIngestion ();
+  auto message_bytes = delivery_ingestion.getMessageBytes ();
+  g_auto (GStrv) recipients = NULL;
+  g_autoptr (GBytes) decoded_message_bytes = NULL;
+
+  if (!decode_request_identity (request_frame, state, error))
+    return FALSE;
+
+  if (!decode_strv (delivery_ingestion.getRecipients (), &recipients))
+    return FALSE;
+
+  decoded_message_bytes =
+      g_bytes_new (message_bytes.begin (), message_bytes.size ());
+
+  if (!wyrebox_daemon_delivery_ingestion_request_init (&state->delivery_ingestion,
+          delivery_ingestion.getDeliveryId ().cStr (),
+          delivery_ingestion.getQueueId ().cStr (),
+          delivery_ingestion.getEnvelopeSender ().cStr (),
+          (const gchar * const *) recipients,
+          decoded_message_bytes,
+          error))
+    return FALSE;
+
+  out_request_frame->request_id = state->request_id;
+  out_request_frame->caller_identity = state->caller_identity;
+  out_request_frame->account_identity = state->account_identity;
+  out_request_frame->tool_identity = state->tool_identity;
+  out_request_frame->correlation_id = state->correlation_id;
+  out_request_frame->operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION;
+  out_request_frame->mailbox_list = NULL;
+  out_request_frame->mailbox_select = NULL;
+  out_request_frame->fact_mutation = NULL;
+  out_request_frame->message_fetch = NULL;
+  out_request_frame->message_search = NULL;
+  out_request_frame->delivery_ingestion = &state->delivery_ingestion;
+  out_request_frame->flag_keyword_update = NULL;
+
+  return TRUE;
+}
+
+static gboolean
 decode_flag_keyword_update_request (
     const RequestFrame::Reader &request_frame,
     WyreboxDaemonCapnpDecodedRequestState *state,
@@ -480,8 +530,10 @@ decode_request_frame (const capnp::word *words,
             out_request_frame,
             error);
       case RequestFrame::DELIVERY_INGESTION:
-        return set_not_supported (error,
-            "unsupported request frame: DeliveryIngestion");
+        return decode_delivery_ingestion_request (request_frame,
+            state,
+            out_request_frame,
+            error);
       case RequestFrame::MAILBOX_SELECT:
         return decode_mailbox_select_request (request_frame,
             state,
