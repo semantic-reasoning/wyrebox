@@ -10,6 +10,18 @@ daemon_request_identity_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_mailbox_list_request_test = executable(
+  'test-daemon-mailbox-list-request',
+  'test-daemon-mailbox-list-request.c',
+  dependencies: [wyrebox_dep],
+)
+
+daemon_mailbox_list_result_test = executable(
+  'test-daemon-mailbox-list-result',
+  'test-daemon-mailbox-list-result.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_request_router_test = executable(
   'test-daemon-request-router',
   'test-daemon-request-router.c',
@@ -60,6 +72,8 @@ daemon_response_frame_test = executable(
 
 test('daemon success receipt', daemon_success_receipt_test)
 test('daemon request identity', daemon_request_identity_test)
+test('daemon mailbox list request', daemon_mailbox_list_request_test)
+test('daemon mailbox list result', daemon_mailbox_list_result_test)
 test('daemon request router', daemon_request_router_test)
 test('daemon fact mutation request', daemon_fact_mutation_request_test)
 test('daemon fact mutation service', daemon_fact_mutation_service_test)
