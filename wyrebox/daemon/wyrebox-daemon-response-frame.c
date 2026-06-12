@@ -16,6 +16,7 @@ wyrebox_daemon_response_frame_clear (WyreboxDaemonResponseFrame *frame)
   wyrebox_daemon_success_receipt_clear (&frame->success);
   wyrebox_daemon_error_frame_clear (&frame->error);
   wyrebox_daemon_mailbox_list_result_clear (&frame->mailbox_list);
+  wyrebox_daemon_mailbox_select_result_clear (&frame->mailbox_select);
 }
 
 static gboolean
@@ -114,6 +115,15 @@ copy_mailbox_list_result (WyreboxDaemonMailboxListResult *dest,
   }
 
   return TRUE;
+}
+
+static gboolean
+copy_mailbox_select_result (WyreboxDaemonMailboxSelectResult *dest,
+    const WyreboxDaemonMailboxSelectResult *src, GError **error)
+{
+  return wyrebox_daemon_mailbox_select_result_init (dest,
+      src->kind, src->mailbox_id, src->mailbox_name, src->uid_validity,
+      src->uid_next, error);
 }
 
 static gboolean
@@ -219,6 +229,37 @@ wyrebox_daemon_response_frame_init_mailbox_list (WyreboxDaemonResponseFrame
   next.correlation_id = NULL;
   next.kind = WYREBOX_DAEMON_RESPONSE_FRAME_NONE;
   memset (&next.mailbox_list, 0, sizeof (next.mailbox_list));
+
+  return TRUE;
+}
+
+gboolean
+wyrebox_daemon_response_frame_init_mailbox_select (WyreboxDaemonResponseFrame
+    *frame, const char *request_id, const char *correlation_id,
+    const WyreboxDaemonMailboxSelectResult *mailbox_select, GError **error)
+{
+  g_auto (WyreboxDaemonResponseFrame) next = { 0 };
+
+  g_return_val_if_fail (frame != NULL, FALSE);
+  g_return_val_if_fail (mailbox_select != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (!validate_required_request_id (request_id, error))
+    return FALSE;
+
+  if (!copy_mailbox_select_result (&next.mailbox_select, mailbox_select, error))
+    return FALSE;
+
+  next.request_id = g_strdup (request_id);
+  copy_optional_string (&next.correlation_id, correlation_id);
+  next.kind = WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_SELECT;
+
+  wyrebox_daemon_response_frame_clear (frame);
+  *frame = next;
+  next.request_id = NULL;
+  next.correlation_id = NULL;
+  next.kind = WYREBOX_DAEMON_RESPONSE_FRAME_NONE;
+  memset (&next.mailbox_select, 0, sizeof (next.mailbox_select));
 
   return TRUE;
 }

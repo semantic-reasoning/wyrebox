@@ -295,7 +295,7 @@ fake_adapter_encode (const WyreboxDaemonResponseFrame *response_frame,
 static WyreboxDaemonRequestAdapter *
 create_fake_adapter (FakeAdapterState *state)
 {
-  return wyrebox_daemon_request_adapter_new (NULL, NULL,
+  return wyrebox_daemon_request_adapter_new (NULL, NULL, NULL,
       fake_adapter_decode, state, NULL, fake_adapter_encode, state, NULL);
 }
 

@@ -35,6 +35,7 @@ typedef GBytes *(*WyreboxDaemonRequestAdapterEncodeResponseFrameCallback) (
 WyreboxDaemonRequestAdapter *wyrebox_daemon_request_adapter_new (
     WyreboxDaemonFactMutationService *fact_mutation_service,
     WyreboxDaemonMailboxListService *mailbox_list_service,
+    WyreboxDaemonMailboxSelectService *mailbox_select_service,
     WyreboxDaemonRequestAdapterDecodeRequestFrameCallback
     decode_request_frame_callback,
     gpointer decode_request_frame_user_data,

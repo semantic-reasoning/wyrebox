@@ -9,6 +9,7 @@ struct _WyreboxDaemonRequestAdapter
 
   WyreboxDaemonFactMutationService *fact_mutation_service;
   WyreboxDaemonMailboxListService *mailbox_list_service;
+  WyreboxDaemonMailboxSelectService *mailbox_select_service;
 
     WyreboxDaemonRequestAdapterDecodeRequestFrameCallback
       decode_request_frame_callback;
@@ -62,6 +63,7 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDaemonRequestAdapterDecodedState,
 
   g_clear_object (&self->fact_mutation_service);
   g_clear_object (&self->mailbox_list_service);
+  g_clear_object (&self->mailbox_select_service);
 
   G_OBJECT_CLASS (wyrebox_daemon_request_adapter_parent_class)->finalize
       (object);
@@ -86,6 +88,7 @@ WyreboxDaemonRequestAdapter *
 wyrebox_daemon_request_adapter_new (WyreboxDaemonFactMutationService
     *fact_mutation_service,
     WyreboxDaemonMailboxListService *mailbox_list_service,
+    WyreboxDaemonMailboxSelectService *mailbox_select_service,
     WyreboxDaemonRequestAdapterDecodeRequestFrameCallback
     decode_request_frame_callback, gpointer decode_request_frame_user_data,
     GDestroyNotify decode_request_frame_user_data_destroy,
@@ -99,6 +102,9 @@ wyrebox_daemon_request_adapter_new (WyreboxDaemonFactMutationService
       || WYREBOX_IS_DAEMON_FACT_MUTATION_SERVICE (fact_mutation_service), NULL);
   g_return_val_if_fail (mailbox_list_service == NULL
       || WYREBOX_IS_DAEMON_MAILBOX_LIST_SERVICE (mailbox_list_service), NULL);
+  g_return_val_if_fail (mailbox_select_service == NULL
+      || WYREBOX_IS_DAEMON_MAILBOX_SELECT_SERVICE (mailbox_select_service),
+      NULL);
 
   WyreboxDaemonRequestAdapter *self =
       g_object_new (WYREBOX_TYPE_DAEMON_REQUEST_ADAPTER, NULL);
@@ -108,6 +114,9 @@ wyrebox_daemon_request_adapter_new (WyreboxDaemonFactMutationService
 
   if (mailbox_list_service != NULL)
     self->mailbox_list_service = g_object_ref (mailbox_list_service);
+
+  if (mailbox_select_service != NULL)
+    self->mailbox_select_service = g_object_ref (mailbox_select_service);
 
   self->decode_request_frame_callback = decode_request_frame_callback;
   self->decode_request_frame_user_data = decode_request_frame_user_data;
@@ -150,6 +159,7 @@ wyrebox_daemon_request_adapter_handle_payload (const
 
   if (!wyrebox_daemon_request_router_route (self->fact_mutation_service,
           self->mailbox_list_service,
+          self->mailbox_select_service,
           &decoded_request, &response_frame, &local_error))
     goto route_failed;
 

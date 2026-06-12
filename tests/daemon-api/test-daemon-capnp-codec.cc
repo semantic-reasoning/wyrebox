@@ -556,6 +556,7 @@ assert_request_adapter_callbacks_are_usable (void)
 
   adapter = wyrebox_daemon_request_adapter_new (NULL,
       service,
+      NULL,
       wyrebox_daemon_capnp_codec_decode_request_frame,
       NULL,
       NULL,
@@ -614,6 +615,7 @@ assert_request_adapter_routes_fact_mutation (void)
   g_assert_nonnull (service);
 
   adapter = wyrebox_daemon_request_adapter_new (service,
+      NULL,
       NULL,
       wyrebox_daemon_capnp_codec_decode_request_frame,
       NULL,
