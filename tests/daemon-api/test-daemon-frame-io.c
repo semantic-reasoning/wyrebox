@@ -129,6 +129,76 @@ test_frame_io_reads_eof_without_payload (void)
 }
 
 static void
+test_frame_io_or_eof_clears_stale_output_on_eof (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) stale_payload = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  g_autoptr (GInputStream) input = NULL;
+  gboolean eof = FALSE;
+
+  stale_payload = g_bytes_new_static ((guint8 *) "stale", 5);
+  payload = g_steal_pointer (&stale_payload);
+  input = g_memory_input_stream_new_from_data (NULL, 0, NULL);
+
+  g_assert_true (wyrebox_daemon_frame_io_read_payload_or_eof (input, &payload,
+          &eof, &error));
+  g_assert_no_error (error);
+  g_assert_true (eof);
+  g_assert_null (payload);
+}
+
+static void
+test_frame_io_or_eof_clears_stale_output_on_truncated_prefix (void)
+{
+  const guint8 truncated_prefix[] = { 0x00, 0x00, 0x00 };
+  g_autoptr (GBytes) stale_payload = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  g_autoptr (GInputStream) input = NULL;
+  g_autoptr (GError) error = NULL;
+  gboolean eof = TRUE;
+
+  stale_payload = g_bytes_new_static ((guint8 *) "stale", 5);
+  payload = g_steal_pointer (&stale_payload);
+  input = g_memory_input_stream_new_from_data (truncated_prefix,
+      sizeof (truncated_prefix), NULL);
+
+  g_assert_false (wyrebox_daemon_frame_io_read_payload_or_eof (input, &payload,
+          &eof, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_false (eof);
+  g_assert_null (payload);
+}
+
+static void
+test_frame_io_or_eof_clears_stale_output_on_oversized_frame (void)
+{
+  guint8 oversized_prefix[4];
+  gsize oversized = WYREBOX_DAEMON_MAX_FRAME_SIZE_BYTES + 1;
+  g_autoptr (GBytes) stale_payload = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  g_autoptr (GInputStream) input = NULL;
+  g_autoptr (GError) error = NULL;
+  gboolean eof = TRUE;
+
+  oversized_prefix[0] = (guint8) (oversized >> 24);
+  oversized_prefix[1] = (guint8) (oversized >> 16);
+  oversized_prefix[2] = (guint8) (oversized >> 8);
+  oversized_prefix[3] = (guint8) oversized;
+
+  stale_payload = g_bytes_new_static ((guint8 *) "stale", 5);
+  payload = g_steal_pointer (&stale_payload);
+  input = g_memory_input_stream_new_from_data (oversized_prefix,
+      sizeof (oversized_prefix), NULL);
+
+  g_assert_false (wyrebox_daemon_frame_io_read_payload_or_eof (input, &payload,
+          &eof, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_false (eof);
+  g_assert_null (payload);
+}
+
+static void
 test_frame_io_read_payload_reports_eof_as_protocol_error (void)
 {
   g_autoptr (GError) error = NULL;
@@ -231,6 +301,15 @@ main (int argc, char **argv)
       test_frame_io_rejects_truncated_length_prefix);
   g_test_add_func ("/daemon-api/frame-io/reads-clean-eof-without-payload",
       test_frame_io_reads_eof_without_payload);
+  g_test_add_func
+      ("/daemon-api/frame-io/or-eof-clears-stale-output-on-eof",
+      test_frame_io_or_eof_clears_stale_output_on_eof);
+  g_test_add_func
+      ("/daemon-api/frame-io/or-eof-clears-stale-output-on-truncated-prefix",
+      test_frame_io_or_eof_clears_stale_output_on_truncated_prefix);
+  g_test_add_func
+      ("/daemon-api/frame-io/or-eof-clears-stale-output-on-oversized-frame",
+      test_frame_io_or_eof_clears_stale_output_on_oversized_frame);
   g_test_add_func
       ("/daemon-api/frame-io/read-payload-reports-eof-as-protocol-error",
       test_frame_io_read_payload_reports_eof_as_protocol_error);
