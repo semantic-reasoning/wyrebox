@@ -41,6 +41,29 @@ make_mailbox_list_result (void)
 }
 
 static void
+assert_mailbox_list_entry (const WyreboxDaemonMailboxListResult *result,
+    guint index,
+    WyreboxDaemonMailboxListEntryKind kind,
+    const char *mailbox_id,
+    const char *mailbox_name,
+    const char *hierarchy_delimiter,
+    const char *special_use,
+    gboolean is_selectable, WyreboxDaemonMailboxListChildState child_state)
+{
+  const WyreboxDaemonMailboxListEntry *entry =
+      wyrebox_daemon_mailbox_list_result_get_entry (result, index);
+
+  g_assert_nonnull (entry);
+  g_assert_cmpint (entry->kind, ==, kind);
+  g_assert_cmpstr (entry->mailbox_id, ==, mailbox_id);
+  g_assert_cmpstr (entry->mailbox_name, ==, mailbox_name);
+  g_assert_cmpstr (entry->hierarchy_delimiter, ==, hierarchy_delimiter);
+  g_assert_cmpstr (entry->special_use, ==, special_use);
+  g_assert_cmpint (entry->is_selectable, ==, is_selectable);
+  g_assert_cmpint (entry->child_state, ==, child_state);
+}
+
+static void
 test_response_frame_init_success_copies_payload (void)
 {
   g_auto (WyreboxDaemonSuccessReceipt) receipt = make_success_receipt ();
@@ -223,6 +246,14 @@ test_response_frame_rejects_malformed_mailbox_list_entry (void)
   g_assert_cmpstr (frame.correlation_id, ==, "stable-correlation");
   g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
       (&frame.mailbox_list), ==, 2);
+  assert_mailbox_list_entry (&frame.mailbox_list, 0,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+      "mailbox-inbox", "INBOX", "/", "\\Inbox", TRUE,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN);
+  assert_mailbox_list_entry (&frame.mailbox_list, 1,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
+      "view-project-a", "Projects/Project A", "/", NULL, TRUE,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN);
 }
 
 static void
@@ -381,6 +412,14 @@ test_response_frame_mailbox_list_failure_leaves_existing_contents (void)
   g_assert_cmpstr (frame.correlation_id, ==, "stable-correlation");
   g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
       (&frame.mailbox_list), ==, 2);
+  assert_mailbox_list_entry (&frame.mailbox_list, 0,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+      "mailbox-inbox", "INBOX", "/", "\\Inbox", TRUE,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN);
+  assert_mailbox_list_entry (&frame.mailbox_list, 1,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
+      "view-project-a", "Projects/Project A", "/", NULL, TRUE,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN);
 }
 
 static void
