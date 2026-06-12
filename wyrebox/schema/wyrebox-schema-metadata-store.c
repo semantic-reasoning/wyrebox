@@ -372,6 +372,34 @@ static gboolean
 }
 
 static gboolean
+    duckdb_store_validate_message_header_table
+    (WyreboxSchemaMetadataStoreDuckdb * self, GError ** error)
+{
+  static const WyreboxDuckdbColumnSpec message_headers_columns[] = {
+    {"message_id", "VARCHAR", TRUE},
+    {"rfc_message_id", "VARCHAR", FALSE},
+    {"duplicate_message_id_count", "UBIGINT", TRUE},
+    {"subject", "VARCHAR", FALSE},
+    {"from_addr", "VARCHAR", FALSE},
+    {"to_addr", "VARCHAR", FALSE},
+    {"cc_addr", "VARCHAR", FALSE},
+    {"bcc_addr", "VARCHAR", FALSE},
+    {"date_raw", "VARCHAR", FALSE},
+    {"journal_offset", "UBIGINT", TRUE},
+    {"journal_sequence", "UBIGINT", TRUE},
+  };
+  static const gchar *message_headers_primary_key_columns[] = {
+    "message_id",
+  };
+
+  return duckdb_store_validate_table_columns (self, "message_headers",
+      message_headers_columns, G_N_ELEMENTS (message_headers_columns), error)
+      && duckdb_store_validate_primary_key (self, "message_headers",
+      message_headers_primary_key_columns,
+      G_N_ELEMENTS (message_headers_primary_key_columns), error);
+}
+
+static gboolean
 wyrebox_schema_metadata_store_memory_load (WyreboxSchemaMetadataStore *self,
     WyreboxSchemaMigrationMetadataState *out_state, GError **error)
 {
@@ -433,7 +461,9 @@ static gboolean
   if (operation ==
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP ||
       operation ==
-      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES)
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES
+      || operation ==
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE)
     return TRUE;
 
   g_set_error (error,
@@ -562,6 +592,26 @@ static gboolean
       "journal_sequence UBIGINT NOT NULL,"
       "PRIMARY KEY (membership_id, keyword_name)" ");", error)
       && duckdb_store_validate_message_attribute_tables (self, error);
+}
+
+static gboolean
+    duckdb_store_create_message_header_table
+    (WyreboxSchemaMetadataStoreDuckdb * self, GError ** error)
+{
+  return duckdb_store_query (self,
+      "CREATE TABLE IF NOT EXISTS message_headers ("
+      "message_id VARCHAR PRIMARY KEY,"
+      "rfc_message_id VARCHAR,"
+      "duplicate_message_id_count UBIGINT NOT NULL,"
+      "subject VARCHAR,"
+      "from_addr VARCHAR,"
+      "to_addr VARCHAR,"
+      "cc_addr VARCHAR,"
+      "bcc_addr VARCHAR,"
+      "date_raw VARCHAR,"
+      "journal_offset UBIGINT NOT NULL,"
+      "journal_sequence UBIGINT NOT NULL" ");", error)
+      && duckdb_store_validate_message_header_table (self, error);
 }
 
 static gboolean
@@ -861,6 +911,7 @@ static gboolean
   switch (operation) {
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP:
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES:
+    case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE:
       break;
     default:
       goto unsupported;
@@ -875,6 +926,10 @@ static gboolean
           || (operation ==
               WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES
               && duckdb_store_create_message_attribute_tables (duckdb_store,
+                  error))
+          || (operation ==
+              WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE
+              && duckdb_store_create_message_header_table (duckdb_store,
                   error))) ||
       !duckdb_store_query (duckdb_store, "COMMIT;", error)) {
     duckdb_store_rollback_quietly (duckdb_store);

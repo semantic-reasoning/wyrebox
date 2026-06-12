@@ -70,7 +70,7 @@ projection_record_free (gpointer data)
   g_free (record);
 }
 
-static void
+static WyreboxDeliveryProjectionRecord *
 append_projection_record (WyreboxDeliveryProjectionList *projection,
     const gchar *object_key, guint64 size_bytes, guint64 internal_date_unix_us,
     guint64 journal_offset, guint64 journal_sequence)
@@ -89,6 +89,30 @@ append_projection_record (WyreboxDeliveryProjectionList *projection,
   record->journal_sequence = journal_sequence;
 
   g_ptr_array_add (projection->records, record);
+  return record;
+}
+
+static void
+append_projection_record_with_headers (WyreboxDeliveryProjectionList
+    *projection, const gchar *object_key, guint64 size_bytes,
+    guint64 internal_date_unix_us, guint64 journal_offset,
+    guint64 journal_sequence, const gchar *rfc_message_id,
+    guint duplicate_message_id_count, const gchar *subject,
+    const gchar *from_addr, const gchar *to_addr, const gchar *cc_addr,
+    const gchar *bcc_addr, const gchar *date_raw)
+{
+  WyreboxDeliveryProjectionRecord *record = NULL;
+
+  record = append_projection_record (projection, object_key, size_bytes,
+      internal_date_unix_us, journal_offset, journal_sequence);
+  record->rfc_message_id = g_strdup (rfc_message_id);
+  record->duplicate_message_id_count = duplicate_message_id_count;
+  record->subject = g_strdup (subject);
+  record->from = g_strdup (from_addr);
+  record->to = g_strdup (to_addr);
+  record->cc = g_strdup (cc_addr);
+  record->bcc = g_strdup (bcc_addr);
+  record->date_raw = g_strdup (date_raw);
 }
 
 static gchar *
@@ -113,8 +137,12 @@ create_bootstrap_catalog (void)
   g_assert_no_error (error);
   g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES,
-          wyrebox_schema_migration_get_first_supported_schema_version (),
-          wyrebox_schema_migration_get_current_schema_version (), &error));
+          wyrebox_schema_migration_get_first_supported_schema_version (), 2,
+          &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE,
+          2, wyrebox_schema_migration_get_current_schema_version (), &error));
   g_assert_no_error (error);
 
   return g_steal_pointer (&path);
@@ -171,6 +199,18 @@ query_string (duckdb_connection connection, const gchar *sql)
 
   value = duckdb_value_varchar (&result, 0, 0);
   return g_strdup (value);
+}
+
+static gboolean
+query_is_null (duckdb_connection connection, const gchar *sql)
+{
+  g_auto (duckdb_result) result = { 0 };
+
+  g_assert_cmpint (duckdb_query (connection, sql, &result), ==, DuckDBSuccess);
+  g_assert_cmpuint (duckdb_column_count (&result), ==, 1);
+  g_assert_cmpuint (duckdb_row_count (&result), ==, 1);
+
+  return duckdb_value_is_null (&result, 0, 0);
 }
 
 static void
@@ -259,6 +299,7 @@ test_divergent_mailbox_conflict_rolls_back (void)
   assert_table_count (duckdb.connection, "mailbox_uid_state", 0);
   assert_table_count (duckdb.connection, "objects", 0);
   assert_table_count (duckdb.connection, "messages", 0);
+  assert_table_count (duckdb.connection, "message_headers", 0);
   assert_table_count (duckdb.connection, "mailbox_memberships", 0);
   g_assert_cmpstr (query_string (duckdb.connection,
           "SELECT mailbox_id FROM mailboxes WHERE account_id = 'account-1' "
@@ -331,6 +372,53 @@ test_divergent_message_conflict_rolls_back (void)
   g_assert_cmpstr (query_string (duckdb.connection,
           "SELECT object_id FROM messages WHERE message_id = 'journal:11:1';"),
       ==, "sha256:wrong");
+  close_duckdb_fixture (&duckdb);
+
+  remove_catalog (path);
+}
+
+static void
+test_divergent_message_headers_conflict_rolls_back (void)
+{
+  g_autofree gchar *path = create_bootstrap_catalog ();
+  g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+  TestDuckdbFixture duckdb = { 0 };
+
+  append_projection_record_with_headers (&projection, "sha256:first",
+      101, 1001, 11, 1, "<first@example.test>", 0, "Correct subject",
+      "sender@example.test", "to@example.test", NULL, NULL,
+      "Fri, 12 Jun 2026 10:00:00 +0000");
+
+  open_duckdb_fixture (path, &duckdb);
+  execute_sql (duckdb.connection,
+      "INSERT INTO objects (object_id, size_bytes) "
+      "VALUES ('sha256:first', 101);");
+  execute_sql (duckdb.connection,
+      "INSERT INTO messages ("
+      "message_id, account_id, object_id, journal_offset, journal_sequence"
+      ") VALUES ('journal:11:1', 'account-1', 'sha256:first', 11, 1);");
+  execute_sql (duckdb.connection,
+      "INSERT INTO message_headers ("
+      "message_id, rfc_message_id, duplicate_message_id_count, subject, "
+      "from_addr, to_addr, journal_offset, journal_sequence"
+      ") VALUES ("
+      "'journal:11:1', '<first@example.test>', 0, 'Wrong subject', "
+      "'sender@example.test', 'to@example.test', 11, 1);");
+  close_duckdb_fixture (&duckdb);
+
+  assert_apply_to_inbox_fails_invalid_data (path, &projection);
+
+  open_duckdb_fixture (path, &duckdb);
+  assert_table_count (duckdb.connection, "accounts", 0);
+  assert_table_count (duckdb.connection, "mailboxes", 0);
+  assert_table_count (duckdb.connection, "mailbox_uid_state", 0);
+  assert_table_count (duckdb.connection, "objects", 1);
+  assert_table_count (duckdb.connection, "messages", 1);
+  assert_table_count (duckdb.connection, "message_headers", 1);
+  assert_table_count (duckdb.connection, "mailbox_memberships", 0);
+  g_assert_cmpstr (query_string (duckdb.connection,
+          "SELECT subject FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"), ==, "Wrong subject");
   close_duckdb_fixture (&duckdb);
 
   remove_catalog (path);
@@ -527,8 +615,14 @@ test_happy_path_materializes_inbox (void)
   g_autofree gchar *first_message_id = NULL;
   g_autofree gchar *first_membership_id = NULL;
 
-  append_projection_record (&projection, "sha256:first", 101, 1001, 11, 1);
-  append_projection_record (&projection, "sha256:second", 202, 1002, 22, 2);
+  append_projection_record_with_headers (&projection, "sha256:first",
+      101, 1001, 11, 1, "<first@example.test>", 0, "First subject",
+      "sender@example.test", "to@example.test", "cc@example.test",
+      "bcc@example.test", "Fri, 12 Jun 2026 10:00:00 +0000");
+  append_projection_record_with_headers (&projection, "sha256:second",
+      202, 1002, 22, 2, NULL, 2, "Missing id subject",
+      "missing@example.test", "receiver@example.test", NULL, NULL,
+      "Fri, 12 Jun 2026 10:01:00 +0000");
 
   apply_projection_to_inbox (path, &projection);
 
@@ -538,6 +632,7 @@ test_happy_path_materializes_inbox (void)
   assert_table_count (duckdb.connection, "mailbox_uid_state", 1);
   assert_table_count (duckdb.connection, "objects", 2);
   assert_table_count (duckdb.connection, "messages", 2);
+  assert_table_count (duckdb.connection, "message_headers", 2);
   assert_table_count (duckdb.connection, "mailbox_memberships", 2);
   assert_table_count (duckdb.connection, "message_flags", 0);
   assert_table_count (duckdb.connection, "message_keywords", 0);
@@ -556,6 +651,43 @@ test_happy_path_materializes_inbox (void)
   g_assert_cmpuint (query_uint64 (duckdb.connection,
           "SELECT uid FROM mailbox_memberships WHERE "
           "membership_id = 'mailbox:mailbox-inbox:journal:22:2';"), ==, 2);
+  g_assert_cmpstr (query_string (duckdb.connection,
+          "SELECT subject FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"), ==, "First subject");
+  g_assert_cmpstr (query_string (duckdb.connection,
+          "SELECT from_addr FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"), ==, "sender@example.test");
+  g_assert_cmpstr (query_string (duckdb.connection,
+          "SELECT to_addr FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"), ==, "to@example.test");
+  g_assert_cmpstr (query_string (duckdb.connection,
+          "SELECT cc_addr FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"), ==, "cc@example.test");
+  g_assert_cmpstr (query_string (duckdb.connection,
+          "SELECT bcc_addr FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"), ==, "bcc@example.test");
+  g_assert_cmpstr (query_string (duckdb.connection,
+          "SELECT date_raw FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"), ==,
+      "Fri, 12 Jun 2026 10:00:00 +0000");
+  g_assert_cmpstr (query_string (duckdb.connection,
+          "SELECT rfc_message_id FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"), ==, "<first@example.test>");
+  g_assert_true (query_is_null (duckdb.connection,
+          "SELECT rfc_message_id FROM message_headers WHERE "
+          "message_id = 'journal:22:2';"));
+  g_assert_true (query_is_null (duckdb.connection,
+          "SELECT cc_addr FROM message_headers WHERE "
+          "message_id = 'journal:22:2';"));
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT duplicate_message_id_count FROM message_headers WHERE "
+          "message_id = 'journal:22:2';"), ==, 2);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT journal_offset FROM message_headers WHERE "
+          "message_id = 'journal:22:2';"), ==, 22);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT journal_sequence FROM message_headers WHERE "
+          "message_id = 'journal:22:2';"), ==, 2);
 
   first_message_id = query_string (duckdb.connection,
       "SELECT message_id FROM messages WHERE journal_offset = 11 "
@@ -586,6 +718,7 @@ test_duplicate_object_materializes_distinct_messages (void)
   open_duckdb_fixture (path, &duckdb);
   assert_table_count (duckdb.connection, "objects", 1);
   assert_table_count (duckdb.connection, "messages", 2);
+  assert_table_count (duckdb.connection, "message_headers", 2);
   assert_table_count (duckdb.connection, "mailbox_memberships", 2);
   g_assert_cmpuint (query_uint64 (duckdb.connection,
           "SELECT uid FROM mailbox_memberships WHERE message_id = "
@@ -636,6 +769,7 @@ test_reapply_projection_is_idempotent (void)
   assert_table_count (duckdb.connection, "mailbox_uid_state", 1);
   assert_table_count (duckdb.connection, "objects", 2);
   assert_table_count (duckdb.connection, "messages", 2);
+  assert_table_count (duckdb.connection, "message_headers", 2);
   assert_table_count (duckdb.connection, "mailbox_memberships", 2);
   assert_table_count (duckdb.connection, "message_flags", 1);
   assert_table_count (duckdb.connection, "message_keywords", 1);
@@ -746,6 +880,7 @@ test_suffix_overlap_apply_preserves_existing_uids (void)
   open_duckdb_fixture (path, &duckdb);
   assert_table_count (duckdb.connection, "objects", 3);
   assert_table_count (duckdb.connection, "messages", 3);
+  assert_table_count (duckdb.connection, "message_headers", 3);
   assert_table_count (duckdb.connection, "mailbox_memberships", 3);
   assert_materialization_checkpoint (duckdb.connection, 33, 3);
   g_assert_cmpuint (query_uint64 (duckdb.connection,
@@ -765,6 +900,7 @@ test_suffix_overlap_apply_preserves_existing_uids (void)
   open_duckdb_fixture (path, &duckdb);
   assert_table_count (duckdb.connection, "objects", 3);
   assert_table_count (duckdb.connection, "messages", 3);
+  assert_table_count (duckdb.connection, "message_headers", 3);
   assert_table_count (duckdb.connection, "mailbox_memberships", 3);
   assert_materialization_checkpoint (duckdb.connection, 33, 3);
   g_assert_cmpuint (query_uint64 (duckdb.connection,
@@ -778,6 +914,7 @@ test_suffix_overlap_apply_preserves_existing_uids (void)
   open_duckdb_fixture (path, &duckdb);
   assert_table_count (duckdb.connection, "objects", 3);
   assert_table_count (duckdb.connection, "messages", 3);
+  assert_table_count (duckdb.connection, "message_headers", 3);
   assert_table_count (duckdb.connection, "mailbox_memberships", 3);
   assert_materialization_checkpoint (duckdb.connection, 33, 3);
   g_assert_cmpuint (query_uint64 (duckdb.connection,
@@ -847,6 +984,8 @@ main (int argc, char **argv)
       test_divergent_object_conflict_rolls_back);
   g_test_add_func ("/ingestion/delivery-materializer/divergent-message",
       test_divergent_message_conflict_rolls_back);
+  g_test_add_func ("/ingestion/delivery-materializer/divergent-message-headers",
+      test_divergent_message_headers_conflict_rolls_back);
   g_test_add_func ("/ingestion/delivery-materializer/divergent-membership",
       test_divergent_membership_conflict_rolls_back);
   g_test_add_func ("/ingestion/delivery-materializer/preserve-membership-uid",
