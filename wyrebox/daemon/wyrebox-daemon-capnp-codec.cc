@@ -459,6 +459,80 @@ encode_mailbox_list_response (const WyreboxDaemonResponseFrame *response_frame,
 }
 
 static gboolean
+encode_stream_chunk_response (const WyreboxDaemonResponseFrame *response_frame,
+    GBytes **out_bytes,
+    GError **error)
+{
+  try {
+    const WyreboxDaemonStreamChunkFrame *chunk =
+        &response_frame->stream_chunk;
+    const guint8 *chunk_bytes = NULL;
+    gsize chunk_size = 0;
+
+    if (response_frame->request_id == NULL || *response_frame->request_id == '\0')
+      return set_invalid_argument (error, "response frame request_id is required");
+
+    if (chunk->request_id == NULL || *chunk->request_id == '\0')
+      return set_invalid_argument (error,
+          "stream chunk response request_id is required");
+
+    if (g_strcmp0 (response_frame->request_id, chunk->request_id) != 0)
+      return set_invalid_argument (error,
+          "stream chunk response request_id does not match frame envelope");
+
+    const bool has_message_id =
+        chunk->message_id != NULL && *chunk->message_id != '\0';
+    const bool has_query_id =
+        chunk->query_id != NULL && *chunk->query_id != '\0';
+
+    if (has_message_id == has_query_id)
+      return set_invalid_argument (error,
+          "stream chunk response requires exactly one of message_id or query_id");
+
+    if (chunk->bytes != NULL)
+      chunk_bytes = static_cast<const guint8 *> (
+          g_bytes_get_data (chunk->bytes, &chunk_size));
+
+    if (!chunk->end_of_stream && chunk_size == 0)
+      return set_invalid_argument (error,
+          "non-final stream chunk response requires bytes");
+
+    capnp::MallocMessageBuilder response_builder;
+    auto response_frame_message = response_builder.initRoot<ResponseFrame> ();
+    auto response_chunk = response_frame_message.initStreamChunk ();
+
+    response_frame_message.setRequestId (response_frame->request_id);
+    response_frame_message.setCorrelationId (
+        response_frame->correlation_id != NULL ? response_frame->correlation_id : "");
+
+    response_chunk.setRequestId (chunk->request_id);
+    response_chunk.setMessageId (
+        chunk->message_id != NULL ? chunk->message_id : "");
+    response_chunk.setQueryId (chunk->query_id != NULL ? chunk->query_id : "");
+    response_chunk.setCorrelationId (
+        chunk->correlation_id != NULL ? chunk->correlation_id : "");
+    response_chunk.setChunkIndex (chunk->chunk_index);
+    response_chunk.setBytes (kj::arrayPtr (
+        reinterpret_cast<const capnp::byte *> (chunk_bytes), chunk_size));
+    response_chunk.setEndOfStream (chunk->end_of_stream);
+
+    auto words = capnp::messageToFlatArray (response_builder);
+    auto bytes = words.asBytes ();
+    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+
+    return TRUE;
+  } catch (const std::exception &e) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "stream chunk response encode failed: %s",
+        e.what ());
+  }
+
+  return FALSE;
+}
+
+static gboolean
 encode_mailbox_select_response (const WyreboxDaemonResponseFrame *response_frame,
     GBytes **out_bytes,
     GError **error)
@@ -651,6 +725,10 @@ wyrebox_daemon_capnp_codec_encode_response_frame (
       return g_steal_pointer (&out_bytes);
     case WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_LIST:
       if (!encode_mailbox_list_response (response_frame, &out_bytes, error))
+        return NULL;
+      return g_steal_pointer (&out_bytes);
+    case WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK:
+      if (!encode_stream_chunk_response (response_frame, &out_bytes, error))
         return NULL;
       return g_steal_pointer (&out_bytes);
     case WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_SELECT:

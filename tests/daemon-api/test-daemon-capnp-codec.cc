@@ -674,6 +674,170 @@ assert_response_bytes_encode_mailbox_select (void)
 }
 
 static void
+assert_response_bytes_encode_stream_chunk (void)
+{
+  const guint8 payload[] = { 0xde, 0xad, 0xbe, 0xef };
+  g_autoptr (GBytes) chunk_bytes = g_bytes_new_static (payload,
+      sizeof (payload));
+  g_auto (WyreboxDaemonStreamChunkFrame) chunk = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) response = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+
+  g_assert_true (wyrebox_daemon_stream_chunk_frame_init (&chunk,
+      "request-stream",
+      "message-1",
+      NULL,
+      "corr-stream",
+      42,
+      chunk_bytes,
+      FALSE,
+      &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_stream_chunk (&response,
+      &chunk,
+      &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
+      NULL,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  gsize size = 0;
+  const guint8 *data = static_cast<const guint8 *> (
+      g_bytes_get_data (encoded, &size));
+  auto words = kj::arrayPtr (
+      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  capnp::FlatArrayMessageReader reader (words);
+
+  auto response_frame = reader.getRoot<ResponseFrame> ();
+  g_assert_true (response_frame.which () == ResponseFrame::STREAM_CHUNK);
+  g_assert_cmpstr (response_frame.getRequestId ().cStr (), ==,
+      "request-stream");
+  g_assert_cmpstr (response_frame.getCorrelationId ().cStr (), ==,
+      "corr-stream");
+  g_assert_cmpstr (response_frame.getStreamChunk ().getRequestId ().cStr (), ==,
+      "request-stream");
+  g_assert_cmpstr (response_frame.getStreamChunk ().getMessageId ().cStr (), ==,
+      "message-1");
+  g_assert_cmpstr (response_frame.getStreamChunk ().getQueryId ().cStr (), ==,
+      "");
+  g_assert_cmpstr (response_frame.getStreamChunk ().getCorrelationId ().cStr (),
+      ==,
+      "corr-stream");
+  g_assert_cmpuint (response_frame.getStreamChunk ().getChunkIndex (), ==, 42);
+  g_assert_false (response_frame.getStreamChunk ().getEndOfStream ());
+  g_assert_cmpuint (response_frame.getStreamChunk ().getBytes ().size (), ==,
+      sizeof (payload));
+  g_assert_cmpuint (response_frame.getStreamChunk ().getBytes ()[0], ==, 0xde);
+  g_assert_cmpuint (response_frame.getStreamChunk ().getBytes ()[1], ==, 0xad);
+  g_assert_cmpuint (response_frame.getStreamChunk ().getBytes ()[2], ==, 0xbe);
+  g_assert_cmpuint (response_frame.getStreamChunk ().getBytes ()[3], ==, 0xef);
+}
+
+static void
+assert_response_bytes_reject_ambiguous_stream_chunk (void)
+{
+  const guint8 payload[] = { 0xde, 0xad };
+  g_autoptr (GBytes) chunk_bytes = g_bytes_new_static (payload,
+      sizeof (payload));
+  g_auto (WyreboxDaemonResponseFrame) response = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+
+  response.kind = WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK;
+  response.request_id = g_strdup ("request-stream");
+  response.stream_chunk.request_id = g_strdup ("request-stream");
+  response.stream_chunk.message_id = g_strdup ("message-1");
+  response.stream_chunk.query_id = g_strdup ("query-1");
+  response.stream_chunk.chunk_index = 0;
+  response.stream_chunk.bytes = g_bytes_ref (chunk_bytes);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
+      NULL,
+      &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
+assert_response_bytes_reject_mismatched_stream_chunk_request (void)
+{
+  const guint8 payload[] = { 0xca, 0xfe };
+  g_autoptr (GBytes) chunk_bytes = g_bytes_new_static (payload,
+      sizeof (payload));
+  g_auto (WyreboxDaemonResponseFrame) response = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+
+  response.kind = WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK;
+  response.request_id = g_strdup ("request-envelope");
+  response.stream_chunk.request_id = g_strdup ("request-payload");
+  response.stream_chunk.message_id = g_strdup ("message-1");
+  response.stream_chunk.chunk_index = 0;
+  response.stream_chunk.bytes = g_bytes_ref (chunk_bytes);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
+      NULL,
+      &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
+assert_response_bytes_encode_final_empty_stream_chunk (void)
+{
+  g_auto (WyreboxDaemonStreamChunkFrame) chunk = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) response = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+
+  g_assert_true (wyrebox_daemon_stream_chunk_frame_init (&chunk,
+      "request-stream-final",
+      NULL,
+      "query-1",
+      NULL,
+      43,
+      NULL,
+      TRUE,
+      &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_stream_chunk (&response,
+      &chunk,
+      &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
+      NULL,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  gsize size = 0;
+  const guint8 *data = static_cast<const guint8 *> (
+      g_bytes_get_data (encoded, &size));
+  auto words = kj::arrayPtr (
+      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  capnp::FlatArrayMessageReader reader (words);
+
+  auto response_frame = reader.getRoot<ResponseFrame> ();
+  g_assert_true (response_frame.which () == ResponseFrame::STREAM_CHUNK);
+  g_assert_cmpstr (response_frame.getStreamChunk ().getRequestId ().cStr (), ==,
+      "request-stream-final");
+  g_assert_cmpstr (response_frame.getStreamChunk ().getMessageId ().cStr (), ==,
+      "");
+  g_assert_cmpstr (response_frame.getStreamChunk ().getQueryId ().cStr (), ==,
+      "query-1");
+  g_assert_cmpuint (response_frame.getStreamChunk ().getChunkIndex (), ==, 43);
+  g_assert_true (response_frame.getStreamChunk ().getEndOfStream ());
+  g_assert_cmpuint (response_frame.getStreamChunk ().getBytes ().size (), ==, 0);
+}
+
+static void
 assert_response_bytes_encode_error (void)
 {
   g_auto (WyreboxDaemonErrorFrame) error_frame = { 0 };
@@ -995,6 +1159,15 @@ main (int argc, char **argv)
       assert_response_bytes_encode_mailbox_list);
   g_test_add_func ("/daemon-api/capnp/codec/encode-mailbox-select",
       assert_response_bytes_encode_mailbox_select);
+  g_test_add_func ("/daemon-api/capnp/codec/encode-stream-chunk",
+      assert_response_bytes_encode_stream_chunk);
+  g_test_add_func ("/daemon-api/capnp/codec/reject-ambiguous-stream-chunk",
+      assert_response_bytes_reject_ambiguous_stream_chunk);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-mismatched-stream-chunk-request",
+      assert_response_bytes_reject_mismatched_stream_chunk_request);
+  g_test_add_func ("/daemon-api/capnp/codec/encode-final-empty-stream-chunk",
+      assert_response_bytes_encode_final_empty_stream_chunk);
   g_test_add_func ("/daemon-api/capnp/codec/encode-error",
       assert_response_bytes_encode_error);
   g_test_add_func ("/daemon-api/capnp/codec/encode-success",

@@ -15,6 +15,7 @@ wyrebox_daemon_response_frame_clear (WyreboxDaemonResponseFrame *frame)
   frame->kind = WYREBOX_DAEMON_RESPONSE_FRAME_NONE;
   wyrebox_daemon_success_receipt_clear (&frame->success);
   wyrebox_daemon_error_frame_clear (&frame->error);
+  wyrebox_daemon_stream_chunk_frame_clear (&frame->stream_chunk);
   wyrebox_daemon_mailbox_list_result_clear (&frame->mailbox_list);
   wyrebox_daemon_mailbox_select_result_clear (&frame->mailbox_select);
 }
@@ -76,6 +77,15 @@ copy_error_frame (WyreboxDaemonErrorFrame *dest,
 {
   return wyrebox_daemon_error_frame_init (dest,
       src->request_id, src->error_class, src->message, src->retry_hint, error);
+}
+
+static gboolean
+copy_stream_chunk_frame (WyreboxDaemonStreamChunkFrame *dest,
+    const WyreboxDaemonStreamChunkFrame *src, GError **error)
+{
+  return wyrebox_daemon_stream_chunk_frame_init (dest,
+      src->request_id, src->message_id, src->query_id, src->correlation_id,
+      src->chunk_index, src->bytes, src->end_of_stream, error);
 }
 
 static gboolean
@@ -198,6 +208,33 @@ wyrebox_daemon_response_frame_init_error (WyreboxDaemonResponseFrame *frame,
   next.correlation_id = NULL;
   next.kind = WYREBOX_DAEMON_RESPONSE_FRAME_NONE;
   memset (&next.error, 0, sizeof (next.error));
+
+  return TRUE;
+}
+
+gboolean
+wyrebox_daemon_response_frame_init_stream_chunk (WyreboxDaemonResponseFrame
+    *frame, const WyreboxDaemonStreamChunkFrame *stream_chunk, GError **error)
+{
+  g_auto (WyreboxDaemonResponseFrame) next = { 0 };
+
+  g_return_val_if_fail (frame != NULL, FALSE);
+  g_return_val_if_fail (stream_chunk != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (!copy_stream_chunk_frame (&next.stream_chunk, stream_chunk, error))
+    return FALSE;
+
+  next.request_id = g_strdup (stream_chunk->request_id);
+  copy_optional_string (&next.correlation_id, stream_chunk->correlation_id);
+  next.kind = WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK;
+
+  wyrebox_daemon_response_frame_clear (frame);
+  *frame = next;
+  next.request_id = NULL;
+  next.correlation_id = NULL;
+  next.kind = WYREBOX_DAEMON_RESPONSE_FRAME_NONE;
+  memset (&next.stream_chunk, 0, sizeof (next.stream_chunk));
 
   return TRUE;
 }

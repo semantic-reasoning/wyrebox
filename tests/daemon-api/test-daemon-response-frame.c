@@ -58,6 +58,28 @@ make_mailbox_select_result (void)
         result.uid_validity,.uid_next = result.uid_next,};
 }
 
+static WyreboxDaemonStreamChunkFrame
+make_stream_chunk_frame (void)
+{
+  const guint8 payload[] = { 0x10, 0x20, 0x30 };
+  g_autoptr (GBytes) bytes = g_bytes_new_static (payload, sizeof (payload));
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonStreamChunkFrame) chunk = { 0 };
+
+  g_assert_true (wyrebox_daemon_stream_chunk_frame_init (&chunk,
+          "request-stream", "message-1", NULL, "correlation-stream",
+          5, bytes, FALSE, &error));
+  g_assert_no_error (error);
+
+  return (WyreboxDaemonStreamChunkFrame) {
+  .request_id = g_steal_pointer (&chunk.request_id),.message_id =
+        g_steal_pointer (&chunk.message_id),.query_id =
+        g_steal_pointer (&chunk.query_id),.correlation_id =
+        g_steal_pointer (&chunk.correlation_id),.chunk_index =
+        chunk.chunk_index,.bytes =
+        g_steal_pointer (&chunk.bytes),.end_of_stream = chunk.end_of_stream,};
+}
+
 static void
 assert_mailbox_list_entry (const WyreboxDaemonMailboxListResult *result,
     guint index,
@@ -79,6 +101,44 @@ assert_mailbox_list_entry (const WyreboxDaemonMailboxListResult *result,
   g_assert_cmpstr (entry->special_use, ==, special_use);
   g_assert_cmpint (entry->is_selectable, ==, is_selectable);
   g_assert_cmpint (entry->child_state, ==, child_state);
+}
+
+static void
+test_response_frame_init_stream_chunk_copies_payload (void)
+{
+  g_auto (WyreboxDaemonStreamChunkFrame) chunk = make_stream_chunk_frame ();
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  const guint8 *input = NULL;
+  const guint8 *stored = NULL;
+  gsize input_size = 0;
+  gsize stored_size = 0;
+
+  input = g_bytes_get_data (chunk.bytes, &input_size);
+  g_assert_true (wyrebox_daemon_response_frame_init_stream_chunk (&frame,
+          &chunk, &error));
+  g_assert_no_error (error);
+
+  wyrebox_daemon_stream_chunk_frame_clear (&chunk);
+  stored = g_bytes_get_data (frame.stream_chunk.bytes, &stored_size);
+
+  g_assert_cmpstr (frame.request_id, ==, "request-stream");
+  g_assert_cmpstr (frame.correlation_id, ==, "correlation-stream");
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_null (frame.success.request_id);
+  g_assert_null (frame.error.request_id);
+  g_assert_cmpstr (frame.stream_chunk.request_id, ==, "request-stream");
+  g_assert_cmpstr (frame.stream_chunk.message_id, ==, "message-1");
+  g_assert_null (frame.stream_chunk.query_id);
+  g_assert_cmpstr (frame.stream_chunk.correlation_id, ==, "correlation-stream");
+  g_assert_cmpuint (frame.stream_chunk.chunk_index, ==, 5);
+  g_assert_false (frame.stream_chunk.end_of_stream);
+  g_assert_cmpuint (input_size, ==, 3);
+  g_assert_cmpuint (stored_size, ==, 3);
+  g_assert_true (stored != input);
+  g_assert_cmpuint (stored[0], ==, 0x10);
+  g_assert_cmpuint (stored[1], ==, 0x20);
+  g_assert_cmpuint (stored[2], ==, 0x30);
 }
 
 static void
@@ -351,6 +411,24 @@ test_response_frame_rejects_malformed_mailbox_list_entry (void)
 }
 
 static void
+test_response_frame_rejects_invalid_stream_chunk_payload (void)
+{
+  WyreboxDaemonStreamChunkFrame chunk = {
+    .request_id = "request-stream",
+    .chunk_index = 0,
+    .end_of_stream = TRUE,
+  };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+  g_assert_false (wyrebox_daemon_response_frame_init_stream_chunk (&frame,
+          &chunk, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_NONE);
+  g_assert_null (frame.request_id);
+}
+
+static void
 test_response_frame_rejects_invalid_success_payload (void)
 {
   WyreboxDaemonSuccessReceipt receipt = {
@@ -402,6 +480,131 @@ test_response_frame_rejects_invalid_error_payload (void)
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_NONE);
   g_assert_null (frame.request_id);
+}
+
+static void
+test_response_frame_stream_chunk_then_success_is_mutually_exclusive (void)
+{
+  g_auto (WyreboxDaemonStreamChunkFrame) chunk = make_stream_chunk_frame ();
+  g_auto (WyreboxDaemonSuccessReceipt) receipt = make_success_receipt ();
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_response_frame_init_stream_chunk (&frame,
+          &chunk, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_success (&frame,
+          &receipt, NULL, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+  g_assert_cmpstr (frame.request_id, ==, "request-success");
+  g_assert_null (frame.stream_chunk.request_id);
+  g_assert_null (frame.stream_chunk.message_id);
+  g_assert_null (frame.stream_chunk.query_id);
+  g_assert_null (frame.stream_chunk.bytes);
+  g_assert_cmpstr (frame.success.request_id, ==, "request-success");
+}
+
+static void
+test_response_frame_stream_chunk_then_error_is_mutually_exclusive (void)
+{
+  g_auto (WyreboxDaemonStreamChunkFrame) chunk = make_stream_chunk_frame ();
+  g_auto (WyreboxDaemonErrorFrame) error_frame = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_response_frame_init_stream_chunk (&frame,
+          &chunk, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_error_frame_init (&error_frame,
+          "request-error",
+          WYREBOX_DAEMON_ERROR_NOT_FOUND, "not found", NULL, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_error (&frame,
+          &error_frame, NULL, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpstr (frame.request_id, ==, "request-error");
+  g_assert_null (frame.stream_chunk.request_id);
+  g_assert_null (frame.stream_chunk.bytes);
+  g_assert_cmpstr (frame.error.request_id, ==, "request-error");
+}
+
+static void
+test_response_frame_stream_chunk_then_mailbox_list_is_mutually_exclusive (void)
+{
+  g_auto (WyreboxDaemonStreamChunkFrame) chunk = make_stream_chunk_frame ();
+  g_auto (WyreboxDaemonMailboxListResult) result = make_mailbox_list_result ();
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_response_frame_init_stream_chunk (&frame,
+          &chunk, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_mailbox_list (&frame,
+          "request-list", NULL, &result, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_LIST);
+  g_assert_cmpstr (frame.request_id, ==, "request-list");
+  g_assert_null (frame.stream_chunk.request_id);
+  g_assert_null (frame.stream_chunk.bytes);
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
+      (&frame.mailbox_list), ==, 2);
+}
+
+static void
+    test_response_frame_stream_chunk_then_mailbox_select_is_mutually_exclusive
+    (void)
+{
+  g_auto (WyreboxDaemonStreamChunkFrame) chunk = make_stream_chunk_frame ();
+  g_auto (WyreboxDaemonMailboxSelectResult) result =
+      make_mailbox_select_result ();
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_response_frame_init_stream_chunk (&frame,
+          &chunk, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_mailbox_select (&frame,
+          "request-select", NULL, &result, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==,
+      WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_SELECT);
+  g_assert_cmpstr (frame.request_id, ==, "request-select");
+  g_assert_null (frame.stream_chunk.request_id);
+  g_assert_null (frame.stream_chunk.bytes);
+  g_assert_cmpstr (frame.mailbox_select.mailbox_id, ==, "view-project-a");
+}
+
+static void
+test_response_frame_success_then_stream_chunk_is_mutually_exclusive (void)
+{
+  g_auto (WyreboxDaemonSuccessReceipt) receipt = make_success_receipt ();
+  g_auto (WyreboxDaemonStreamChunkFrame) chunk = make_stream_chunk_frame ();
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_response_frame_init_success (&frame,
+          &receipt, NULL, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_stream_chunk (&frame,
+          &chunk, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpstr (frame.request_id, ==, "request-stream");
+  g_assert_null (frame.success.request_id);
+  g_assert_cmpstr (frame.stream_chunk.request_id, ==, "request-stream");
 }
 
 static void
@@ -512,6 +715,33 @@ test_response_frame_failure_leaves_existing_contents (void)
   g_assert_cmpstr (frame.request_id, ==, "request-success");
   g_assert_cmpstr (frame.correlation_id, ==, "stable-correlation");
   g_assert_cmpstr (frame.success.request_id, ==, "request-success");
+}
+
+static void
+test_response_frame_stream_chunk_failure_leaves_existing_contents (void)
+{
+  g_auto (WyreboxDaemonStreamChunkFrame) chunk = make_stream_chunk_frame ();
+  WyreboxDaemonStreamChunkFrame invalid = {
+    .request_id = "request-invalid",
+    .end_of_stream = TRUE,
+  };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_response_frame_init_stream_chunk (&frame,
+          &chunk, &error));
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_daemon_response_frame_init_stream_chunk (&frame,
+          &invalid, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpstr (frame.request_id, ==, "request-stream");
+  g_assert_cmpstr (frame.correlation_id, ==, "correlation-stream");
+  g_assert_cmpstr (frame.stream_chunk.message_id, ==, "message-1");
+  g_assert_null (frame.stream_chunk.query_id);
+  g_assert_cmpuint (frame.stream_chunk.chunk_index, ==, 5);
 }
 
 static void
@@ -629,6 +859,8 @@ main (int argc, char **argv)
       test_response_frame_init_mailbox_list_copies_payload);
   g_test_add_func ("/daemon-api/response-frame/mailbox-select-copies-payload",
       test_response_frame_init_mailbox_select_copies_payload);
+  g_test_add_func ("/daemon-api/response-frame/stream-chunk-copies-payload",
+      test_response_frame_init_stream_chunk_copies_payload);
   g_test_add_func ("/daemon-api/response-frame/"
       "mailbox-list-deep-copies-payload",
       test_response_frame_mailbox_list_deep_copies_payload);
@@ -643,6 +875,8 @@ main (int argc, char **argv)
       test_response_frame_rejects_non_journaled_success_payload);
   g_test_add_func ("/daemon-api/response-frame/rejects-invalid-error",
       test_response_frame_rejects_invalid_error_payload);
+  g_test_add_func ("/daemon-api/response-frame/rejects-invalid-stream-chunk",
+      test_response_frame_rejects_invalid_stream_chunk_payload);
   g_test_add_func ("/daemon-api/response-frame/"
       "rejects-invalid-mailbox-list",
       test_response_frame_rejects_invalid_mailbox_list_payload);
@@ -660,8 +894,26 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/response-frame/"
       "mailbox-select-then-error-exclusive",
       test_response_frame_mailbox_select_then_error_is_mutually_exclusive);
+  g_test_add_func ("/daemon-api/response-frame/"
+      "stream-chunk-then-success-exclusive",
+      test_response_frame_stream_chunk_then_success_is_mutually_exclusive);
+  g_test_add_func ("/daemon-api/response-frame/"
+      "stream-chunk-then-error-exclusive",
+      test_response_frame_stream_chunk_then_error_is_mutually_exclusive);
+  g_test_add_func ("/daemon-api/response-frame/"
+      "stream-chunk-then-mailbox-list-exclusive",
+      test_response_frame_stream_chunk_then_mailbox_list_is_mutually_exclusive);
+  g_test_add_func ("/daemon-api/response-frame/"
+      "stream-chunk-then-mailbox-select-exclusive",
+      test_response_frame_stream_chunk_then_mailbox_select_is_mutually_exclusive);
+  g_test_add_func ("/daemon-api/response-frame/"
+      "success-then-stream-chunk-exclusive",
+      test_response_frame_success_then_stream_chunk_is_mutually_exclusive);
   g_test_add_func ("/daemon-api/response-frame/failure-leaves-existing",
       test_response_frame_failure_leaves_existing_contents);
+  g_test_add_func ("/daemon-api/response-frame/"
+      "stream-chunk-failure-leaves-existing",
+      test_response_frame_stream_chunk_failure_leaves_existing_contents);
   g_test_add_func ("/daemon-api/response-frame/"
       "mailbox-list-failure-leaves-existing",
       test_response_frame_mailbox_list_failure_leaves_existing_contents);
