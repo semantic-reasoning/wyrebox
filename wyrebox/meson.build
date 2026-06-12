@@ -2,6 +2,8 @@ wyrebox_sources = files(
   'wyrebox-local-object-store.c',
   'wyrebox-daemon-mailbox-list-request.c',
   'wyrebox-daemon-mailbox-list-result.c',
+  'wyrebox-daemon-mailbox-list-service.c',
+  'wyrebox-daemon-mailbox-list-dispatcher.c',
   'wyrebox-daemon-request-router.c',
   'wyrebox-daemon-request-identity.c',
   'wyrebox-daemon-fact-mutation-dispatcher.c',
