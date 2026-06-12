@@ -8,6 +8,7 @@
 #include <glib.h>
 #include <gio/gio.h>
 #include <glib-object.h>
+#include <glib/gstdio.h>
 
 typedef struct
 {
@@ -15,6 +16,43 @@ typedef struct
   guint validation_call_count;
   guint expected_fail_at_call;
 } TestMigrationFixtureData;
+
+static void
+remove_directory_tree (const char *path)
+{
+  g_autoptr (GDir) dir = NULL;
+  const char *entry = NULL;
+
+  if (path == NULL)
+    return;
+
+  dir = g_dir_open (path, 0, NULL);
+  if (dir == NULL) {
+    (void) g_remove (path);
+    return;
+  }
+
+  while ((entry = g_dir_read_name (dir)) != NULL) {
+    g_autofree char *child = g_build_filename (path, entry, NULL);
+    remove_directory_tree (child);
+  }
+
+  (void) g_rmdir (path);
+}
+
+static char *
+make_duckdb_path (char **out_root)
+{
+  g_autofree char *root = NULL;
+
+  g_assert_nonnull (out_root);
+
+  root = g_dir_make_tmp ("wyrebox-schema-migration-XXXXXX", NULL);
+  g_assert_nonnull (root);
+
+  *out_root = g_steal_pointer (&root);
+  return g_build_filename (*out_root, "schema.duckdb", NULL);
+}
 
 typedef struct _TestSchemaMetadataStoreSpy TestSchemaMetadataStoreSpy;
 typedef struct _TestSchemaMetadataStoreSpyClass TestSchemaMetadataStoreSpyClass;
@@ -476,6 +514,225 @@ test_schema_migration_run_store_to_current_save_failure_preserves_state (void)
 }
 
 static void
+    test_schema_migration_duckdb_run_store_missing_metadata_persists_current
+    (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
+          store, FALSE, &error));
+  g_assert_no_error (error);
+  g_clear_object (&store);
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_metadata_store_load (store, &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==,
+      wyrebox_schema_migration_get_current_schema_version ());
+  g_assert_false (loaded.materialization_checkpoint_present);
+  g_assert_false (loaded.checkpoint_precondition_satisfied);
+
+  g_clear_object (&store);
+  remove_directory_tree (root);
+}
+
+static void
+test_schema_migration_duckdb_run_store_current_preserves_checkpoint (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  base.schema_version_present = TRUE;
+  base.schema_version = wyrebox_schema_migration_get_current_schema_version ();
+  test_schema_migration_set_materialization_checkpoint_fields (&base);
+  g_assert_true (wyrebox_schema_metadata_store_save (store, &base, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
+          store, FALSE, &error));
+  g_assert_no_error (error);
+  g_clear_object (&store);
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_metadata_store_load (store, &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==, base.schema_version);
+  g_assert_true (loaded.materialization_checkpoint_present);
+  g_assert_cmpuint (loaded.materialization_checkpoint_journal_offset, ==,
+      base.materialization_checkpoint_journal_offset);
+  g_assert_cmpuint (loaded.materialization_checkpoint_sequence, ==,
+      base.materialization_checkpoint_sequence);
+  g_assert_false (loaded.checkpoint_precondition_satisfied);
+
+  g_clear_object (&store);
+  remove_directory_tree (root);
+}
+
+static void
+    test_schema_migration_duckdb_run_store_legacy_with_checkpoint_persists_current
+    (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  base.schema_version_present = TRUE;
+  base.schema_version = 0;
+  test_schema_migration_set_materialization_checkpoint_fields (&base);
+  g_assert_true (wyrebox_schema_metadata_store_save (store, &base, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
+          store, TRUE, &error));
+  g_assert_no_error (error);
+  g_clear_object (&store);
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_metadata_store_load (store, &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==,
+      wyrebox_schema_migration_get_current_schema_version ());
+  g_assert_false (loaded.materialization_checkpoint_present);
+  g_assert_false (loaded.checkpoint_precondition_satisfied);
+
+  g_clear_object (&store);
+  remove_directory_tree (root);
+}
+
+static void
+    test_schema_migration_duckdb_run_store_legacy_without_checkpoint_preserves_state
+    (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  base.schema_version_present = TRUE;
+  base.schema_version = 0;
+  test_schema_migration_set_materialization_checkpoint_fields (&base);
+  g_assert_true (wyrebox_schema_metadata_store_save (store, &base, &error));
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_schema_migration_run_store_to_current (migration,
+          store, FALSE, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+  g_clear_object (&store);
+  g_clear_error (&error);
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_metadata_store_load (store, &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==, base.schema_version);
+  g_assert_true (loaded.materialization_checkpoint_present);
+  g_assert_cmpuint (loaded.materialization_checkpoint_journal_offset, ==,
+      base.materialization_checkpoint_journal_offset);
+  g_assert_cmpuint (loaded.materialization_checkpoint_sequence, ==,
+      base.materialization_checkpoint_sequence);
+  g_assert_false (loaded.checkpoint_precondition_satisfied);
+
+  g_clear_object (&store);
+  remove_directory_tree (root);
+}
+
+static void
+    test_schema_migration_duckdb_run_store_future_metadata_preserves_state
+    (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  base.schema_version_present = TRUE;
+  base.schema_version =
+      wyrebox_schema_migration_get_current_schema_version () + 1;
+  test_schema_migration_set_materialization_checkpoint_fields (&base);
+  g_assert_true (wyrebox_schema_metadata_store_save (store, &base, &error));
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_schema_migration_run_store_to_current (migration,
+          store, FALSE, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
+  g_clear_object (&store);
+  g_clear_error (&error);
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_metadata_store_load (store, &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==, base.schema_version);
+  g_assert_true (loaded.materialization_checkpoint_present);
+  g_assert_cmpuint (loaded.materialization_checkpoint_journal_offset, ==,
+      base.materialization_checkpoint_journal_offset);
+  g_assert_cmpuint (loaded.materialization_checkpoint_sequence, ==,
+      base.materialization_checkpoint_sequence);
+  g_assert_false (loaded.checkpoint_precondition_satisfied);
+
+  g_clear_object (&store);
+  remove_directory_tree (root);
+}
+
+static void
 test_checkpoint_precondition_missing_blocks_legacy_migration (void)
 {
   g_autoptr (WyreboxSchemaMigration) migration = NULL;
@@ -853,6 +1110,21 @@ main (int argc, char **argv)
   g_test_add_func
       ("/migration/schema/run-store-to-current-save-failure",
       test_schema_migration_run_store_to_current_save_failure_preserves_state);
+  g_test_add_func
+      ("/migration/schema/duckdb-run-store-missing-metadata",
+      test_schema_migration_duckdb_run_store_missing_metadata_persists_current);
+  g_test_add_func
+      ("/migration/schema/duckdb-run-store-current-preserves-checkpoint",
+      test_schema_migration_duckdb_run_store_current_preserves_checkpoint);
+  g_test_add_func
+      ("/migration/schema/duckdb-run-store-legacy-with-checkpoint",
+      test_schema_migration_duckdb_run_store_legacy_with_checkpoint_persists_current);
+  g_test_add_func
+      ("/migration/schema/duckdb-run-store-legacy-without-checkpoint",
+      test_schema_migration_duckdb_run_store_legacy_without_checkpoint_preserves_state);
+  g_test_add_func
+      ("/migration/schema/duckdb-run-store-future-metadata",
+      test_schema_migration_duckdb_run_store_future_metadata_preserves_state);
   g_test_add_func ("/migration/schema/explicit-forward-path",
       test_explicit_forward_path_succeeds_with_checkpoint_precondition);
   g_test_add_func
