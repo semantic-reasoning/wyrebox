@@ -25,6 +25,7 @@ struct ResponseFrame {
     error @3 :ErrorFrame;
     streamChunk @4 :StreamChunkFrame;
     mailboxList @5 :MailboxListResponse;
+    mailboxSelect @6 :MailboxSelectResponse;
   }
 }
 
@@ -113,6 +114,15 @@ struct MailboxSelectRequest {
   accountIdentity @0 :Text;
   mailboxId @1 :Text;
   mailboxName @2 :Text;
+}
+
+struct MailboxSelectResponse {
+  requestId @0 :Text;
+  kind @1 :MailboxListEntryKind;
+  mailboxId @2 :Text;
+  mailboxName @3 :Text;
+  uidValidity @4 :UInt32;
+  uidNext @5 :UInt32;
 }
 
 struct MessageFetchRequest {
