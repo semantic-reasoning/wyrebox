@@ -1,6 +1,7 @@
 wyrebox_sources = files(
   'wyrebox-local-object-store.c',
   'wyrebox-daemon-request-identity.c',
+  'wyrebox-daemon-fact-mutation-request.c',
   'wyrebox-daemon-runtime.c',
   'wyrebox-daemon-error.c',
   'wyrebox-daemon-error-frame.c',
