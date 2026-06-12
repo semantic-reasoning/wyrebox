@@ -340,6 +340,25 @@ test_fact_mutation_request_rejects_uninitialized_encode (void)
 }
 
 static void
+test_fact_mutation_request_encode_revalidates_public_fields (void)
+{
+  const char *args[] = { "mail-1", NULL };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+  g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
+
+  request.mutation = WYREBOX_DAEMON_FACT_MUTATION_INSERT;
+  request.predicate_id = g_strdup ("ProjectMention");
+  request.scope_id = g_strdup ("account-1");
+  request.arguments = g_strdupv ((char **) args);
+
+  encoded = wyrebox_daemon_fact_mutation_request_encode (&request, &error);
+
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
 test_fact_mutation_request_rejects_trailing_payload_bytes (void)
 {
   const char *args[] = { "mail-1", NULL };
@@ -436,6 +455,9 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/fact-mutation-request/"
       "rejects-uninitialized-encode",
       test_fact_mutation_request_rejects_uninitialized_encode);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "encode-revalidates-public-fields",
+      test_fact_mutation_request_encode_revalidates_public_fields);
   g_test_add_func ("/daemon-api/fact-mutation-request/"
       "rejects-trailing-payload-bytes",
       test_fact_mutation_request_rejects_trailing_payload_bytes);

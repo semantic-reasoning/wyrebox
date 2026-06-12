@@ -357,6 +357,15 @@ wyrebox_daemon_fact_mutation_request_encode (const
     return NULL;
   }
 
+  if (!validate_predicate_id (request->predicate_id, error))
+    return NULL;
+
+  if (!validate_required_text (request->scope_id, "scope_id", error))
+    return NULL;
+
+  if (!validate_arguments ((const char *const *) request->arguments, error))
+    return NULL;
+
   argument_count = count_arguments (request->arguments);
   if (!checked_add_encoded_string_len (&payload_size, request->predicate_id,
           error))
