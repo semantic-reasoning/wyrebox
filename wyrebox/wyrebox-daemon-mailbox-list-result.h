@@ -1,5 +1,7 @@
 #pragma once
 
+#include "wyrebox-delivery-projection.h"
+
 #include <glib-object.h>
 
 /* *INDENT-OFF* */
@@ -97,6 +99,17 @@ const WyreboxDaemonMailboxListEntry *
 wyrebox_daemon_mailbox_list_result_get_entry (
     const WyreboxDaemonMailboxListResult *result,
     guint index);
+
+/*
+ * Initializes @result from delivered-message projection state. The current
+ * minimal materialization exposes a stable ordinary INBOX when at least one
+ * delivery exists and an empty LIST when no deliveries exist. On failure,
+ * leaves any existing contents of @result unchanged.
+ */
+gboolean wyrebox_daemon_mailbox_list_result_init_from_delivery_projection (
+    WyreboxDaemonMailboxListResult *result,
+    const WyreboxDeliveryProjectionList *projection,
+    GError **error);
 
 G_END_DECLS
 /* *INDENT-ON* */

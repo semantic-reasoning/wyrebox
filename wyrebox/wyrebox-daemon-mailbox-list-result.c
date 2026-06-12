@@ -251,3 +251,39 @@ wyrebox_daemon_mailbox_list_result_get_entry (const
 
   return g_ptr_array_index (result->entries, index);
 }
+
+gboolean
+    wyrebox_daemon_mailbox_list_result_init_from_delivery_projection
+    (WyreboxDaemonMailboxListResult * result,
+    const WyreboxDeliveryProjectionList * projection, GError ** error)
+{
+  g_auto (WyreboxDaemonMailboxListResult) next = { 0 };
+
+  g_return_val_if_fail (result != NULL, FALSE);
+  g_return_val_if_fail (projection != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (projection->records == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "mailbox LIST projection requires initialized delivery records");
+    return FALSE;
+  }
+
+  wyrebox_daemon_mailbox_list_result_init_empty (&next);
+
+  if (projection->records->len > 0) {
+    if (!wyrebox_daemon_mailbox_list_result_append_entry (&next,
+            WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+            "mailbox-inbox", "INBOX", "/", "\\Inbox", TRUE,
+            WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, error))
+      return FALSE;
+  }
+
+  wyrebox_daemon_mailbox_list_result_clear (result);
+  *result = next;
+  next.entries = NULL;
+
+  return TRUE;
+}

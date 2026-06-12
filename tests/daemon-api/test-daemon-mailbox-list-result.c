@@ -212,6 +212,81 @@ test_mailbox_list_entry_failure_preserves_existing_contents (void)
       WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN);
 }
 
+static void
+test_mailbox_list_result_projection_without_deliveries_is_empty (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+
+  projection.records = g_ptr_array_new ();
+
+  g_assert_true
+      (wyrebox_daemon_mailbox_list_result_init_from_delivery_projection
+      (&result, &projection, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries (&result),
+      ==, 0);
+}
+
+static void
+test_mailbox_list_result_projection_with_deliveries_exposes_inbox (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  const WyreboxDaemonMailboxListEntry *entry = NULL;
+
+  projection.records = g_ptr_array_new ();
+  g_ptr_array_add (projection.records, GINT_TO_POINTER (1));
+
+  g_assert_true
+      (wyrebox_daemon_mailbox_list_result_init_from_delivery_projection
+      (&result, &projection, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries (&result),
+      ==, 1);
+
+  entry = wyrebox_daemon_mailbox_list_result_get_entry (&result, 0);
+  g_assert_nonnull (entry);
+  g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  g_assert_cmpstr (entry->mailbox_id, ==, "mailbox-inbox");
+  g_assert_cmpstr (entry->mailbox_name, ==, "INBOX");
+  g_assert_cmpstr (entry->hierarchy_delimiter, ==, "/");
+  g_assert_cmpstr (entry->special_use, ==, "\\Inbox");
+  g_assert_true (entry->is_selectable);
+  g_assert_cmpint (entry->child_state, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN);
+}
+
+static void
+test_mailbox_list_result_projection_failure_preserves_existing_contents (void)
+{
+  g_autoptr (GError) error = NULL;
+  WyreboxDeliveryProjectionList invalid = { 0 };
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  const WyreboxDaemonMailboxListEntry *entry = NULL;
+
+  wyrebox_daemon_mailbox_list_result_init_empty (&result);
+  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
+          "view-1", "Smart/Invoices", "/", NULL, TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN, &error));
+  g_assert_no_error (error);
+
+  g_assert_false
+      (wyrebox_daemon_mailbox_list_result_init_from_delivery_projection
+      (&result, &invalid, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries (&result),
+      ==, 1);
+  entry = wyrebox_daemon_mailbox_list_result_get_entry (&result, 0);
+  g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
+  g_assert_cmpstr (entry->mailbox_id, ==, "view-1");
+  g_assert_cmpstr (entry->mailbox_name, ==, "Smart/Invoices");
+}
+
 int
 main (int argc, char **argv)
 {
@@ -233,6 +308,15 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/mailbox-list-result/"
       "entry-failure-preserves-existing-contents",
       test_mailbox_list_entry_failure_preserves_existing_contents);
+  g_test_add_func ("/daemon-api/mailbox-list-result/"
+      "projection-without-deliveries-is-empty",
+      test_mailbox_list_result_projection_without_deliveries_is_empty);
+  g_test_add_func ("/daemon-api/mailbox-list-result/"
+      "projection-with-deliveries-exposes-inbox",
+      test_mailbox_list_result_projection_with_deliveries_exposes_inbox);
+  g_test_add_func ("/daemon-api/mailbox-list-result/"
+      "projection-failure-preserves-existing-contents",
+      test_mailbox_list_result_projection_failure_preserves_existing_contents);
 
   return g_test_run ();
 }
