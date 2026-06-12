@@ -218,6 +218,97 @@ validate_dictionary_rules (const WyreboxDeterministicFactDictionaryRule *rules,
 }
 
 static gboolean
+regex_predicate_is_supported (const char *predicate)
+{
+  return g_strcmp0 (predicate, "amount_candidate") == 0 ||
+      g_strcmp0 (predicate, "date_candidate") == 0 ||
+      g_strcmp0 (predicate, "reference_candidate") == 0;
+}
+
+static gboolean
+compile_regex_rule_pattern (const WyreboxDeterministicFactRegexRule *rule,
+    GRegex **out_regex, GError **error)
+{
+  g_autoptr (GError) regex_error = NULL;
+  g_autoptr (GRegex) regex = NULL;
+  gint capture_count = 0;
+
+  regex = g_regex_new (rule->pattern, G_REGEX_OPTIMIZE, 0, &regex_error);
+  if (regex == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "invalid regex pattern for rule '%s': %s",
+        rule->rule_id, regex_error != NULL ? regex_error->message : "unknown");
+    return FALSE;
+  }
+
+  capture_count = g_regex_get_capture_count (regex);
+  if (rule->capture_group > (guint) capture_count) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "regex rule '%s' capture group %u is out of range",
+        rule->rule_id, rule->capture_group);
+    return FALSE;
+  }
+
+  *out_regex = g_steal_pointer (&regex);
+  return TRUE;
+}
+
+static gboolean
+validate_regex_rules (const WyreboxDeterministicFactRegexRule *rules,
+    gsize n_rules, GError **error)
+{
+  if (n_rules > 0 && rules == NULL) {
+    g_set_error (error,
+        G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "regex rules are NULL");
+    return FALSE;
+  }
+
+  for (gsize i = 0; i < n_rules; i++) {
+    g_autoptr (GRegex) regex = NULL;
+
+    if (rules[i].rule_id == NULL || rules[i].rule_id[0] == '\0') {
+      g_set_error (error,
+          G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "regex rule id is required");
+      return FALSE;
+    }
+
+    if (!rule_field_is_supported (rules[i].field)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "unsupported regex rule field '%s'",
+          rules[i].field != NULL ? rules[i].field : "(null)");
+      return FALSE;
+    }
+
+    if (!regex_predicate_is_supported (rules[i].predicate)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "unsupported regex rule predicate '%s'",
+          rules[i].predicate != NULL ? rules[i].predicate : "(null)");
+      return FALSE;
+    }
+
+    if (rules[i].pattern == NULL || rules[i].pattern[0] == '\0') {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT, "regex rule pattern is required");
+      return FALSE;
+    }
+
+    if (!compile_regex_rule_pattern (&rules[i], &regex, error))
+      return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
 append_dictionary_facts (GPtrArray *facts,
     const char *mail_id,
     const WyreboxEmlMetadata *metadata,
@@ -244,10 +335,81 @@ append_dictionary_facts (GPtrArray *facts,
   return TRUE;
 }
 
+static gboolean
+append_regex_rule_facts (GPtrArray *facts,
+    const char *mail_id,
+    const char *field_value,
+    const WyreboxDeterministicFactRegexRule *rule,
+    guint64 created_at_unix_us, GError **error)
+{
+  g_autoptr (GRegex) regex = NULL;
+  g_autoptr (GMatchInfo) match_info = NULL;
+
+  if (field_value == NULL || *field_value == '\0')
+    return TRUE;
+
+  if (!compile_regex_rule_pattern (rule, &regex, error))
+    return FALSE;
+
+  g_regex_match (regex, field_value, 0, &match_info);
+  while (g_match_info_matches (match_info)) {
+    gint start_pos = -1;
+    gint end_pos = -1;
+    g_autofree char *value = NULL;
+    g_autofree char *source = NULL;
+
+    if (g_match_info_fetch_pos (match_info,
+            (gint) rule->capture_group, &start_pos, &end_pos) &&
+        start_pos >= 0 && end_pos > start_pos) {
+      value = g_match_info_fetch (match_info, (gint) rule->capture_group);
+      source = g_strdup_printf ("regex:%s:%s", rule->field, rule->rule_id);
+      if (!append_fact (facts,
+              rule->predicate, mail_id, value, source, created_at_unix_us,
+              error))
+        return FALSE;
+    }
+
+    {
+      g_autoptr (GError) match_error = NULL;
+
+      if (!g_match_info_next (match_info, &match_error)) {
+        if (match_error != NULL) {
+          g_propagate_error (error, g_steal_pointer (&match_error));
+          return FALSE;
+        }
+        break;
+      }
+    }
+  }
+
+  return TRUE;
+}
+
+static gboolean
+append_regex_facts (GPtrArray *facts,
+    const char *mail_id,
+    const WyreboxEmlMetadata *metadata,
+    guint64 created_at_unix_us,
+    const WyreboxDeterministicFactRegexRule *rules,
+    gsize n_rules, GError **error)
+{
+  for (gsize i = 0; i < n_rules; i++) {
+    const char *field_value = get_rule_field_value (metadata, rules[i].field);
+
+    if (!append_regex_rule_facts (facts,
+            mail_id, field_value, &rules[i], created_at_unix_us, error))
+      return FALSE;
+  }
+
+  return TRUE;
+}
+
 GPtrArray *
-wyrebox_deterministic_fact_extract_from_metadata_with_dictionary (const char
+wyrebox_deterministic_fact_extract_from_metadata_with_rules (const char
     *mail_id, const WyreboxEmlMetadata *metadata, guint64 created_at_unix_us,
-    const WyreboxDeterministicFactDictionaryRule *rules, gsize n_rules,
+    const WyreboxDeterministicFactDictionaryRule *dictionary_rules,
+    gsize n_dictionary_rules,
+    const WyreboxDeterministicFactRegexRule *regex_rules, gsize n_regex_rules,
     GError **error)
 {
   g_autoptr (GPtrArray) facts = NULL;
@@ -269,7 +431,10 @@ wyrebox_deterministic_fact_extract_from_metadata_with_dictionary (const char
     return NULL;
   }
 
-  if (!validate_dictionary_rules (rules, n_rules, error))
+  if (!validate_dictionary_rules (dictionary_rules, n_dictionary_rules, error))
+    return NULL;
+
+  if (!validate_regex_rules (regex_rules, n_regex_rules, error))
     return NULL;
 
   facts = g_ptr_array_new_with_free_func (fact_record_free);
@@ -328,10 +493,36 @@ wyrebox_deterministic_fact_extract_from_metadata_with_dictionary (const char
     return NULL;
 
   if (!append_dictionary_facts (facts,
-          mail_id, metadata, created_at_unix_us, rules, n_rules, error))
+          mail_id, metadata, created_at_unix_us, dictionary_rules,
+          n_dictionary_rules, error))
+    return NULL;
+
+  if (!append_regex_facts (facts,
+          mail_id, metadata, created_at_unix_us, regex_rules, n_regex_rules,
+          error))
     return NULL;
 
   return g_steal_pointer (&facts);
+}
+
+GPtrArray *
+wyrebox_deterministic_fact_extract_from_metadata_with_dictionary (const char
+    *mail_id, const WyreboxEmlMetadata *metadata, guint64 created_at_unix_us,
+    const WyreboxDeterministicFactDictionaryRule *rules, gsize n_rules,
+    GError **error)
+{
+  return wyrebox_deterministic_fact_extract_from_metadata_with_rules (mail_id,
+      metadata, created_at_unix_us, rules, n_rules, NULL, 0, error);
+}
+
+GPtrArray *
+wyrebox_deterministic_fact_extract_from_metadata_with_regex (const char
+    *mail_id, const WyreboxEmlMetadata *metadata, guint64 created_at_unix_us,
+    const WyreboxDeterministicFactRegexRule *rules, gsize n_rules,
+    GError **error)
+{
+  return wyrebox_deterministic_fact_extract_from_metadata_with_rules (mail_id,
+      metadata, created_at_unix_us, NULL, 0, rules, n_rules, error);
 }
 
 GPtrArray *
@@ -340,6 +531,6 @@ wyrebox_deterministic_fact_extract_from_metadata (const char *mail_id,
     guint64 created_at_unix_us, GError **error)
 {
   return
-      wyrebox_deterministic_fact_extract_from_metadata_with_dictionary (mail_id,
-      metadata, created_at_unix_us, NULL, 0, error);
+      wyrebox_deterministic_fact_extract_from_metadata_with_rules (mail_id,
+      metadata, created_at_unix_us, NULL, 0, NULL, 0, error);
 }
