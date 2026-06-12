@@ -23,6 +23,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-error.c',
   'daemon/wyrebox-daemon-error-frame.c',
   'daemon/wyrebox-daemon-response-frame.c',
+  'daemon/wyrebox-daemon-stream-chunk-frame.c',
   'daemon/wyrebox-daemon-success-receipt.c',
   'ingestion/wyrebox-delivery-materializer.c',
   'ingestion/wyrebox-delivery-catchup.c',
