@@ -54,6 +54,13 @@ gboolean wyrebox_daemon_fact_mutation_request_decode (
     WyreboxDaemonFactMutationRequest *out_request,
     GError **error);
 
+gboolean wyrebox_daemon_fact_mutation_request_append_journal (
+    const WyreboxDaemonFactMutationRequest *request,
+    WyreboxJournalWriter *journal_writer,
+    guint64 *out_offset,
+    guint64 *out_sequence,
+    GError **error);
+
 gboolean wyrebox_daemon_fact_mutation_request_init (
     WyreboxDaemonFactMutationRequest *request,
     WyreboxDaemonFactMutationKind mutation,
