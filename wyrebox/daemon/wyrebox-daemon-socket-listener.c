@@ -53,19 +53,25 @@ stat_socket_path (const char *socket_path,
 }
 
 static gboolean
-socket_path_matches_created_inode (WyreboxDaemonSocketListener *self)
+socket_path_matches_inode (const char *socket_path, dev_t device, ino_t inode)
 {
   struct stat socket_stat = { 0 };
 
-  if (!self->created_inode_valid)
-    return FALSE;
-
-  if (lstat (self->socket_path, &socket_stat) != 0)
+  if (lstat (socket_path, &socket_stat) != 0)
     return FALSE;
 
   return S_ISSOCK (socket_stat.st_mode)
-      && socket_stat.st_dev == self->created_device
-      && socket_stat.st_ino == self->created_inode;
+      && socket_stat.st_dev == device && socket_stat.st_ino == inode;
+}
+
+static gboolean
+socket_path_matches_created_inode (WyreboxDaemonSocketListener *self)
+{
+  if (!self->created_inode_valid)
+    return FALSE;
+
+  return socket_path_matches_inode (self->socket_path,
+      self->created_device, self->created_inode);
 }
 
 static void
@@ -81,8 +87,23 @@ static gboolean
 ensure_socket_parent_dir (const char *socket_path, GError **error)
 {
   g_autofree char *parent_dir = g_path_get_dirname (socket_path);
+  gboolean parent_existed = g_file_test (parent_dir, G_FILE_TEST_EXISTS);
 
-  if (g_mkdir_with_parents (parent_dir, 0770) == 0)
+  if (g_mkdir_with_parents (parent_dir, 0750) != 0) {
+    int saved_errno = errno;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        g_io_error_from_errno (saved_errno),
+        "failed to create daemon socket directory '%s': %s",
+        parent_dir, g_strerror (saved_errno));
+    return FALSE;
+  }
+
+  if (parent_existed)
+    return TRUE;
+
+  if (g_chmod (parent_dir, 0750) == 0)
     return TRUE;
 
   int saved_errno = errno;
@@ -90,9 +111,113 @@ ensure_socket_parent_dir (const char *socket_path, GError **error)
   g_set_error (error,
       G_IO_ERROR,
       g_io_error_from_errno (saved_errno),
-      "failed to create daemon socket directory '%s': %s",
+      "failed to set daemon socket directory mode for '%s': %s",
       parent_dir, g_strerror (saved_errno));
   return FALSE;
+}
+
+static gboolean
+connect_error_indicates_stale_socket (const GError *error)
+{
+  return g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CONNECTION_REFUSED)
+      || g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+}
+
+static gboolean
+unlink_stale_socket_path (const char *socket_path,
+    dev_t device, ino_t inode, GError **error)
+{
+  struct stat socket_stat = { 0 };
+
+  if (lstat (socket_path, &socket_stat) != 0) {
+    int saved_errno = errno;
+
+    if (saved_errno == ENOENT)
+      return TRUE;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        g_io_error_from_errno (saved_errno),
+        "failed to stat stale daemon socket '%s': %s",
+        socket_path, g_strerror (saved_errno));
+    return FALSE;
+  }
+
+  if (!S_ISSOCK (socket_stat.st_mode)
+      || socket_stat.st_dev != device || socket_stat.st_ino != inode) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_EXISTS,
+        "daemon socket path '%s' changed during stale socket recovery",
+        socket_path);
+    return FALSE;
+  }
+
+  if (g_unlink (socket_path) == 0)
+    return TRUE;
+
+  int saved_errno = errno;
+
+  if (saved_errno == ENOENT)
+    return TRUE;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      g_io_error_from_errno (saved_errno),
+      "failed to unlink stale daemon socket '%s': %s",
+      socket_path, g_strerror (saved_errno));
+  return FALSE;
+}
+
+static gboolean
+recover_stale_socket_path_before_bind (const char *socket_path, GError **error)
+{
+  g_autoptr (GError) connect_error = NULL;
+  g_autoptr (GSocketClient) client = NULL;
+  g_autoptr (GSocketAddress) address = NULL;
+  g_autoptr (GSocketConnection) connection = NULL;
+  struct stat socket_stat = { 0 };
+
+  if (lstat (socket_path, &socket_stat) != 0) {
+    int saved_errno = errno;
+
+    if (saved_errno == ENOENT)
+      return TRUE;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        g_io_error_from_errno (saved_errno),
+        "failed to stat daemon socket path '%s': %s",
+        socket_path, g_strerror (saved_errno));
+    return FALSE;
+  }
+
+  if (!S_ISSOCK (socket_stat.st_mode))
+    return TRUE;
+
+  client = g_socket_client_new ();
+  address = g_unix_socket_address_new (socket_path);
+  connection = g_socket_client_connect (client,
+      G_SOCKET_CONNECTABLE (address), NULL, &connect_error);
+
+  if (connection != NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_ADDRESS_IN_USE,
+        "daemon socket path '%s' is already served by a live listener",
+        socket_path);
+    return FALSE;
+  }
+
+  if (!connect_error_indicates_stale_socket (connect_error)) {
+    g_propagate_prefixed_error (error,
+        g_steal_pointer (&connect_error),
+        "failed to probe daemon socket '%s': ", socket_path);
+    return FALSE;
+  }
+
+  return unlink_stale_socket_path (socket_path,
+      socket_stat.st_dev, socket_stat.st_ino, error);
 }
 
 static gboolean
@@ -192,6 +317,9 @@ wyrebox_daemon_socket_listener_start (WyreboxDaemonSocketListener *self,
   }
 
   if (!ensure_socket_parent_dir (self->socket_path, error))
+    return FALSE;
+
+  if (!recover_stale_socket_path_before_bind (self->socket_path, error))
     return FALSE;
 
   listener = g_socket_listener_new ();

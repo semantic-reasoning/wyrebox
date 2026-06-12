@@ -7,7 +7,11 @@
 #include <glib/gstdio.h>
 
 #include <errno.h>
+#include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
+#include <unistd.h>
 
 static void
 remove_tree (const char *path)
@@ -78,6 +82,27 @@ stat_existing_path (const char *path)
 }
 
 static void
+create_stale_socket_path (const char *socket_path)
+{
+  g_autofree char *parent_dir = g_path_get_dirname (socket_path);
+  struct sockaddr_un address = { 0 };
+  int socket_fd = -1;
+
+  g_assert_cmpint (g_mkdir_with_parents (parent_dir, 0750), ==, 0);
+  g_assert_cmpuint (strlen (socket_path), <, sizeof (address.sun_path));
+
+  socket_fd = socket (AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  g_assert_cmpint (socket_fd, >=, 0);
+
+  address.sun_family = AF_UNIX;
+  g_strlcpy (address.sun_path, socket_path, sizeof (address.sun_path));
+  g_assert_cmpint (bind (socket_fd,
+          (const struct sockaddr *) &address, sizeof (address)), ==, 0);
+  g_assert_cmpint (listen (socket_fd, 1), ==, 0);
+  g_assert_cmpint (close (socket_fd), ==, 0);
+}
+
+static void
 test_socket_listener_starts_and_accepts_client_connect (void)
 {
   g_autofree char *root = NULL;
@@ -99,6 +124,34 @@ test_socket_listener_starts_and_accepts_client_connect (void)
 }
 
 static void
+test_socket_listener_creates_parent_dir_mode_0750 (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_autofree char *parent_dir = g_path_get_dirname (socket_path);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonSocketListener) listener = NULL;
+  GStatBuf stat_buf = { 0 };
+  mode_t previous_umask = 0;
+  gboolean started = FALSE;
+
+  listener = wyrebox_daemon_socket_listener_new (socket_path);
+
+  previous_umask = umask (0);
+  started = wyrebox_daemon_socket_listener_start (listener, &error);
+  umask (previous_umask);
+
+  g_assert_true (started);
+  g_assert_no_error (error);
+  g_assert_cmpint (g_lstat (parent_dir, &stat_buf), ==, 0);
+  g_assert_cmpuint (stat_buf.st_mode & 0777, ==, 0750);
+
+  g_assert_true (wyrebox_daemon_socket_listener_stop (listener, &error));
+  g_assert_no_error (error);
+  remove_tree (root);
+}
+
+static void
 test_socket_listener_sets_socket_mode_0660 (void)
 {
   g_autofree char *root = NULL;
@@ -113,6 +166,26 @@ test_socket_listener_sets_socket_mode_0660 (void)
   g_assert_no_error (error);
   g_assert_cmpint (g_lstat (socket_path, &stat_buf), ==, 0);
   g_assert_cmpuint (stat_buf.st_mode & 0777, ==, 0660);
+
+  g_assert_true (wyrebox_daemon_socket_listener_stop (listener, &error));
+  g_assert_no_error (error);
+  remove_tree (root);
+}
+
+static void
+test_socket_listener_recovers_stale_socket_path (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonSocketListener) listener = NULL;
+
+  create_stale_socket_path (socket_path);
+
+  listener = wyrebox_daemon_socket_listener_new (socket_path);
+  g_assert_true (wyrebox_daemon_socket_listener_start (listener, &error));
+  g_assert_no_error (error);
+  assert_connects_with_socket_client (socket_path);
 
   g_assert_true (wyrebox_daemon_socket_listener_stop (listener, &error));
   g_assert_no_error (error);
@@ -258,8 +331,12 @@ main (int argc, char **argv)
 
   g_test_add_func ("/daemon-api/socket-listener/start-connect",
       test_socket_listener_starts_and_accepts_client_connect);
+  g_test_add_func ("/daemon-api/socket-listener/parent-dir-mode-0750",
+      test_socket_listener_creates_parent_dir_mode_0750);
   g_test_add_func ("/daemon-api/socket-listener/mode-0660",
       test_socket_listener_sets_socket_mode_0660);
+  g_test_add_func ("/daemon-api/socket-listener/stale-socket-recovery",
+      test_socket_listener_recovers_stale_socket_path);
   g_test_add_func ("/daemon-api/socket-listener/duplicate-start",
       test_socket_listener_rejects_duplicate_start);
   g_test_add_func ("/daemon-api/socket-listener/second-live-path-conflict",
