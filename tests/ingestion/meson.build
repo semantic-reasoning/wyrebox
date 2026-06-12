@@ -13,6 +13,12 @@ eml_ingestion_roundtrip_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+eml_duplicate_behavior_test = executable(
+  'test-eml-duplicate-behavior',
+  'test-eml-duplicate-behavior.c',
+  dependencies: [wyrebox_dep],
+)
+
 delivery_replay_validator_test = executable(
   'test-delivery-replay-validator',
   'test-delivery-replay-validator.c',
@@ -58,6 +64,8 @@ test(
     'WYREBOX_EML_FIXTURE_DIR': eml_fixture_dir,
   },
 )
+
+test('duplicate delivery behavior', eml_duplicate_behavior_test)
 
 test(
   'delivery replay validator',
