@@ -186,6 +186,21 @@ assert_table_count (duckdb_connection connection, const gchar *table,
 }
 
 static void
+assert_materialization_checkpoint (duckdb_connection connection,
+    guint64 expected_offset, guint64 expected_sequence)
+{
+  g_assert_cmpuint (query_uint64 (connection,
+          "SELECT COUNT(*) FROM materialization_checkpoint WHERE "
+          "checkpoint_key = 'materialization';"), ==, 1);
+  g_assert_cmpuint (query_uint64 (connection,
+          "SELECT journal_offset FROM materialization_checkpoint WHERE "
+          "checkpoint_key = 'materialization';"), ==, expected_offset);
+  g_assert_cmpuint (query_uint64 (connection,
+          "SELECT journal_sequence FROM materialization_checkpoint WHERE "
+          "checkpoint_key = 'materialization';"), ==, expected_sequence);
+}
+
+static void
 assert_apply_to_inbox_fails_invalid_data (const gchar *path,
     const WyreboxDeliveryProjectionList *projection)
 {
@@ -519,6 +534,7 @@ test_happy_path_materializes_inbox (void)
   assert_table_count (duckdb.connection, "objects", 2);
   assert_table_count (duckdb.connection, "messages", 2);
   assert_table_count (duckdb.connection, "mailbox_memberships", 2);
+  assert_materialization_checkpoint (duckdb.connection, 22, 2);
   g_assert_cmpuint (query_uint64 (duckdb.connection,
           "SELECT uidnext FROM mailbox_uid_state WHERE "
           "account_id = 'account-1' AND namespace_kind = 'mailbox' "
@@ -595,6 +611,7 @@ test_reapply_projection_is_idempotent (void)
   assert_table_count (duckdb.connection, "objects", 2);
   assert_table_count (duckdb.connection, "messages", 2);
   assert_table_count (duckdb.connection, "mailbox_memberships", 2);
+  assert_materialization_checkpoint (duckdb.connection, 22, 2);
   g_assert_cmpuint (query_uint64 (duckdb.connection,
           "SELECT uidnext FROM mailbox_uid_state WHERE "
           "account_id = 'account-1' AND namespace_kind = 'mailbox' "
@@ -624,6 +641,7 @@ test_suffix_overlap_apply_preserves_existing_uids (void)
   assert_table_count (duckdb.connection, "objects", 3);
   assert_table_count (duckdb.connection, "messages", 3);
   assert_table_count (duckdb.connection, "mailbox_memberships", 3);
+  assert_materialization_checkpoint (duckdb.connection, 33, 3);
   g_assert_cmpuint (query_uint64 (duckdb.connection,
           "SELECT uid FROM mailbox_memberships WHERE message_id = "
           "'journal:22:2';"), ==, 2);
@@ -642,6 +660,20 @@ test_suffix_overlap_apply_preserves_existing_uids (void)
   assert_table_count (duckdb.connection, "objects", 3);
   assert_table_count (duckdb.connection, "messages", 3);
   assert_table_count (duckdb.connection, "mailbox_memberships", 3);
+  assert_materialization_checkpoint (duckdb.connection, 33, 3);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT uidnext FROM mailbox_uid_state WHERE "
+          "account_id = 'account-1' AND namespace_kind = 'mailbox' "
+          "AND namespace_id = 'mailbox-inbox';"), ==, 4);
+  close_duckdb_fixture (&duckdb);
+
+  apply_projection_to_inbox (path, &initial);
+
+  open_duckdb_fixture (path, &duckdb);
+  assert_table_count (duckdb.connection, "objects", 3);
+  assert_table_count (duckdb.connection, "messages", 3);
+  assert_table_count (duckdb.connection, "mailbox_memberships", 3);
+  assert_materialization_checkpoint (duckdb.connection, 33, 3);
   g_assert_cmpuint (query_uint64 (duckdb.connection,
           "SELECT uidnext FROM mailbox_uid_state WHERE "
           "account_id = 'account-1' AND namespace_kind = 'mailbox' "
@@ -663,6 +695,13 @@ test_later_record_failure_rolls_back_apply (void)
   append_projection_record (&projection, "sha256:first", 101, 1001, 11, 1);
   append_projection_record (&projection, NULL, 202, 1002, 22, 2);
 
+  open_duckdb_fixture (path, &duckdb);
+  execute_sql (duckdb.connection,
+      "INSERT INTO materialization_checkpoint ("
+      "checkpoint_key, journal_offset, journal_sequence"
+      ") VALUES ('materialization', 99, 9);");
+  close_duckdb_fixture (&duckdb);
+
   materializer = wyrebox_delivery_materializer_new_duckdb (path, &error);
   g_assert_no_error (error);
   g_assert_nonnull (materializer);
@@ -677,6 +716,7 @@ test_later_record_failure_rolls_back_apply (void)
   assert_table_count (duckdb.connection, "objects", 0);
   assert_table_count (duckdb.connection, "messages", 0);
   assert_table_count (duckdb.connection, "mailbox_memberships", 0);
+  assert_materialization_checkpoint (duckdb.connection, 99, 9);
   close_duckdb_fixture (&duckdb);
 
   remove_catalog (path);

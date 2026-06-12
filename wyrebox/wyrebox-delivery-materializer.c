@@ -499,6 +499,37 @@ materializer_update_uidnext (WyreboxDeliveryMaterializer *self,
       && materializer_execute_prepared (statement, error);
 }
 
+static gboolean
+materializer_save_checkpoint (WyreboxDeliveryMaterializer *self,
+    const WyreboxDeliveryProjectionRecord *record, GError **error)
+{
+  g_auto (duckdb_prepared_statement) statement = NULL;
+
+  if (!materializer_prepare (self,
+          "DELETE FROM materialization_checkpoint "
+          "WHERE checkpoint_key = 'materialization' "
+          "AND (journal_sequence < ? OR "
+          "(journal_sequence = ? AND journal_offset < ?));",
+          &statement, error) ||
+      !bind_uint64 (statement, 1, record->journal_sequence, error) ||
+      !bind_uint64 (statement, 2, record->journal_sequence, error) ||
+      !bind_uint64 (statement, 3, record->journal_offset, error) ||
+      !materializer_execute_prepared (statement, error))
+    return FALSE;
+
+  duckdb_destroy_prepare (&statement);
+  return materializer_prepare (self,
+      "INSERT INTO materialization_checkpoint ("
+      "checkpoint_key, journal_offset, journal_sequence"
+      ") SELECT 'materialization', ?, ? "
+      "WHERE NOT EXISTS ("
+      "SELECT 1 FROM materialization_checkpoint "
+      "WHERE checkpoint_key = 'materialization'" ");", &statement, error)
+      && bind_uint64 (statement, 1, record->journal_offset, error)
+      && bind_uint64 (statement, 2, record->journal_sequence, error)
+      && materializer_execute_prepared (statement, error);
+}
+
 static void
 materializer_rollback_quietly (WyreboxDeliveryMaterializer *self)
 {
@@ -648,7 +679,18 @@ wyrebox_delivery_materializer_apply_to_mailbox (WyreboxDeliveryMaterializer
   }
 
   if (!materializer_update_uidnext (self, account_id, mailbox_id, uidnext,
-          error) || !materializer_query (self, "COMMIT;", error))
+          error))
+    goto fail;
+
+  if (projection->records->len > 0) {
+    const WyreboxDeliveryProjectionRecord *last_record =
+        g_ptr_array_index (projection->records, projection->records->len - 1);
+
+    if (!materializer_save_checkpoint (self, last_record, error))
+      goto fail;
+  }
+
+  if (!materializer_query (self, "COMMIT;", error))
     goto fail;
 
   return TRUE;
