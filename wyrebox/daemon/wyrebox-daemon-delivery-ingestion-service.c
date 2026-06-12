@@ -85,6 +85,38 @@ WyreboxDaemonDeliveryIngestionService
   return self;
 }
 
+static gboolean
+ingest_delivery_with_ingestor (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDeliveryIngestionRequest *request,
+    WyreboxEmlIngestResult *out_result, gpointer user_data, GError **error)
+{
+  WyreboxEmlIngestor *ingestor = user_data;
+
+  (void) identity;
+
+  g_return_val_if_fail (WYREBOX_IS_EML_INGESTOR (ingestor), FALSE);
+  g_return_val_if_fail (request != NULL, FALSE);
+
+  return wyrebox_eml_ingestor_ingest_bytes (ingestor,
+      request->message_bytes, out_result, error);
+}
+
+WyreboxDaemonDeliveryIngestionService *
+wyrebox_daemon_delivery_ingestion_service_new_with_ingestor (WyreboxEmlIngestor
+    *ingestor)
+{
+  g_autoptr (WyreboxEmlIngestor) owned_ingestor = NULL;
+
+  g_return_val_if_fail (WYREBOX_IS_EML_INGESTOR (ingestor), NULL);
+
+  owned_ingestor = g_object_ref (ingestor);
+
+  return
+      wyrebox_daemon_delivery_ingestion_service_new
+      (ingest_delivery_with_ingestor, g_steal_pointer (&owned_ingestor),
+      g_object_unref);
+}
+
 gboolean
     wyrebox_daemon_delivery_ingestion_service_handle_identity
     (WyreboxDaemonDeliveryIngestionService * self,
