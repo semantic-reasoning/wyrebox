@@ -7,6 +7,12 @@ eml_ingestor_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+eml_ingestion_roundtrip_test = executable(
+  'test-eml-ingestion-roundtrip',
+  'test-eml-ingestion-roundtrip.c',
+  dependencies: [wyrebox_dep],
+)
+
 delivery_replay_validator_test = executable(
   'test-delivery-replay-validator',
   'test-delivery-replay-validator.c',
@@ -40,6 +46,14 @@ delivery_catchup_test = executable(
 test(
   'eml ingestor',
   eml_ingestor_test,
+  env: {
+    'WYREBOX_EML_FIXTURE_DIR': eml_fixture_dir,
+  },
+)
+
+test(
+  'eml ingestion roundtrip',
+  eml_ingestion_roundtrip_test,
   env: {
     'WYREBOX_EML_FIXTURE_DIR': eml_fixture_dir,
   },
