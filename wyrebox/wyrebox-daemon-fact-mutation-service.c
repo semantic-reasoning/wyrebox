@@ -25,6 +25,27 @@ validate_request_id (const char *request_id, GError **error)
   return TRUE;
 }
 
+static gboolean
+caller_can_mutate_facts (const char *caller_identity)
+{
+  return g_strcmp0 (caller_identity, "skill") == 0;
+}
+
+static gboolean
+authorize_fact_mutation_identity (const WyreboxDaemonRequestIdentity *identity,
+    GError **error)
+{
+  if (!caller_can_mutate_facts (identity->caller_identity)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_PERMISSION_DENIED,
+        "caller is not authorized to mutate facts");
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
 static void
 wyrebox_daemon_fact_mutation_service_finalize (GObject *object)
 {
@@ -99,6 +120,9 @@ gboolean
     WyreboxDaemonResponseFrame * out_frame, GError ** error)
 {
   g_return_val_if_fail (identity != NULL, FALSE);
+
+  if (!authorize_fact_mutation_identity (identity, error))
+    return FALSE;
 
   return wyrebox_daemon_fact_mutation_service_handle (self,
       identity->request_id, identity->correlation_id, request, out_frame,
