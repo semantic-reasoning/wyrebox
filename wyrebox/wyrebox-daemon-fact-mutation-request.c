@@ -56,13 +56,25 @@ static gboolean
 validate_required_text (const char *value,
     const char *field_name, GError **error)
 {
-  if (value != NULL && *value != '\0')
-    return TRUE;
+  if (value == NULL || *value == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "fact mutation %s is required", field_name);
+    return FALSE;
+  }
 
-  g_set_error (error,
-      G_IO_ERROR,
-      G_IO_ERROR_INVALID_ARGUMENT, "fact mutation %s is required", field_name);
-  return FALSE;
+  for (const char *cursor = value; *cursor != '\0'; cursor++) {
+    if (g_ascii_iscntrl (*cursor)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "fact mutation %s must not contain control characters", field_name);
+      return FALSE;
+    }
+  }
+
+  return TRUE;
 }
 
 static gboolean
@@ -83,6 +95,16 @@ validate_arguments (const char *const *arguments, GError **error)
           G_IO_ERROR_INVALID_ARGUMENT,
           "fact mutation arguments must not contain empty values");
       return FALSE;
+    }
+
+    for (const char *cursor = arguments[index]; *cursor != '\0'; cursor++) {
+      if (g_ascii_iscntrl (*cursor)) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT,
+            "fact mutation arguments must not contain control characters");
+        return FALSE;
+      }
     }
   }
 

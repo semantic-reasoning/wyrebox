@@ -84,6 +84,20 @@ test_fact_mutation_request_init_rejects_missing_scope (void)
 }
 
 static void
+test_fact_mutation_request_init_rejects_control_scope (void)
+{
+  const char *args[] = { "mail-1", NULL };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
+
+  g_assert_false (wyrebox_daemon_fact_mutation_request_init (&request,
+          WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+          "project_mention", "account-1\naccount-2", args, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (request.scope_id);
+}
+
+static void
 test_fact_mutation_request_init_rejects_null_arguments (void)
 {
   g_autoptr (GError) error = NULL;
@@ -100,6 +114,20 @@ static void
 test_fact_mutation_request_init_rejects_empty_argument (void)
 {
   const char *args[] = { "mail-1", "", NULL };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
+
+  g_assert_false (wyrebox_daemon_fact_mutation_request_init (&request,
+          WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+          "project_mention", "account-1", args, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (request.arguments);
+}
+
+static void
+test_fact_mutation_request_init_rejects_control_argument (void)
+{
+  const char *args[] = { "mail-1\nmail-2", NULL };
   g_autoptr (GError) error = NULL;
   g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
 
@@ -192,11 +220,17 @@ main (int argc, char **argv)
       "init-rejects-missing-scope",
       test_fact_mutation_request_init_rejects_missing_scope);
   g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "init-rejects-control-scope",
+      test_fact_mutation_request_init_rejects_control_scope);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
       "init-rejects-null-arguments",
       test_fact_mutation_request_init_rejects_null_arguments);
   g_test_add_func ("/daemon-api/fact-mutation-request/"
       "init-rejects-empty-argument",
       test_fact_mutation_request_init_rejects_empty_argument);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "init-rejects-control-argument",
+      test_fact_mutation_request_init_rejects_control_argument);
   g_test_add_func ("/daemon-api/fact-mutation-request/"
       "init-replaces-existing-value",
       test_fact_mutation_request_init_replaces_existing_value);
