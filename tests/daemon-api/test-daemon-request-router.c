@@ -163,6 +163,9 @@ test_request_router_rejects_missing_fact_mutation_payload (void)
           &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpstr (frame.request_id, ==, "request-1");
+  g_assert_cmpstr (frame.correlation_id, ==, "correlation-1");
+  g_assert_cmpstr (frame.error.request_id, ==, "request-1");
   g_assert_cmpint (frame.error.error_class, ==,
       WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
 
@@ -199,6 +202,9 @@ test_request_router_rejects_unsupported_operation_with_error_frame (void)
           &request_frame, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpstr (frame.request_id, ==, "request-1");
+  g_assert_cmpstr (frame.correlation_id, ==, "correlation-1");
+  g_assert_cmpstr (frame.error.request_id, ==, "request-1");
   g_assert_cmpint (frame.error.error_class, ==,
       WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
 
