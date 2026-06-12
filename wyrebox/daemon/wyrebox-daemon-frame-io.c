@@ -93,38 +93,73 @@ wyrebox_daemon_frame_io_write_payload (GOutputStream *stream,
 GBytes *
 wyrebox_daemon_frame_io_read_payload (GInputStream *stream, GError **error)
 {
+  g_autoptr (GBytes) payload = NULL;
+  gboolean eof = FALSE;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  if (!wyrebox_daemon_frame_io_read_payload_or_eof (stream, &payload, &eof,
+          error))
+    return NULL;
+
+  if (eof)
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA, "daemon frame stream ended before a frame");
+
+  return g_steal_pointer (&payload);
+}
+
+gboolean
+wyrebox_daemon_frame_io_read_payload_or_eof (GInputStream *stream,
+    GBytes **out_payload, gboolean *out_eof, GError **error)
+{
   guint8 prefix[WYREBOX_DAEMON_FRAME_PREFIX_BYTES] = { 0 };
   gsize frame_size = 0;
   gsize bytes_read = 0;
   g_autofree guint8 *payload = NULL;
 
-  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+  g_return_val_if_fail (out_payload != NULL, FALSE);
 
   if (stream == NULL) {
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_ARGUMENT,
         "daemon frame reader requires a non-null input stream");
-    return NULL;
+    return FALSE;
   }
 
   if (!g_input_stream_read_all (stream, prefix, sizeof (prefix), &bytes_read,
           NULL, error))
     goto read_prefix_failed;
 
-  if (bytes_read != sizeof (prefix)) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA, "daemon frame length prefix is truncated");
-    return NULL;
+  if (bytes_read == 0) {
+    if (out_eof != NULL) {
+      *out_eof = TRUE;
+      return TRUE;
+    }
+
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+        "daemon frame stream ended before a frame");
+    return FALSE;
   }
+
+  if (bytes_read != sizeof (prefix)) {
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+        "daemon frame length prefix is truncated");
+    return FALSE;
+  }
+
+  if (out_eof != NULL)
+    *out_eof = FALSE;
 
   frame_size = read_u32_be (prefix);
   if (frame_size == 0) {
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_ARGUMENT, "daemon frame payload must be non-empty");
-    return NULL;
+    return FALSE;
   }
 
   if (frame_size > WYREBOX_DAEMON_MAX_FRAME_SIZE_BYTES) {
@@ -133,7 +168,7 @@ wyrebox_daemon_frame_io_read_payload (GInputStream *stream, GError **error)
         G_IO_ERROR_INVALID_ARGUMENT,
         "daemon frame payload size %zu exceeds maximum of %u bytes",
         frame_size, WYREBOX_DAEMON_MAX_FRAME_SIZE_BYTES);
-    return NULL;
+    return FALSE;
   }
 
   payload = g_new (guint8, frame_size);
@@ -145,21 +180,23 @@ wyrebox_daemon_frame_io_read_payload (GInputStream *stream, GError **error)
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_DATA, "daemon frame payload is truncated");
-    return NULL;
+    return FALSE;
   }
 
-  return g_bytes_new_take (g_steal_pointer (&payload), frame_size);
+  *out_payload = g_bytes_new_take (g_steal_pointer (&payload), frame_size);
+  return TRUE;
 
 read_prefix_failed:
-  if (bytes_read != sizeof (prefix) && (error == NULL || *error == NULL))
+  if (bytes_read != 0 && bytes_read != sizeof (prefix)
+      && (error == NULL || *error == NULL))
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_DATA, "daemon frame length prefix is truncated");
-  return NULL;
+  return FALSE;
 
 read_payload_failed:
   if (bytes_read != frame_size && (error == NULL || *error == NULL))
     g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
         "daemon frame payload is truncated");
-  return NULL;
+  return FALSE;
 }

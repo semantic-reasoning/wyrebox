@@ -3,6 +3,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-mailbox-list-request.c',
   'daemon/wyrebox-daemon-mailbox-list-result.c',
   'daemon/wyrebox-daemon-mailbox-list-service.c',
+  'daemon/wyrebox-daemon-connection-session.c',
   'daemon/wyrebox-daemon-mailbox-list-dispatcher.c',
   'daemon/wyrebox-daemon-request-router.c',
   'daemon/wyrebox-daemon-request-identity.c',
