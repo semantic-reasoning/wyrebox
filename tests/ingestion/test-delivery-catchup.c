@@ -167,8 +167,12 @@ create_bootstrap_catalog (void)
   g_assert_no_error (error);
   g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES,
-          wyrebox_schema_migration_get_first_supported_schema_version (),
-          wyrebox_schema_migration_get_current_schema_version (), &error));
+          wyrebox_schema_migration_get_first_supported_schema_version (), 2,
+          &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE,
+          2, wyrebox_schema_migration_get_current_schema_version (), &error));
   g_assert_no_error (error);
 
   return g_steal_pointer (&path);
@@ -262,6 +266,7 @@ assert_inbox_state (const gchar *catalog_path,
 
   open_duckdb_fixture (catalog_path, &duckdb);
   assert_table_count (duckdb.connection, "messages", expected_messages);
+  assert_table_count (duckdb.connection, "message_headers", expected_messages);
   assert_table_count (duckdb.connection, "mailbox_memberships",
       expected_messages);
   assert_materialization_checkpoint (duckdb.connection,

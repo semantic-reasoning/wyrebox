@@ -143,6 +143,25 @@ bind_varchar (duckdb_prepared_statement statement, idx_t index,
 }
 
 static gboolean
+bind_nullable_varchar (duckdb_prepared_statement statement, idx_t index,
+    const gchar *value, GError **error)
+{
+  if (value == NULL) {
+    if (duckdb_bind_null (statement, index) == DuckDBSuccess)
+      return TRUE;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB delivery materializer NULL bind failed at index %"
+        G_GUINT64_FORMAT, (guint64) index);
+    return FALSE;
+  }
+
+  return bind_varchar (statement, index, value, error);
+}
+
+static gboolean
 bind_uint64 (duckdb_prepared_statement statement, idx_t index,
     guint64 value, GError **error)
 {
@@ -407,6 +426,73 @@ materializer_ensure_message (WyreboxDeliveryMaterializer *self,
 }
 
 static gboolean
+materializer_ensure_message_headers (WyreboxDeliveryMaterializer *self,
+    const gchar *message_id, const WyreboxDeliveryProjectionRecord *record,
+    GError **error)
+{
+  g_auto (duckdb_prepared_statement) statement = NULL;
+  guint64 count = 0;
+
+  if (!materializer_prepare (self,
+          "INSERT OR IGNORE INTO message_headers ("
+          "message_id, rfc_message_id, duplicate_message_id_count, "
+          "subject, from_addr, to_addr, cc_addr, bcc_addr, date_raw, "
+          "journal_offset, journal_sequence"
+          ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+          &statement, error) ||
+      !bind_varchar (statement, 1, message_id, error) ||
+      !bind_nullable_varchar (statement, 2, record->rfc_message_id, error) ||
+      !bind_uint64 (statement, 3, record->duplicate_message_id_count, error) ||
+      !bind_nullable_varchar (statement, 4, record->subject, error) ||
+      !bind_nullable_varchar (statement, 5, record->from, error) ||
+      !bind_nullable_varchar (statement, 6, record->to, error) ||
+      !bind_nullable_varchar (statement, 7, record->cc, error) ||
+      !bind_nullable_varchar (statement, 8, record->bcc, error) ||
+      !bind_nullable_varchar (statement, 9, record->date_raw, error) ||
+      !bind_uint64 (statement, 10, record->journal_offset, error) ||
+      !bind_uint64 (statement, 11, record->journal_sequence, error) ||
+      !materializer_execute_prepared (statement, error))
+    return FALSE;
+
+  duckdb_destroy_prepare (&statement);
+  if (!materializer_prepare (self,
+          "SELECT COUNT(*) FROM message_headers WHERE message_id = ? "
+          "AND rfc_message_id IS NOT DISTINCT FROM ? "
+          "AND duplicate_message_id_count = ? "
+          "AND subject IS NOT DISTINCT FROM ? "
+          "AND from_addr IS NOT DISTINCT FROM ? "
+          "AND to_addr IS NOT DISTINCT FROM ? "
+          "AND cc_addr IS NOT DISTINCT FROM ? "
+          "AND bcc_addr IS NOT DISTINCT FROM ? "
+          "AND date_raw IS NOT DISTINCT FROM ? "
+          "AND journal_offset = ? AND journal_sequence = ?;",
+          &statement, error) ||
+      !bind_varchar (statement, 1, message_id, error) ||
+      !bind_nullable_varchar (statement, 2, record->rfc_message_id, error) ||
+      !bind_uint64 (statement, 3, record->duplicate_message_id_count, error) ||
+      !bind_nullable_varchar (statement, 4, record->subject, error) ||
+      !bind_nullable_varchar (statement, 5, record->from, error) ||
+      !bind_nullable_varchar (statement, 6, record->to, error) ||
+      !bind_nullable_varchar (statement, 7, record->cc, error) ||
+      !bind_nullable_varchar (statement, 8, record->bcc, error) ||
+      !bind_nullable_varchar (statement, 9, record->date_raw, error) ||
+      !bind_uint64 (statement, 10, record->journal_offset, error) ||
+      !bind_uint64 (statement, 11, record->journal_sequence, error) ||
+      !materializer_count_prepared (statement, &count, error))
+    return FALSE;
+
+  if (count == 1)
+    return TRUE;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_INVALID_DATA,
+      "message headers for %s do not match requested materialized state",
+      message_id);
+  return FALSE;
+}
+
+static gboolean
 materializer_ensure_membership_exact (WyreboxDeliveryMaterializer *self,
     const gchar *account_id, const gchar *mailbox_id,
     const gchar *message_id, const gchar *membership_id,
@@ -566,6 +652,7 @@ materializer_apply_record (WyreboxDeliveryMaterializer *self,
   if (!materializer_ensure_object (self, record, error) ||
       !materializer_ensure_message (self, account_id, message_id, record,
           error) ||
+      !materializer_ensure_message_headers (self, message_id, record, error) ||
       !materializer_ensure_membership_exact (self, account_id, mailbox_id,
           message_id, membership_id, record, &exists, error))
     return FALSE;
