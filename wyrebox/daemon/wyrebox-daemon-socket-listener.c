@@ -12,15 +12,36 @@ struct _WyreboxDaemonSocketListener
 
   char *socket_path;
   GSocketListener *listener;
+  GCancellable *accept_cancellable;
   gboolean started;
+  guint accept_generation;
+
+  WyreboxDaemonSocketListenerConnectionHandler connection_handler;
+  gpointer connection_handler_data;
+  GDestroyNotify connection_handler_destroy_notify;
 
   gboolean created_inode_valid;
   dev_t created_device;
   ino_t created_inode;
 };
 
+typedef struct
+{
+  GWeakRef listener_ref;
+  guint generation;
+} AcceptLoopData;
+
 G_DEFINE_TYPE (WyreboxDaemonSocketListener, wyrebox_daemon_socket_listener,
     G_TYPE_OBJECT);
+
+static void arm_accept_loop (WyreboxDaemonSocketListener * self);
+
+static void
+accept_loop_data_free (AcceptLoopData *data)
+{
+  g_weak_ref_clear (&data->listener_ref);
+  g_free (data);
+}
 
 static gboolean
 stat_socket_path (const char *socket_path,
@@ -81,6 +102,75 @@ unlink_created_socket_path (WyreboxDaemonSocketListener *self)
     (void) g_unlink (self->socket_path);
 
   self->created_inode_valid = FALSE;
+}
+
+static gboolean
+accept_error_is_expected_after_stop (const GError *error)
+{
+  return g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)
+      || g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CLOSED);
+}
+
+static void
+accepted_connection_ready (GObject *source_object,
+    GAsyncResult *result, gpointer user_data)
+{
+  g_autoptr (GSocketConnection) connection = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonSocketListener) self = NULL;
+  g_autoptr (GError) credentials_error = NULL;
+  AcceptLoopData *data = user_data;
+  WyreboxDaemonPeerCredentials credentials = { 0 };
+
+  connection =
+      g_socket_listener_accept_finish (G_SOCKET_LISTENER (source_object),
+      result, NULL, &error);
+  self = g_weak_ref_get (&data->listener_ref);
+
+  if (connection == NULL) {
+    if (!accept_error_is_expected_after_stop (error))
+      g_warning ("daemon socket accept failed: %s", error->message);
+
+    accept_loop_data_free (data);
+    return;
+  }
+
+  if (self == NULL
+      || !self->started || self->accept_generation != data->generation) {
+    accept_loop_data_free (data);
+    return;
+  }
+
+  if (!wyrebox_daemon_peer_credentials_from_socket
+      (g_socket_connection_get_socket (connection), &credentials,
+          &credentials_error)) {
+    g_warning ("failed to capture daemon peer credentials: %s",
+        credentials_error->message);
+  } else if (self->connection_handler != NULL) {
+    self->connection_handler (self,
+        connection, &credentials, self->connection_handler_data);
+  }
+
+  if (self->started && self->accept_generation == data->generation)
+    arm_accept_loop (self);
+
+  accept_loop_data_free (data);
+}
+
+static void
+arm_accept_loop (WyreboxDaemonSocketListener *self)
+{
+  AcceptLoopData *data = NULL;
+
+  if (!self->started || self->listener == NULL)
+    return;
+
+  data = g_new0 (AcceptLoopData, 1);
+  g_weak_ref_init (&data->listener_ref, self);
+  data->generation = self->accept_generation;
+
+  g_socket_listener_accept_async (self->listener,
+      self->accept_cancellable, accepted_connection_ready, data);
 }
 
 static gboolean
@@ -244,6 +334,10 @@ wyrebox_daemon_socket_listener_finalize (GObject *object)
 
   (void) wyrebox_daemon_socket_listener_stop (self, &local_error);
 
+  if (self->connection_handler_destroy_notify != NULL)
+    self->connection_handler_destroy_notify (self->connection_handler_data);
+
+  g_clear_object (&self->accept_cancellable);
   g_clear_pointer (&self->socket_path, g_free);
 
   G_OBJECT_CLASS (wyrebox_daemon_socket_listener_parent_class)->finalize
@@ -293,6 +387,21 @@ wyrebox_daemon_socket_listener_is_started (WyreboxDaemonSocketListener *self)
   g_return_val_if_fail (WYREBOX_IS_DAEMON_SOCKET_LISTENER (self), FALSE);
 
   return self->started;
+}
+
+void wyrebox_daemon_socket_listener_set_connection_handler
+    (WyreboxDaemonSocketListener * self,
+    WyreboxDaemonSocketListenerConnectionHandler handler, gpointer user_data,
+    GDestroyNotify destroy_notify)
+{
+  g_return_if_fail (WYREBOX_IS_DAEMON_SOCKET_LISTENER (self));
+
+  if (self->connection_handler_destroy_notify != NULL)
+    self->connection_handler_destroy_notify (self->connection_handler_data);
+
+  self->connection_handler = handler;
+  self->connection_handler_data = user_data;
+  self->connection_handler_destroy_notify = destroy_notify;
 }
 
 gboolean
@@ -358,7 +467,10 @@ wyrebox_daemon_socket_listener_start (WyreboxDaemonSocketListener *self,
   }
 
   self->listener = g_steal_pointer (&listener);
+  self->accept_cancellable = g_cancellable_new ();
   self->started = TRUE;
+  self->accept_generation++;
+  arm_accept_loop (self);
 
   return TRUE;
 }
@@ -373,9 +485,12 @@ wyrebox_daemon_socket_listener_stop (WyreboxDaemonSocketListener *self,
   if (!self->started)
     return TRUE;
 
+  self->started = FALSE;
+  self->accept_generation++;
+  g_cancellable_cancel (self->accept_cancellable);
   g_socket_listener_close (self->listener);
   g_clear_object (&self->listener);
-  self->started = FALSE;
+  g_clear_object (&self->accept_cancellable);
 
   unlink_created_socket_path (self);
 
