@@ -20,6 +20,7 @@ typedef struct
   guint64 source_version;
   guint64 target_version;
   const gchar *name;
+  WyreboxSchemaMetadataStoreMigrationOperation store_operation;
   WyreboxSchemaMigrationStepOperationFunc operation;
   WyreboxSchemaMigrationStepValidationFunc validate;
   gboolean requires_checkpoint;
@@ -72,6 +73,7 @@ static const WyreboxSchemaMigrationStep wyrebox_schema_migration_steps[] = {
   {WYREBOX_SCHEMA_VERSION_LEGACY_0,
         WYREBOX_SCHEMA_VERSION_FIRST,
         "legacy-bootstrap",
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
         wyrebox_schema_migration_default_step_operation,
         wyrebox_schema_migration_default_step_validation,
         TRUE,
@@ -245,6 +247,7 @@ wyrebox_schema_migration_find_step_for_source (guint64 source_version)
 static gboolean
 wyrebox_schema_migration_apply_step (WyreboxSchemaMigration *self,
     const WyreboxSchemaMigrationStep *step,
+    WyreboxSchemaMetadataStore *metadata_store,
     WyreboxSchemaMigrationMetadataState *state, GError **error)
 {
   if (step->requires_checkpoint && !state->checkpoint_precondition_satisfied) {
@@ -270,8 +273,15 @@ wyrebox_schema_migration_apply_step (WyreboxSchemaMigration *self,
           self->hook_user_data, error))
     return FALSE;
 
-  if (!step->operation (step->source_version, step->target_version, error))
+  if (metadata_store != NULL) {
+    if (!wyrebox_schema_metadata_store_apply_migration_operation
+        (metadata_store, step->store_operation, step->source_version,
+            step->target_version, error))
+      return FALSE;
+  } else if (!step->operation (step->source_version, step->target_version,
+          error)) {
     return FALSE;
+  }
 
   if (self->validation_hook != NULL &&
       !self->validation_hook (step->source_version, step->target_version,
@@ -289,6 +299,7 @@ wyrebox_schema_migration_apply_step (WyreboxSchemaMigration *self,
 static gboolean
 metadata_apply_to_version (WyreboxSchemaMigration *self,
     WyreboxSchemaMigrationMetadataState *state,
+    WyreboxSchemaMetadataStore *metadata_store,
     guint64 source_version, guint64 target_version, GError **error)
 {
   guint64 cursor = source_version;
@@ -323,7 +334,8 @@ metadata_apply_to_version (WyreboxSchemaMigration *self,
       return FALSE;
     }
 
-    if (!wyrebox_schema_migration_apply_step (self, step, state, error))
+    if (!wyrebox_schema_migration_apply_step (self,
+            step, metadata_store, state, error))
       return FALSE;
 
     cursor = step->target_version;
@@ -332,10 +344,11 @@ metadata_apply_to_version (WyreboxSchemaMigration *self,
   return TRUE;
 }
 
-gboolean
-wyrebox_schema_migration_evaluate_to_version (WyreboxSchemaMigration *self,
-    WyreboxSchemaMigrationMetadataState *state,
-    guint64 target_version, GError **error)
+static gboolean
+wyrebox_schema_migration_evaluate_to_version_internal (WyreboxSchemaMigration
+    *self, WyreboxSchemaMetadataStore *metadata_store,
+    WyreboxSchemaMigrationMetadataState *state, guint64 target_version,
+    GError **error)
 {
   guint64 source_version = 0;
   g_auto (WyreboxSchemaMigrationMetadataState) updated_state = { 0 };
@@ -359,7 +372,8 @@ wyrebox_schema_migration_evaluate_to_version (WyreboxSchemaMigration *self,
 
   if (source_version < target_version &&
       !metadata_apply_to_version (self,
-          &updated_state, source_version, target_version, error))
+          &updated_state, metadata_store, source_version, target_version,
+          error))
     return FALSE;
 
   updated_state.schema_version_present = TRUE;
@@ -367,6 +381,15 @@ wyrebox_schema_migration_evaluate_to_version (WyreboxSchemaMigration *self,
   *state = updated_state;
 
   return TRUE;
+}
+
+gboolean
+wyrebox_schema_migration_evaluate_to_version (WyreboxSchemaMigration *self,
+    WyreboxSchemaMigrationMetadataState *state,
+    guint64 target_version, GError **error)
+{
+  return wyrebox_schema_migration_evaluate_to_version_internal (self,
+      NULL, state, target_version, error);
 }
 
 gboolean
@@ -415,7 +438,10 @@ wyrebox_schema_migration_run_store_to_current (WyreboxSchemaMigration *self,
   persisted_state = state;
   state.checkpoint_precondition_satisfied = checkpoint_precondition_satisfied;
 
-  if (!wyrebox_schema_migration_evaluate_to_current (self, &state, error))
+  if (!wyrebox_schema_migration_evaluate_to_version_internal (self,
+          metadata_store,
+          &state,
+          wyrebox_schema_migration_get_current_schema_version (), error))
     return FALSE;
 
   if (wyrebox_schema_migration_state_matches_persisted_metadata (&state,

@@ -66,6 +66,24 @@ wyrebox_schema_metadata_store_default_save (WyreboxSchemaMetadataStore *self,
   return FALSE;
 }
 
+static gboolean
+    wyrebox_schema_metadata_store_default_apply_migration_operation
+    (WyreboxSchemaMetadataStore * self,
+    WyreboxSchemaMetadataStoreMigrationOperation operation,
+    guint64 source_version, guint64 target_version, GError ** error)
+{
+  (void) self;
+  (void) operation;
+  (void) source_version;
+  (void) target_version;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_NOT_SUPPORTED,
+      "schema metadata store migration operation is not implemented");
+  return FALSE;
+}
+
 static void
 wyrebox_schema_metadata_store_init (WyreboxSchemaMetadataStore *self)
 {
@@ -77,6 +95,8 @@ wyrebox_schema_metadata_store_class_init (WyreboxSchemaMetadataStoreClass
 {
   klass->load = wyrebox_schema_metadata_store_default_load;
   klass->save = wyrebox_schema_metadata_store_default_save;
+  klass->apply_migration_operation =
+      wyrebox_schema_metadata_store_default_apply_migration_operation;
 }
 
 G_DEFINE_TYPE (WyreboxSchemaMetadataStoreMemory,
@@ -155,6 +175,28 @@ wyrebox_schema_metadata_store_memory_save (WyreboxSchemaMetadataStore *self,
   return TRUE;
 }
 
+static gboolean
+    wyrebox_schema_metadata_store_memory_apply_migration_operation
+    (WyreboxSchemaMetadataStore * self,
+    WyreboxSchemaMetadataStoreMigrationOperation operation,
+    guint64 source_version, guint64 target_version, GError ** error)
+{
+  (void) self;
+  (void) source_version;
+  (void) target_version;
+
+  if (operation ==
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP)
+    return TRUE;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_NOT_SUPPORTED,
+      "unsupported schema metadata store migration operation %u",
+      (guint) operation);
+  return FALSE;
+}
+
 static void
     wyrebox_schema_metadata_store_memory_class_init
     (WyreboxSchemaMetadataStoreMemoryClass * klass)
@@ -164,6 +206,8 @@ static void
 
   store_class->load = wyrebox_schema_metadata_store_memory_load;
   store_class->save = wyrebox_schema_metadata_store_memory_save;
+  store_class->apply_migration_operation =
+      wyrebox_schema_metadata_store_memory_apply_migration_operation;
 }
 
 static void
@@ -466,6 +510,28 @@ wyrebox_schema_metadata_store_duckdb_save (WyreboxSchemaMetadataStore *self,
   return TRUE;
 }
 
+static gboolean
+    wyrebox_schema_metadata_store_duckdb_apply_migration_operation
+    (WyreboxSchemaMetadataStore * self,
+    WyreboxSchemaMetadataStoreMigrationOperation operation,
+    guint64 source_version, guint64 target_version, GError ** error)
+{
+  (void) self;
+  (void) source_version;
+  (void) target_version;
+
+  if (operation ==
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP)
+    return TRUE;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_NOT_SUPPORTED,
+      "unsupported DuckDB schema metadata store migration operation %u",
+      (guint) operation);
+  return FALSE;
+}
+
 static void
 wyrebox_schema_metadata_store_duckdb_finalize (GObject *object)
 {
@@ -493,6 +559,8 @@ static void
   object_class->finalize = wyrebox_schema_metadata_store_duckdb_finalize;
   store_class->load = wyrebox_schema_metadata_store_duckdb_load;
   store_class->save = wyrebox_schema_metadata_store_duckdb_save;
+  store_class->apply_migration_operation =
+      wyrebox_schema_metadata_store_duckdb_apply_migration_operation;
 }
 
 static void
@@ -534,6 +602,30 @@ wyrebox_schema_metadata_store_save (WyreboxSchemaMetadataStore *self,
     return FALSE;
 
   return klass->save (self, state, error);
+}
+
+/* *INDENT-OFF* */
+gboolean
+wyrebox_schema_metadata_store_apply_migration_operation (
+    WyreboxSchemaMetadataStore *self,
+    WyreboxSchemaMetadataStoreMigrationOperation operation,
+    guint64 source_version,
+    guint64 target_version,
+    GError **error)
+/* *INDENT-ON* */
+
+{
+  WyreboxSchemaMetadataStoreClass *klass = NULL;
+
+  g_return_val_if_fail (WYREBOX_IS_SCHEMA_METADATA_STORE (self), FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  klass = WYREBOX_SCHEMA_METADATA_STORE_GET_CLASS (self);
+  if (klass == NULL || klass->apply_migration_operation == NULL)
+    return FALSE;
+
+  return klass->apply_migration_operation (self,
+      operation, source_version, target_version, error);
 }
 
 WyreboxSchemaMetadataStore *

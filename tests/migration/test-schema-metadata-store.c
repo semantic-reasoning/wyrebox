@@ -187,6 +187,39 @@ test_save_failure_preserves_prior_state (void)
   g_assert_cmpuint (loaded.schema_version, ==, base_state.schema_version);
 }
 
+static void
+test_memory_store_accepts_legacy_bootstrap_migration_operation (void)
+{
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+
+  store = wyrebox_schema_metadata_store_new_memory ();
+  g_assert_nonnull (store);
+
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
+          0,
+          wyrebox_schema_migration_get_first_supported_schema_version (),
+          &error));
+  g_assert_no_error (error);
+}
+
+static void
+test_memory_store_rejects_unknown_migration_operation (void)
+{
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+
+  store = wyrebox_schema_metadata_store_new_memory ();
+  g_assert_nonnull (store);
+
+  g_assert_false (wyrebox_schema_metadata_store_apply_migration_operation
+      (store, (WyreboxSchemaMetadataStoreMigrationOperation) 999, 0,
+          wyrebox_schema_migration_get_first_supported_schema_version (),
+          &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
+}
+
 static char *
 make_duckdb_path (char **out_root)
 {
@@ -219,6 +252,29 @@ test_duckdb_store_missing_metadata_load (void)
   g_assert_false (loaded.schema_version_present);
   g_assert_false (loaded.materialization_checkpoint_present);
   g_assert_false (loaded.checkpoint_precondition_satisfied);
+
+  g_clear_object (&store);
+  remove_directory_tree (root);
+}
+
+static void
+test_duckdb_store_accepts_legacy_bootstrap_migration_operation (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
+          0,
+          wyrebox_schema_migration_get_first_supported_schema_version (),
+          &error));
+  g_assert_no_error (error);
 
   g_clear_object (&store);
   remove_directory_tree (root);
@@ -392,9 +448,18 @@ main (int argc, char **argv)
   g_test_add_func
       ("/migration/schema-metadata-store/save-failure-preserves-state",
       test_save_failure_preserves_prior_state);
+  g_test_add_func ("/migration/schema-metadata-store/"
+      "memory-store-accepts-legacy-bootstrap-operation",
+      test_memory_store_accepts_legacy_bootstrap_migration_operation);
+  g_test_add_func ("/migration/schema-metadata-store/"
+      "memory-store-rejects-unknown-operation",
+      test_memory_store_rejects_unknown_migration_operation);
   g_test_add_func
       ("/migration/schema-metadata-store/duckdb-store/missing-metadata-load",
       test_duckdb_store_missing_metadata_load);
+  g_test_add_func ("/migration/schema-metadata-store/duckdb-store/"
+      "accepts-legacy-bootstrap-operation",
+      test_duckdb_store_accepts_legacy_bootstrap_migration_operation);
   g_test_add_func
       ("/migration/schema-metadata-store/duckdb-store/schema-version-roundtrip",
       test_duckdb_store_schema_version_roundtrip);

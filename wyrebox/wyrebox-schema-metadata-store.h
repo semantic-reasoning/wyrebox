@@ -19,6 +19,11 @@ G_DECLARE_DERIVABLE_TYPE (WyreboxSchemaMetadataStore,
     SCHEMA_METADATA_STORE,
     GObject)
 
+typedef enum
+{
+  WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP = 1,
+} WyreboxSchemaMetadataStoreMigrationOperation;
+
 struct _WyreboxSchemaMetadataStoreClass
 {
   GObjectClass parent_class;
@@ -28,6 +33,12 @@ struct _WyreboxSchemaMetadataStoreClass
       GError **error);
   gboolean (*save) (WyreboxSchemaMetadataStore *self,
       const WyreboxSchemaMigrationMetadataState *state,
+      GError **error);
+  gboolean (*apply_migration_operation) (
+      WyreboxSchemaMetadataStore *self,
+      WyreboxSchemaMetadataStoreMigrationOperation operation,
+      guint64 source_version,
+      guint64 target_version,
       GError **error);
 };
 
@@ -48,9 +59,8 @@ wyrebox_schema_metadata_store_new_memory (void);
  * - On success, returns a non-floating GObject reference owned by the caller.
  * - On failure, returns NULL and sets @error when provided.
  *
- * DuckDB metadata persistence is not implemented yet. Until it is implemented,
- * this constructor fails with G_IO_ERROR_NOT_SUPPORTED instead of returning a
- * placeholder or in-memory fallback store.
+ * The DuckDB implementation persists schema metadata and materialization
+ * checkpoint state. It does not fall back to the in-memory store.
  *
  * Returns: (transfer full): a non-floating GObject reference owned by the
  * caller, or NULL with @error set.
@@ -79,6 +89,18 @@ gboolean wyrebox_schema_metadata_store_load (
 gboolean wyrebox_schema_metadata_store_save (
     WyreboxSchemaMetadataStore *self,
     const WyreboxSchemaMigrationMetadataState *state,
+    GError **error);
+
+/*
+ * Apply a typed physical migration operation against the backing metadata
+ * store. This does not accept caller-provided SQL or arbitrary DuckDB handles;
+ * operation identifiers are owned by WyreBox schema migration code.
+ */
+gboolean wyrebox_schema_metadata_store_apply_migration_operation (
+    WyreboxSchemaMetadataStore *self,
+    WyreboxSchemaMetadataStoreMigrationOperation operation,
+    guint64 source_version,
+    guint64 target_version,
     GError **error);
 
 /*

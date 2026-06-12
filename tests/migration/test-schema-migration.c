@@ -64,6 +64,11 @@ struct _TestSchemaMetadataStoreSpy
   gulong save_call_count;
   gboolean save_called;
   gboolean observed_checkpoint_precondition_satisfied;
+  guint migration_operation_call_count;
+  gboolean fail_next_migration_operation;
+  WyreboxSchemaMetadataStoreMigrationOperation observed_operation;
+  guint64 observed_operation_source_version;
+  guint64 observed_operation_target_version;
 
   gboolean has_state;
   gboolean fail_next_save;
@@ -126,12 +131,47 @@ test_schema_metadata_store_spy_save (WyreboxSchemaMetadataStore *self,
   return TRUE;
 }
 
+static gboolean
+    test_schema_metadata_store_spy_apply_migration_operation
+    (WyreboxSchemaMetadataStore * self,
+    WyreboxSchemaMetadataStoreMigrationOperation operation,
+    guint64 source_version, guint64 target_version, GError ** error)
+{
+  TestSchemaMetadataStoreSpy *spy = NULL;
+
+  g_return_val_if_fail (g_type_check_instance_is_a ((GTypeInstance *) self,
+          test_schema_metadata_store_spy_get_type ()), FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  spy = (TestSchemaMetadataStoreSpy *) self;
+  spy->migration_operation_call_count += 1;
+  spy->observed_operation = operation;
+  spy->observed_operation_source_version = source_version;
+  spy->observed_operation_target_version = target_version;
+
+  if (spy->fail_next_migration_operation) {
+    spy->fail_next_migration_operation = FALSE;
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED, "forced spy migration operation failure");
+    return FALSE;
+  }
+
+  return operation ==
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP;
+}
+
 static void
 test_schema_metadata_store_spy_init (TestSchemaMetadataStoreSpy *self)
 {
   self->save_called = FALSE;
   self->save_call_count = 0;
   self->observed_checkpoint_precondition_satisfied = FALSE;
+  self->migration_operation_call_count = 0;
+  self->fail_next_migration_operation = FALSE;
+  self->observed_operation = 0;
+  self->observed_operation_source_version = 0;
+  self->observed_operation_target_version = 0;
   self->has_state = FALSE;
   self->fail_next_save = FALSE;
   wyrebox_schema_migration_metadata_state_clear (&self->persisted_state);
@@ -146,6 +186,8 @@ test_schema_metadata_store_spy_class_init (TestSchemaMetadataStoreSpyClass
 
   store_class->load = test_schema_metadata_store_spy_load;
   store_class->save = test_schema_metadata_store_spy_save;
+  store_class->apply_migration_operation =
+      test_schema_metadata_store_spy_apply_migration_operation;
 }
 
 static TestSchemaMetadataStoreSpy *
@@ -351,6 +393,12 @@ static void
   g_assert_no_error (error);
   g_assert_true (spy->save_called);
   g_assert_cmpuint (spy->save_call_count, ==, 1);
+  g_assert_cmpuint (spy->migration_operation_call_count, ==, 1);
+  g_assert_cmpint (spy->observed_operation, ==,
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP);
+  g_assert_cmpuint (spy->observed_operation_source_version, ==, 0);
+  g_assert_cmpuint (spy->observed_operation_target_version, ==,
+      wyrebox_schema_migration_get_current_schema_version ());
   g_assert_false (spy->observed_checkpoint_precondition_satisfied);
 
   g_clear_error (&error);
@@ -362,6 +410,102 @@ static void
   g_assert_false (loaded.materialization_checkpoint_present);
   g_assert_cmpuint (loaded.materialization_checkpoint_journal_offset, ==, 0);
   g_assert_cmpuint (loaded.materialization_checkpoint_sequence, ==, 0);
+
+  g_object_unref (spy);
+}
+
+static void
+test_schema_migration_run_store_missing_metadata_skips_operation (void)
+{
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  TestSchemaMetadataStoreSpy *spy = NULL;
+  g_autoptr (GError) error = NULL;
+
+  migration = wyrebox_schema_migration_new ();
+  spy = test_schema_metadata_store_spy_new ();
+
+  g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
+          (WyreboxSchemaMetadataStore *) spy, FALSE, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (spy->migration_operation_call_count, ==, 0);
+  g_assert_cmpuint (spy->save_call_count, ==, 1);
+
+  g_object_unref (spy);
+}
+
+static void
+test_schema_migration_run_store_current_metadata_skips_operation (void)
+{
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  TestSchemaMetadataStoreSpy *spy = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  spy = test_schema_metadata_store_spy_new ();
+
+  base.schema_version_present = TRUE;
+  base.schema_version = wyrebox_schema_migration_get_current_schema_version ();
+  test_schema_migration_set_materialization_checkpoint_fields (&base);
+  g_assert_true (wyrebox_schema_metadata_store_save ((WyreboxSchemaMetadataStore
+              *) spy, &base, &error));
+  g_assert_no_error (error);
+  spy->save_call_count = 0;
+  spy->save_called = FALSE;
+
+  g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
+          (WyreboxSchemaMetadataStore *) spy, FALSE, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (spy->migration_operation_call_count, ==, 0);
+  g_assert_cmpuint (spy->save_call_count, ==, 0);
+  g_assert_false (spy->save_called);
+
+  g_object_unref (spy);
+}
+
+static void
+test_schema_migration_run_store_operation_failure_preserves_state (void)
+{
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  TestSchemaMetadataStoreSpy *spy = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  spy = test_schema_metadata_store_spy_new ();
+
+  base.schema_version_present = TRUE;
+  base.schema_version = 0;
+  test_schema_migration_set_materialization_checkpoint_fields (&base);
+
+  g_assert_true (wyrebox_schema_metadata_store_save ((WyreboxSchemaMetadataStore
+              *) spy, &base, &error));
+  g_assert_no_error (error);
+  spy->save_called = FALSE;
+  spy->save_call_count = 0;
+  spy->migration_operation_call_count = 0;
+  spy->fail_next_migration_operation = TRUE;
+
+  g_clear_error (&error);
+  g_assert_false (wyrebox_schema_migration_run_store_to_current (migration,
+          (WyreboxSchemaMetadataStore *) spy, TRUE, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+  g_assert_cmpuint (spy->migration_operation_call_count, ==, 1);
+  g_assert_false (spy->save_called);
+  g_assert_cmpuint (spy->save_call_count, ==, 0);
+
+  g_clear_error (&error);
+  g_assert_true (wyrebox_schema_metadata_store_load (
+          (WyreboxSchemaMetadataStore *) spy, &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==, base.schema_version);
+  g_assert_true (loaded.materialization_checkpoint_present);
+  g_assert_cmpuint (loaded.materialization_checkpoint_journal_offset, ==,
+      base.materialization_checkpoint_journal_offset);
+  g_assert_cmpuint (loaded.materialization_checkpoint_sequence, ==,
+      base.materialization_checkpoint_sequence);
 
   g_object_unref (spy);
 }
@@ -1098,6 +1242,15 @@ main (int argc, char **argv)
   g_test_add_func
       ("/migration/schema/run-store-to-current-transient-precondition-not-saved",
       test_schema_migration_run_store_to_current_transient_precondition_not_saved);
+  g_test_add_func
+      ("/migration/schema/run-store-missing-metadata-skips-operation",
+      test_schema_migration_run_store_missing_metadata_skips_operation);
+  g_test_add_func
+      ("/migration/schema/run-store-current-metadata-skips-operation",
+      test_schema_migration_run_store_current_metadata_skips_operation);
+  g_test_add_func
+      ("/migration/schema/run-store-operation-failure-preserves-state",
+      test_schema_migration_run_store_operation_failure_preserves_state);
   g_test_add_func
       ("/migration/schema/run-store-to-current-future-metadata-rejected",
       test_schema_migration_run_store_to_current_future_metadata_rejected);
