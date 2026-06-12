@@ -14,6 +14,7 @@ wyrebox_sources = files(
   'wyrebox-daemon-error-frame.c',
   'wyrebox-daemon-response-frame.c',
   'wyrebox-daemon-success-receipt.c',
+  'wyrebox-delivery-materializer.c',
   'wyrebox-delivery-projection.c',
   'wyrebox-delivery-replay-validator.c',
   'wyrebox-deterministic-fact-extractor.c',

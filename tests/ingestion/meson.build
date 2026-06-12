@@ -19,6 +19,12 @@ delivery_projection_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+delivery_materializer_test = executable(
+  'test-delivery-materializer',
+  'test-delivery-materializer.c',
+  dependencies: [wyrebox_dep],
+)
+
 test(
   'eml ingestor',
   eml_ingestor_test,
@@ -41,6 +47,11 @@ test(
   env: {
     'WYREBOX_EML_FIXTURE_DIR': eml_fixture_dir,
   },
+)
+
+test(
+  'delivery materializer',
+  delivery_materializer_test,
 )
 
 eml_metadata_test = executable(
