@@ -12,6 +12,8 @@
 #include "wyrebox-daemon-delivery-ingestion-service.h"
 #include "wyrebox-daemon-message-search-request.h"
 #include "wyrebox-daemon-message-search-service.h"
+#include "wyrebox-daemon-wirelog-predicate-query-request.h"
+#include "wyrebox-daemon-wirelog-predicate-query-service.h"
 #include "wyrebox-daemon-flag-keyword-update-request.h"
 #include "wyrebox-daemon-flag-keyword-update-service.h"
 #include "wyrebox-daemon-request-adapter.h"
@@ -29,28 +31,6 @@ typedef struct
 {
   gboolean was_called;
 } FixtureState;
-
-static WyreboxDaemonRequestAdapter *
-adapter_new_without_wirelog (WyreboxDaemonDeliveryIngestionService *delivery,
-    WyreboxDaemonFactMutationService *fact,
-    WyreboxDaemonMailboxListService *list,
-    WyreboxDaemonMailboxSelectService *select,
-    WyreboxDaemonMessageFetchService *fetch,
-    WyreboxDaemonMessageSearchService *search,
-    WyreboxDaemonFlagKeywordUpdateService *flag,
-    WyreboxDaemonRequestAdapterDecodeRequestFrameCallback decode_cb,
-    gpointer decode_data,
-    GDestroyNotify decode_destroy,
-    WyreboxDaemonRequestAdapterEncodeResponseFrameCallback encode_cb,
-    gpointer encode_data,
-    GDestroyNotify encode_destroy)
-{
-  return wyrebox_daemon_request_adapter_new (delivery, fact, list, select,
-      fetch, search, NULL, flag, decode_cb, decode_data, decode_destroy,
-      encode_cb, encode_data, encode_destroy);
-}
-
-#define wyrebox_daemon_request_adapter_new adapter_new_without_wirelog
 
 static void
 remove_tree (const char *path)
@@ -214,6 +194,45 @@ build_message_search_request_bytes (const char *request_id,
   message_search_request.setMailboxId (mailbox_id);
   message_search_request.setUidValidity (uid_validity);
   message_search_request.setCriteriaToken (criteria_token);
+
+  auto words = capnp::messageToFlatArray (request_builder);
+  auto bytes = words.asBytes ();
+
+  return g_bytes_new (bytes.begin (), bytes.size ());
+}
+
+static GBytes *
+build_wirelog_predicate_query_request_bytes (
+    const char *request_id,
+    const char *caller_identity,
+    const char *identity_account,
+    const char *query_id,
+    const char *predicate_id,
+    const char *scope_id,
+    const char * const *bindings)
+{
+  gsize binding_count = 0;
+  capnp::MallocMessageBuilder request_builder;
+  auto request_frame = request_builder.initRoot<RequestFrame> ();
+
+  auto identity = request_frame.initIdentity ();
+  identity.setRequestId (request_id);
+  identity.setCallerIdentity (caller_identity);
+  identity.setAccountIdentity (identity_account);
+  identity.setToolIdentity ("dovecot-storage");
+  identity.setCorrelationId ("corr-wirelog");
+
+  auto wirelog_predicate_query = request_frame.initWirelogPredicateQuery ();
+  wirelog_predicate_query.setQueryId (query_id);
+  wirelog_predicate_query.setPredicateId (predicate_id);
+  wirelog_predicate_query.setScopeId (scope_id);
+
+  while (bindings != NULL && bindings[binding_count] != NULL)
+    binding_count++;
+
+  auto encoded_bindings = wirelog_predicate_query.initBindings (binding_count);
+  for (gsize i = 0; i < binding_count; i++)
+    encoded_bindings.set (i, bindings[i]);
 
   auto words = capnp::messageToFlatArray (request_builder);
   auto bytes = words.asBytes ();
@@ -452,6 +471,43 @@ search_message_fixture (const WyreboxDaemonRequestIdentity *identity,
       identity->request_id,
       NULL,
       "query-search",
+      identity->correlation_id,
+      0,
+      bytes,
+      TRUE,
+      error);
+}
+
+static gboolean
+query_wirelog_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonWirelogPredicateQueryRequest *request,
+    WyreboxDaemonStreamChunkFrame *out_chunk,
+    gpointer user_data,
+    GError **error)
+{
+  const char *payload = "wirelog-result-rows";
+  g_autoptr (GBytes) bytes = NULL;
+  FixtureState *state = static_cast<FixtureState *> (user_data);
+
+  g_assert_cmpstr (identity->request_id, ==, "request-wirelog-route");
+  g_assert_cmpstr (identity->caller_identity, ==, "skill");
+  g_assert_cmpstr (identity->account_identity, ==, "account-1");
+  g_assert_cmpstr (identity->tool_identity, ==, "dovecot-storage");
+  g_assert_cmpstr (identity->correlation_id, ==, "corr-wirelog");
+  g_assert_cmpstr (request->query_id, ==, "query-wirelog");
+  g_assert_cmpstr (request->predicate_id, ==, "has_label");
+  g_assert_cmpstr (request->scope_id, ==, "account-1");
+  g_assert_cmpstr (request->bindings[0], ==, "?message");
+  g_assert_cmpstr (request->bindings[1], ==, "project-a");
+  g_assert_null (request->bindings[2]);
+
+  state->was_called = TRUE;
+  bytes = g_bytes_new_static (payload, strlen (payload));
+
+  return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+      identity->request_id,
+      NULL,
+      request->query_id,
       identity->correlation_id,
       0,
       bytes,
@@ -918,6 +974,222 @@ assert_request_bytes_rejects_message_search_invalid_criteria_sql_like (void)
       "mailbox-inbox",
       77,
       "select*from");
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_decode_wirelog_predicate_query_with_bindings (void)
+{
+  const char *bindings[] = { "?message", "project-a", NULL };
+  g_autoptr (GBytes) request =
+      build_wirelog_predicate_query_request_bytes (
+          "request-wirelog",
+          "dovecot",
+          "account-1",
+          "query-wirelog",
+          "has_label",
+          "account-1",
+          bindings);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (decoded.request_id, ==, "request-wirelog");
+  g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
+  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.tool_identity, ==, "dovecot-storage");
+  g_assert_cmpstr (decoded.correlation_id, ==, "corr-wirelog");
+  g_assert_cmpint (decoded.operation, ==,
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY);
+  g_assert_nonnull (decoded.wirelog_predicate_query);
+  g_assert_cmpstr (decoded.wirelog_predicate_query->query_id, ==,
+      "query-wirelog");
+  g_assert_cmpstr (decoded.wirelog_predicate_query->predicate_id, ==,
+      "has_label");
+  g_assert_cmpstr (decoded.wirelog_predicate_query->scope_id, ==,
+      "account-1");
+  g_assert_cmpstr (decoded.wirelog_predicate_query->bindings[0], ==,
+      "?message");
+  g_assert_cmpstr (decoded.wirelog_predicate_query->bindings[1], ==,
+      "project-a");
+  g_assert_null (decoded.wirelog_predicate_query->bindings[2]);
+  g_assert_null (decoded.mailbox_list);
+  g_assert_null (decoded.mailbox_select);
+  g_assert_null (decoded.fact_mutation);
+  g_assert_null (decoded.message_fetch);
+  g_assert_null (decoded.message_search);
+  g_assert_null (decoded.flag_keyword_update);
+
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  decoded_state_clear (decoded_state);
+}
+
+static void
+assert_request_bytes_decode_wirelog_predicate_query_empty_bindings (void)
+{
+  const char *bindings[] = { NULL };
+  g_autoptr (GBytes) request =
+      build_wirelog_predicate_query_request_bytes (
+          "request-wirelog-empty-bindings",
+          "dovecot",
+          "account-1",
+          "query-wirelog-empty",
+          "has_label",
+          "account-1",
+          bindings);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.operation, ==,
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY);
+  g_assert_nonnull (decoded.wirelog_predicate_query);
+  g_assert_cmpstr (decoded.wirelog_predicate_query->query_id, ==,
+      "query-wirelog-empty");
+  g_assert_nonnull (decoded.wirelog_predicate_query->bindings);
+  g_assert_null (decoded.wirelog_predicate_query->bindings[0]);
+
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  decoded_state_clear (decoded_state);
+}
+
+static void
+assert_request_bytes_rejects_wirelog_predicate_query_invalid_query_id (void)
+{
+  const char *bindings[] = { "?message", NULL };
+  g_autoptr (GBytes) request =
+      build_wirelog_predicate_query_request_bytes (
+          "request-wirelog-invalid-query",
+          "dovecot",
+          "account-1",
+          "query wirelog",
+          "has_label",
+          "account-1",
+          bindings);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_wirelog_predicate_query_invalid_predicate_id (void)
+{
+  const char *bindings[] = { "?message", NULL };
+  g_autoptr (GBytes) request =
+      build_wirelog_predicate_query_request_bytes (
+          "request-wirelog-invalid-predicate",
+          "dovecot",
+          "account-1",
+          "query-wirelog",
+          "has label",
+          "account-1",
+          bindings);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_wirelog_predicate_query_invalid_scope_id (void)
+{
+  const char *bindings[] = { "?message", NULL };
+  g_autoptr (GBytes) request =
+      build_wirelog_predicate_query_request_bytes (
+          "request-wirelog-invalid-scope",
+          "dovecot",
+          "account-1",
+          "query-wirelog",
+          "has_label",
+          "account\n1",
+          bindings);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_wirelog_predicate_query_invalid_binding (void)
+{
+  const char *bindings[] = { "?message\n", NULL };
+  g_autoptr (GBytes) request =
+      build_wirelog_predicate_query_request_bytes (
+          "request-wirelog-invalid-binding",
+          "dovecot",
+          "account-1",
+          "query-wirelog",
+          "has_label",
+          "account-1",
+          bindings);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
@@ -2352,6 +2624,7 @@ assert_request_adapter_callbacks_are_usable (void)
       NULL,
       NULL,
       NULL,
+      NULL,
       wyrebox_daemon_capnp_codec_decode_request_frame,
       NULL,
       NULL,
@@ -2405,6 +2678,7 @@ assert_request_adapter_routes_mailbox_select (void)
   adapter = wyrebox_daemon_request_adapter_new (NULL, NULL,
           NULL,
           service,
+          NULL,
           NULL,
           NULL,
           NULL,
@@ -2483,6 +2757,7 @@ assert_request_adapter_routes_fact_mutation (void)
       NULL,
       NULL,
       NULL,
+      NULL,
       wyrebox_daemon_capnp_codec_decode_request_frame,
       NULL,
       NULL,
@@ -2548,6 +2823,7 @@ assert_request_adapter_routes_message_fetch (void)
           NULL,
           NULL,
           service,
+          NULL,
           NULL,
           NULL,
           wyrebox_daemon_capnp_codec_decode_request_frame,
@@ -2625,6 +2901,7 @@ assert_request_adapter_routes_message_search (void)
       NULL,
       service,
       NULL,
+      NULL,
       wyrebox_daemon_capnp_codec_decode_request_frame,
       NULL,
       NULL,
@@ -2670,6 +2947,83 @@ assert_request_adapter_routes_message_search (void)
 }
 
 static void
+assert_request_adapter_routes_wirelog_predicate_query (void)
+{
+  const char *bindings[] = { "?message", "project-a", NULL };
+  g_autoptr (GError) error = NULL;
+  g_autofree FixtureState *service_state = g_new0 (FixtureState, 1);
+  g_autoptr (GBytes) request = NULL;
+  g_autoptr (GBytes) response_bytes = NULL;
+  g_autoptr (WyreboxDaemonWirelogPredicateQueryService) service = NULL;
+  g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+  const WyreboxDaemonPeerCredentials peer_credentials = {
+    .uid = 100,
+    .gid = 101,
+    .pid = 102,
+  };
+
+  service = wyrebox_daemon_wirelog_predicate_query_service_new (
+      query_wirelog_predicate_fixture,
+      service_state,
+      NULL);
+  g_assert_nonnull (service);
+
+  adapter = wyrebox_daemon_request_adapter_new (NULL, NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      service,
+      NULL,
+      wyrebox_daemon_capnp_codec_decode_request_frame,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_encode_response_frame,
+      NULL,
+      NULL);
+  g_assert_nonnull (adapter);
+
+  request = build_wirelog_predicate_query_request_bytes (
+      "request-wirelog-route",
+      "skill",
+      "account-1",
+      "query-wirelog",
+      "has_label",
+      "account-1",
+      bindings);
+
+  response_bytes = wyrebox_daemon_request_adapter_handle_payload (
+      &peer_credentials,
+      request,
+      adapter,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (response_bytes);
+  g_assert_true (service_state->was_called);
+
+  gsize size = 0;
+  const guint8 *data = static_cast<const guint8 *> (
+      g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (
+      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  capnp::FlatArrayMessageReader reader (words);
+  auto response_frame = reader.getRoot<ResponseFrame> ();
+
+  g_assert_true (response_frame.which () == ResponseFrame::STREAM_CHUNK);
+  g_assert_cmpstr (response_frame.getStreamChunk ().getRequestId ().cStr (), ==,
+      "request-wirelog-route");
+  g_assert_cmpstr (response_frame.getStreamChunk ().getMessageId ().cStr (), ==,
+      "");
+  g_assert_cmpstr (response_frame.getStreamChunk ().getQueryId ().cStr (), ==,
+      "query-wirelog");
+  g_assert_cmpstr (response_frame.getStreamChunk ().getCorrelationId ().cStr (),
+      ==,
+      "corr-wirelog");
+  g_assert_cmpuint (response_frame.getStreamChunk ().getChunkIndex (), ==, 0);
+  g_assert_true (response_frame.getStreamChunk ().getEndOfStream ());
+}
+
+static void
 assert_request_adapter_routes_flag_keyword_update (void)
 {
   const char *system_flags[] = { "\\Seen", "\\Flagged", NULL };
@@ -2691,6 +3045,7 @@ assert_request_adapter_routes_flag_keyword_update (void)
   g_assert_nonnull (service);
 
   adapter = wyrebox_daemon_request_adapter_new (NULL, NULL,
+      NULL,
       NULL,
       NULL,
       NULL,
@@ -2761,6 +3116,7 @@ assert_request_adapter_routes_delivery_ingestion (void)
 
   adapter =
       wyrebox_daemon_request_adapter_new (service, NULL,
+          NULL,
           NULL,
           NULL,
           NULL,
@@ -2853,6 +3209,24 @@ main (int argc, char **argv)
   g_test_add_func (
       "/daemon-api/capnp/codec/reject-message-search-invalid-criteria-sql",
       assert_request_bytes_rejects_message_search_invalid_criteria_sql_like);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/decode-wirelog-predicate-query-bindings",
+      assert_request_bytes_decode_wirelog_predicate_query_with_bindings);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/decode-wirelog-predicate-query-empty-bindings",
+      assert_request_bytes_decode_wirelog_predicate_query_empty_bindings);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-wirelog-predicate-query-invalid-query",
+      assert_request_bytes_rejects_wirelog_predicate_query_invalid_query_id);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-wirelog-predicate-query-invalid-predicate",
+      assert_request_bytes_rejects_wirelog_predicate_query_invalid_predicate_id);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-wirelog-predicate-query-invalid-scope",
+      assert_request_bytes_rejects_wirelog_predicate_query_invalid_scope_id);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-wirelog-predicate-query-invalid-binding",
+      assert_request_bytes_rejects_wirelog_predicate_query_invalid_binding);
   g_test_add_func ("/daemon-api/capnp/codec/decode-delivery-ingestion-valid",
       assert_request_bytes_decode_delivery_ingestion);
   g_test_add_func (
@@ -2954,6 +3328,9 @@ main (int argc, char **argv)
       assert_request_adapter_routes_message_fetch);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-message-search",
       assert_request_adapter_routes_message_search);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/request-adapter-wirelog-predicate-query",
+      assert_request_adapter_routes_wirelog_predicate_query);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-delivery-ingestion",
       assert_request_adapter_routes_delivery_ingestion);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-flag-keyword-update",

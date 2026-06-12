@@ -10,6 +10,7 @@
 #include "wyrebox-daemon-mailbox-select-result.h"
 #include "wyrebox-daemon-message-fetch-request.h"
 #include "wyrebox-daemon-message-search-request.h"
+#include "wyrebox-daemon-wirelog-predicate-query-request.h"
 
 #include <capnp/message.h>
 #include <capnp/serialize.h>
@@ -33,6 +34,7 @@ typedef struct
   WyreboxDaemonFactMutationRequest fact_mutation;
   WyreboxDaemonMessageFetchRequest message_fetch;
   WyreboxDaemonMessageSearchRequest message_search;
+  WyreboxDaemonWirelogPredicateQueryRequest wirelog_predicate_query;
   WyreboxDaemonDeliveryIngestionRequest delivery_ingestion;
   WyreboxDaemonFlagKeywordUpdateRequest flag_keyword_update;
 } WyreboxDaemonCapnpDecodedRequestState;
@@ -74,6 +76,8 @@ wyrebox_daemon_capnp_codec_decoded_state_clear (gpointer decoded_state)
   wyrebox_daemon_fact_mutation_request_clear (&state->fact_mutation);
   wyrebox_daemon_message_fetch_request_clear (&state->message_fetch);
   wyrebox_daemon_message_search_request_clear (&state->message_search);
+  wyrebox_daemon_wirelog_predicate_query_request_clear
+      (&state->wirelog_predicate_query);
   wyrebox_daemon_delivery_ingestion_request_clear (&state->delivery_ingestion);
   wyrebox_daemon_flag_keyword_update_request_clear (&state->flag_keyword_update);
 
@@ -416,6 +420,54 @@ decode_message_search_request (const RequestFrame::Reader &request_frame,
 }
 
 static gboolean
+decode_wirelog_predicate_query_request (
+    const RequestFrame::Reader &request_frame,
+    WyreboxDaemonCapnpDecodedRequestState *state,
+    WyreboxDaemonDecodedRequestFrame *out_request_frame,
+    GError **error)
+{
+  auto wirelog_predicate_query = request_frame.getWirelogPredicateQuery ();
+  g_auto (GStrv) bindings = NULL;
+
+  if (!decode_request_identity (request_frame, state, error))
+    return FALSE;
+
+  if (!decode_strv (wirelog_predicate_query.getBindings (), &bindings))
+    return FALSE;
+
+  if (bindings == NULL)
+    bindings = g_new0 (char *, 1);
+
+  if (!wyrebox_daemon_wirelog_predicate_query_request_init (
+          &state->wirelog_predicate_query,
+          wirelog_predicate_query.getQueryId ().cStr (),
+          wirelog_predicate_query.getPredicateId ().cStr (),
+          wirelog_predicate_query.getScopeId ().cStr (),
+          (const char * const *) bindings,
+          error))
+    return FALSE;
+
+  out_request_frame->request_id = state->request_id;
+  out_request_frame->caller_identity = state->caller_identity;
+  out_request_frame->account_identity = state->account_identity;
+  out_request_frame->tool_identity = state->tool_identity;
+  out_request_frame->correlation_id = state->correlation_id;
+  out_request_frame->operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY;
+  out_request_frame->mailbox_list = NULL;
+  out_request_frame->mailbox_select = NULL;
+  out_request_frame->fact_mutation = NULL;
+  out_request_frame->message_fetch = NULL;
+  out_request_frame->message_search = NULL;
+  out_request_frame->wirelog_predicate_query =
+      &state->wirelog_predicate_query;
+  out_request_frame->delivery_ingestion = NULL;
+  out_request_frame->flag_keyword_update = NULL;
+
+  return TRUE;
+}
+
+static gboolean
 decode_delivery_ingestion_request (const RequestFrame::Reader &request_frame,
     WyreboxDaemonCapnpDecodedRequestState *state,
     WyreboxDaemonDecodedRequestFrame *out_request_frame,
@@ -567,8 +619,10 @@ decode_request_frame (const capnp::word *words,
             out_request_frame,
             error);
       case RequestFrame::WIRELOG_PREDICATE_QUERY:
-        return set_not_supported (error,
-            "unsupported request frame: WirelogPredicateQuery");
+        return decode_wirelog_predicate_query_request (request_frame,
+            state,
+            out_request_frame,
+            error);
       case RequestFrame::DUCK_D_B_QUERY_TEMPLATE:
         return set_not_supported (error,
             "unsupported request frame: DuckDBQueryTemplate");
