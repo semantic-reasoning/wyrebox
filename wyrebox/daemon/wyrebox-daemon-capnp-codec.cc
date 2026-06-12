@@ -6,6 +6,7 @@
 #include "wyrebox-daemon-mailbox-list-result.h"
 #include "wyrebox-daemon-mailbox-select-request.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
+#include "wyrebox-daemon-message-fetch-request.h"
 
 #include <capnp/message.h>
 #include <capnp/serialize.h>
@@ -27,6 +28,7 @@ typedef struct
   WyreboxDaemonMailboxListRequest mailbox_list;
   WyreboxDaemonMailboxSelectRequest mailbox_select;
   WyreboxDaemonFactMutationRequest fact_mutation;
+  WyreboxDaemonMessageFetchRequest message_fetch;
 } WyreboxDaemonCapnpDecodedRequestState;
 
 static gboolean
@@ -64,6 +66,7 @@ wyrebox_daemon_capnp_codec_decoded_state_clear (gpointer decoded_state)
   wyrebox_daemon_mailbox_list_request_clear (&state->mailbox_list);
   wyrebox_daemon_mailbox_select_request_clear (&state->mailbox_select);
   wyrebox_daemon_fact_mutation_request_clear (&state->fact_mutation);
+  wyrebox_daemon_message_fetch_request_clear (&state->message_fetch);
 
   g_free (state);
 }
@@ -196,6 +199,7 @@ decode_mailbox_list_request (const RequestFrame::Reader &request_frame,
   out_request_frame->mailbox_list = &state->mailbox_list;
   out_request_frame->mailbox_select = NULL;
   out_request_frame->fact_mutation = NULL;
+  out_request_frame->message_fetch = NULL;
 
   return TRUE;
 }
@@ -228,6 +232,7 @@ decode_mailbox_select_request (const RequestFrame::Reader &request_frame,
   out_request_frame->mailbox_list = NULL;
   out_request_frame->mailbox_select = &state->mailbox_select;
   out_request_frame->fact_mutation = NULL;
+  out_request_frame->message_fetch = NULL;
 
   return TRUE;
 }
@@ -272,6 +277,41 @@ decode_fact_mutation_request (const RequestFrame::Reader &request_frame,
   out_request_frame->mailbox_list = NULL;
   out_request_frame->mailbox_select = NULL;
   out_request_frame->fact_mutation = &state->fact_mutation;
+  out_request_frame->message_fetch = NULL;
+
+  return TRUE;
+}
+
+static gboolean
+decode_message_fetch_request (const RequestFrame::Reader &request_frame,
+    WyreboxDaemonCapnpDecodedRequestState *state,
+    WyreboxDaemonDecodedRequestFrame *out_request_frame,
+    GError **error)
+{
+  auto message_fetch = request_frame.getMessageFetch ();
+
+  if (!decode_request_identity (request_frame, state, error))
+    return FALSE;
+
+  if (!wyrebox_daemon_message_fetch_request_init (&state->message_fetch,
+          message_fetch.getAccountIdentity ().cStr (),
+          message_fetch.getMailboxId ().cStr (),
+          message_fetch.getUidValidity (),
+          message_fetch.getMailboxUid (),
+          error))
+    return FALSE;
+
+  out_request_frame->request_id = state->request_id;
+  out_request_frame->caller_identity = state->caller_identity;
+  out_request_frame->account_identity = state->account_identity;
+  out_request_frame->tool_identity = state->tool_identity;
+  out_request_frame->correlation_id = state->correlation_id;
+  out_request_frame->operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_FETCH;
+  out_request_frame->mailbox_list = NULL;
+  out_request_frame->mailbox_select = NULL;
+  out_request_frame->fact_mutation = NULL;
+  out_request_frame->message_fetch = &state->message_fetch;
 
   return TRUE;
 }
@@ -303,8 +343,10 @@ decode_request_frame (const capnp::word *words,
             out_request_frame,
             error);
       case RequestFrame::MESSAGE_FETCH:
-        return set_not_supported (error,
-            "unsupported request frame: MessageFetch");
+        return decode_message_fetch_request (request_frame,
+            state,
+            out_request_frame,
+            error);
       case RequestFrame::MESSAGE_SEARCH:
         return set_not_supported (error,
             "unsupported request frame: MessageSearch");
