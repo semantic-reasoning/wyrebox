@@ -22,6 +22,12 @@ daemon_fact_mutation_service_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_fact_mutation_dispatcher_test = executable(
+  'test-daemon-fact-mutation-dispatcher',
+  'test-daemon-fact-mutation-dispatcher.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_runtime_test = executable(
   'test-daemon-runtime',
   'test-daemon-runtime.c',
@@ -50,6 +56,7 @@ test('daemon success receipt', daemon_success_receipt_test)
 test('daemon request identity', daemon_request_identity_test)
 test('daemon fact mutation request', daemon_fact_mutation_request_test)
 test('daemon fact mutation service', daemon_fact_mutation_service_test)
+test('daemon fact mutation dispatcher', daemon_fact_mutation_dispatcher_test)
 test('daemon runtime', daemon_runtime_test)
 test('daemon error', daemon_error_test)
 test('daemon error frame', daemon_error_frame_test)
