@@ -120,6 +120,17 @@ assert_bootstrap_catalog_schema (const gchar *path)
     {"is_selectable", "BOOLEAN", TRUE},
     {"is_visible", "BOOLEAN", TRUE},
   };
+  static const TestDuckdbBootstrapColumn mailbox_memberships_columns[] = {
+    {"membership_id", "VARCHAR", TRUE},
+    {"account_id", "VARCHAR", TRUE},
+    {"mailbox_id", "VARCHAR", TRUE},
+    {"message_id", "VARCHAR", TRUE},
+    {"uid", "UBIGINT", TRUE},
+    {"internal_date_unix_us", "UBIGINT", TRUE},
+    {"journal_offset", "UBIGINT", TRUE},
+    {"journal_sequence", "UBIGINT", TRUE},
+    {"is_visible", "BOOLEAN", TRUE},
+  };
   static const TestDuckdbBootstrapColumn derived_views_columns[] = {
     {"view_id", "VARCHAR", TRUE},
     {"account_id", "VARCHAR", TRUE},
@@ -147,10 +158,86 @@ assert_bootstrap_catalog_schema (const gchar *path)
       messages_columns, G_N_ELEMENTS (messages_columns));
   assert_bootstrap_table_schema (connection, "mailboxes",
       mailboxes_columns, G_N_ELEMENTS (mailboxes_columns));
+  assert_bootstrap_table_schema (connection, "mailbox_memberships",
+      mailbox_memberships_columns, G_N_ELEMENTS (mailbox_memberships_columns));
   assert_bootstrap_table_schema (connection, "derived_views",
       derived_views_columns, G_N_ELEMENTS (derived_views_columns));
   assert_bootstrap_table_schema (connection, "mailbox_uid_state",
       mailbox_uid_state_columns, G_N_ELEMENTS (mailbox_uid_state_columns));
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
+}
+
+static void
+assert_bootstrap_query_succeeds (duckdb_connection connection,
+    const gchar *query)
+{
+  g_auto (duckdb_result) result = { 0 };
+
+  g_assert_cmpint (duckdb_query (connection, query, &result), ==,
+      DuckDBSuccess);
+}
+
+static void
+assert_bootstrap_query_fails (duckdb_connection connection, const gchar *query)
+{
+  g_auto (duckdb_result) result = { 0 };
+
+  g_assert_cmpint (duckdb_query (connection, query, &result), ==, DuckDBError);
+}
+
+static void
+assert_mailbox_membership_constraints (const gchar *path)
+{
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  assert_bootstrap_query_succeeds (connection,
+      "INSERT INTO mailbox_memberships ("
+      "membership_id, account_id, mailbox_id, message_id, uid, "
+      "internal_date_unix_us, journal_offset, journal_sequence, is_visible"
+      ") VALUES ("
+      "'membership-1', 'account-1', 'mailbox-1', 'message-1', 1, "
+      "1000, 2000, 1, TRUE" ");");
+  assert_bootstrap_query_succeeds (connection,
+      "INSERT INTO mailbox_memberships ("
+      "membership_id, account_id, mailbox_id, message_id, uid, "
+      "internal_date_unix_us, journal_offset, journal_sequence, is_visible"
+      ") VALUES ("
+      "'membership-shared-journal-other-mailbox', 'account-1', 'mailbox-2', "
+      "'message-2', 1, 1001, 2000, 1, TRUE" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO mailbox_memberships ("
+      "membership_id, account_id, mailbox_id, message_id, uid, "
+      "internal_date_unix_us, journal_offset, journal_sequence, is_visible"
+      ") VALUES ("
+      "'membership-duplicate-journal-same-mailbox', 'account-1', "
+      "'mailbox-2', 'message-3', 2, 1002, 2000, 1, TRUE" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO mailbox_memberships ("
+      "membership_id, account_id, mailbox_id, message_id, uid, "
+      "internal_date_unix_us, journal_offset, journal_sequence, is_visible"
+      ") VALUES ("
+      "'membership-1', 'account-1', 'mailbox-3', 'message-4', 1, "
+      "1003, 2001, 1, TRUE" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO mailbox_memberships ("
+      "membership_id, account_id, mailbox_id, message_id, uid, "
+      "internal_date_unix_us, journal_offset, journal_sequence, is_visible"
+      ") VALUES ("
+      "'membership-uid-zero', 'account-1', 'mailbox-2', 'message-2', 0, "
+      "1004, 2002, 1, TRUE" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO mailbox_memberships ("
+      "membership_id, account_id, mailbox_id, message_id, uid, "
+      "internal_date_unix_us, journal_offset, journal_sequence, is_visible"
+      ") VALUES ("
+      "'membership-duplicate-uid', 'account-1', 'mailbox-1', 'message-2', 1, "
+      "1005, 2003, 1, TRUE" ");");
 
   (void) duckdb_disconnect (&connection);
   (void) duckdb_close (&database);
@@ -423,6 +510,7 @@ test_duckdb_store_legacy_bootstrap_creates_catalog_tables (void)
   g_assert_no_error (error);
 
   assert_bootstrap_catalog_schema (path);
+  assert_mailbox_membership_constraints (path);
 
   g_clear_object (&store);
   remove_directory_tree (root);

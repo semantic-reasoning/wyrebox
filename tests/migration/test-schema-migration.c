@@ -62,7 +62,7 @@ assert_bootstrap_catalog_tables_exist (const gchar *path)
   duckdb_connection connection = NULL;
 
   static const char *tables[] = { "accounts", "objects", "messages",
-    "mailboxes", "derived_views", "mailbox_uid_state"
+    "mailboxes", "mailbox_memberships", "derived_views", "mailbox_uid_state"
   };
 
   g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);

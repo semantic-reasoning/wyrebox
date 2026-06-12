@@ -319,6 +319,19 @@ duckdb_store_create_bootstrap_catalog (WyreboxSchemaMetadataStoreDuckdb *self,
       "is_visible BOOLEAN NOT NULL,"
       "UNIQUE(account_id, imap_name)" ");", error)
       && duckdb_store_query (self,
+      "CREATE TABLE IF NOT EXISTS mailbox_memberships ("
+      "membership_id VARCHAR PRIMARY KEY,"
+      "account_id VARCHAR NOT NULL,"
+      "mailbox_id VARCHAR NOT NULL,"
+      "message_id VARCHAR NOT NULL,"
+      "uid UBIGINT NOT NULL CHECK(uid >= 1),"
+      "internal_date_unix_us UBIGINT NOT NULL,"
+      "journal_offset UBIGINT NOT NULL,"
+      "journal_sequence UBIGINT NOT NULL,"
+      "is_visible BOOLEAN NOT NULL,"
+      "UNIQUE(mailbox_id, uid),"
+      "UNIQUE(journal_offset, journal_sequence, mailbox_id)" ");", error)
+      && duckdb_store_query (self,
       "CREATE TABLE IF NOT EXISTS derived_views ("
       "view_id VARCHAR PRIMARY KEY,"
       "account_id VARCHAR NOT NULL,"
