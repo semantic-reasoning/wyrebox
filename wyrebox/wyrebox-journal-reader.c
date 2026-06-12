@@ -399,3 +399,61 @@ wyrebox_journal_reader_read_next (WyreboxJournalReader *self,
 
   return TRUE;
 }
+
+gboolean
+wyrebox_journal_reader_seek_after_checkpoint (WyreboxJournalReader *self,
+    guint64 checkpoint_offset, guint64 checkpoint_sequence, GError **error)
+{
+  g_auto (WyreboxJournalRecord) record = { 0 };
+  gboolean eof = FALSE;
+
+  g_return_val_if_fail (WYREBOX_IS_JOURNAL_READER (self), FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (self->fd < 0 || checkpoint_offset >= self->file_size ||
+      checkpoint_offset > G_MAXINT64) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "journal checkpoint offset %" G_GUINT64_FORMAT " is invalid",
+        checkpoint_offset);
+    return FALSE;
+  }
+
+  if (lseek (self->fd, (off_t) checkpoint_offset, SEEK_SET) < 0) {
+    int saved_errno = errno;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        g_io_error_from_errno (saved_errno),
+        "failed to seek journal segment to checkpoint offset %"
+        G_GUINT64_FORMAT ": %s", checkpoint_offset, g_strerror (saved_errno));
+    return FALSE;
+  }
+
+  self->offset = checkpoint_offset;
+  self->next_sequence = checkpoint_sequence;
+
+  if (!wyrebox_journal_reader_read_next (self, &record, &eof, error)) {
+    if (eof) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "journal checkpoint offset %" G_GUINT64_FORMAT " is past EOF",
+          checkpoint_offset);
+    }
+    return FALSE;
+  }
+
+  if (record.offset != checkpoint_offset ||
+      record.sequence != checkpoint_sequence) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "journal checkpoint mismatch at offset %" G_GUINT64_FORMAT,
+        checkpoint_offset);
+    return FALSE;
+  }
+
+  return TRUE;
+}

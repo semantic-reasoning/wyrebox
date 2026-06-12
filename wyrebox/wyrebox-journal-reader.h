@@ -33,6 +33,19 @@ WyreboxJournalReader *wyrebox_journal_reader_new (const char *journal_root_dir,
 gboolean wyrebox_journal_reader_read_next (WyreboxJournalReader *self,
     WyreboxJournalRecord *record, gboolean *out_eof, GError **error);
 
+/*
+ * Validates and consumes the journal record at @checkpoint_offset.
+ *
+ * On success, the record at @checkpoint_offset must have
+ * @checkpoint_sequence and pass the same validation as read_next(); the next
+ * read returns the following record or EOF. On failure, the reader position and
+ * expected sequence are unspecified; discard and recreate the reader before
+ * retrying or continuing.
+ */
+gboolean wyrebox_journal_reader_seek_after_checkpoint (WyreboxJournalReader
+    *self, guint64 checkpoint_offset, guint64 checkpoint_sequence,
+    GError **error);
+
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxJournalRecord,
     wyrebox_journal_record_clear)
 

@@ -113,6 +113,35 @@ overwrite_segment (const char *path, guint8 *data, gsize size)
 }
 
 static void
+append_three_records (const char *root,
+    guint64 offsets[3], guint64 sequences[3], GError **error)
+{
+  const guint8 first_payload[] = { 0x6f, 0x6e, 0x65 };
+  const guint8 second_payload[] = { 0x74, 0x77, 0x6f };
+  const guint8 third_payload[] = { 0x74, 0x68, 0x72, 0x65, 0x65 };
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) first_bytes =
+      g_bytes_new_static (first_payload, sizeof (first_payload));
+  g_autoptr (GBytes) second_bytes =
+      g_bytes_new_static (second_payload, sizeof (second_payload));
+  g_autoptr (GBytes) third_bytes =
+      g_bytes_new_static (third_payload, sizeof (third_payload));
+
+  writer = wyrebox_journal_writer_new (root, error);
+  g_assert_nonnull (writer);
+
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          first_bytes, &offsets[0], &sequences[0], error));
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          second_bytes, &offsets[1], &sequences[1], error));
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          third_bytes, &offsets[2], &sequences[2], error));
+}
+
+static void
 test_reads_one_record (void)
 {
   const guint8 payload[] = { 0x68, 0x69, 0x0a };
@@ -636,6 +665,267 @@ test_rejects_unknown_event_type (void)
   remove_tree (root);
 }
 
+static void
+test_seek_after_checkpoint_returns_following_record (void)
+{
+  const guint8 third_payload[] = { 0x74, 0x68, 0x72, 0x65, 0x65 };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_auto (WyreboxJournalRecord) record = { 0 };
+  guint64 offsets[3] = { 0 };
+  guint64 sequences[3] = { 0 };
+  gboolean eof = FALSE;
+  gsize payload_size = 0;
+  const guint8 *payload_data = NULL;
+
+  g_assert_nonnull (root);
+  append_three_records (root, offsets, sequences, &error);
+  g_assert_no_error (error);
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_nonnull (reader);
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_journal_reader_seek_after_checkpoint (reader,
+          offsets[1], sequences[1], &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_journal_reader_read_next (reader,
+          &record, &eof, &error));
+  g_assert_no_error (error);
+  g_assert_false (eof);
+  g_assert_cmpuint (record.offset, ==, offsets[2]);
+  g_assert_cmpuint (record.sequence, ==, sequences[2]);
+  payload_data = g_bytes_get_data (record.payload, &payload_size);
+  g_assert_cmpuint (payload_size, ==, sizeof (third_payload));
+  g_assert_cmpmem (payload_data,
+      payload_size, third_payload, sizeof (third_payload));
+
+  remove_tree (root);
+}
+
+static void
+test_seek_after_last_checkpoint_returns_eof (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_auto (WyreboxJournalRecord) record = { 0 };
+  guint64 offsets[3] = { 0 };
+  guint64 sequences[3] = { 0 };
+  gboolean eof = FALSE;
+
+  g_assert_nonnull (root);
+  append_three_records (root, offsets, sequences, &error);
+  g_assert_no_error (error);
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_nonnull (reader);
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_journal_reader_seek_after_checkpoint (reader,
+          offsets[2], sequences[2], &error));
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_journal_reader_read_next (reader,
+          &record, &eof, &error));
+  g_assert_no_error (error);
+  g_assert_true (eof);
+
+  remove_tree (root);
+}
+
+static void
+test_seek_after_checkpoint_rejects_past_eof (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autofree guint8 *segment = NULL;
+  gsize segment_size = 0;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  guint64 offsets[3] = { 0 };
+  guint64 sequences[3] = { 0 };
+
+  g_assert_nonnull (root);
+  append_three_records (root, offsets, sequences, &error);
+  g_assert_no_error (error);
+  segment_path = segment_path_for_root (root);
+  read_segment (segment_path, &segment, &segment_size);
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_nonnull (reader);
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_journal_reader_seek_after_checkpoint (reader,
+          segment_size, sequences[2], &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_clear_error (&error);
+
+  remove_tree (root);
+}
+
+static void
+test_seek_after_checkpoint_rejects_middle_of_record (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  guint64 offsets[3] = { 0 };
+  guint64 sequences[3] = { 0 };
+
+  g_assert_nonnull (root);
+  append_three_records (root, offsets, sequences, &error);
+  g_assert_no_error (error);
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_nonnull (reader);
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_journal_reader_seek_after_checkpoint (reader,
+          offsets[1] + 1, sequences[1], &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_clear_error (&error);
+
+  remove_tree (root);
+}
+
+static void
+test_seek_after_checkpoint_rejects_wrong_sequence (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  guint64 offsets[3] = { 0 };
+  guint64 sequences[3] = { 0 };
+
+  g_assert_nonnull (root);
+  append_three_records (root, offsets, sequences, &error);
+  g_assert_no_error (error);
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_nonnull (reader);
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_journal_reader_seek_after_checkpoint (reader,
+          offsets[1], sequences[1] + 1, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_clear_error (&error);
+
+  remove_tree (root);
+}
+
+static void
+test_seek_after_checkpoint_rejects_corrupt_checksum (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autofree guint8 *segment = NULL;
+  gsize segment_size = 0;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  guint64 offsets[3] = { 0 };
+  guint64 sequences[3] = { 0 };
+
+  g_assert_nonnull (root);
+  append_three_records (root, offsets, sequences, &error);
+  g_assert_no_error (error);
+
+  segment_path = segment_path_for_root (root);
+  read_segment (segment_path, &segment, &segment_size);
+  g_assert_cmpuint (segment_size, >, offsets[1] + 32);
+  segment[offsets[1] + 32] ^= 0x01;
+  overwrite_segment (segment_path, segment, segment_size);
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_nonnull (reader);
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_journal_reader_seek_after_checkpoint (reader,
+          offsets[1], sequences[1], &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_clear_error (&error);
+
+  remove_tree (root);
+}
+
+static void
+test_seek_after_checkpoint_rejects_corrupt_header (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autofree guint8 *segment = NULL;
+  gsize segment_size = 0;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  guint64 offsets[3] = { 0 };
+  guint64 sequences[3] = { 0 };
+
+  g_assert_nonnull (root);
+  append_three_records (root, offsets, sequences, &error);
+  g_assert_no_error (error);
+
+  segment_path = segment_path_for_root (root);
+  read_segment (segment_path, &segment, &segment_size);
+  g_assert_cmpuint (segment_size, >, offsets[1] + 10);
+  write_u16_le (segment + offsets[1] + 8, 32);
+  overwrite_segment (segment_path, segment, segment_size);
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_nonnull (reader);
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_journal_reader_seek_after_checkpoint (reader,
+          offsets[1], sequences[1], &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_clear_error (&error);
+
+  remove_tree (root);
+}
+
+static void
+test_seek_after_checkpoint_rejects_corrupt_event_length (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autofree guint8 *segment = NULL;
+  gsize segment_size = 0;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  guint64 offsets[3] = { 0 };
+  guint64 sequences[3] = { 0 };
+
+  g_assert_nonnull (root);
+  append_three_records (root, offsets, sequences, &error);
+  g_assert_no_error (error);
+
+  segment_path = segment_path_for_root (root);
+  read_segment (segment_path, &segment, &segment_size);
+  g_assert_cmpuint (segment_size, >, offsets[1] + 16);
+  write_u32_le (segment + offsets[1] + 12, 0);
+  overwrite_segment (segment_path, segment, segment_size);
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_nonnull (reader);
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_journal_reader_seek_after_checkpoint (reader,
+          offsets[1], sequences[1], &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_clear_error (&error);
+
+  remove_tree (root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -660,6 +950,28 @@ main (int argc, char **argv)
       test_rejects_non_monotonic_sequence);
   g_test_add_func ("/journal-reader/rejects-unknown-event-type",
       test_rejects_unknown_event_type);
+  g_test_add_func
+      ("/journal-reader/seek-after-checkpoint/returns-following-record",
+      test_seek_after_checkpoint_returns_following_record);
+  g_test_add_func ("/journal-reader/seek-after-checkpoint/last-returns-eof",
+      test_seek_after_last_checkpoint_returns_eof);
+  g_test_add_func ("/journal-reader/seek-after-checkpoint/rejects-past-eof",
+      test_seek_after_checkpoint_rejects_past_eof);
+  g_test_add_func
+      ("/journal-reader/seek-after-checkpoint/rejects-middle-of-record",
+      test_seek_after_checkpoint_rejects_middle_of_record);
+  g_test_add_func
+      ("/journal-reader/seek-after-checkpoint/rejects-wrong-sequence",
+      test_seek_after_checkpoint_rejects_wrong_sequence);
+  g_test_add_func
+      ("/journal-reader/seek-after-checkpoint/rejects-corrupt-checksum",
+      test_seek_after_checkpoint_rejects_corrupt_checksum);
+  g_test_add_func
+      ("/journal-reader/seek-after-checkpoint/rejects-corrupt-header",
+      test_seek_after_checkpoint_rejects_corrupt_header);
+  g_test_add_func
+      ("/journal-reader/seek-after-checkpoint/rejects-corrupt-event-length",
+      test_seek_after_checkpoint_rejects_corrupt_event_length);
 
   return g_test_run ();
 }
