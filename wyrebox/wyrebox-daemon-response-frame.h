@@ -1,6 +1,7 @@
 #pragma once
 
 #include "wyrebox-daemon-error-frame.h"
+#include "wyrebox-daemon-mailbox-list-result.h"
 #include "wyrebox-daemon-success-receipt.h"
 
 #include <glib-object.h>
@@ -12,6 +13,7 @@ typedef enum {
   WYREBOX_DAEMON_RESPONSE_FRAME_NONE,
   WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS,
   WYREBOX_DAEMON_RESPONSE_FRAME_ERROR,
+  WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_LIST,
 } WyreboxDaemonResponseFrameKind;
 
 typedef struct
@@ -28,6 +30,7 @@ typedef struct
   WyreboxDaemonResponseFrameKind kind;
   WyreboxDaemonSuccessReceipt success;
   WyreboxDaemonErrorFrame error;
+  WyreboxDaemonMailboxListResult mailbox_list;
 } WyreboxDaemonResponseFrame;
 
 void wyrebox_daemon_response_frame_clear (WyreboxDaemonResponseFrame *frame);
@@ -50,6 +53,13 @@ gboolean wyrebox_daemon_response_frame_init_error (
     WyreboxDaemonResponseFrame *frame,
     const WyreboxDaemonErrorFrame *error_frame,
     const char *correlation_id,
+    GError **error);
+
+gboolean wyrebox_daemon_response_frame_init_mailbox_list (
+    WyreboxDaemonResponseFrame *frame,
+    const char *request_id,
+    const char *correlation_id,
+    const WyreboxDaemonMailboxListResult *mailbox_list,
     GError **error);
 
 gboolean wyrebox_daemon_response_frame_init_fact_mutation_success (

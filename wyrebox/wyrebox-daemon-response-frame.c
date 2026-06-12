@@ -15,6 +15,7 @@ wyrebox_daemon_response_frame_clear (WyreboxDaemonResponseFrame *frame)
   frame->kind = WYREBOX_DAEMON_RESPONSE_FRAME_NONE;
   wyrebox_daemon_success_receipt_clear (&frame->success);
   wyrebox_daemon_error_frame_clear (&frame->error);
+  wyrebox_daemon_mailbox_list_result_clear (&frame->mailbox_list);
 }
 
 static gboolean
@@ -76,6 +77,51 @@ copy_error_frame (WyreboxDaemonErrorFrame *dest,
       src->request_id, src->error_class, src->message, src->retry_hint, error);
 }
 
+static gboolean
+copy_mailbox_list_result (WyreboxDaemonMailboxListResult *dest,
+    const WyreboxDaemonMailboxListResult *src, GError **error)
+{
+  guint n_entries = 0;
+
+  if (src->entries == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "mailbox LIST response requires initialized result");
+    return FALSE;
+  }
+
+  wyrebox_daemon_mailbox_list_result_init_empty (dest);
+  n_entries = wyrebox_daemon_mailbox_list_result_get_n_entries (src);
+
+  for (guint i = 0; i < n_entries; i++) {
+    const WyreboxDaemonMailboxListEntry *entry =
+        wyrebox_daemon_mailbox_list_result_get_entry (src, i);
+
+    if (entry == NULL ||
+        !wyrebox_daemon_mailbox_list_result_append_entry (dest,
+            entry->kind, entry->mailbox_id, entry->mailbox_name,
+            entry->hierarchy_delimiter, entry->special_use,
+            entry->is_selectable, entry->child_state, error))
+      return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
+validate_required_request_id (const char *request_id, GError **error)
+{
+  if (request_id == NULL || *request_id == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "response frame requires request_id");
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
 static void
 copy_optional_string (char **dest, const char *src)
 {
@@ -135,6 +181,39 @@ wyrebox_daemon_response_frame_init_error (WyreboxDaemonResponseFrame *frame,
   next.correlation_id = NULL;
   next.kind = WYREBOX_DAEMON_RESPONSE_FRAME_NONE;
   memset (&next.error, 0, sizeof (next.error));
+
+  return TRUE;
+}
+
+gboolean
+wyrebox_daemon_response_frame_init_mailbox_list (
+    WyreboxDaemonResponseFrame *frame,
+    const char *request_id,
+    const char *correlation_id,
+    const WyreboxDaemonMailboxListResult *mailbox_list, GError **error)
+{
+  g_auto (WyreboxDaemonResponseFrame) next = { 0 };
+
+  g_return_val_if_fail (frame != NULL, FALSE);
+  g_return_val_if_fail (mailbox_list != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (!validate_required_request_id (request_id, error))
+    return FALSE;
+
+  if (!copy_mailbox_list_result (&next.mailbox_list, mailbox_list, error))
+    return FALSE;
+
+  next.request_id = g_strdup (request_id);
+  copy_optional_string (&next.correlation_id, correlation_id);
+  next.kind = WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_LIST;
+
+  wyrebox_daemon_response_frame_clear (frame);
+  *frame = next;
+  next.request_id = NULL;
+  next.correlation_id = NULL;
+  next.kind = WYREBOX_DAEMON_RESPONSE_FRAME_NONE;
+  memset (&next.mailbox_list, 0, sizeof (next.mailbox_list));
 
   return TRUE;
 }

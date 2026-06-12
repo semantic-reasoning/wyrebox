@@ -18,6 +18,29 @@ make_success_receipt (void)
   return receipt;
 }
 
+static WyreboxDaemonMailboxListResult
+make_mailbox_list_result (void)
+{
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  wyrebox_daemon_mailbox_list_result_init_empty (&result);
+  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "mailbox-inbox", "INBOX", "/", "\\Inbox", TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
+          "view-project-a", "Projects/Project A", "/", NULL, TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN, &error));
+  g_assert_no_error (error);
+
+  return (WyreboxDaemonMailboxListResult) {
+    .entries = g_steal_pointer (&result.entries),
+  };
+}
+
 static void
 test_response_frame_init_success_copies_payload (void)
 {
@@ -67,6 +90,114 @@ test_response_frame_init_error_copies_payload (void)
   g_assert_cmpstr (frame.error.message, ==, "try later");
   g_assert_cmpstr (frame.error.retry_hint, ==, "retry");
   g_assert_null (frame.success.request_id);
+}
+
+static void
+test_response_frame_init_mailbox_list_copies_payload (void)
+{
+  g_auto (WyreboxDaemonMailboxListResult) result = make_mailbox_list_result ();
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  const WyreboxDaemonMailboxListEntry *entry = NULL;
+
+  g_assert_true (wyrebox_daemon_response_frame_init_mailbox_list (&frame,
+          "request-list", "correlation-list", &result, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpstr (frame.request_id, ==, "request-list");
+  g_assert_cmpstr (frame.correlation_id, ==, "correlation-list");
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_LIST);
+  g_assert_null (frame.success.request_id);
+  g_assert_null (frame.error.request_id);
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
+      (&frame.mailbox_list), ==, 2);
+
+  entry = wyrebox_daemon_mailbox_list_result_get_entry (&frame.mailbox_list, 0);
+  g_assert_nonnull (entry);
+  g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  g_assert_cmpstr (entry->mailbox_id, ==, "mailbox-inbox");
+  g_assert_cmpstr (entry->mailbox_name, ==, "INBOX");
+  g_assert_cmpstr (entry->hierarchy_delimiter, ==, "/");
+  g_assert_cmpstr (entry->special_use, ==, "\\Inbox");
+  g_assert_true (entry->is_selectable);
+  g_assert_cmpint (entry->child_state, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN);
+
+  entry = wyrebox_daemon_mailbox_list_result_get_entry (&frame.mailbox_list, 1);
+  g_assert_nonnull (entry);
+  g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
+  g_assert_cmpstr (entry->mailbox_id, ==, "view-project-a");
+  g_assert_cmpstr (entry->mailbox_name, ==, "Projects/Project A");
+  g_assert_cmpstr (entry->special_use, ==, NULL);
+}
+
+static void
+test_response_frame_mailbox_list_deep_copies_payload (void)
+{
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  const WyreboxDaemonMailboxListEntry *entry = NULL;
+
+  wyrebox_daemon_mailbox_list_result_init_empty (&result);
+  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "mailbox-inbox", "INBOX", "/", "\\Inbox", TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_mailbox_list (&frame,
+          "request-list", NULL, &result, &error));
+  g_assert_no_error (error);
+
+  wyrebox_daemon_mailbox_list_result_clear (&result);
+  wyrebox_daemon_mailbox_list_result_init_empty (&result);
+
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
+      (&frame.mailbox_list), ==, 1);
+  entry = wyrebox_daemon_mailbox_list_result_get_entry (&frame.mailbox_list, 0);
+  g_assert_cmpstr (entry->mailbox_id, ==, "mailbox-inbox");
+  g_assert_cmpstr (entry->mailbox_name, ==, "INBOX");
+}
+
+static void
+test_response_frame_allows_empty_mailbox_list (void)
+{
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+  wyrebox_daemon_mailbox_list_result_init_empty (&result);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_mailbox_list (&frame,
+          "request-list-empty", NULL, &result, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_LIST);
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
+      (&frame.mailbox_list), ==, 0);
+}
+
+static void
+test_response_frame_rejects_invalid_mailbox_list_payload (void)
+{
+  WyreboxDaemonMailboxListResult result = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+  g_assert_false (wyrebox_daemon_response_frame_init_mailbox_list (&frame,
+          "request-list", NULL, &result, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_NONE);
+  g_assert_null (frame.request_id);
+
+  g_clear_error (&error);
+  wyrebox_daemon_mailbox_list_result_init_empty (&result);
+  g_assert_false (wyrebox_daemon_response_frame_init_mailbox_list (&frame,
+          "", NULL, &result, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_NONE);
+  wyrebox_daemon_mailbox_list_result_clear (&result);
 }
 
 static void
@@ -151,6 +282,34 @@ test_response_frame_success_then_error_is_mutually_exclusive (void)
 }
 
 static void
+test_response_frame_mailbox_list_then_error_is_mutually_exclusive (void)
+{
+  g_auto (WyreboxDaemonMailboxListResult) result = make_mailbox_list_result ();
+  g_auto (WyreboxDaemonErrorFrame) error_frame = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_response_frame_init_mailbox_list (&frame,
+          "request-list", NULL, &result, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_error_frame_init (&error_frame,
+          "request-error",
+          WYREBOX_DAEMON_ERROR_NOT_FOUND, "not found", NULL, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_error (&frame,
+          &error_frame, NULL, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpstr (frame.request_id, ==, "request-error");
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
+      (&frame.mailbox_list), ==, 0);
+  g_assert_cmpstr (frame.error.request_id, ==, "request-error");
+}
+
+static void
 test_response_frame_failure_leaves_existing_contents (void)
 {
   g_auto (WyreboxDaemonSuccessReceipt) receipt = make_success_receipt ();
@@ -174,6 +333,29 @@ test_response_frame_failure_leaves_existing_contents (void)
   g_assert_cmpstr (frame.request_id, ==, "request-success");
   g_assert_cmpstr (frame.correlation_id, ==, "stable-correlation");
   g_assert_cmpstr (frame.success.request_id, ==, "request-success");
+}
+
+static void
+test_response_frame_mailbox_list_failure_leaves_existing_contents (void)
+{
+  g_auto (WyreboxDaemonMailboxListResult) result = make_mailbox_list_result ();
+  WyreboxDaemonMailboxListResult invalid = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_response_frame_init_mailbox_list (&frame,
+          "request-list", "stable-correlation", &result, &error));
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_daemon_response_frame_init_mailbox_list (&frame,
+          "request-invalid", NULL, &invalid, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_LIST);
+  g_assert_cmpstr (frame.request_id, ==, "request-list");
+  g_assert_cmpstr (frame.correlation_id, ==, "stable-correlation");
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
+      (&frame.mailbox_list), ==, 2);
 }
 
 static void
@@ -229,16 +411,32 @@ main (int argc, char **argv)
       test_response_frame_init_success_copies_payload);
   g_test_add_func ("/daemon-api/response-frame/error-copies-payload",
       test_response_frame_init_error_copies_payload);
+  g_test_add_func ("/daemon-api/response-frame/mailbox-list-copies-payload",
+      test_response_frame_init_mailbox_list_copies_payload);
+  g_test_add_func ("/daemon-api/response-frame/"
+      "mailbox-list-deep-copies-payload",
+      test_response_frame_mailbox_list_deep_copies_payload);
+  g_test_add_func ("/daemon-api/response-frame/allows-empty-mailbox-list",
+      test_response_frame_allows_empty_mailbox_list);
   g_test_add_func ("/daemon-api/response-frame/rejects-invalid-success",
       test_response_frame_rejects_invalid_success_payload);
   g_test_add_func ("/daemon-api/response-frame/rejects-non-journaled-success",
       test_response_frame_rejects_non_journaled_success_payload);
   g_test_add_func ("/daemon-api/response-frame/rejects-invalid-error",
       test_response_frame_rejects_invalid_error_payload);
+  g_test_add_func ("/daemon-api/response-frame/"
+      "rejects-invalid-mailbox-list",
+      test_response_frame_rejects_invalid_mailbox_list_payload);
   g_test_add_func ("/daemon-api/response-frame/success-then-error-exclusive",
       test_response_frame_success_then_error_is_mutually_exclusive);
+  g_test_add_func ("/daemon-api/response-frame/"
+      "mailbox-list-then-error-exclusive",
+      test_response_frame_mailbox_list_then_error_is_mutually_exclusive);
   g_test_add_func ("/daemon-api/response-frame/failure-leaves-existing",
       test_response_frame_failure_leaves_existing_contents);
+  g_test_add_func ("/daemon-api/response-frame/"
+      "mailbox-list-failure-leaves-existing",
+      test_response_frame_mailbox_list_failure_leaves_existing_contents);
   g_test_add_func ("/daemon-api/response-frame/fact-mutation-success",
       test_response_frame_init_fact_mutation_success);
   g_test_add_func ("/daemon-api/response-frame/"
