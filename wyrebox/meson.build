@@ -23,9 +23,9 @@ wyrebox_sources = files(
   'wyrebox-schema-metadata-store.c',
   'wyrebox-eml-ingestor.c',
   'wyrebox-eml-metadata.c',
-  'wyrebox-message-delivered-payload.c',
-  'wyrebox-journal-writer.c',
-  'wyrebox-journal-reader.c',
+  'journal/wyrebox-message-delivered-payload.c',
+  'journal/wyrebox-journal-writer.c',
+  'journal/wyrebox-journal-reader.c',
   'wyrebox-schema-migration.c',
 )
 
@@ -43,6 +43,7 @@ configure_file(
 wyrebox_inc = include_directories(
   '.',
   'object-store',
+  'journal',
 )
 
 wyrebox_lib = static_library(
