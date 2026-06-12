@@ -158,14 +158,35 @@ static void
 await_framed_response_data (GSocket *socket, guint timeout_ms)
 {
   gint64 deadline = 0;
+  const gint64 poll_slice_us = 10 * G_TIME_SPAN_MILLISECOND;
 
   deadline = g_get_monotonic_time ()
       + (gint64) timeout_ms * G_TIME_SPAN_MILLISECOND;
 
   while (g_get_monotonic_time () < deadline) {
+    g_autoptr (GError) error = NULL;
+    gint64 now = 0;
+    gint64 remaining_us = 0;
+    gint64 wait_us = 0;
+
+    while (g_main_context_pending (NULL))
+      g_assert_true (g_main_context_iteration (NULL, FALSE));
+
     if (g_socket_get_available_bytes (socket) >= (gssize) sizeof (guint32))
       return;
-    g_main_context_iteration (NULL, TRUE);
+
+    now = g_get_monotonic_time ();
+    remaining_us = deadline - now;
+    if (remaining_us <= 0)
+      break;
+
+    wait_us = MIN (remaining_us, poll_slice_us);
+    (void) g_socket_condition_timed_wait (socket,
+        (GIOCondition) (G_IO_IN | G_IO_HUP | G_IO_ERR),
+        wait_us,
+        NULL,
+        &error);
+    g_assert_no_error (error);
   }
 
   g_assert_not_reached ();
