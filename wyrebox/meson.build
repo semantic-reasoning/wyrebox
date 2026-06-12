@@ -1,5 +1,5 @@
 wyrebox_sources = files(
-  'wyrebox-local-object-store.c',
+  'object-store/wyrebox-local-object-store.c',
   'wyrebox-daemon-mailbox-list-request.c',
   'wyrebox-daemon-mailbox-list-result.c',
   'wyrebox-daemon-mailbox-list-service.c',
@@ -40,7 +40,10 @@ configure_file(
   configuration: wyrebox_build_config,
 )
 
-wyrebox_inc = include_directories('.')
+wyrebox_inc = include_directories(
+  '.',
+  'object-store',
+)
 
 wyrebox_lib = static_library(
   'wyrebox',
