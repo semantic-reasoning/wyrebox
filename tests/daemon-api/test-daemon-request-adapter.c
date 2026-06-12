@@ -55,6 +55,7 @@ typedef enum
   TEST_REQUEST_ADAPTER_SCENARIO_FACT_MUTATION_MISSING_PAYLOAD,
   TEST_REQUEST_ADAPTER_SCENARIO_DELIVERY_INGESTION_SUCCESS,
   TEST_REQUEST_ADAPTER_SCENARIO_WIRELOG_PREDICATE_QUERY_SUCCESS,
+  TEST_REQUEST_ADAPTER_SCENARIO_DUCKDB_QUERY_TEMPLATE_SUCCESS,
   TEST_REQUEST_ADAPTER_SCENARIO_MESSAGE_SEARCH_SUCCESS,
   TEST_REQUEST_ADAPTER_SCENARIO_FLAG_KEYWORD_UPDATE_SUCCESS,
   TEST_REQUEST_ADAPTER_SCENARIO_DECODE_FAIL,
@@ -82,6 +83,7 @@ typedef struct
   WyreboxDaemonFactMutationRequest fact_mutation_request;
   WyreboxDaemonDeliveryIngestionRequest delivery_ingestion_request;
   WyreboxDaemonWirelogPredicateQueryRequest wirelog_predicate_query_request;
+  WyreboxDaemonDuckDBQueryTemplateRequest duckdb_query_template_request;
   WyreboxDaemonMessageSearchRequest message_search_request;
   WyreboxDaemonFlagKeywordUpdateRequest flag_keyword_update_request;
 } TestRequestAdapterDecodedState;
@@ -193,6 +195,10 @@ test_request_adapter_clear_decoded_state (gpointer user_data)
       wyrebox_daemon_wirelog_predicate_query_request_clear
           (&state->wirelog_predicate_query_request);
       break;
+    case TEST_REQUEST_ADAPTER_SCENARIO_DUCKDB_QUERY_TEMPLATE_SUCCESS:
+      wyrebox_daemon_duckdb_query_template_request_clear
+          (&state->duckdb_query_template_request);
+      break;
     case TEST_REQUEST_ADAPTER_SCENARIO_MESSAGE_SEARCH_SUCCESS:
       wyrebox_daemon_message_search_request_clear
           (&state->message_search_request);
@@ -232,6 +238,7 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
   out_request->fact_mutation = NULL;
   out_request->delivery_ingestion = NULL;
   out_request->wirelog_predicate_query = NULL;
+  out_request->duckdb_query_template = NULL;
   out_request->message_fetch = NULL;
   out_request->message_search = NULL;
   out_request->flag_keyword_update = NULL;
@@ -351,6 +358,25 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
           WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY;
       out_request->wirelog_predicate_query =
           &decoded_state->wirelog_predicate_query_request;
+      return TRUE;
+    }
+
+    case TEST_REQUEST_ADAPTER_SCENARIO_DUCKDB_QUERY_TEMPLATE_SUCCESS:{
+      const char *parameters[] = { "mail-1", NULL };
+
+      out_request->request_id = "request-duckdb-query";
+      out_request->caller_identity = "skill";
+      out_request->account_identity = "account-1";
+      out_request->tool_identity = "duckdb-tool";
+      out_request->correlation_id = "corr-duckdb";
+      if (!wyrebox_daemon_duckdb_query_template_request_init
+          (&decoded_state->duckdb_query_template_request,
+              "query-1", "template.summary", "account-1", parameters, error))
+        return FALSE;
+      out_request->operation =
+          WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE;
+      out_request->duckdb_query_template =
+          &decoded_state->duckdb_query_template_request;
       return TRUE;
     }
 
@@ -545,6 +571,33 @@ query_wirelog_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
 }
 
 static gboolean
+query_duckdb_template_fixture (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDuckDBQueryTemplateRequest *request,
+    WyreboxDaemonStreamChunkFrame *out_chunk, gpointer user_data,
+    GError **error)
+{
+  const char *payload = "duckdb-rows";
+  gboolean *was_called = user_data;
+  g_autoptr (GBytes) bytes = NULL;
+
+  g_assert_cmpstr (identity->request_id, ==, "request-duckdb-query");
+  g_assert_cmpstr (identity->caller_identity, ==, "skill");
+  g_assert_cmpstr (identity->account_identity, ==, "account-1");
+  g_assert_cmpstr (identity->tool_identity, ==, "duckdb-tool");
+  g_assert_cmpstr (request->query_id, ==, "query-1");
+  g_assert_cmpstr (request->template_id, ==, "template.summary");
+  g_assert_cmpstr (request->scope_id, ==, "account-1");
+  g_assert_cmpstr (request->parameters[0], ==, "mail-1");
+
+  *was_called = TRUE;
+  bytes = g_bytes_new_static (payload, strlen (payload));
+
+  return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+      identity->request_id,
+      NULL, request->query_id, identity->correlation_id, 0, bytes, TRUE, error);
+}
+
+static gboolean
 update_flag_keyword_fixture (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonFlagKeywordUpdateRequest *request,
     WyreboxDaemonSuccessReceipt *out_receipt, gpointer user_data,
@@ -719,6 +772,57 @@ test_request_adapter_routes_wirelog_predicate_query (void)
 
   request = g_bytes_new_static ("request-wirelog-query",
       strlen ("request-wirelog-query"));
+  response = wyrebox_daemon_request_adapter_handle_payload (&credentials,
+      request, adapter, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (response);
+  assert_bytes_equal (response, "encoded-stream-chunk");
+  g_assert_true (was_called);
+  g_assert_true (codec_state.peer_credentials_seen);
+  g_assert_cmpuint (codec_state.decode_calls, ==, 1);
+  g_assert_cmpuint (codec_state.encode_calls, ==, 1);
+  g_assert_cmpuint (codec_state.clear_calls, ==, 1);
+}
+
+static void
+test_request_adapter_routes_duckdb_query_template (void)
+{
+  TestRequestAdapterCodecState codec_state = {
+    .scenario = TEST_REQUEST_ADAPTER_SCENARIO_DUCKDB_QUERY_TEMPLATE_SUCCESS,
+    .request_payload = "request-duckdb-query",
+    .request_id = "request-duckdb-query",
+    .expected_peer_credentials = {
+          .uid = 2100,
+          .gid = 2200,
+          .pid = 2300,
+        },
+    .expected_peer_credentials_match = TRUE,
+  };
+  const WyreboxDaemonPeerCredentials credentials = {
+    .uid = 2100,
+    .gid = 2200,
+    .pid = 2300,
+  };
+  gboolean was_called = FALSE;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+  g_autoptr (GBytes) request = NULL;
+  g_autoptr (GBytes) response = NULL;
+
+  service = wyrebox_daemon_duckdb_query_template_service_new
+      (query_duckdb_template_fixture, &was_called, NULL);
+  g_assert_nonnull (service);
+
+  adapter = wyrebox_daemon_request_adapter_new (NULL, NULL, NULL, NULL, NULL,
+      NULL, NULL, test_request_adapter_decode, &codec_state, NULL,
+      test_request_adapter_encode, &codec_state, NULL);
+  g_assert_nonnull (adapter);
+  wyrebox_daemon_request_adapter_set_duckdb_query_template_service (adapter,
+      service);
+
+  request = g_bytes_new_static ("request-duckdb-query",
+      strlen ("request-duckdb-query"));
   response = wyrebox_daemon_request_adapter_handle_payload (&credentials,
       request, adapter, &error);
   g_assert_no_error (error);
@@ -1116,6 +1220,8 @@ main (int argc, char **argv)
       test_request_adapter_routes_delivery_ingestion);
   g_test_add_func ("/daemon-api/request-adapter/routes-wirelog-predicate-query",
       test_request_adapter_routes_wirelog_predicate_query);
+  g_test_add_func ("/daemon-api/request-adapter/routes-duckdb-query-template",
+      test_request_adapter_routes_duckdb_query_template);
   g_test_add_func ("/daemon-api/request-adapter/routes-fact-mutation",
       test_request_adapter_routes_fact_mutation);
   g_test_add_func ("/daemon-api/request-adapter/"

@@ -139,6 +139,42 @@ route_wirelog_predicate_query (WyreboxDaemonWirelogPredicateQueryService
 }
 
 static gboolean
+route_duckdb_query_template (WyreboxDaemonDuckDBQueryTemplateService *service,
+    const WyreboxDaemonDecodedRequestFrame *request_frame,
+    WyreboxDaemonResponseFrame *out_frame, GError **error)
+{
+  g_autoptr (GError) local_error = NULL;
+
+  if (!WYREBOX_IS_DAEMON_DUCKDB_QUERY_TEMPLATE_SERVICE (service)) {
+    g_set_error (&local_error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "duckdb query template request frame cannot be routed without service");
+    return init_error_response (out_frame,
+        request_frame->request_id,
+        request_frame->correlation_id, local_error, error);
+  }
+
+  if (request_frame->duckdb_query_template == NULL) {
+    g_set_error (&local_error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "duckdb query template request frame is missing payload");
+    return init_error_response (out_frame,
+        request_frame->request_id,
+        request_frame->correlation_id, local_error, error);
+  }
+
+  return wyrebox_daemon_duckdb_query_template_dispatch (service,
+      request_frame->request_id,
+      request_frame->caller_identity,
+      request_frame->account_identity,
+      request_frame->tool_identity,
+      request_frame->correlation_id,
+      request_frame->duckdb_query_template, out_frame, error);
+}
+
+static gboolean
 route_delivery_ingestion (WyreboxDaemonDeliveryIngestionService *service,
     const WyreboxDaemonDecodedRequestFrame *request_frame,
     WyreboxDaemonResponseFrame *out_frame, GError **error)
@@ -327,6 +363,7 @@ wyrebox_daemon_request_router_route (WyreboxDaemonDeliveryIngestionService
     *message_fetch_service, WyreboxDaemonMessageSearchService
     *message_search_service,
     WyreboxDaemonWirelogPredicateQueryService *wirelog_predicate_query_service,
+    WyreboxDaemonDuckDBQueryTemplateService *duckdb_query_template_service,
     WyreboxDaemonFlagKeywordUpdateService *flag_keyword_update_service,
     const WyreboxDaemonDecodedRequestFrame *request_frame,
     WyreboxDaemonResponseFrame *out_frame, GError **error)
@@ -352,6 +389,9 @@ wyrebox_daemon_request_router_route (WyreboxDaemonDeliveryIngestionService
           out_frame, error);
     case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY:
       return route_wirelog_predicate_query (wirelog_predicate_query_service,
+          request_frame, out_frame, error);
+    case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE:
+      return route_duckdb_query_template (duckdb_query_template_service,
           request_frame, out_frame, error);
     case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION:
       return route_delivery_ingestion (delivery_ingestion_service,
