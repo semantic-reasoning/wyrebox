@@ -18,8 +18,8 @@ wyrebox_sources = files(
   'ingestion/wyrebox-delivery-catchup.c',
   'ingestion/wyrebox-delivery-projection.c',
   'ingestion/wyrebox-delivery-replay-validator.c',
-  'wyrebox-deterministic-fact-extractor.c',
-  'wyrebox-fact-record.c',
+  'facts/wyrebox-deterministic-fact-extractor.c',
+  'facts/wyrebox-fact-record.c',
   'schema/wyrebox-schema-metadata-store.c',
   'ingestion/wyrebox-eml-ingestor.c',
   'ingestion/wyrebox-eml-metadata.c',
@@ -46,6 +46,7 @@ wyrebox_inc = include_directories(
   'journal',
   'schema',
   'ingestion',
+  'facts',
 )
 
 wyrebox_lib = static_library(
