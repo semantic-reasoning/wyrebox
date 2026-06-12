@@ -1,0 +1,7 @@
+/*
+!/.gitignore
+!/*.wrap
+!/packagefiles/
+/packagefiles/*
+!/packagefiles/duckdb-prebuilt-linux/
+!/packagefiles/duckdb-prebuilt-linux/meson.build

@@ -55,7 +55,6 @@ endif
 summary('capnp serialization', capnp_serialization_summary,
   section: 'Toolchain')
 
-duckdb_option = get_option('duckdb')
 duckdb_found = false
 duckdb_deps = []
 duckdb_api_probe = '''
@@ -74,56 +73,71 @@ duckdb_api_probe = '''
   }
 '''
 
-if duckdb_option.disabled()
-  duckdb_summary = 'disabled'
-else
-  duckdb_pkg_dep = dependency(
-    'duckdb',
-    method: 'pkg-config',
-    required: false,
+duckdb_pkg_dep = dependency(
+  'duckdb',
+  method: 'pkg-config',
+  required: false,
+)
+if duckdb_pkg_dep.found()
+  duckdb_api_usable = cc.links(
+    duckdb_api_probe,
+    name: 'DuckDB C API via pkg-config',
+    dependencies: duckdb_pkg_dep,
   )
-  if duckdb_pkg_dep.found()
+  if duckdb_api_usable
+    duckdb_found = true
+    duckdb_deps = [duckdb_pkg_dep]
+    duckdb_summary = 'enabled via pkg-config'
+  else
+    error('pkg-config found duckdb, but it did not provide a ' +
+      'compile/link usable C API.')
+  endif
+else
+  duckdb_lib_dep = cc.find_library('duckdb', required: false)
+  duckdb_api_usable = false
+
+  if duckdb_lib_dep.found()
     duckdb_api_usable = cc.links(
       duckdb_api_probe,
-      name: 'DuckDB C API via pkg-config',
-      dependencies: duckdb_pkg_dep,
+      name: 'DuckDB C API via library/header detection',
+      dependencies: duckdb_lib_dep,
     )
-    if duckdb_api_usable
-      duckdb_found = true
-      duckdb_deps = [duckdb_pkg_dep]
-      duckdb_summary = 'enabled via pkg-config'
-    elif duckdb_option.enabled()
-      error('DuckDB dependency requested with -Dduckdb=enabled, but ' +
-        'pkg-config found duckdb without a compile/link usable C API.')
-    else
-      duckdb_summary = (
-        'not found; DuckDB integration disabled ' +
-        '(pkg-config found duckdb, but the C API probe failed)'
-      )
-    endif
+  endif
+
+  if duckdb_api_usable
+    duckdb_found = true
+    duckdb_deps = [duckdb_lib_dep]
+    duckdb_summary = 'enabled via library/header detection'
   else
-    duckdb_lib_dep = cc.find_library('duckdb', required: false)
-    duckdb_api_usable = false
-
-    if duckdb_lib_dep.found()
-      duckdb_api_usable = cc.links(
-        duckdb_api_probe,
-        name: 'DuckDB C API via library/header detection',
-        dependencies: duckdb_lib_dep,
-      )
+    if host_machine.system() != 'linux'
+      error('DuckDB is required, but WyreBox only provides a DuckDB ' +
+        'subproject fallback on Linux.')
     endif
 
-    if duckdb_api_usable
-      duckdb_found = true
-      duckdb_deps = [duckdb_lib_dep]
-      duckdb_summary = 'enabled via library/header detection'
-    elif duckdb_option.enabled()
-      error('DuckDB dependency requested with -Dduckdb=enabled, but ' +
-        'pkg-config did not find duckdb and fallback detection did not ' +
-        'find a compile/link usable duckdb.h and libduckdb C API.')
-    else
-      duckdb_summary = 'not found; DuckDB integration disabled'
+    if host_machine.cpu_family() != 'x86_64'
+      error('DuckDB is required, but the bundled DuckDB prebuilt ' +
+        'subproject supports Linux x86_64 only.')
     endif
+
+    duckdb_subproject_dep = dependency(
+      'duckdb-prebuilt-linux',
+      fallback: ['duckdb-prebuilt-linux', 'duckdb_dep'],
+      required: true,
+    )
+    duckdb_api_usable = cc.links(
+      duckdb_api_probe,
+      name: 'DuckDB C API via linux prebuilt subproject',
+      dependencies: duckdb_subproject_dep,
+    )
+
+    if not duckdb_api_usable
+      error('DuckDB is required, but the DuckDB linux prebuilt ' +
+        'subproject did not provide a compile/link usable C API.')
+    endif
+
+    duckdb_found = true
+    duckdb_deps = [duckdb_subproject_dep]
+    duckdb_summary = 'enabled via linux prebuilt subproject'
   endif
 endif
 
