@@ -33,13 +33,22 @@ caller_can_mutate_facts (const char *caller_identity)
 
 static gboolean
 authorize_fact_mutation_identity (const WyreboxDaemonRequestIdentity *identity,
-    GError **error)
+    const WyreboxDaemonFactMutationRequest *request, GError **error)
 {
   if (!caller_can_mutate_facts (identity->caller_identity)) {
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_PERMISSION_DENIED,
         "caller is not authorized to mutate facts");
+    return FALSE;
+  }
+
+  if (identity->account_identity == NULL ||
+      g_strcmp0 (identity->account_identity, request->scope_id) != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_PERMISSION_DENIED,
+        "caller is not authorized for fact mutation account scope");
     return FALSE;
   }
 
@@ -121,7 +130,7 @@ gboolean
 {
   g_return_val_if_fail (identity != NULL, FALSE);
 
-  if (!authorize_fact_mutation_identity (identity, error))
+  if (!authorize_fact_mutation_identity (identity, request, error))
     return FALSE;
 
   return wyrebox_daemon_fact_mutation_service_handle (self,
