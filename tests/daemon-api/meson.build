@@ -10,6 +10,12 @@ daemon_request_identity_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_peer_credentials_test = executable(
+  'test-daemon-peer-credentials',
+  'test-daemon-peer-credentials.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_mailbox_list_request_test = executable(
   'test-daemon-mailbox-list-request',
   'test-daemon-mailbox-list-request.c',
@@ -78,6 +84,7 @@ daemon_response_frame_test = executable(
 
 test('daemon success receipt', daemon_success_receipt_test)
 test('daemon request identity', daemon_request_identity_test)
+test('daemon peer credentials', daemon_peer_credentials_test)
 test('daemon mailbox list request', daemon_mailbox_list_request_test)
 test('daemon mailbox list result', daemon_mailbox_list_result_test)
 test('daemon request router', daemon_request_router_test)
