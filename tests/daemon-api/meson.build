@@ -82,6 +82,18 @@ daemon_message_fetch_dispatcher_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_flag_keyword_update_request_test = executable(
+  'test-daemon-flag-keyword-update-request',
+  'test-daemon-flag-keyword-update-request.c',
+  dependencies: [wyrebox_dep],
+)
+
+daemon_flag_keyword_update_dispatcher_test = executable(
+  'test-daemon-flag-keyword-update-dispatcher',
+  'test-daemon-flag-keyword-update-dispatcher.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_runtime_test = executable(
   'test-daemon-runtime',
   'test-daemon-runtime.c',
@@ -178,6 +190,9 @@ test('daemon fact mutation dispatcher', daemon_fact_mutation_dispatcher_test)
 test('daemon mailbox select dispatcher', daemon_mailbox_select_dispatcher_test)
 test('daemon message fetch request', daemon_message_fetch_request_test)
 test('daemon message fetch dispatcher', daemon_message_fetch_dispatcher_test)
+test('daemon flag keyword update request', daemon_flag_keyword_update_request_test)
+test('daemon flag keyword update dispatcher',
+  daemon_flag_keyword_update_dispatcher_test)
 test('daemon runtime', daemon_runtime_test)
 test('daemon socket listener', daemon_socket_listener_test)
 test('daemon error', daemon_error_test)

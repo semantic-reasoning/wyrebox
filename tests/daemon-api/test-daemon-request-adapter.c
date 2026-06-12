@@ -1,6 +1,7 @@
 #include "wyrebox-daemon-fact-mutation-request.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-request-router.h"
+#include "wyrebox-daemon-flag-keyword-update-request.h"
 #include "wyrebox-journal-reader.h"
 #include "wyrebox-journal-writer.h"
 
@@ -16,6 +17,7 @@ typedef enum
   TEST_REQUEST_ADAPTER_SCENARIO_FACT_MUTATION_SUCCESS,
   TEST_REQUEST_ADAPTER_SCENARIO_FACT_MUTATION_UNAUTHORIZED,
   TEST_REQUEST_ADAPTER_SCENARIO_FACT_MUTATION_MISSING_PAYLOAD,
+  TEST_REQUEST_ADAPTER_SCENARIO_FLAG_KEYWORD_UPDATE_SUCCESS,
   TEST_REQUEST_ADAPTER_SCENARIO_DECODE_FAIL,
 } TestRequestAdapterScenario;
 
@@ -39,6 +41,7 @@ typedef struct
   TestRequestAdapterScenario scenario;
   WyreboxDaemonMailboxListRequest mailbox_list_request;
   WyreboxDaemonFactMutationRequest fact_mutation_request;
+  WyreboxDaemonFlagKeywordUpdateRequest flag_keyword_update_request;
 } TestRequestAdapterDecodedState;
 
 static void
@@ -140,6 +143,10 @@ test_request_adapter_clear_decoded_state (gpointer user_data)
       wyrebox_daemon_fact_mutation_request_clear
           (&state->fact_mutation_request);
       break;
+    case TEST_REQUEST_ADAPTER_SCENARIO_FLAG_KEYWORD_UPDATE_SUCCESS:
+      wyrebox_daemon_flag_keyword_update_request_clear
+          (&state->flag_keyword_update_request);
+      break;
     case TEST_REQUEST_ADAPTER_SCENARIO_DECODE_FAIL:
       break;
   }
@@ -159,6 +166,18 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
   g_return_val_if_fail (state != NULL, FALSE);
 
   state->decode_calls++;
+
+  out_request->request_id = NULL;
+  out_request->caller_identity = NULL;
+  out_request->account_identity = NULL;
+  out_request->tool_identity = NULL;
+  out_request->correlation_id = NULL;
+  out_request->operation = WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_NONE;
+  out_request->mailbox_list = NULL;
+  out_request->mailbox_select = NULL;
+  out_request->fact_mutation = NULL;
+  out_request->message_fetch = NULL;
+  out_request->flag_keyword_update = NULL;
 
   if (!request_payload_matches (request, state->request_payload))
     g_set_error (error,
@@ -238,6 +257,31 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
       out_request->fact_mutation = NULL;
       return TRUE;
 
+    case TEST_REQUEST_ADAPTER_SCENARIO_FLAG_KEYWORD_UPDATE_SUCCESS:{
+      const char *system_flags[] = { "\\Seen", NULL };
+      const char *user_keywords[] = { "project", NULL };
+
+      out_request->request_id = "request-update-flags";
+      out_request->caller_identity = "dovecot";
+      out_request->account_identity = "account-1";
+      out_request->tool_identity = "dovecot-storage";
+      out_request->correlation_id = "corr-flag-keyword";
+      if (!wyrebox_daemon_flag_keyword_update_request_init
+          (&decoded_state->flag_keyword_update_request,
+              "account-1",
+              "mailbox-inbox",
+              77,
+              42,
+              WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET,
+              system_flags, user_keywords, error))
+        return FALSE;
+      out_request->operation =
+          WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FLAG_KEYWORD_UPDATE;
+      out_request->flag_keyword_update =
+          &decoded_state->flag_keyword_update_request;
+      return TRUE;
+    }
+
     case TEST_REQUEST_ADAPTER_SCENARIO_DECODE_FAIL:
       g_set_error (error,
           G_IO_ERROR,
@@ -304,6 +348,39 @@ append_fixture_mailbox_list (const WyreboxDaemonRequestIdentity *identity,
       TRUE, WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN, error);
 }
 
+static gboolean
+update_flag_keyword_fixture (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonFlagKeywordUpdateRequest *request,
+    WyreboxDaemonSuccessReceipt *out_receipt, gpointer user_data,
+    GError **error)
+{
+  gboolean *was_called = user_data;
+
+  g_assert_cmpstr (identity->request_id, ==, "request-update-flags");
+  g_assert_cmpstr (identity->caller_identity, ==, "dovecot");
+  g_assert_cmpstr (identity->account_identity, ==, "account-1");
+  g_assert_cmpstr (identity->tool_identity, ==, "dovecot-storage");
+  g_assert_cmpstr (request->account_identity, ==, "account-1");
+  g_assert_cmpstr (request->mailbox_id, ==, "mailbox-inbox");
+  g_assert_cmpint (request->uid_validity, ==, 77);
+  g_assert_cmpuint (request->mailbox_uid, ==, 42);
+  g_assert_cmpint (request->mode,
+      ==, WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET);
+  g_assert_cmpstr (request->system_flags[0], ==, "\\Seen");
+  g_assert_cmpstr (request->user_keywords[0], ==, "project");
+
+  *was_called = TRUE;
+
+  out_receipt->request_id = g_strdup (identity->request_id);
+  out_receipt->durable_marker = g_strdup ("journal:123:456");
+  out_receipt->journal_offset = 123;
+  out_receipt->journal_sequence = 456;
+  out_receipt->summary = g_strdup_printf
+      ("flag_keyword_update account=%s mailbox=%s mode=set",
+      request->account_identity, request->mailbox_id);
+  return TRUE;
+}
+
 static void
 test_request_adapter_routes_mailbox_list (void)
 {
@@ -337,7 +414,7 @@ test_request_adapter_routes_mailbox_list (void)
 
   adapter =
       wyrebox_daemon_request_adapter_new (NULL, mailbox_list_service, NULL,
-      NULL,
+      NULL, NULL,
       test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
@@ -394,7 +471,7 @@ test_request_adapter_routes_fact_mutation (void)
 
   adapter =
       wyrebox_daemon_request_adapter_new (fact_mutation_service, NULL, NULL,
-      NULL,
+      NULL, NULL,
       test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
@@ -452,7 +529,7 @@ test_request_adapter_rejects_unauthorized_fact_mutation (void)
 
   adapter =
       wyrebox_daemon_request_adapter_new (fact_mutation_service, NULL, NULL,
-      NULL,
+      NULL, NULL,
       test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
@@ -510,7 +587,7 @@ test_request_adapter_rejects_missing_fact_mutation_payload (void)
 
   adapter =
       wyrebox_daemon_request_adapter_new (fact_mutation_service, NULL, NULL,
-      NULL,
+      NULL, NULL,
       test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
@@ -555,7 +632,7 @@ test_request_adapter_decode_failure_skips_router_and_encoder (void)
   g_autoptr (GBytes) response = NULL;
 
   adapter = wyrebox_daemon_request_adapter_new (NULL, NULL, NULL,
-      NULL,
+      NULL, NULL,
       test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
@@ -568,6 +645,62 @@ test_request_adapter_decode_failure_skips_router_and_encoder (void)
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
   g_assert_cmpuint (codec_state.decode_calls, ==, 1);
   g_assert_cmpuint (codec_state.encode_calls, ==, 0);
+  g_assert_cmpuint (codec_state.clear_calls, ==, 1);
+}
+
+static void
+test_request_adapter_routes_flag_keyword_update (void)
+{
+  TestRequestAdapterCodecState codec_state = {
+    .scenario = TEST_REQUEST_ADAPTER_SCENARIO_FLAG_KEYWORD_UPDATE_SUCCESS,
+    .request_payload = "request-flag-keyword",
+    .request_id = "request-update-flags",
+    .expected_peer_credentials = {
+          .uid = 1000,
+          .gid = 1001,
+          .pid = 1002,
+        },
+    .expected_peer_credentials_match = TRUE,
+  };
+  const WyreboxDaemonPeerCredentials credentials = {
+    .uid = 1000,
+    .gid = 1001,
+    .pid = 1002,
+  };
+  gboolean was_called = FALSE;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonFlagKeywordUpdateService)
+      flag_keyword_update_service = NULL;
+  g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+  g_autoptr (GBytes) request = NULL;
+  g_autoptr (GBytes) response = NULL;
+
+  flag_keyword_update_service =
+      wyrebox_daemon_flag_keyword_update_service_new
+      (update_flag_keyword_fixture, &was_called, NULL);
+  g_assert_nonnull (flag_keyword_update_service);
+
+  adapter =
+      wyrebox_daemon_request_adapter_new (NULL,
+      NULL,
+      NULL,
+      NULL,
+      flag_keyword_update_service,
+      test_request_adapter_decode, &codec_state, NULL,
+      test_request_adapter_encode, &codec_state, NULL);
+  g_assert_nonnull (adapter);
+
+  request = g_bytes_new_static ("request-flag-keyword",
+      strlen ("request-flag-keyword"));
+  response = wyrebox_daemon_request_adapter_handle_payload (&credentials,
+      request, adapter, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (response);
+  assert_bytes_equal (response, "encoded-success");
+  g_assert_true (was_called);
+  g_assert_true (codec_state.peer_credentials_seen);
+  g_assert_cmpuint (codec_state.decode_calls, ==, 1);
+  g_assert_cmpuint (codec_state.encode_calls, ==, 1);
   g_assert_cmpuint (codec_state.clear_calls, ==, 1);
 }
 
@@ -605,7 +738,7 @@ test_request_adapter_encode_failure_is_propagated (void)
 
   adapter =
       wyrebox_daemon_request_adapter_new (NULL, mailbox_list_service, NULL,
-      NULL,
+      NULL, NULL,
       test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
@@ -637,6 +770,9 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/request-adapter/"
       "rejects-missing-fact-mutation-payload-with-error-frame",
       test_request_adapter_rejects_missing_fact_mutation_payload);
+  g_test_add_func ("/daemon-api/request-adapter/"
+      "routes-flag-keyword-update",
+      test_request_adapter_routes_flag_keyword_update);
   g_test_add_func ("/daemon-api/request-adapter/"
       "decode-failure-skips-router-and-encoder",
       test_request_adapter_decode_failure_skips_router_and_encoder);
