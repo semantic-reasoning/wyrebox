@@ -11,9 +11,21 @@ G_BEGIN_DECLS
 
 /*
  * Returns: (transfer full) on success: caller-owned payload bytes.
- * Returns NULL on failure and sets @error.
+ * Returns NULL on protocol failure and sets @error.
  */
 GBytes *wyrebox_daemon_frame_io_read_payload (GInputStream *stream,
+    GError **error);
+
+/*
+ * Returns TRUE on success, FALSE on protocol or I/O errors.
+ *
+ * A clean EOF before a frame is reported as successful read with @out_payload set
+ * to %NULL and @out_eof set to %TRUE.
+ */
+gboolean wyrebox_daemon_frame_io_read_payload_or_eof (
+    GInputStream *stream,
+    GBytes **out_payload,
+    gboolean *out_eof,
     GError **error);
 
 /*

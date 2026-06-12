@@ -113,6 +113,35 @@ test_frame_io_rejects_truncated_length_prefix (void)
 }
 
 static void
+test_frame_io_reads_eof_without_payload (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  g_autoptr (GInputStream) input = NULL;
+  gboolean eof = FALSE;
+
+  input = g_memory_input_stream_new_from_data (NULL, 0, NULL);
+  g_assert_true (wyrebox_daemon_frame_io_read_payload_or_eof (input,
+          &payload, &eof, &error));
+  g_assert_no_error (error);
+  g_assert_true (eof);
+  g_assert_null (payload);
+}
+
+static void
+test_frame_io_read_payload_reports_eof_as_protocol_error (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  g_autoptr (GInputStream) input = NULL;
+
+  input = g_memory_input_stream_new_from_data (NULL, 0, NULL);
+  payload = wyrebox_daemon_frame_io_read_payload (input, &error);
+  g_assert_null (payload);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+}
+
+static void
 test_frame_io_rejects_truncated_payload (void)
 {
   const guint8 truncated_payload_prefix[] = {
@@ -200,6 +229,11 @@ main (int argc, char **argv)
       test_frame_io_supports_multiple_sequential_frames);
   g_test_add_func ("/daemon-api/frame-io/rejects-truncated-length-prefix",
       test_frame_io_rejects_truncated_length_prefix);
+  g_test_add_func ("/daemon-api/frame-io/reads-clean-eof-without-payload",
+      test_frame_io_reads_eof_without_payload);
+  g_test_add_func
+      ("/daemon-api/frame-io/read-payload-reports-eof-as-protocol-error",
+      test_frame_io_read_payload_reports_eof_as_protocol_error);
   g_test_add_func ("/daemon-api/frame-io/rejects-truncated-payload",
       test_frame_io_rejects_truncated_payload);
   g_test_add_func ("/daemon-api/frame-io/rejects-oversized-prefix",
