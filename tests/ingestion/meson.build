@@ -25,6 +25,12 @@ delivery_materializer_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+delivery_catchup_test = executable(
+  'test-delivery-catchup',
+  'test-delivery-catchup.c',
+  dependencies: [wyrebox_dep],
+)
+
 test(
   'eml ingestor',
   eml_ingestor_test,
@@ -52,6 +58,14 @@ test(
 test(
   'delivery materializer',
   delivery_materializer_test,
+)
+
+test(
+  'delivery catchup',
+  delivery_catchup_test,
+  env: {
+    'WYREBOX_EML_FIXTURE_DIR': eml_fixture_dir,
+  },
 )
 
 eml_metadata_test = executable(
