@@ -2,6 +2,7 @@
 
 #include "wyrebox-daemon-error-frame.h"
 #include "wyrebox-daemon-mailbox-list-result.h"
+#include "wyrebox-daemon-mailbox-select-result.h"
 #include "wyrebox-daemon-success-receipt.h"
 
 #include <glib-object.h>
@@ -14,6 +15,7 @@ typedef enum {
   WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS,
   WYREBOX_DAEMON_RESPONSE_FRAME_ERROR,
   WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_LIST,
+  WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_SELECT,
 } WyreboxDaemonResponseFrameKind;
 
 typedef struct
@@ -31,6 +33,7 @@ typedef struct
   WyreboxDaemonSuccessReceipt success;
   WyreboxDaemonErrorFrame error;
   WyreboxDaemonMailboxListResult mailbox_list;
+  WyreboxDaemonMailboxSelectResult mailbox_select;
 } WyreboxDaemonResponseFrame;
 
 void wyrebox_daemon_response_frame_clear (WyreboxDaemonResponseFrame *frame);
@@ -60,6 +63,13 @@ gboolean wyrebox_daemon_response_frame_init_mailbox_list (
     const char *request_id,
     const char *correlation_id,
     const WyreboxDaemonMailboxListResult *mailbox_list,
+    GError **error);
+
+gboolean wyrebox_daemon_response_frame_init_mailbox_select (
+    WyreboxDaemonResponseFrame *frame,
+    const char *request_id,
+    const char *correlation_id,
+    const WyreboxDaemonMailboxSelectResult *mailbox_select,
     GError **error);
 
 gboolean wyrebox_daemon_response_frame_init_fact_mutation_success (
