@@ -121,6 +121,9 @@ wyrebox_daemon_frame_io_read_payload_or_eof (GInputStream *stream,
 
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
   g_return_val_if_fail (out_payload != NULL, FALSE);
+  *out_payload = NULL;
+  if (out_eof != NULL)
+    *out_eof = FALSE;
 
   if (stream == NULL) {
     g_set_error (error,
@@ -150,9 +153,6 @@ wyrebox_daemon_frame_io_read_payload_or_eof (GInputStream *stream,
         "daemon frame length prefix is truncated");
     return FALSE;
   }
-
-  if (out_eof != NULL)
-    *out_eof = FALSE;
 
   frame_size = read_u32_be (prefix);
   if (frame_size == 0) {

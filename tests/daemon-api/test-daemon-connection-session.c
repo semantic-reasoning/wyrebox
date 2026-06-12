@@ -532,7 +532,7 @@ test_connection_session_response_write_failure (void)
 
   g_assert_false (wyrebox_daemon_connection_session_process_payloads (session,
           &error));
-  g_assert_nonnull (error);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_BROKEN_PIPE);
 
   client_input = g_io_stream_get_input_stream (G_IO_STREAM (client_connection));
   g_assert_null (wyrebox_daemon_frame_io_read_payload (client_input, NULL));
