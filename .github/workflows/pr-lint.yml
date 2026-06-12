@@ -44,3 +44,32 @@ jobs:
 
           ./tools/gst-indent "${changed_files[@]}"
           git diff --exit-code -- "${changed_files[@]}"
+
+  pr-build:
+    name: PR build
+    runs-on: ubuntu-24.04
+    needs: pr-lint
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            libglib2.0-dev \
+            meson \
+            ninja-build \
+            pkg-config \
+            unzip
+
+      - name: Configure
+        run: |
+          meson setup _build
+
+      - name: Build
+        run: |
+          meson compile -C _build
