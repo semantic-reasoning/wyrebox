@@ -106,6 +106,34 @@ daemon_frame_io_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+if capnp_serialization_found
+  daemon_api_capnp_schema = custom_target(
+    'daemon-api-capnp-schema',
+    input: files('../../wyrebox/wyrebox-daemon-api.capnp'),
+    output: [
+      'wyrebox-daemon-api.capnp.c++',
+      'wyrebox-daemon-api.capnp.h',
+    ],
+    command: [
+      capnp_serialization_compiler,
+      'compile',
+      '-oc++:@OUTDIR@',
+      '--src-prefix=' + meson.project_source_root() / 'wyrebox',
+      '@INPUT@',
+    ],
+  )
+
+  daemon_api_capnp_smoke_test = executable(
+    'test-daemon-api-capnp-smoke',
+    [
+      'test-daemon-api-capnp-smoke.cc',
+      daemon_api_capnp_schema,
+    ],
+    dependencies: [capnp_dep, kj_dep],
+    include_directories: include_directories(meson.current_build_dir()),
+  )
+endif
+
 test('daemon success receipt', daemon_success_receipt_test)
 test('daemon request identity', daemon_request_identity_test)
 test('daemon peer credentials', daemon_peer_credentials_test)
@@ -124,3 +152,6 @@ test('daemon connection session', daemon_connection_session_test)
 test('daemon connection server', daemon_connection_server_test)
 test('daemon request adapter', daemon_request_adapter_test)
 test('daemon frame io', daemon_frame_io_test)
+if capnp_serialization_found
+  test('daemon api capnp smoke', daemon_api_capnp_smoke_test)
+endif

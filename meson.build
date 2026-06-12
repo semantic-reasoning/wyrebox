@@ -39,13 +39,28 @@ capnpc_cpp = find_program('capnpc-c++', required: false)
 capnp_dep = dependency('capnp', method: 'pkg-config', required: false)
 capnpc_dep = dependency('capnpc', method: 'pkg-config', required: false)
 kj_dep = dependency('kj', method: 'pkg-config', required: false)
+cpp_enabled = false
 
 if capnp_serialization_option.disabled()
   capnp_serialization_summary = 'disabled'
 elif capnp_serialization_compiler.found() and capnpc_cpp.found() and \
     capnp_dep.found() and capnpc_dep.found() and kj_dep.found()
-  capnp_serialization_found = true
-  capnp_serialization_summary = 'enabled'
+  cpp_enabled = add_languages('cpp',
+    required: capnp_serialization_option.enabled(),
+    native: false,
+  )
+  if cpp_enabled
+    capnp_serialization_found = true
+    capnp_serialization_summary = 'enabled'
+  elif capnp_serialization_option.enabled()
+    error('Cap\'n Proto serialization requested with ' +
+      '-Dcapnp_serialization=enabled, but no usable C++ compiler was found.')
+  else
+    capnp_serialization_summary = (
+      'not found; generated API serialization disabled because no usable ' +
+      'C++ compiler was found'
+    )
+  endif
 elif capnp_serialization_option.enabled()
   error('Cap\'n Proto serialization requested with ' +
     '-Dcapnp_serialization=enabled, but capnp, capnpc-c++, and the ' +
