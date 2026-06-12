@@ -8,6 +8,7 @@
 #include "wyrebox-daemon-mailbox-select-request.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
 #include "wyrebox-daemon-message-fetch-request.h"
+#include "wyrebox-daemon-message-search-request.h"
 
 #include <capnp/message.h>
 #include <capnp/serialize.h>
@@ -30,6 +31,7 @@ typedef struct
   WyreboxDaemonMailboxSelectRequest mailbox_select;
   WyreboxDaemonFactMutationRequest fact_mutation;
   WyreboxDaemonMessageFetchRequest message_fetch;
+  WyreboxDaemonMessageSearchRequest message_search;
   WyreboxDaemonFlagKeywordUpdateRequest flag_keyword_update;
 } WyreboxDaemonCapnpDecodedRequestState;
 
@@ -69,6 +71,7 @@ wyrebox_daemon_capnp_codec_decoded_state_clear (gpointer decoded_state)
   wyrebox_daemon_mailbox_select_request_clear (&state->mailbox_select);
   wyrebox_daemon_fact_mutation_request_clear (&state->fact_mutation);
   wyrebox_daemon_message_fetch_request_clear (&state->message_fetch);
+  wyrebox_daemon_message_search_request_clear (&state->message_search);
   wyrebox_daemon_flag_keyword_update_request_clear (&state->flag_keyword_update);
 
   g_free (state);
@@ -244,6 +247,8 @@ decode_mailbox_list_request (const RequestFrame::Reader &request_frame,
   out_request_frame->mailbox_select = NULL;
   out_request_frame->fact_mutation = NULL;
   out_request_frame->message_fetch = NULL;
+  out_request_frame->message_search = NULL;
+  out_request_frame->flag_keyword_update = NULL;
 
   return TRUE;
 }
@@ -277,6 +282,8 @@ decode_mailbox_select_request (const RequestFrame::Reader &request_frame,
   out_request_frame->mailbox_select = &state->mailbox_select;
   out_request_frame->fact_mutation = NULL;
   out_request_frame->message_fetch = NULL;
+  out_request_frame->message_search = NULL;
+  out_request_frame->flag_keyword_update = NULL;
 
   return TRUE;
 }
@@ -322,6 +329,8 @@ decode_fact_mutation_request (const RequestFrame::Reader &request_frame,
   out_request_frame->mailbox_select = NULL;
   out_request_frame->fact_mutation = &state->fact_mutation;
   out_request_frame->message_fetch = NULL;
+  out_request_frame->message_search = NULL;
+  out_request_frame->flag_keyword_update = NULL;
 
   return TRUE;
 }
@@ -356,6 +365,44 @@ decode_message_fetch_request (const RequestFrame::Reader &request_frame,
   out_request_frame->mailbox_select = NULL;
   out_request_frame->fact_mutation = NULL;
   out_request_frame->message_fetch = &state->message_fetch;
+  out_request_frame->message_search = NULL;
+  out_request_frame->flag_keyword_update = NULL;
+
+  return TRUE;
+}
+
+static gboolean
+decode_message_search_request (const RequestFrame::Reader &request_frame,
+    WyreboxDaemonCapnpDecodedRequestState *state,
+    WyreboxDaemonDecodedRequestFrame *out_request_frame,
+    GError **error)
+{
+  auto message_search = request_frame.getMessageSearch ();
+
+  if (!decode_request_identity (request_frame, state, error))
+    return FALSE;
+
+  if (!wyrebox_daemon_message_search_request_init (&state->message_search,
+          message_search.getAccountIdentity ().cStr (),
+          message_search.getMailboxId ().cStr (),
+          message_search.getUidValidity (),
+          message_search.getCriteriaToken ().cStr (),
+          error))
+    return FALSE;
+
+  out_request_frame->request_id = state->request_id;
+  out_request_frame->caller_identity = state->caller_identity;
+  out_request_frame->account_identity = state->account_identity;
+  out_request_frame->tool_identity = state->tool_identity;
+  out_request_frame->correlation_id = state->correlation_id;
+  out_request_frame->operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_SEARCH;
+  out_request_frame->mailbox_list = NULL;
+  out_request_frame->mailbox_select = NULL;
+  out_request_frame->fact_mutation = NULL;
+  out_request_frame->message_fetch = NULL;
+  out_request_frame->message_search = &state->message_search;
+  out_request_frame->flag_keyword_update = NULL;
 
   return TRUE;
 }
@@ -408,6 +455,7 @@ decode_flag_keyword_update_request (
   out_request_frame->mailbox_select = NULL;
   out_request_frame->fact_mutation = NULL;
   out_request_frame->message_fetch = NULL;
+  out_request_frame->message_search = NULL;
   out_request_frame->flag_keyword_update = &state->flag_keyword_update;
 
   return TRUE;
@@ -445,8 +493,10 @@ decode_request_frame (const capnp::word *words,
             out_request_frame,
             error);
       case RequestFrame::MESSAGE_SEARCH:
-        return set_not_supported (error,
-            "unsupported request frame: MessageSearch");
+        return decode_message_search_request (request_frame,
+            state,
+            out_request_frame,
+            error);
       case RequestFrame::FLAG_KEYWORD_UPDATE:
         return decode_flag_keyword_update_request (request_frame,
             state,
