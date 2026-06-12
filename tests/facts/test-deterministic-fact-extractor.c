@@ -124,6 +124,163 @@ test_ignores_reference_headers_without_message_id_tokens (void)
 }
 
 static void
+test_appends_dictionary_project_keywords_after_header_facts (void)
+{
+  WyreboxEmlMetadata metadata = {
+    .message_id = "<mail-dict@example.test>",
+    .subject = "Quarterly ALPHA planning",
+    .from = "Program Lead <lead@Example.TEST>",
+    .to = "Team Bravo <bravo@example.test>",
+    .cc = "Ops Desk <ops@example.test>",
+    .bcc = "Audit <audit@example.test>",
+    .date = "Tue, 02 Jun 2026 12:34:56 +0000",
+  };
+  const WyreboxDeterministicFactDictionaryRule rules[] = {
+    {
+          .field = "to",
+          .rule_id = "to-bravo",
+          .match_text = "BRAVO",
+          .canonical_project_key = "project-bravo",
+        },
+    {
+          .field = "subject",
+          .rule_id = "subject-alpha",
+          .match_text = "alpha",
+          .canonical_project_key = "project-alpha",
+        },
+    {
+          .field = "from",
+          .rule_id = "from-lead-domain",
+          .match_text = "example.test",
+          .canonical_project_key = "project-lead",
+        },
+    {
+          .field = "cc",
+          .rule_id = "cc-ops",
+          .match_text = "OPS DESK",
+          .canonical_project_key = "project-ops",
+        },
+    {
+          .field = "bcc",
+          .rule_id = "bcc-audit",
+          .match_text = "audit",
+          .canonical_project_key = "project-hidden",
+        },
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) facts = NULL;
+
+  facts =
+      wyrebox_deterministic_fact_extract_from_metadata_with_dictionary
+      ("mail-dict", &metadata, 1800000000000000, rules, G_N_ELEMENTS (rules),
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (facts);
+  g_assert_cmpuint (facts->len, ==, 12);
+
+  assert_fact (fact_at (facts, 0),
+      "message_id", "mail-dict", "<mail-dict@example.test>",
+      "header:message-id");
+  assert_fact (fact_at (facts, 7),
+      "project_keyword", "mail-dict", "project-bravo",
+      "dictionary:to:to-bravo");
+  assert_fact (fact_at (facts, 8),
+      "project_keyword", "mail-dict", "project-alpha",
+      "dictionary:subject:subject-alpha");
+  assert_fact (fact_at (facts, 9),
+      "project_keyword", "mail-dict", "project-lead",
+      "dictionary:from:from-lead-domain");
+  assert_fact (fact_at (facts, 10),
+      "project_keyword", "mail-dict", "project-ops", "dictionary:cc:cc-ops");
+  assert_fact (fact_at (facts, 11),
+      "project_keyword", "mail-dict", "project-hidden",
+      "dictionary:bcc:bcc-audit");
+}
+
+static void
+test_dictionary_rules_match_only_selected_field (void)
+{
+  WyreboxEmlMetadata metadata = {
+    .subject = "Project Alpha",
+    .from = "alpha@example.test",
+  };
+  const WyreboxDeterministicFactDictionaryRule rules[] = {
+    {
+          .field = "to",
+          .rule_id = "to-alpha",
+          .match_text = "alpha",
+          .canonical_project_key = "project-alpha",
+        },
+    {
+          .field = "subject",
+          .rule_id = "subject-alpha",
+          .match_text = "alpha",
+          .canonical_project_key = "project-alpha",
+        },
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GPtrArray) facts = NULL;
+
+  facts =
+      wyrebox_deterministic_fact_extract_from_metadata_with_dictionary
+      ("mail-selected-field", &metadata, 1800000000000000, rules,
+      G_N_ELEMENTS (rules), &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (facts);
+  g_assert_cmpuint (facts->len, ==, 3);
+
+  assert_fact (fact_at (facts, 2),
+      "project_keyword", "mail-selected-field", "project-alpha",
+      "dictionary:subject:subject-alpha");
+}
+
+static void
+test_rejects_invalid_dictionary_rules (void)
+{
+  WyreboxEmlMetadata metadata = {
+    .subject = "Project Alpha",
+  };
+  const WyreboxDeterministicFactDictionaryRule invalid_rules[] = {
+    {
+          .field = "subject",
+          .rule_id = "",
+          .match_text = "alpha",
+          .canonical_project_key = "project-alpha",
+        },
+    {
+          .field = "date",
+          .rule_id = "unsupported-field",
+          .match_text = "alpha",
+          .canonical_project_key = "project-alpha",
+        },
+    {
+          .field = "subject",
+          .rule_id = "empty-match",
+          .match_text = "",
+          .canonical_project_key = "project-alpha",
+        },
+    {
+          .field = "subject",
+          .rule_id = "empty-project",
+          .match_text = "alpha",
+          .canonical_project_key = "",
+        },
+  };
+
+  for (guint i = 0; i < G_N_ELEMENTS (invalid_rules); i++) {
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GPtrArray) facts = NULL;
+
+    facts =
+        wyrebox_deterministic_fact_extract_from_metadata_with_dictionary
+        ("mail-invalid-rule", &metadata, 1800000000000000, &invalid_rules[i], 1,
+        &error);
+    g_assert_null (facts);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  }
+}
+
+static void
 test_rejects_missing_mail_id (void)
 {
   WyreboxEmlMetadata metadata = {
@@ -167,6 +324,15 @@ main (int argc, char **argv)
   g_test_add_func ("/facts/deterministic-extractor/"
       "ignores-reference-headers-without-message-id-tokens",
       test_ignores_reference_headers_without_message_id_tokens);
+  g_test_add_func ("/facts/deterministic-extractor/"
+      "dictionary-project-keywords-after-header-facts",
+      test_appends_dictionary_project_keywords_after_header_facts);
+  g_test_add_func ("/facts/deterministic-extractor/"
+      "dictionary-rules-match-only-selected-field",
+      test_dictionary_rules_match_only_selected_field);
+  g_test_add_func ("/facts/deterministic-extractor/"
+      "rejects-invalid-dictionary-rules",
+      test_rejects_invalid_dictionary_rules);
   g_test_add_func ("/facts/deterministic-extractor/rejects-missing-mail-id",
       test_rejects_missing_mail_id);
   g_test_add_func ("/facts/deterministic-extractor/rejects-missing-created-at",
