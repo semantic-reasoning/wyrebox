@@ -10,6 +10,12 @@ daemon_request_identity_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_request_router_test = executable(
+  'test-daemon-request-router',
+  'test-daemon-request-router.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_fact_mutation_request_test = executable(
   'test-daemon-fact-mutation-request',
   'test-daemon-fact-mutation-request.c',
@@ -54,6 +60,7 @@ daemon_response_frame_test = executable(
 
 test('daemon success receipt', daemon_success_receipt_test)
 test('daemon request identity', daemon_request_identity_test)
+test('daemon request router', daemon_request_router_test)
 test('daemon fact mutation request', daemon_fact_mutation_request_test)
 test('daemon fact mutation service', daemon_fact_mutation_service_test)
 test('daemon fact mutation dispatcher', daemon_fact_mutation_dispatcher_test)
