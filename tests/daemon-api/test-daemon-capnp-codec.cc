@@ -10,6 +10,8 @@
 #include "wyrebox-daemon-message-fetch-service.h"
 #include "wyrebox-daemon-delivery-ingestion-request.h"
 #include "wyrebox-daemon-delivery-ingestion-service.h"
+#include "wyrebox-daemon-duckdb-query-template-request.h"
+#include "wyrebox-daemon-duckdb-query-template-service.h"
 #include "wyrebox-daemon-message-search-request.h"
 #include "wyrebox-daemon-message-search-service.h"
 #include "wyrebox-daemon-wirelog-predicate-query-request.h"
@@ -233,6 +235,46 @@ build_wirelog_predicate_query_request_bytes (
   auto encoded_bindings = wirelog_predicate_query.initBindings (binding_count);
   for (gsize i = 0; i < binding_count; i++)
     encoded_bindings.set (i, bindings[i]);
+
+  auto words = capnp::messageToFlatArray (request_builder);
+  auto bytes = words.asBytes ();
+
+  return g_bytes_new (bytes.begin (), bytes.size ());
+}
+
+static GBytes *
+build_duckdb_query_template_request_bytes (
+    const char *request_id,
+    const char *caller_identity,
+    const char *identity_account,
+    const char *query_id,
+    const char *template_id,
+    const char *scope_id,
+    const char * const *parameters)
+{
+  gsize parameter_count = 0;
+  capnp::MallocMessageBuilder request_builder;
+  auto request_frame = request_builder.initRoot<RequestFrame> ();
+
+  auto identity = request_frame.initIdentity ();
+  identity.setRequestId (request_id);
+  identity.setCallerIdentity (caller_identity);
+  identity.setAccountIdentity (identity_account);
+  identity.setToolIdentity ("duckdb-tool");
+  identity.setCorrelationId ("corr-duckdb");
+
+  auto duckdb_query_template = request_frame.initDuckDBQueryTemplate ();
+  duckdb_query_template.setQueryId (query_id);
+  duckdb_query_template.setTemplateId (template_id);
+  duckdb_query_template.setScopeId (scope_id);
+
+  while (parameters != NULL && parameters[parameter_count] != NULL)
+    parameter_count++;
+
+  auto encoded_parameters =
+      duckdb_query_template.initParameters (parameter_count);
+  for (gsize i = 0; i < parameter_count; i++)
+    encoded_parameters.set (i, parameters[i]);
 
   auto words = capnp::messageToFlatArray (request_builder);
   auto bytes = words.asBytes ();
@@ -500,6 +542,43 @@ query_wirelog_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
   g_assert_cmpstr (request->bindings[0], ==, "?message");
   g_assert_cmpstr (request->bindings[1], ==, "project-a");
   g_assert_null (request->bindings[2]);
+
+  state->was_called = TRUE;
+  bytes = g_bytes_new_static (payload, strlen (payload));
+
+  return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+      identity->request_id,
+      NULL,
+      request->query_id,
+      identity->correlation_id,
+      0,
+      bytes,
+      TRUE,
+      error);
+}
+
+static gboolean
+query_duckdb_template_fixture (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDuckDBQueryTemplateRequest *request,
+    WyreboxDaemonStreamChunkFrame *out_chunk,
+    gpointer user_data,
+    GError **error)
+{
+  const char *payload = "duckdb-result-rows";
+  g_autoptr (GBytes) bytes = NULL;
+  FixtureState *state = static_cast<FixtureState *> (user_data);
+
+  g_assert_cmpstr (identity->request_id, ==, "request-duckdb-route");
+  g_assert_cmpstr (identity->caller_identity, ==, "skill");
+  g_assert_cmpstr (identity->account_identity, ==, "account-1");
+  g_assert_cmpstr (identity->tool_identity, ==, "duckdb-tool");
+  g_assert_cmpstr (identity->correlation_id, ==, "corr-duckdb");
+  g_assert_cmpstr (request->query_id, ==, "query-duckdb");
+  g_assert_cmpstr (request->template_id, ==, "template.summary");
+  g_assert_cmpstr (request->scope_id, ==, "account-1");
+  g_assert_cmpstr (request->parameters[0], ==, "mail-1");
+  g_assert_cmpstr (request->parameters[1], ==, "project-a");
+  g_assert_null (request->parameters[2]);
 
   state->was_called = TRUE;
   bytes = g_bytes_new_static (payload, strlen (payload));
@@ -1190,6 +1269,223 @@ assert_request_bytes_rejects_wirelog_predicate_query_invalid_binding (void)
           "has_label",
           "account-1",
           bindings);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_decode_duckdb_query_template_with_parameters (void)
+{
+  const char *parameters[] = { "mail-1", "project-a", NULL };
+  g_autoptr (GBytes) request =
+      build_duckdb_query_template_request_bytes (
+          "request-duckdb",
+          "skill",
+          "account-1",
+          "query-duckdb",
+          "template.summary",
+          "account-1",
+          parameters);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (decoded.request_id, ==, "request-duckdb");
+  g_assert_cmpstr (decoded.caller_identity, ==, "skill");
+  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.tool_identity, ==, "duckdb-tool");
+  g_assert_cmpstr (decoded.correlation_id, ==, "corr-duckdb");
+  g_assert_cmpint (decoded.operation, ==,
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE);
+  g_assert_nonnull (decoded.duckdb_query_template);
+  g_assert_cmpstr (decoded.duckdb_query_template->query_id, ==,
+      "query-duckdb");
+  g_assert_cmpstr (decoded.duckdb_query_template->template_id, ==,
+      "template.summary");
+  g_assert_cmpstr (decoded.duckdb_query_template->scope_id, ==,
+      "account-1");
+  g_assert_cmpstr (decoded.duckdb_query_template->parameters[0], ==,
+      "mail-1");
+  g_assert_cmpstr (decoded.duckdb_query_template->parameters[1], ==,
+      "project-a");
+  g_assert_null (decoded.duckdb_query_template->parameters[2]);
+  g_assert_null (decoded.mailbox_list);
+  g_assert_null (decoded.mailbox_select);
+  g_assert_null (decoded.fact_mutation);
+  g_assert_null (decoded.message_fetch);
+  g_assert_null (decoded.message_search);
+  g_assert_null (decoded.wirelog_predicate_query);
+  g_assert_null (decoded.flag_keyword_update);
+
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  decoded_state_clear (decoded_state);
+}
+
+static void
+assert_request_bytes_decode_duckdb_query_template_empty_parameters (void)
+{
+  const char *parameters[] = { NULL };
+  g_autoptr (GBytes) request =
+      build_duckdb_query_template_request_bytes (
+          "request-duckdb-empty-parameters",
+          "skill",
+          "account-1",
+          "query-duckdb-empty",
+          "template.summary",
+          "account-1",
+          parameters);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.operation, ==,
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE);
+  g_assert_nonnull (decoded.duckdb_query_template);
+  g_assert_cmpstr (decoded.duckdb_query_template->query_id, ==,
+      "query-duckdb-empty");
+  g_assert_nonnull (decoded.duckdb_query_template->parameters);
+  g_assert_null (decoded.duckdb_query_template->parameters[0]);
+
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  decoded_state_clear (decoded_state);
+}
+
+static void
+assert_request_bytes_rejects_duckdb_query_template_invalid_query_id (void)
+{
+  const char *parameters[] = { "mail-1", NULL };
+  g_autoptr (GBytes) request =
+      build_duckdb_query_template_request_bytes (
+          "request-duckdb-invalid-query",
+          "skill",
+          "account-1",
+          "query duckdb",
+          "template.summary",
+          "account-1",
+          parameters);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_duckdb_query_template_invalid_template_id (void)
+{
+  const char *parameters[] = { "mail-1", NULL };
+  g_autoptr (GBytes) request =
+      build_duckdb_query_template_request_bytes (
+          "request-duckdb-invalid-template",
+          "skill",
+          "account-1",
+          "query-duckdb",
+          "template summary",
+          "account-1",
+          parameters);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_duckdb_query_template_invalid_scope_id (void)
+{
+  const char *parameters[] = { "mail-1", NULL };
+  g_autoptr (GBytes) request =
+      build_duckdb_query_template_request_bytes (
+          "request-duckdb-invalid-scope",
+          "skill",
+          "account-1",
+          "query-duckdb",
+          "template.summary",
+          "account\n1",
+          parameters);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_request_bytes_rejects_duckdb_query_template_invalid_parameter (void)
+{
+  const char *parameters[] = { "mail\n1", NULL };
+  g_autoptr (GBytes) request =
+      build_duckdb_query_template_request_bytes (
+          "request-duckdb-invalid-parameter",
+          "skill",
+          "account-1",
+          "query-duckdb",
+          "template.summary",
+          "account-1",
+          parameters);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
@@ -3024,6 +3320,85 @@ assert_request_adapter_routes_wirelog_predicate_query (void)
 }
 
 static void
+assert_request_adapter_routes_duckdb_query_template (void)
+{
+  const char *parameters[] = { "mail-1", "project-a", NULL };
+  g_autoptr (GError) error = NULL;
+  g_autofree FixtureState *service_state = g_new0 (FixtureState, 1);
+  g_autoptr (GBytes) request = NULL;
+  g_autoptr (GBytes) response_bytes = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+  const WyreboxDaemonPeerCredentials peer_credentials = {
+    .uid = 100,
+    .gid = 101,
+    .pid = 102,
+  };
+
+  service = wyrebox_daemon_duckdb_query_template_service_new (
+      query_duckdb_template_fixture,
+      service_state,
+      NULL);
+  g_assert_nonnull (service);
+
+  adapter = wyrebox_daemon_request_adapter_new (NULL, NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_decode_request_frame,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_encode_response_frame,
+      NULL,
+      NULL);
+  g_assert_nonnull (adapter);
+  wyrebox_daemon_request_adapter_set_duckdb_query_template_service (adapter,
+      service);
+
+  request = build_duckdb_query_template_request_bytes (
+      "request-duckdb-route",
+      "skill",
+      "account-1",
+      "query-duckdb",
+      "template.summary",
+      "account-1",
+      parameters);
+
+  response_bytes = wyrebox_daemon_request_adapter_handle_payload (
+      &peer_credentials,
+      request,
+      adapter,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (response_bytes);
+  g_assert_true (service_state->was_called);
+
+  gsize size = 0;
+  const guint8 *data = static_cast<const guint8 *> (
+      g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (
+      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  capnp::FlatArrayMessageReader reader (words);
+  auto response_frame = reader.getRoot<ResponseFrame> ();
+
+  g_assert_true (response_frame.which () == ResponseFrame::STREAM_CHUNK);
+  g_assert_cmpstr (response_frame.getStreamChunk ().getRequestId ().cStr (), ==,
+      "request-duckdb-route");
+  g_assert_cmpstr (response_frame.getStreamChunk ().getMessageId ().cStr (), ==,
+      "");
+  g_assert_cmpstr (response_frame.getStreamChunk ().getQueryId ().cStr (), ==,
+      "query-duckdb");
+  g_assert_cmpstr (response_frame.getStreamChunk ().getCorrelationId ().cStr (),
+      ==,
+      "corr-duckdb");
+  g_assert_cmpuint (response_frame.getStreamChunk ().getChunkIndex (), ==, 0);
+  g_assert_true (response_frame.getStreamChunk ().getEndOfStream ());
+}
+
+static void
 assert_request_adapter_routes_flag_keyword_update (void)
 {
   const char *system_flags[] = { "\\Seen", "\\Flagged", NULL };
@@ -3227,6 +3602,24 @@ main (int argc, char **argv)
   g_test_add_func (
       "/daemon-api/capnp/codec/reject-wirelog-predicate-query-invalid-binding",
       assert_request_bytes_rejects_wirelog_predicate_query_invalid_binding);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/decode-duckdb-query-template-parameters",
+      assert_request_bytes_decode_duckdb_query_template_with_parameters);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/decode-duckdb-query-template-empty-parameters",
+      assert_request_bytes_decode_duckdb_query_template_empty_parameters);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-duckdb-query-template-invalid-query",
+      assert_request_bytes_rejects_duckdb_query_template_invalid_query_id);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-duckdb-query-template-invalid-template",
+      assert_request_bytes_rejects_duckdb_query_template_invalid_template_id);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-duckdb-query-template-invalid-scope",
+      assert_request_bytes_rejects_duckdb_query_template_invalid_scope_id);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-duckdb-query-template-invalid-parameter",
+      assert_request_bytes_rejects_duckdb_query_template_invalid_parameter);
   g_test_add_func ("/daemon-api/capnp/codec/decode-delivery-ingestion-valid",
       assert_request_bytes_decode_delivery_ingestion);
   g_test_add_func (
@@ -3331,6 +3724,9 @@ main (int argc, char **argv)
   g_test_add_func (
       "/daemon-api/capnp/codec/request-adapter-wirelog-predicate-query",
       assert_request_adapter_routes_wirelog_predicate_query);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/request-adapter-duckdb-query-template",
+      assert_request_adapter_routes_duckdb_query_template);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-delivery-ingestion",
       assert_request_adapter_routes_delivery_ingestion);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-flag-keyword-update",

@@ -2,6 +2,7 @@
 
 #include "wyrebox-daemon-error-frame.h"
 #include "wyrebox-daemon-delivery-ingestion-request.h"
+#include "wyrebox-daemon-duckdb-query-template-request.h"
 #include "wyrebox-daemon-fact-mutation-request.h"
 #include "wyrebox-daemon-flag-keyword-update-request.h"
 #include "wyrebox-daemon-mailbox-list-request.h"
@@ -35,6 +36,7 @@ typedef struct
   WyreboxDaemonMessageFetchRequest message_fetch;
   WyreboxDaemonMessageSearchRequest message_search;
   WyreboxDaemonWirelogPredicateQueryRequest wirelog_predicate_query;
+  WyreboxDaemonDuckDBQueryTemplateRequest duckdb_query_template;
   WyreboxDaemonDeliveryIngestionRequest delivery_ingestion;
   WyreboxDaemonFlagKeywordUpdateRequest flag_keyword_update;
 } WyreboxDaemonCapnpDecodedRequestState;
@@ -78,6 +80,8 @@ wyrebox_daemon_capnp_codec_decoded_state_clear (gpointer decoded_state)
   wyrebox_daemon_message_search_request_clear (&state->message_search);
   wyrebox_daemon_wirelog_predicate_query_request_clear
       (&state->wirelog_predicate_query);
+  wyrebox_daemon_duckdb_query_template_request_clear
+      (&state->duckdb_query_template);
   wyrebox_daemon_delivery_ingestion_request_clear (&state->delivery_ingestion);
   wyrebox_daemon_flag_keyword_update_request_clear (&state->flag_keyword_update);
 
@@ -256,6 +260,7 @@ decode_mailbox_list_request (const RequestFrame::Reader &request_frame,
   out_request_frame->message_fetch = NULL;
   out_request_frame->message_search = NULL;
   out_request_frame->wirelog_predicate_query = NULL;
+  out_request_frame->duckdb_query_template = NULL;
   out_request_frame->flag_keyword_update = NULL;
 
   return TRUE;
@@ -292,6 +297,7 @@ decode_mailbox_select_request (const RequestFrame::Reader &request_frame,
   out_request_frame->message_fetch = NULL;
   out_request_frame->message_search = NULL;
   out_request_frame->wirelog_predicate_query = NULL;
+  out_request_frame->duckdb_query_template = NULL;
   out_request_frame->flag_keyword_update = NULL;
 
   return TRUE;
@@ -340,6 +346,7 @@ decode_fact_mutation_request (const RequestFrame::Reader &request_frame,
   out_request_frame->message_fetch = NULL;
   out_request_frame->message_search = NULL;
   out_request_frame->wirelog_predicate_query = NULL;
+  out_request_frame->duckdb_query_template = NULL;
   out_request_frame->flag_keyword_update = NULL;
 
   return TRUE;
@@ -377,6 +384,7 @@ decode_message_fetch_request (const RequestFrame::Reader &request_frame,
   out_request_frame->message_fetch = &state->message_fetch;
   out_request_frame->message_search = NULL;
   out_request_frame->wirelog_predicate_query = NULL;
+  out_request_frame->duckdb_query_template = NULL;
   out_request_frame->flag_keyword_update = NULL;
 
   return TRUE;
@@ -414,6 +422,7 @@ decode_message_search_request (const RequestFrame::Reader &request_frame,
   out_request_frame->message_fetch = NULL;
   out_request_frame->message_search = &state->message_search;
   out_request_frame->wirelog_predicate_query = NULL;
+  out_request_frame->duckdb_query_template = NULL;
   out_request_frame->flag_keyword_update = NULL;
 
   return TRUE;
@@ -461,6 +470,55 @@ decode_wirelog_predicate_query_request (
   out_request_frame->message_search = NULL;
   out_request_frame->wirelog_predicate_query =
       &state->wirelog_predicate_query;
+  out_request_frame->duckdb_query_template = NULL;
+  out_request_frame->delivery_ingestion = NULL;
+  out_request_frame->flag_keyword_update = NULL;
+
+  return TRUE;
+}
+
+static gboolean
+decode_duckdb_query_template_request (
+    const RequestFrame::Reader &request_frame,
+    WyreboxDaemonCapnpDecodedRequestState *state,
+    WyreboxDaemonDecodedRequestFrame *out_request_frame,
+    GError **error)
+{
+  auto duckdb_query_template = request_frame.getDuckDBQueryTemplate ();
+  g_auto (GStrv) parameters = NULL;
+
+  if (!decode_request_identity (request_frame, state, error))
+    return FALSE;
+
+  if (!decode_strv (duckdb_query_template.getParameters (), &parameters))
+    return FALSE;
+
+  if (parameters == NULL)
+    parameters = g_new0 (char *, 1);
+
+  if (!wyrebox_daemon_duckdb_query_template_request_init (
+          &state->duckdb_query_template,
+          duckdb_query_template.getQueryId ().cStr (),
+          duckdb_query_template.getTemplateId ().cStr (),
+          duckdb_query_template.getScopeId ().cStr (),
+          (const char * const *) parameters,
+          error))
+    return FALSE;
+
+  out_request_frame->request_id = state->request_id;
+  out_request_frame->caller_identity = state->caller_identity;
+  out_request_frame->account_identity = state->account_identity;
+  out_request_frame->tool_identity = state->tool_identity;
+  out_request_frame->correlation_id = state->correlation_id;
+  out_request_frame->operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE;
+  out_request_frame->mailbox_list = NULL;
+  out_request_frame->mailbox_select = NULL;
+  out_request_frame->fact_mutation = NULL;
+  out_request_frame->message_fetch = NULL;
+  out_request_frame->message_search = NULL;
+  out_request_frame->wirelog_predicate_query = NULL;
+  out_request_frame->duckdb_query_template = &state->duckdb_query_template;
   out_request_frame->delivery_ingestion = NULL;
   out_request_frame->flag_keyword_update = NULL;
 
@@ -509,6 +567,7 @@ decode_delivery_ingestion_request (const RequestFrame::Reader &request_frame,
   out_request_frame->message_fetch = NULL;
   out_request_frame->message_search = NULL;
   out_request_frame->wirelog_predicate_query = NULL;
+  out_request_frame->duckdb_query_template = NULL;
   out_request_frame->delivery_ingestion = &state->delivery_ingestion;
   out_request_frame->flag_keyword_update = NULL;
 
@@ -565,6 +624,7 @@ decode_flag_keyword_update_request (
   out_request_frame->message_fetch = NULL;
   out_request_frame->message_search = NULL;
   out_request_frame->wirelog_predicate_query = NULL;
+  out_request_frame->duckdb_query_template = NULL;
   out_request_frame->flag_keyword_update = &state->flag_keyword_update;
 
   return TRUE;
@@ -624,8 +684,10 @@ decode_request_frame (const capnp::word *words,
             out_request_frame,
             error);
       case RequestFrame::DUCK_D_B_QUERY_TEMPLATE:
-        return set_not_supported (error,
-            "unsupported request frame: DuckDBQueryTemplate");
+        return decode_duckdb_query_template_request (request_frame,
+            state,
+            out_request_frame,
+            error);
       default:
         return set_not_supported (error, "unsupported request frame union arm");
     }
