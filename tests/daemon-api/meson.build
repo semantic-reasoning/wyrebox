@@ -52,6 +52,12 @@ daemon_runtime_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_socket_listener_test = executable(
+  'test-daemon-socket-listener',
+  'test-daemon-socket-listener.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_error_test = executable(
   'test-daemon-error',
   'test-daemon-error.c',
@@ -79,6 +85,7 @@ test('daemon fact mutation request', daemon_fact_mutation_request_test)
 test('daemon fact mutation service', daemon_fact_mutation_service_test)
 test('daemon fact mutation dispatcher', daemon_fact_mutation_dispatcher_test)
 test('daemon runtime', daemon_runtime_test)
+test('daemon socket listener', daemon_socket_listener_test)
 test('daemon error', daemon_error_test)
 test('daemon error frame', daemon_error_frame_test)
 test('daemon response frame', daemon_response_frame_test)
