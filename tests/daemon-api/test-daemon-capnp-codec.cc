@@ -30,6 +30,28 @@ typedef struct
   gboolean was_called;
 } FixtureState;
 
+static WyreboxDaemonRequestAdapter *
+adapter_new_without_wirelog (WyreboxDaemonDeliveryIngestionService *delivery,
+    WyreboxDaemonFactMutationService *fact,
+    WyreboxDaemonMailboxListService *list,
+    WyreboxDaemonMailboxSelectService *select,
+    WyreboxDaemonMessageFetchService *fetch,
+    WyreboxDaemonMessageSearchService *search,
+    WyreboxDaemonFlagKeywordUpdateService *flag,
+    WyreboxDaemonRequestAdapterDecodeRequestFrameCallback decode_cb,
+    gpointer decode_data,
+    GDestroyNotify decode_destroy,
+    WyreboxDaemonRequestAdapterEncodeResponseFrameCallback encode_cb,
+    gpointer encode_data,
+    GDestroyNotify encode_destroy)
+{
+  return wyrebox_daemon_request_adapter_new (delivery, fact, list, select,
+      fetch, search, NULL, flag, decode_cb, decode_data, decode_destroy,
+      encode_cb, encode_data, encode_destroy);
+}
+
+#define wyrebox_daemon_request_adapter_new adapter_new_without_wirelog
+
 static void
 remove_tree (const char *path)
 {

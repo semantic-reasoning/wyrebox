@@ -251,6 +251,7 @@ decode_mailbox_list_request (const RequestFrame::Reader &request_frame,
   out_request_frame->fact_mutation = NULL;
   out_request_frame->message_fetch = NULL;
   out_request_frame->message_search = NULL;
+  out_request_frame->wirelog_predicate_query = NULL;
   out_request_frame->flag_keyword_update = NULL;
 
   return TRUE;
@@ -286,6 +287,7 @@ decode_mailbox_select_request (const RequestFrame::Reader &request_frame,
   out_request_frame->fact_mutation = NULL;
   out_request_frame->message_fetch = NULL;
   out_request_frame->message_search = NULL;
+  out_request_frame->wirelog_predicate_query = NULL;
   out_request_frame->flag_keyword_update = NULL;
 
   return TRUE;
@@ -333,6 +335,7 @@ decode_fact_mutation_request (const RequestFrame::Reader &request_frame,
   out_request_frame->fact_mutation = &state->fact_mutation;
   out_request_frame->message_fetch = NULL;
   out_request_frame->message_search = NULL;
+  out_request_frame->wirelog_predicate_query = NULL;
   out_request_frame->flag_keyword_update = NULL;
 
   return TRUE;
@@ -369,6 +372,7 @@ decode_message_fetch_request (const RequestFrame::Reader &request_frame,
   out_request_frame->fact_mutation = NULL;
   out_request_frame->message_fetch = &state->message_fetch;
   out_request_frame->message_search = NULL;
+  out_request_frame->wirelog_predicate_query = NULL;
   out_request_frame->flag_keyword_update = NULL;
 
   return TRUE;
@@ -405,6 +409,7 @@ decode_message_search_request (const RequestFrame::Reader &request_frame,
   out_request_frame->fact_mutation = NULL;
   out_request_frame->message_fetch = NULL;
   out_request_frame->message_search = &state->message_search;
+  out_request_frame->wirelog_predicate_query = NULL;
   out_request_frame->flag_keyword_update = NULL;
 
   return TRUE;
@@ -451,6 +456,7 @@ decode_delivery_ingestion_request (const RequestFrame::Reader &request_frame,
   out_request_frame->fact_mutation = NULL;
   out_request_frame->message_fetch = NULL;
   out_request_frame->message_search = NULL;
+  out_request_frame->wirelog_predicate_query = NULL;
   out_request_frame->delivery_ingestion = &state->delivery_ingestion;
   out_request_frame->flag_keyword_update = NULL;
 
@@ -506,6 +512,7 @@ decode_flag_keyword_update_request (
   out_request_frame->fact_mutation = NULL;
   out_request_frame->message_fetch = NULL;
   out_request_frame->message_search = NULL;
+  out_request_frame->wirelog_predicate_query = NULL;
   out_request_frame->flag_keyword_update = &state->flag_keyword_update;
 
   return TRUE;

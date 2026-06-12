@@ -13,6 +13,40 @@
 #include <string.h>
 #include <stdio.h>
 
+static WyreboxDaemonRequestAdapter *
+adapter_new_without_wirelog (WyreboxDaemonDeliveryIngestionService *delivery,
+    WyreboxDaemonFactMutationService *fact,
+    WyreboxDaemonMailboxListService *list,
+    WyreboxDaemonMailboxSelectService *select,
+    WyreboxDaemonMessageFetchService *fetch,
+    WyreboxDaemonMessageSearchService *search,
+    WyreboxDaemonFlagKeywordUpdateService *flag,
+    WyreboxDaemonRequestAdapterDecodeRequestFrameCallback decode_cb,
+    gpointer decode_data,
+    GDestroyNotify decode_destroy,
+    WyreboxDaemonRequestAdapterEncodeResponseFrameCallback encode_cb,
+    gpointer encode_data, GDestroyNotify encode_destroy)
+{
+  return wyrebox_daemon_request_adapter_new (delivery, fact, list, select,
+      fetch, search, NULL, flag, decode_cb, decode_data, decode_destroy,
+      encode_cb, encode_data, encode_destroy);
+}
+
+static WyreboxDaemonRequestAdapter *
+adapter_new_with_wirelog (WyreboxDaemonWirelogPredicateQueryService *wirelog,
+    WyreboxDaemonRequestAdapterDecodeRequestFrameCallback decode_cb,
+    gpointer decode_data,
+    GDestroyNotify decode_destroy,
+    WyreboxDaemonRequestAdapterEncodeResponseFrameCallback encode_cb,
+    gpointer encode_data, GDestroyNotify encode_destroy)
+{
+  return wyrebox_daemon_request_adapter_new (NULL, NULL, NULL, NULL, NULL,
+      NULL, wirelog, NULL, decode_cb, decode_data, decode_destroy, encode_cb,
+      encode_data, encode_destroy);
+}
+
+#define wyrebox_daemon_request_adapter_new adapter_new_without_wirelog
+
 typedef enum
 {
   TEST_REQUEST_ADAPTER_SCENARIO_MAILBOX_LIST_SUCCESS,
@@ -20,6 +54,7 @@ typedef enum
   TEST_REQUEST_ADAPTER_SCENARIO_FACT_MUTATION_UNAUTHORIZED,
   TEST_REQUEST_ADAPTER_SCENARIO_FACT_MUTATION_MISSING_PAYLOAD,
   TEST_REQUEST_ADAPTER_SCENARIO_DELIVERY_INGESTION_SUCCESS,
+  TEST_REQUEST_ADAPTER_SCENARIO_WIRELOG_PREDICATE_QUERY_SUCCESS,
   TEST_REQUEST_ADAPTER_SCENARIO_MESSAGE_SEARCH_SUCCESS,
   TEST_REQUEST_ADAPTER_SCENARIO_FLAG_KEYWORD_UPDATE_SUCCESS,
   TEST_REQUEST_ADAPTER_SCENARIO_DECODE_FAIL,
@@ -46,6 +81,7 @@ typedef struct
   WyreboxDaemonMailboxListRequest mailbox_list_request;
   WyreboxDaemonFactMutationRequest fact_mutation_request;
   WyreboxDaemonDeliveryIngestionRequest delivery_ingestion_request;
+  WyreboxDaemonWirelogPredicateQueryRequest wirelog_predicate_query_request;
   WyreboxDaemonMessageSearchRequest message_search_request;
   WyreboxDaemonFlagKeywordUpdateRequest flag_keyword_update_request;
 } TestRequestAdapterDecodedState;
@@ -153,6 +189,10 @@ test_request_adapter_clear_decoded_state (gpointer user_data)
       wyrebox_daemon_delivery_ingestion_request_clear
           (&state->delivery_ingestion_request);
       break;
+    case TEST_REQUEST_ADAPTER_SCENARIO_WIRELOG_PREDICATE_QUERY_SUCCESS:
+      wyrebox_daemon_wirelog_predicate_query_request_clear
+          (&state->wirelog_predicate_query_request);
+      break;
     case TEST_REQUEST_ADAPTER_SCENARIO_MESSAGE_SEARCH_SUCCESS:
       wyrebox_daemon_message_search_request_clear
           (&state->message_search_request);
@@ -191,6 +231,7 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
   out_request->mailbox_select = NULL;
   out_request->fact_mutation = NULL;
   out_request->delivery_ingestion = NULL;
+  out_request->wirelog_predicate_query = NULL;
   out_request->message_fetch = NULL;
   out_request->message_search = NULL;
   out_request->flag_keyword_update = NULL;
@@ -291,6 +332,25 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
           WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION;
       out_request->delivery_ingestion =
           &decoded_state->delivery_ingestion_request;
+      return TRUE;
+    }
+
+    case TEST_REQUEST_ADAPTER_SCENARIO_WIRELOG_PREDICATE_QUERY_SUCCESS:{
+      const char *bindings[] = { "mail-1", NULL };
+
+      out_request->request_id = "request-wirelog-query";
+      out_request->caller_identity = "skill";
+      out_request->account_identity = "account-1";
+      out_request->tool_identity = "fact-skill";
+      out_request->correlation_id = "corr-wirelog";
+      if (!wyrebox_daemon_wirelog_predicate_query_request_init
+          (&decoded_state->wirelog_predicate_query_request,
+              "query-1", "project_mention", "account-1", bindings, error))
+        return FALSE;
+      out_request->operation =
+          WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY;
+      out_request->wirelog_predicate_query =
+          &decoded_state->wirelog_predicate_query_request;
       return TRUE;
     }
 
@@ -458,6 +518,33 @@ ingest_delivery_fixture (const WyreboxDaemonRequestIdentity *identity,
 }
 
 static gboolean
+query_wirelog_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonWirelogPredicateQueryRequest *request,
+    WyreboxDaemonStreamChunkFrame *out_chunk, gpointer user_data,
+    GError **error)
+{
+  const char *payload = "rows";
+  gboolean *was_called = user_data;
+  g_autoptr (GBytes) bytes = NULL;
+
+  g_assert_cmpstr (identity->request_id, ==, "request-wirelog-query");
+  g_assert_cmpstr (identity->caller_identity, ==, "skill");
+  g_assert_cmpstr (identity->account_identity, ==, "account-1");
+  g_assert_cmpstr (identity->tool_identity, ==, "fact-skill");
+  g_assert_cmpstr (request->query_id, ==, "query-1");
+  g_assert_cmpstr (request->predicate_id, ==, "project_mention");
+  g_assert_cmpstr (request->scope_id, ==, "account-1");
+  g_assert_cmpstr (request->bindings[0], ==, "mail-1");
+
+  *was_called = TRUE;
+  bytes = g_bytes_new_static (payload, strlen (payload));
+
+  return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+      identity->request_id,
+      NULL, request->query_id, identity->correlation_id, 0, bytes, TRUE, error);
+}
+
+static gboolean
 update_flag_keyword_fixture (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonFlagKeywordUpdateRequest *request,
     WyreboxDaemonSuccessReceipt *out_receipt, gpointer user_data,
@@ -588,6 +675,55 @@ test_request_adapter_routes_delivery_ingestion (void)
   g_assert_no_error (error);
   g_assert_nonnull (response);
   assert_bytes_equal (response, "encoded-success");
+  g_assert_true (was_called);
+  g_assert_true (codec_state.peer_credentials_seen);
+  g_assert_cmpuint (codec_state.decode_calls, ==, 1);
+  g_assert_cmpuint (codec_state.encode_calls, ==, 1);
+  g_assert_cmpuint (codec_state.clear_calls, ==, 1);
+}
+
+static void
+test_request_adapter_routes_wirelog_predicate_query (void)
+{
+  TestRequestAdapterCodecState codec_state = {
+    .scenario = TEST_REQUEST_ADAPTER_SCENARIO_WIRELOG_PREDICATE_QUERY_SUCCESS,
+    .request_payload = "request-wirelog-query",
+    .request_id = "request-wirelog-query",
+    .expected_peer_credentials = {
+          .uid = 1800,
+          .gid = 1900,
+          .pid = 2000,
+        },
+    .expected_peer_credentials_match = TRUE,
+  };
+  const WyreboxDaemonPeerCredentials credentials = {
+    .uid = 1800,
+    .gid = 1900,
+    .pid = 2000,
+  };
+  gboolean was_called = FALSE;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonWirelogPredicateQueryService) service = NULL;
+  g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+  g_autoptr (GBytes) request = NULL;
+  g_autoptr (GBytes) response = NULL;
+
+  service = wyrebox_daemon_wirelog_predicate_query_service_new
+      (query_wirelog_predicate_fixture, &was_called, NULL);
+  g_assert_nonnull (service);
+
+  adapter = adapter_new_with_wirelog (service,
+      test_request_adapter_decode, &codec_state, NULL,
+      test_request_adapter_encode, &codec_state, NULL);
+  g_assert_nonnull (adapter);
+
+  request = g_bytes_new_static ("request-wirelog-query",
+      strlen ("request-wirelog-query"));
+  response = wyrebox_daemon_request_adapter_handle_payload (&credentials,
+      request, adapter, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (response);
+  assert_bytes_equal (response, "encoded-stream-chunk");
   g_assert_true (was_called);
   g_assert_true (codec_state.peer_credentials_seen);
   g_assert_cmpuint (codec_state.decode_calls, ==, 1);
@@ -978,6 +1114,8 @@ main (int argc, char **argv)
       test_request_adapter_routes_mailbox_list);
   g_test_add_func ("/daemon-api/request-adapter/routes-delivery-ingestion",
       test_request_adapter_routes_delivery_ingestion);
+  g_test_add_func ("/daemon-api/request-adapter/routes-wirelog-predicate-query",
+      test_request_adapter_routes_wirelog_predicate_query);
   g_test_add_func ("/daemon-api/request-adapter/routes-fact-mutation",
       test_request_adapter_routes_fact_mutation);
   g_test_add_func ("/daemon-api/request-adapter/"
