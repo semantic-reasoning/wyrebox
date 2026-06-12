@@ -12,7 +12,7 @@
  * Keep these small and explicit for fixture-backed deterministic transitions.
  */
 #define WYREBOX_SCHEMA_VERSION_FIRST 1
-#define WYREBOX_SCHEMA_VERSION_CURRENT 1
+#define WYREBOX_SCHEMA_VERSION_CURRENT 2
 #define WYREBOX_SCHEMA_VERSION_LEGACY_0 0
 
 typedef struct
@@ -77,6 +77,14 @@ static const WyreboxSchemaMigrationStep wyrebox_schema_migration_steps[] = {
         wyrebox_schema_migration_default_step_operation,
         wyrebox_schema_migration_default_step_validation,
         TRUE,
+      WYREBOX_SCHEMA_MIGRATION_MATERIALIZATION_CHECKPOINT_INVALIDATE},
+  {WYREBOX_SCHEMA_VERSION_FIRST,
+        WYREBOX_SCHEMA_VERSION_CURRENT,
+        "add-message-attribute-tables",
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES,
+        wyrebox_schema_migration_default_step_operation,
+        wyrebox_schema_migration_default_step_validation,
+        FALSE,
       WYREBOX_SCHEMA_MIGRATION_MATERIALIZATION_CHECKPOINT_INVALIDATE},
 };
 
@@ -358,8 +366,13 @@ wyrebox_schema_migration_evaluate_to_version_internal (WyreboxSchemaMigration
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
   source_version = state->schema_version_present ? state->schema_version :
-      wyrebox_schema_migration_get_first_supported_schema_version ();
+      WYREBOX_SCHEMA_VERSION_LEGACY_0;
   updated_state = *state;
+  if (!state->schema_version_present && source_version ==
+      WYREBOX_SCHEMA_VERSION_LEGACY_0) {
+    updated_state.checkpoint_precondition_satisfied = TRUE;
+    updated_state.materialization_checkpoint_present = TRUE;
+  }
 
   if (!metadata_source_is_supported (source_version, error))
     return FALSE;

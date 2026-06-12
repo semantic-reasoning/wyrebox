@@ -187,6 +187,20 @@ assert_bootstrap_query_fails (duckdb_connection connection, const gchar *query)
   g_assert_cmpint (duckdb_query (connection, query, &result), ==, DuckDBError);
 }
 
+static gboolean
+duckdb_table_exists (duckdb_connection connection, const gchar *table_name)
+{
+  g_auto (duckdb_result) result = { 0 };
+  g_autofree gchar *query = NULL;
+
+  query = g_strdup_printf ("SELECT COUNT(*) FROM information_schema.tables "
+      "WHERE table_name = '%s';", table_name);
+  g_assert_cmpint (duckdb_query (connection, query, &result), ==,
+      DuckDBSuccess);
+
+  return duckdb_value_uint64 (&result, 0, 0) == 1;
+}
+
 static void
 assert_mailbox_membership_constraints (const gchar *path)
 {
@@ -238,6 +252,36 @@ assert_mailbox_membership_constraints (const gchar *path)
       ") VALUES ("
       "'membership-duplicate-uid', 'account-1', 'mailbox-1', 'message-2', 1, "
       "1005, 2003, 1, TRUE" ");");
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
+}
+
+static void
+assert_message_attribute_tables_exist (const gchar *path)
+{
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+  g_assert_true (duckdb_table_exists (connection, "message_flags"));
+  g_assert_true (duckdb_table_exists (connection, "message_keywords"));
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
+}
+
+static void
+assert_message_attribute_tables_missing (const gchar *path)
+{
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+  g_assert_false (duckdb_table_exists (connection, "message_flags"));
+  g_assert_false (duckdb_table_exists (connection, "message_keywords"));
 
   (void) duckdb_disconnect (&connection);
   (void) duckdb_close (&database);
@@ -415,6 +459,23 @@ test_memory_store_accepts_legacy_bootstrap_migration_operation (void)
 }
 
 static void
+    test_memory_store_accepts_add_message_attribute_tables_migration_operation
+    (void)
+{
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+
+  store = wyrebox_schema_metadata_store_new_memory ();
+  g_assert_nonnull (store);
+
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES,
+          wyrebox_schema_migration_get_first_supported_schema_version (),
+          wyrebox_schema_migration_get_current_schema_version (), &error));
+  g_assert_no_error (error);
+}
+
+static void
 test_memory_store_rejects_unknown_migration_operation (void)
 {
   g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
@@ -491,6 +552,35 @@ test_duckdb_store_accepts_legacy_bootstrap_migration_operation (void)
 }
 
 static void
+test_duckdb_store_add_message_attribute_tables_migration_operation (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES,
+          wyrebox_schema_migration_get_first_supported_schema_version (),
+          wyrebox_schema_migration_get_current_schema_version (), &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES,
+          wyrebox_schema_migration_get_first_supported_schema_version (),
+          wyrebox_schema_migration_get_current_schema_version (), &error));
+  g_assert_no_error (error);
+
+  assert_message_attribute_tables_exist (path);
+
+  g_clear_object (&store);
+  remove_directory_tree (root);
+}
+
+static void
 test_duckdb_store_legacy_bootstrap_creates_catalog_tables (void)
 {
   g_autofree char *root = NULL;
@@ -511,6 +601,7 @@ test_duckdb_store_legacy_bootstrap_creates_catalog_tables (void)
 
   assert_bootstrap_catalog_schema (path);
   assert_mailbox_membership_constraints (path);
+  assert_message_attribute_tables_missing (path);
 
   g_clear_object (&store);
   remove_directory_tree (root);
@@ -540,6 +631,7 @@ test_duckdb_store_legacy_bootstrap_creates_catalog_tables_twice (void)
           wyrebox_schema_migration_get_first_supported_schema_version (),
           &error));
   g_assert_no_error (error);
+  assert_message_attribute_tables_missing (path);
 
   assert_bootstrap_catalog_schema (path);
 
@@ -719,6 +811,9 @@ main (int argc, char **argv)
       "memory-store-accepts-legacy-bootstrap-operation",
       test_memory_store_accepts_legacy_bootstrap_migration_operation);
   g_test_add_func ("/migration/schema-metadata-store/"
+      "memory-store-accepts-add-message-attribute-tables-operation",
+      test_memory_store_accepts_add_message_attribute_tables_migration_operation);
+  g_test_add_func ("/migration/schema-metadata-store/"
       "memory-store-rejects-unknown-operation",
       test_memory_store_rejects_unknown_migration_operation);
   g_test_add_func
@@ -727,6 +822,9 @@ main (int argc, char **argv)
   g_test_add_func ("/migration/schema-metadata-store/duckdb-store/"
       "accepts-legacy-bootstrap-operation",
       test_duckdb_store_accepts_legacy_bootstrap_migration_operation);
+  g_test_add_func ("/migration/schema-metadata-store/duckdb-store/"
+      "add-message-attribute-tables-operation",
+      test_duckdb_store_add_message_attribute_tables_migration_operation);
   g_test_add_func
       ("/migration/schema-metadata-store/duckdb-store/"
       "legacy-bootstrap-creates-catalog-tables",

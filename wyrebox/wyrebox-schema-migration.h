@@ -167,9 +167,12 @@ WyreboxSchemaMigration *wyrebox_schema_migration_new (void);
  *
  * If any visited migration step has @requires_checkpoint set, callers must set
  * @state->checkpoint_precondition_satisfied before evaluation and provide
- * materialization checkpoint metadata in @state. Materialization checkpoint
- * compatibility policy is handled per step and applied only after operation
- * and validation succeed.
+ * materialization checkpoint metadata in @state, except when
+ * @state->schema_version_present is FALSE. Missing metadata is treated as a
+ * fresh-store bootstrap and synthesizes the bootstrap precondition/checkpoint
+ * needed for the initial legacy step. Materialization checkpoint compatibility
+ * policy is handled per step and applied only after operation and validation
+ * succeed.
  *
  * If successful, transitions are applied in-memory and @state is updated.
  * On failure, @state is not modified.

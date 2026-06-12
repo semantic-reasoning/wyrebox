@@ -126,6 +126,251 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_prepared_statement,
     wyrebox_duckdb_prepared_statement_clear)
 /* *INDENT-ON* */
 
+typedef struct
+{
+  const gchar *name;
+  const gchar *type;
+  gboolean not_null;
+} WyreboxDuckdbColumnSpec;
+
+typedef char *WyreboxDuckdbOwnedString;
+
+static void
+wyrebox_duckdb_owned_string_clear (WyreboxDuckdbOwnedString *value)
+{
+  if (value != NULL && *value != NULL)
+    duckdb_free (*value);
+}
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDuckdbOwnedString,
+    wyrebox_duckdb_owned_string_clear)
+/* *INDENT-ON* */
+
+static gboolean
+duckdb_store_validate_table_exists (WyreboxSchemaMetadataStoreDuckdb *self,
+    const gchar *table_name, GError **error)
+{
+  g_auto (duckdb_result) result = { 0 };
+  g_autofree gchar *query = NULL;
+  uint64_t table_count = 0;
+
+  query = g_strdup_printf ("SELECT COUNT(*) FROM information_schema.tables "
+      "WHERE table_name = '%s';", table_name);
+  if (duckdb_query (self->connection, query, &result) != DuckDBSuccess) {
+    const char *detail = duckdb_result_error (&result);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB table existence check failed: %s",
+        detail != NULL ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  if (duckdb_column_count (&result) != 1 || duckdb_row_count (&result) != 1) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "DuckDB table existence query returned unexpected shape");
+    return FALSE;
+  }
+
+  table_count = duckdb_value_uint64 (&result, 0, 0);
+  if (table_count != 1) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA, "DuckDB table %s does not exist", table_name);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
+duckdb_store_validate_table_columns (WyreboxSchemaMetadataStoreDuckdb *self,
+    const gchar *table_name,
+    const WyreboxDuckdbColumnSpec *expected_columns,
+    gsize expected_column_count, GError **error)
+{
+  g_auto (duckdb_result) result = { 0 };
+  g_autofree gchar *query = NULL;
+
+  if (!duckdb_store_validate_table_exists (self, table_name, error))
+    return FALSE;
+
+  query = g_strdup_printf ("PRAGMA table_info('%s');", table_name);
+  if (duckdb_query (self->connection, query, &result) != DuckDBSuccess) {
+    const char *detail = duckdb_result_error (&result);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB table_info query failed for %s: %s",
+        table_name, detail != NULL ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  if (duckdb_column_count (&result) != 6 ||
+      (guint) duckdb_row_count (&result) != expected_column_count) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "DuckDB schema table %s has unexpected column shape", table_name);
+    return FALSE;
+  }
+
+  for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+    const WyreboxDuckdbColumnSpec *expected = &expected_columns[row];
+    g_auto (WyreboxDuckdbOwnedString) actual_name = NULL;
+    g_auto (WyreboxDuckdbOwnedString) actual_type = NULL;
+    gboolean actual_not_null = FALSE;
+
+    actual_name = duckdb_value_varchar (&result, 1, row);
+    actual_type = duckdb_value_varchar (&result, 2, row);
+    actual_not_null = (gboolean) duckdb_value_int64 (&result, 3, row);
+
+    if (g_strcmp0 (expected->name, actual_name) != 0) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "DuckDB table %s has incompatible column at position %"
+          G_GINT64_FORMAT " name: expected %s, got %s", table_name,
+          (gint64) row, expected->name, actual_name);
+      return FALSE;
+    }
+
+    if (g_strcmp0 (expected->type, actual_type) != 0) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "DuckDB table %s has incompatible column %s type: expected %s, got %s",
+          table_name, expected->name, expected->type, actual_type);
+      return FALSE;
+    }
+
+    if (expected->not_null != actual_not_null) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "DuckDB table %s column %s has incompatible nullability",
+          table_name, expected->name);
+      return FALSE;
+    }
+
+  }
+
+  return TRUE;
+}
+
+static gboolean
+duckdb_store_validate_primary_key (WyreboxSchemaMetadataStoreDuckdb *self,
+    const gchar *table_name,
+    const gchar *const *expected_columns,
+    gsize expected_column_count, GError **error)
+{
+  g_auto (duckdb_result) result = { 0 };
+  g_autofree gchar *query = NULL;
+  gsize key_column_count = 0;
+
+  query =
+      g_strdup_printf
+      ("SELECT column_name, ordinal_position FROM information_schema.key_column_usage "
+      "WHERE table_name = '%s' AND constraint_name LIKE '%%_pkey' "
+      "ORDER BY ordinal_position;", table_name);
+  if (duckdb_query (self->connection, query, &result) != DuckDBSuccess) {
+    const char *detail = duckdb_result_error (&result);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB key column usage query failed for %s: %s",
+        table_name, detail != NULL ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  key_column_count = (gsize) duckdb_row_count (&result);
+  if (duckdb_column_count (&result) != 2 ||
+      key_column_count != expected_column_count) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "DuckDB primary key definition for table %s has unexpected shape",
+        table_name);
+    return FALSE;
+  }
+
+  for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+    g_auto (WyreboxDuckdbOwnedString) column_name = NULL;
+    gint64 ordinal_position = 0;
+
+    column_name = duckdb_value_varchar (&result, 0, row);
+    ordinal_position = duckdb_value_int64 (&result, 1, row);
+
+    if (expected_columns[row] == NULL ||
+        g_strcmp0 (expected_columns[row], column_name) != 0) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "DuckDB table %s has incompatible primary-key definition",
+          table_name);
+      return FALSE;
+    }
+
+    if (ordinal_position != (gint64) (row + 1)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "DuckDB table %s primary-key position mismatch for column %s",
+          table_name, column_name);
+      return FALSE;
+    }
+  }
+
+  return TRUE;
+}
+
+static gboolean
+    duckdb_store_validate_message_attribute_tables
+    (WyreboxSchemaMetadataStoreDuckdb * self, GError ** error)
+{
+  static const WyreboxDuckdbColumnSpec message_flags_columns[] = {
+    {"membership_id", "VARCHAR", TRUE},
+    {"account_id", "VARCHAR", TRUE},
+    {"mailbox_id", "VARCHAR", TRUE},
+    {"flag_name", "VARCHAR", TRUE},
+    {"journal_offset", "UBIGINT", TRUE},
+    {"journal_sequence", "UBIGINT", TRUE},
+  };
+  static const WyreboxDuckdbColumnSpec message_keywords_columns[] = {
+    {"membership_id", "VARCHAR", TRUE},
+    {"account_id", "VARCHAR", TRUE},
+    {"mailbox_id", "VARCHAR", TRUE},
+    {"keyword_name", "VARCHAR", TRUE},
+    {"journal_offset", "UBIGINT", TRUE},
+    {"journal_sequence", "UBIGINT", TRUE},
+  };
+  static const gchar *message_flags_primary_key_columns[] = {
+    "membership_id",
+    "flag_name",
+  };
+  static const gchar *message_keywords_primary_key_columns[] = {
+    "membership_id",
+    "keyword_name",
+  };
+
+  return duckdb_store_validate_table_columns (self, "message_flags",
+      message_flags_columns, G_N_ELEMENTS (message_flags_columns), error)
+      && duckdb_store_validate_primary_key (self, "message_flags",
+      message_flags_primary_key_columns,
+      G_N_ELEMENTS (message_flags_primary_key_columns), error)
+      && duckdb_store_validate_table_columns (self, "message_keywords",
+      message_keywords_columns, G_N_ELEMENTS (message_keywords_columns), error)
+      && duckdb_store_validate_primary_key (self, "message_keywords",
+      message_keywords_primary_key_columns,
+      G_N_ELEMENTS (message_keywords_primary_key_columns), error);
+}
+
 static gboolean
 wyrebox_schema_metadata_store_memory_load (WyreboxSchemaMetadataStore *self,
     WyreboxSchemaMigrationMetadataState *out_state, GError **error)
@@ -186,7 +431,9 @@ static gboolean
   (void) target_version;
 
   if (operation ==
-      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP)
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP ||
+      operation ==
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES)
     return TRUE;
 
   g_set_error (error,
@@ -290,6 +537,31 @@ duckdb_store_create_schema (WyreboxSchemaMetadataStoreDuckdb *self,
       "CHECK (checkpoint_key = 'materialization'),"
       "journal_offset UBIGINT NOT NULL,"
       "journal_sequence UBIGINT NOT NULL" ");", error);
+}
+
+static gboolean
+    duckdb_store_create_message_attribute_tables
+    (WyreboxSchemaMetadataStoreDuckdb * self, GError ** error)
+{
+  return duckdb_store_query (self,
+      "CREATE TABLE IF NOT EXISTS message_flags ("
+      "membership_id VARCHAR NOT NULL,"
+      "account_id VARCHAR NOT NULL,"
+      "mailbox_id VARCHAR NOT NULL,"
+      "flag_name VARCHAR NOT NULL,"
+      "journal_offset UBIGINT NOT NULL,"
+      "journal_sequence UBIGINT NOT NULL,"
+      "PRIMARY KEY (membership_id, flag_name)" ");", error)
+      && duckdb_store_query (self,
+      "CREATE TABLE IF NOT EXISTS message_keywords ("
+      "membership_id VARCHAR NOT NULL,"
+      "account_id VARCHAR NOT NULL,"
+      "mailbox_id VARCHAR NOT NULL,"
+      "keyword_name VARCHAR NOT NULL,"
+      "journal_offset UBIGINT NOT NULL,"
+      "journal_sequence UBIGINT NOT NULL,"
+      "PRIMARY KEY (membership_id, keyword_name)" ");", error)
+      && duckdb_store_validate_message_attribute_tables (self, error);
 }
 
 static gboolean
@@ -586,14 +858,24 @@ static gboolean
   (void) source_version;
   (void) target_version;
 
-  if (operation !=
-      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP)
-    goto unsupported;
+  switch (operation) {
+    case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP:
+    case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES:
+      break;
+    default:
+      goto unsupported;
+  }
 
   if (!duckdb_store_query (duckdb_store, "BEGIN TRANSACTION;", error))
     return FALSE;
 
-  if (!duckdb_store_create_bootstrap_catalog (duckdb_store, error) ||
+  if (!((operation ==
+              WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP
+              && duckdb_store_create_bootstrap_catalog (duckdb_store, error))
+          || (operation ==
+              WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES
+              && duckdb_store_create_message_attribute_tables (duckdb_store,
+                  error))) ||
       !duckdb_store_query (duckdb_store, "COMMIT;", error)) {
     duckdb_store_rollback_quietly (duckdb_store);
     return FALSE;

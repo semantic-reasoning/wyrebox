@@ -111,6 +111,11 @@ create_bootstrap_catalog (void)
           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
           0, 1, &error));
   g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES,
+          wyrebox_schema_migration_get_first_supported_schema_version (),
+          wyrebox_schema_migration_get_current_schema_version (), &error));
+  g_assert_no_error (error);
 
   return g_steal_pointer (&path);
 }
@@ -534,6 +539,8 @@ test_happy_path_materializes_inbox (void)
   assert_table_count (duckdb.connection, "objects", 2);
   assert_table_count (duckdb.connection, "messages", 2);
   assert_table_count (duckdb.connection, "mailbox_memberships", 2);
+  assert_table_count (duckdb.connection, "message_flags", 0);
+  assert_table_count (duckdb.connection, "message_keywords", 0);
   assert_materialization_checkpoint (duckdb.connection, 22, 2);
   g_assert_cmpuint (query_uint64 (duckdb.connection,
           "SELECT uidnext FROM mailbox_uid_state WHERE "
@@ -605,17 +612,116 @@ test_reapply_projection_is_idempotent (void)
   apply_projection_to_inbox (path, &projection);
 
   open_duckdb_fixture (path, &duckdb);
+  execute_sql (duckdb.connection,
+      "INSERT INTO message_flags ("
+      "membership_id, account_id, mailbox_id, flag_name, "
+      "journal_offset, journal_sequence"
+      ") VALUES ("
+      "'mailbox:mailbox-inbox:journal:11:1', "
+      "'account-1', 'mailbox-inbox', '\\Seen', 100, 1" ");");
+  execute_sql (duckdb.connection,
+      "INSERT INTO message_keywords ("
+      "membership_id, account_id, mailbox_id, keyword_name, "
+      "journal_offset, journal_sequence"
+      ") VALUES ("
+      "'mailbox:mailbox-inbox:journal:11:1', "
+      "'account-1', 'mailbox-inbox', 'todo', 101, 1" ");");
+  close_duckdb_fixture (&duckdb);
+
+  apply_projection_to_inbox (path, &projection);
+
+  open_duckdb_fixture (path, &duckdb);
   assert_table_count (duckdb.connection, "accounts", 1);
   assert_table_count (duckdb.connection, "mailboxes", 1);
   assert_table_count (duckdb.connection, "mailbox_uid_state", 1);
   assert_table_count (duckdb.connection, "objects", 2);
   assert_table_count (duckdb.connection, "messages", 2);
   assert_table_count (duckdb.connection, "mailbox_memberships", 2);
+  assert_table_count (duckdb.connection, "message_flags", 1);
+  assert_table_count (duckdb.connection, "message_keywords", 1);
   assert_materialization_checkpoint (duckdb.connection, 22, 2);
   g_assert_cmpuint (query_uint64 (duckdb.connection,
           "SELECT uidnext FROM mailbox_uid_state WHERE "
           "account_id = 'account-1' AND namespace_kind = 'mailbox' "
           "AND namespace_id = 'mailbox-inbox';"), ==, 3);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT journal_offset FROM message_flags WHERE "
+          "membership_id = 'mailbox:mailbox-inbox:journal:11:1' "
+          "AND flag_name = '\\Seen';"), ==, 100);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT journal_offset FROM message_keywords WHERE "
+          "membership_id = 'mailbox:mailbox-inbox:journal:11:1' "
+          "AND keyword_name = 'todo';"), ==, 101);
+  close_duckdb_fixture (&duckdb);
+
+  remove_catalog (path);
+}
+
+static void
+test_duplicate_object_allows_membership_scoped_attributes (void)
+{
+  g_autofree gchar *path = create_bootstrap_catalog ();
+  g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+  TestDuckdbFixture duckdb = { 0 };
+
+  append_projection_record (&projection, "sha256:shared", 101, 1001, 11, 1);
+  append_projection_record (&projection, "sha256:shared", 101, 1002, 22, 2);
+
+  apply_projection_to_inbox (path, &projection);
+
+  open_duckdb_fixture (path, &duckdb);
+  execute_sql (duckdb.connection,
+      "INSERT INTO message_flags ("
+      "membership_id, account_id, mailbox_id, flag_name, "
+      "journal_offset, journal_sequence"
+      ") VALUES ("
+      "'mailbox:mailbox-inbox:journal:11:1', "
+      "'account-1', 'mailbox-inbox', '\\Seen', 100, 1" ");");
+  execute_sql (duckdb.connection,
+      "INSERT INTO message_flags ("
+      "membership_id, account_id, mailbox_id, flag_name, "
+      "journal_offset, journal_sequence"
+      ") VALUES ("
+      "'mailbox:mailbox-inbox:journal:22:2', "
+      "'account-1', 'mailbox-inbox', '\\Answered', 101, 1" ");");
+  execute_sql (duckdb.connection,
+      "INSERT INTO message_keywords ("
+      "membership_id, account_id, mailbox_id, keyword_name, "
+      "journal_offset, journal_sequence"
+      ") VALUES ("
+      "'mailbox:mailbox-inbox:journal:11:1', "
+      "'account-1', 'mailbox-inbox', 'todo', 200, 1" ");");
+  execute_sql (duckdb.connection,
+      "INSERT INTO message_keywords ("
+      "membership_id, account_id, mailbox_id, keyword_name, "
+      "journal_offset, journal_sequence"
+      ") VALUES ("
+      "'mailbox:mailbox-inbox:journal:22:2', "
+      "'account-1', 'mailbox-inbox', 'later', 201, 1" ");");
+
+  assert_table_count (duckdb.connection, "objects", 1);
+  assert_table_count (duckdb.connection, "messages", 2);
+  assert_table_count (duckdb.connection, "mailbox_memberships", 2);
+  assert_table_count (duckdb.connection, "message_flags", 2);
+  assert_table_count (duckdb.connection, "message_keywords", 2);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT COUNT(DISTINCT object_id) FROM messages;"), ==, 1);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT COUNT(*) FROM message_flags WHERE "
+          "membership_id = 'mailbox:mailbox-inbox:journal:11:1' "
+          "AND flag_name = '\\Seen';"), ==, 1);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT COUNT(*) FROM message_flags WHERE "
+          "membership_id = 'mailbox:mailbox-inbox:journal:22:2' "
+          "AND flag_name = '\\Answered';"), ==, 1);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT COUNT(*) FROM message_keywords WHERE "
+          "membership_id = 'mailbox:mailbox-inbox:journal:11:1' "
+          "AND keyword_name = 'todo';"), ==, 1);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT COUNT(*) FROM message_keywords WHERE "
+          "membership_id = 'mailbox:mailbox-inbox:journal:22:2' "
+          "AND keyword_name = 'later';"), ==, 1);
   close_duckdb_fixture (&duckdb);
 
   remove_catalog (path);
@@ -733,6 +839,8 @@ main (int argc, char **argv)
       test_duplicate_object_materializes_distinct_messages);
   g_test_add_func ("/ingestion/delivery-materializer/idempotent-reapply",
       test_reapply_projection_is_idempotent);
+  g_test_add_func ("/ingestion/delivery-materializer/membership-attributes",
+      test_duplicate_object_allows_membership_scoped_attributes);
   g_test_add_func ("/ingestion/delivery-materializer/divergent-mailbox",
       test_divergent_mailbox_conflict_rolls_back);
   g_test_add_func ("/ingestion/delivery-materializer/divergent-object",
