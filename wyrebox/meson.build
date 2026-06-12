@@ -28,7 +28,7 @@ wyrebox_sources = files(
 )
 
 wyrebox_build_config = configuration_data()
-wyrebox_build_config.set10('WYREBOX_HAVE_DUCKDB', duckdb_found)
+wyrebox_build_config.set10('WYREBOX_HAVE_DUCKDB', true)
 wyrebox_build_config.set10('WYREBOX_HAVE_CAPNP_SERIALIZATION',
   capnp_serialization_found)
 
@@ -44,11 +44,11 @@ wyrebox_lib = static_library(
   'wyrebox',
   wyrebox_sources,
   include_directories: wyrebox_inc,
-  dependencies: [glib_dep, gobject_dep, gio_dep],
+  dependencies: [glib_dep, gobject_dep, gio_dep, duckdb_deps],
 )
 
 wyrebox_dep = declare_dependency(
   include_directories: wyrebox_inc,
   link_with: wyrebox_lib,
-  dependencies: [glib_dep, gobject_dep, gio_dep],
+  dependencies: [glib_dep, gobject_dep, gio_dep, duckdb_deps],
 )

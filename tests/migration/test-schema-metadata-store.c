@@ -176,11 +176,7 @@ test_duckdb_factory_fails_fast_until_implemented (void)
   g_assert_null (store);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
 
-#if WYREBOX_HAVE_DUCKDB
   g_assert_nonnull (strstr (error->message, "not implemented"));
-#else
-  g_assert_nonnull (strstr (error->message, "not enabled"));
-#endif
 }
 
 int

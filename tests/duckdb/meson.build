@@ -1,7 +1,7 @@
 duckdb_c_api_smoke_test = executable(
   'test-duckdb-c-api',
   'test-duckdb-c-api.c',
-  dependencies: duckdb_deps,
+  dependencies: wyrebox_dep,
 )
 
 test(

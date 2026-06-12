@@ -227,6 +227,4 @@ subdir('tests/migration')
 subdir('tests/build-config')
 subdir('tests/daemon-api')
 subdir('tests/facts')
-if duckdb_found
-  subdir('tests/duckdb')
-endif
+subdir('tests/duckdb')

@@ -3,7 +3,6 @@
  */
 
 #include "wyrebox-schema-metadata-store.h"
-#include "wyrebox-build-config.h"
 
 #include <glib.h>
 
@@ -185,17 +184,10 @@ wyrebox_schema_metadata_store_new_duckdb (const gchar *path, GError **error)
 
   (void) path;
 
-#if WYREBOX_HAVE_DUCKDB
   g_set_error (error,
       G_IO_ERROR,
       G_IO_ERROR_NOT_SUPPORTED,
       "DuckDB schema metadata store is not implemented yet");
-#else
-  g_set_error (error,
-      G_IO_ERROR,
-      G_IO_ERROR_NOT_SUPPORTED,
-      "DuckDB schema metadata store is not enabled or available in this build");
-#endif
 
   return NULL;
 }
