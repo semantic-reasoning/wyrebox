@@ -8,6 +8,32 @@
 #include <glib/gstdio.h>
 #include <string.h>
 
+static gboolean
+route_without_wirelog (WyreboxDaemonDeliveryIngestionService *delivery,
+    WyreboxDaemonFactMutationService *fact,
+    WyreboxDaemonMailboxListService *list,
+    WyreboxDaemonMailboxSelectService *select,
+    WyreboxDaemonMessageFetchService *fetch,
+    WyreboxDaemonMessageSearchService *search,
+    WyreboxDaemonFlagKeywordUpdateService *flag,
+    const WyreboxDaemonDecodedRequestFrame *frame,
+    WyreboxDaemonResponseFrame *out, GError **error)
+{
+  return wyrebox_daemon_request_router_route (delivery, fact, list, select,
+      fetch, search, NULL, flag, frame, out, error);
+}
+
+static gboolean
+route_with_wirelog (WyreboxDaemonWirelogPredicateQueryService *wirelog,
+    const WyreboxDaemonDecodedRequestFrame *frame,
+    WyreboxDaemonResponseFrame *out, GError **error)
+{
+  return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
+      NULL, wirelog, NULL, frame, out, error);
+}
+
+#define wyrebox_daemon_request_router_route route_without_wirelog
+
 static void
 remove_tree (const char *path)
 {
@@ -112,6 +138,28 @@ update_flag_keyword_fixture (const WyreboxDaemonRequestIdentity *identity,
   out_receipt->journal_sequence = 20;
   out_receipt->summary = g_strdup ("flag_keyword_update mode=set");
   return TRUE;
+}
+
+static gboolean
+query_wirelog_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonWirelogPredicateQueryRequest *request,
+    WyreboxDaemonStreamChunkFrame *out_chunk, gpointer user_data,
+    GError **error)
+{
+  gboolean *was_called = user_data;
+  g_autoptr (GBytes) bytes = g_bytes_new_static ("rows", strlen ("rows"));
+
+  g_assert_cmpstr (identity->request_id, ==, "request-wirelog-query");
+  g_assert_cmpstr (identity->caller_identity, ==, "skill");
+  g_assert_cmpstr (identity->account_identity, ==, "account-1");
+  g_assert_cmpstr (request->query_id, ==, "query-1");
+  g_assert_cmpstr (request->predicate_id, ==, "project_mention");
+  g_assert_cmpstr (request->scope_id, ==, "account-1");
+
+  *was_called = TRUE;
+  return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+      identity->request_id,
+      NULL, request->query_id, identity->correlation_id, 0, bytes, TRUE, error);
 }
 
 static gboolean
@@ -1088,6 +1136,108 @@ test_request_router_rejects_missing_delivery_ingestion_service (void)
 }
 
 static void
+test_request_router_routes_wirelog_predicate_query (void)
+{
+  gboolean was_called = FALSE;
+  const char *bindings[] = { "mail-1", NULL };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonWirelogPredicateQueryService) service = NULL;
+  g_auto (WyreboxDaemonWirelogPredicateQueryRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_wirelog_predicate_query_request_init (&request,
+          "query-1", "project_mention", "account-1", bindings, &error));
+  g_assert_no_error (error);
+
+  request_frame.request_id = "request-wirelog-query";
+  request_frame.caller_identity = "skill";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "fact-skill";
+  request_frame.correlation_id = "wirelog-query-1";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY;
+  request_frame.wirelog_predicate_query = &request;
+
+  service = wyrebox_daemon_wirelog_predicate_query_service_new
+      (query_wirelog_predicate_fixture, &was_called, NULL);
+  g_assert_nonnull (service);
+
+  g_assert_true (route_with_wirelog (service, &request_frame, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_true (was_called);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpstr (frame.request_id, ==, "request-wirelog-query");
+  g_assert_cmpstr (frame.correlation_id, ==, "wirelog-query-1");
+  g_assert_cmpstr (frame.stream_chunk.query_id, ==, "query-1");
+  g_assert_null (frame.stream_chunk.message_id);
+  g_assert_true (frame.stream_chunk.end_of_stream);
+}
+
+static void
+test_request_router_rejects_missing_wirelog_predicate_query_payload (void)
+{
+  gboolean was_called = FALSE;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonWirelogPredicateQueryService) service = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  request_frame.request_id = "request-wirelog-query";
+  request_frame.caller_identity = "skill";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "fact-skill";
+  request_frame.correlation_id = "wirelog-query-1";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY;
+  request_frame.wirelog_predicate_query = NULL;
+
+  service = wyrebox_daemon_wirelog_predicate_query_service_new
+      (query_wirelog_predicate_fixture, &was_called, NULL);
+  g_assert_nonnull (service);
+
+  g_assert_true (route_with_wirelog (service, &request_frame, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_false (was_called);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpstr (frame.request_id, ==, "request-wirelog-query");
+  g_assert_cmpstr (frame.correlation_id, ==, "wirelog-query-1");
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+}
+
+static void
+test_request_router_rejects_missing_wirelog_predicate_query_service (void)
+{
+  const char *bindings[] = { NULL };
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonWirelogPredicateQueryRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_wirelog_predicate_query_request_init (&request,
+          "query-1", "project_mention", "account-1", bindings, &error));
+  g_assert_no_error (error);
+
+  request_frame.request_id = "request-wirelog-query";
+  request_frame.caller_identity = "skill";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "fact-skill";
+  request_frame.correlation_id = "wirelog-query-1";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY;
+  request_frame.wirelog_predicate_query = &request;
+
+  g_assert_true (route_with_wirelog (NULL, &request_frame, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpstr (frame.request_id, ==, "request-wirelog-query");
+  g_assert_cmpstr (frame.correlation_id, ==, "wirelog-query-1");
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+}
+
+static void
 test_request_router_routes_flag_keyword_update (void)
 {
   gboolean was_called = FALSE;
@@ -1274,6 +1424,14 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/request-router/"
       "rejects-missing-delivery-ingestion-service",
       test_request_router_rejects_missing_delivery_ingestion_service);
+  g_test_add_func ("/daemon-api/request-router/routes-wirelog-predicate-query",
+      test_request_router_routes_wirelog_predicate_query);
+  g_test_add_func ("/daemon-api/request-router/"
+      "rejects-missing-wirelog-predicate-query-payload",
+      test_request_router_rejects_missing_wirelog_predicate_query_payload);
+  g_test_add_func ("/daemon-api/request-router/"
+      "rejects-missing-wirelog-predicate-query-service",
+      test_request_router_rejects_missing_wirelog_predicate_query_service);
   g_test_add_func ("/daemon-api/request-router/routes-flag-keyword-update",
       test_request_router_routes_flag_keyword_update);
   g_test_add_func ("/daemon-api/request-router/"

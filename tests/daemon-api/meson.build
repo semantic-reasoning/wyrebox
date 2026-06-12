@@ -94,6 +94,18 @@ daemon_message_search_dispatcher_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_wirelog_predicate_query_request_test = executable(
+  'test-daemon-wirelog-predicate-query-request',
+  'test-daemon-wirelog-predicate-query-request.c',
+  dependencies: [wyrebox_dep],
+)
+
+daemon_wirelog_predicate_query_dispatcher_test = executable(
+  'test-daemon-wirelog-predicate-query-dispatcher',
+  'test-daemon-wirelog-predicate-query-dispatcher.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_delivery_ingestion_request_test = executable(
   'test-daemon-delivery-ingestion-request',
   'test-daemon-delivery-ingestion-request.c',
@@ -216,6 +228,10 @@ test('daemon message fetch request', daemon_message_fetch_request_test)
 test('daemon message fetch dispatcher', daemon_message_fetch_dispatcher_test)
 test('daemon message search request', daemon_message_search_request_test)
 test('daemon message search dispatcher', daemon_message_search_dispatcher_test)
+test('daemon wirelog predicate query request',
+  daemon_wirelog_predicate_query_request_test)
+test('daemon wirelog predicate query dispatcher',
+  daemon_wirelog_predicate_query_dispatcher_test)
 test('daemon delivery ingestion request', daemon_delivery_ingestion_request_test)
 test('daemon delivery ingestion dispatcher',
   daemon_delivery_ingestion_dispatcher_test)

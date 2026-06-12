@@ -13,6 +13,7 @@ struct _WyreboxDaemonRequestAdapter
   WyreboxDaemonMailboxSelectService *mailbox_select_service;
   WyreboxDaemonMessageFetchService *message_fetch_service;
   WyreboxDaemonMessageSearchService *message_search_service;
+  WyreboxDaemonWirelogPredicateQueryService *wirelog_predicate_query_service;
   WyreboxDaemonFlagKeywordUpdateService *flag_keyword_update_service;
 
     WyreboxDaemonRequestAdapterDecodeRequestFrameCallback
@@ -71,6 +72,7 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDaemonRequestAdapterDecodedState,
   g_clear_object (&self->mailbox_select_service);
   g_clear_object (&self->message_fetch_service);
   g_clear_object (&self->message_search_service);
+  g_clear_object (&self->wirelog_predicate_query_service);
   g_clear_object (&self->flag_keyword_update_service);
 
   G_OBJECT_CLASS (wyrebox_daemon_request_adapter_parent_class)->finalize
@@ -100,6 +102,7 @@ wyrebox_daemon_request_adapter_new (WyreboxDaemonDeliveryIngestionService
     WyreboxDaemonMailboxSelectService *mailbox_select_service,
     WyreboxDaemonMessageFetchService *message_fetch_service,
     WyreboxDaemonMessageSearchService *message_search_service,
+    WyreboxDaemonWirelogPredicateQueryService *wirelog_predicate_query_service,
     WyreboxDaemonFlagKeywordUpdateService *flag_keyword_update_service,
     WyreboxDaemonRequestAdapterDecodeRequestFrameCallback
     decode_request_frame_callback, gpointer decode_request_frame_user_data,
@@ -125,6 +128,9 @@ wyrebox_daemon_request_adapter_new (WyreboxDaemonDeliveryIngestionService
   g_return_val_if_fail (message_search_service == NULL
       || WYREBOX_IS_DAEMON_MESSAGE_SEARCH_SERVICE (message_search_service),
       NULL);
+  g_return_val_if_fail (wirelog_predicate_query_service == NULL
+      || WYREBOX_IS_DAEMON_WIRELOG_PREDICATE_QUERY_SERVICE
+      (wirelog_predicate_query_service), NULL);
   g_return_val_if_fail (flag_keyword_update_service == NULL
       || WYREBOX_IS_DAEMON_FLAG_KEYWORD_UPDATE_SERVICE
       (flag_keyword_update_service), NULL);
@@ -148,6 +154,9 @@ wyrebox_daemon_request_adapter_new (WyreboxDaemonDeliveryIngestionService
     self->message_fetch_service = g_object_ref (message_fetch_service);
   if (message_search_service != NULL)
     self->message_search_service = g_object_ref (message_search_service);
+  if (wirelog_predicate_query_service != NULL)
+    self->wirelog_predicate_query_service =
+        g_object_ref (wirelog_predicate_query_service);
   if (flag_keyword_update_service != NULL)
     self->flag_keyword_update_service = g_object_ref
         (flag_keyword_update_service);
@@ -197,6 +206,7 @@ wyrebox_daemon_request_adapter_handle_payload (const
           self->mailbox_select_service,
           self->message_fetch_service,
           self->message_search_service,
+          self->wirelog_predicate_query_service,
           self->flag_keyword_update_service,
           &decoded_request, &response_frame, &local_error))
     goto route_failed;
