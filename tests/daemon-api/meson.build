@@ -82,6 +82,18 @@ daemon_message_fetch_dispatcher_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_message_search_request_test = executable(
+  'test-daemon-message-search-request',
+  'test-daemon-message-search-request.c',
+  dependencies: [wyrebox_dep],
+)
+
+daemon_message_search_dispatcher_test = executable(
+  'test-daemon-message-search-dispatcher',
+  'test-daemon-message-search-dispatcher.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_flag_keyword_update_request_test = executable(
   'test-daemon-flag-keyword-update-request',
   'test-daemon-flag-keyword-update-request.c',
@@ -190,6 +202,8 @@ test('daemon fact mutation dispatcher', daemon_fact_mutation_dispatcher_test)
 test('daemon mailbox select dispatcher', daemon_mailbox_select_dispatcher_test)
 test('daemon message fetch request', daemon_message_fetch_request_test)
 test('daemon message fetch dispatcher', daemon_message_fetch_dispatcher_test)
+test('daemon message search request', daemon_message_search_request_test)
+test('daemon message search dispatcher', daemon_message_search_dispatcher_test)
 test('daemon flag keyword update request', daemon_flag_keyword_update_request_test)
 test('daemon flag keyword update dispatcher',
   daemon_flag_keyword_update_dispatcher_test)

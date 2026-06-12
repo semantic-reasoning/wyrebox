@@ -4,6 +4,7 @@
 #include "wyrebox-daemon-mailbox-list-service.h"
 #include "wyrebox-daemon-message-fetch-service.h"
 #include "wyrebox-daemon-flag-keyword-update-service.h"
+#include "wyrebox-daemon-message-search-service.h"
 #include "wyrebox-daemon-peer-credentials.h"
 #include "wyrebox-daemon-request-router.h"
 #include "wyrebox-daemon-response-frame.h"
@@ -39,6 +40,7 @@ WyreboxDaemonRequestAdapter *wyrebox_daemon_request_adapter_new (
     WyreboxDaemonMailboxListService *mailbox_list_service,
     WyreboxDaemonMailboxSelectService *mailbox_select_service,
     WyreboxDaemonMessageFetchService *message_fetch_service,
+    WyreboxDaemonMessageSearchService *message_search_service,
     WyreboxDaemonFlagKeywordUpdateService *flag_keyword_update_service,
     WyreboxDaemonRequestAdapterDecodeRequestFrameCallback
     decode_request_frame_callback,
