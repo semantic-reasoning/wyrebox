@@ -391,6 +391,67 @@ test_fact_mutation_request_rejects_trailing_payload_bytes (void)
   g_assert_null (decoded.predicate_id);
 }
 
+static void
+assert_fact_mutation_decode_invalid_data (const guint8 *payload, gsize size)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = g_bytes_new (payload, size);
+  g_auto (WyreboxDaemonFactMutationRequest) decoded = { 0 };
+
+  g_assert_false (wyrebox_daemon_fact_mutation_request_decode (encoded,
+          &decoded, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_null (decoded.predicate_id);
+}
+
+static void
+test_fact_mutation_request_rejects_bad_payload_magic (void)
+{
+  const guint8 payload[] = {
+    'B', 'A', 'D', 'F', 'M', 'P', '1', '!',
+    WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+  };
+
+  assert_fact_mutation_decode_invalid_data (payload, sizeof (payload));
+}
+
+static void
+test_fact_mutation_request_rejects_bad_payload_mutation (void)
+{
+  const guint8 payload[] = {
+    'W', 'Y', 'R', 'E', 'F', 'M', 'P', '1',
+    99,
+  };
+
+  assert_fact_mutation_decode_invalid_data (payload, sizeof (payload));
+}
+
+static void
+test_fact_mutation_request_rejects_truncated_payload_string (void)
+{
+  const guint8 payload[] = {
+    'W', 'Y', 'R', 'E', 'F', 'M', 'P', '1',
+    WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+    5, 0, 0, 0,
+    'p', 'r',
+  };
+
+  assert_fact_mutation_decode_invalid_data (payload, sizeof (payload));
+}
+
+static void
+test_fact_mutation_request_rejects_payload_embedded_nul (void)
+{
+  const guint8 payload[] = {
+    'W', 'Y', 'R', 'E', 'F', 'M', 'P', '1',
+    WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+    3, 0, 0, 0,
+    'p', '\0', 'd',
+  };
+
+  assert_fact_mutation_decode_invalid_data (payload, sizeof (payload));
+}
+
 int
 main (int argc, char **argv)
 {
@@ -461,6 +522,18 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/fact-mutation-request/"
       "rejects-trailing-payload-bytes",
       test_fact_mutation_request_rejects_trailing_payload_bytes);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "rejects-bad-payload-magic",
+      test_fact_mutation_request_rejects_bad_payload_magic);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "rejects-bad-payload-mutation",
+      test_fact_mutation_request_rejects_bad_payload_mutation);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "rejects-truncated-payload-string",
+      test_fact_mutation_request_rejects_truncated_payload_string);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "rejects-payload-embedded-nul",
+      test_fact_mutation_request_rejects_payload_embedded_nul);
 
   return g_test_run ();
 }
