@@ -8,6 +8,10 @@ project('wyrebox',
 python = find_program('python3')
 cc = meson.get_compiler('c')
 
+if host_machine.system() != 'linux'
+  error('WyreBox supports Linux only.')
+endif
+
 capnp_option = get_option('capnp')
 capnp = find_program('capnp', required: capnp_option)
 
@@ -109,11 +113,6 @@ else
     duckdb_deps = [duckdb_lib_dep]
     duckdb_summary = 'enabled via library/header detection'
   else
-    if host_machine.system() != 'linux'
-      error('DuckDB is required, but WyreBox only provides a DuckDB ' +
-        'subproject fallback on Linux.')
-    endif
-
     if host_machine.cpu_family() != 'x86_64'
       error('DuckDB is required, but the bundled DuckDB prebuilt ' +
         'subproject supports Linux x86_64 only.')
