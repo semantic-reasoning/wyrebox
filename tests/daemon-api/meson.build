@@ -222,6 +222,16 @@ if capnp_serialization_found
     dependencies: [wyrebox_dep, capnp_dep, kj_dep],
     include_directories: [daemon_api_capnp_schema_include],
   )
+
+  daemon_capnp_uds_test = executable(
+    'test-daemon-capnp-uds',
+    [
+      'test-daemon-capnp-uds.cc',
+      daemon_api_capnp_schema,
+    ],
+    dependencies: [wyrebox_dep, capnp_dep, kj_dep],
+    include_directories: [daemon_api_capnp_schema_include],
+  )
 endif
 
 test('daemon success receipt', daemon_success_receipt_test)
@@ -267,4 +277,5 @@ test('daemon frame io', daemon_frame_io_test)
 if capnp_serialization_found
   test('daemon api capnp smoke', daemon_api_capnp_smoke_test)
   test('daemon capnp codec', daemon_api_capnp_codec_test)
+  test('daemon capnp uds', daemon_capnp_uds_test)
 endif
