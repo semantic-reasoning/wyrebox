@@ -88,6 +88,12 @@ daemon_connection_session_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_request_adapter_test = executable(
+  'test-daemon-request-adapter',
+  'test-daemon-request-adapter.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_frame_io_test = executable(
   'test-daemon-frame-io',
   'test-daemon-frame-io.c',
@@ -109,4 +115,5 @@ test('daemon error', daemon_error_test)
 test('daemon error frame', daemon_error_frame_test)
 test('daemon response frame', daemon_response_frame_test)
 test('daemon connection session', daemon_connection_session_test)
+test('daemon request adapter', daemon_request_adapter_test)
 test('daemon frame io', daemon_frame_io_test)
