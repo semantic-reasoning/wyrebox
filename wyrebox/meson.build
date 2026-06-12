@@ -56,15 +56,33 @@ wyrebox_inc = include_directories(
   'daemon',
 )
 
+wyrebox_inc_paths = [wyrebox_inc]
+
+wyrebox_link_deps = [
+  glib_dep,
+  gobject_dep,
+  gio_dep,
+  gio_unix_dep,
+] + duckdb_deps
+
+if capnp_serialization_found
+  wyrebox_sources += [
+    'daemon/wyrebox-daemon-capnp-codec.cc',
+    daemon_api_capnp_schema,
+  ]
+  wyrebox_inc_paths += [daemon_api_capnp_schema_include]
+  wyrebox_link_deps += [capnp_dep, kj_dep]
+endif
+
 wyrebox_lib = static_library(
   'wyrebox',
   wyrebox_sources,
-  include_directories: wyrebox_inc,
-  dependencies: [glib_dep, gobject_dep, gio_dep, gio_unix_dep, duckdb_deps],
+  include_directories: wyrebox_inc_paths,
+  dependencies: wyrebox_link_deps,
 )
 
 wyrebox_dep = declare_dependency(
-  include_directories: wyrebox_inc,
+  include_directories: wyrebox_inc_paths,
   link_with: wyrebox_lib,
-  dependencies: [glib_dep, gobject_dep, gio_dep, gio_unix_dep, duckdb_deps],
+  dependencies: wyrebox_link_deps,
 )
