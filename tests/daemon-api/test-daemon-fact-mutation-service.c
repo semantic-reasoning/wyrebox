@@ -283,6 +283,39 @@ test_fact_mutation_service_rejects_mismatched_account_scope (void)
 }
 
 static void
+test_fact_mutation_service_rejects_null_identity_request (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-fact-mutation-service-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxDaemonFactMutationService) service = NULL;
+  g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+  g_assert_nonnull (root);
+
+  g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+          "request-1", "skill", "account-1", "fact-importer", NULL, &error));
+  g_assert_no_error (error);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  service = wyrebox_daemon_fact_mutation_service_new (writer);
+  g_assert_nonnull (service);
+
+  g_test_expect_message (NULL, G_LOG_LEVEL_CRITICAL, "*request != NULL*");
+  g_assert_false (wyrebox_daemon_fact_mutation_service_handle_identity (service,
+          &identity, NULL, &frame, &error));
+  g_test_assert_expected_messages ();
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_NONE);
+
+  assert_journal_is_empty (root);
+  remove_tree (root);
+}
+
+static void
 test_fact_mutation_service_handles_identity (void)
 {
   const char *args[] = { "mail-1", NULL };
@@ -344,6 +377,9 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/fact-mutation-service/"
       "rejects-mismatched-account-scope",
       test_fact_mutation_service_rejects_mismatched_account_scope);
+  g_test_add_func ("/daemon-api/fact-mutation-service/"
+      "rejects-null-identity-request",
+      test_fact_mutation_service_rejects_null_identity_request);
   g_test_add_func ("/daemon-api/fact-mutation-service/handles-identity",
       test_fact_mutation_service_handles_identity);
 

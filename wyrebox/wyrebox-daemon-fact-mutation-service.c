@@ -128,7 +128,11 @@ gboolean
     const WyreboxDaemonFactMutationRequest * request,
     WyreboxDaemonResponseFrame * out_frame, GError ** error)
 {
+  g_return_val_if_fail (WYREBOX_IS_DAEMON_FACT_MUTATION_SERVICE (self), FALSE);
   g_return_val_if_fail (identity != NULL, FALSE);
+  g_return_val_if_fail (request != NULL, FALSE);
+  g_return_val_if_fail (out_frame != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
   if (!authorize_fact_mutation_identity (identity, request, error))
     return FALSE;
