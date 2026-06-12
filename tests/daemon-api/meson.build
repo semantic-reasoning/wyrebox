@@ -259,8 +259,14 @@ test('daemon duckdb query template request',
 test('daemon duckdb query template dispatcher',
   daemon_duckdb_query_template_dispatcher_test)
 test('daemon delivery ingestion request', daemon_delivery_ingestion_request_test)
-test('daemon delivery ingestion dispatcher',
-  daemon_delivery_ingestion_dispatcher_test)
+test(
+  'daemon delivery ingestion dispatcher',
+  daemon_delivery_ingestion_dispatcher_test,
+  env: {
+    'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() /
+      'tests' / 'object-store' / 'fixtures',
+  },
+)
 test('daemon flag keyword update request', daemon_flag_keyword_update_request_test)
 test('daemon flag keyword update dispatcher',
   daemon_flag_keyword_update_dispatcher_test)

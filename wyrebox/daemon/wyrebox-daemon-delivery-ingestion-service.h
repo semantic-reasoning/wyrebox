@@ -30,6 +30,10 @@ wyrebox_daemon_delivery_ingestion_service_new (
     gpointer user_data,
     GDestroyNotify user_data_destroy);
 
+WyreboxDaemonDeliveryIngestionService *
+wyrebox_daemon_delivery_ingestion_service_new_with_ingestor (
+    WyreboxEmlIngestor *ingestor);
+
 gboolean wyrebox_daemon_delivery_ingestion_service_handle_identity (
     WyreboxDaemonDeliveryIngestionService *self,
     const WyreboxDaemonRequestIdentity *identity,
