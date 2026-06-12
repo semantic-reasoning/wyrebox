@@ -337,6 +337,7 @@ test_request_adapter_routes_mailbox_list (void)
 
   adapter =
       wyrebox_daemon_request_adapter_new (NULL, mailbox_list_service, NULL,
+      NULL,
       test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
@@ -393,6 +394,7 @@ test_request_adapter_routes_fact_mutation (void)
 
   adapter =
       wyrebox_daemon_request_adapter_new (fact_mutation_service, NULL, NULL,
+      NULL,
       test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
@@ -450,6 +452,7 @@ test_request_adapter_rejects_unauthorized_fact_mutation (void)
 
   adapter =
       wyrebox_daemon_request_adapter_new (fact_mutation_service, NULL, NULL,
+      NULL,
       test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
@@ -507,6 +510,7 @@ test_request_adapter_rejects_missing_fact_mutation_payload (void)
 
   adapter =
       wyrebox_daemon_request_adapter_new (fact_mutation_service, NULL, NULL,
+      NULL,
       test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
@@ -551,6 +555,7 @@ test_request_adapter_decode_failure_skips_router_and_encoder (void)
   g_autoptr (GBytes) response = NULL;
 
   adapter = wyrebox_daemon_request_adapter_new (NULL, NULL, NULL,
+      NULL,
       test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);
@@ -600,6 +605,7 @@ test_request_adapter_encode_failure_is_propagated (void)
 
   adapter =
       wyrebox_daemon_request_adapter_new (NULL, mailbox_list_service, NULL,
+      NULL,
       test_request_adapter_decode, &codec_state, NULL,
       test_request_adapter_encode, &codec_state, NULL);
   g_assert_nonnull (adapter);

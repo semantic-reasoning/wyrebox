@@ -70,6 +70,18 @@ daemon_mailbox_select_dispatcher_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_message_fetch_request_test = executable(
+  'test-daemon-message-fetch-request',
+  'test-daemon-message-fetch-request.c',
+  dependencies: [wyrebox_dep],
+)
+
+daemon_message_fetch_dispatcher_test = executable(
+  'test-daemon-message-fetch-dispatcher',
+  'test-daemon-message-fetch-dispatcher.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_runtime_test = executable(
   'test-daemon-runtime',
   'test-daemon-runtime.c',
@@ -164,6 +176,8 @@ test('daemon fact mutation request', daemon_fact_mutation_request_test)
 test('daemon fact mutation service', daemon_fact_mutation_service_test)
 test('daemon fact mutation dispatcher', daemon_fact_mutation_dispatcher_test)
 test('daemon mailbox select dispatcher', daemon_mailbox_select_dispatcher_test)
+test('daemon message fetch request', daemon_message_fetch_request_test)
+test('daemon message fetch dispatcher', daemon_message_fetch_dispatcher_test)
 test('daemon runtime', daemon_runtime_test)
 test('daemon socket listener', daemon_socket_listener_test)
 test('daemon error', daemon_error_test)
