@@ -38,8 +38,8 @@ wyrebox_daemon_fact_mutation_service_finalize (GObject *object)
 }
 
 static void
-wyrebox_daemon_fact_mutation_service_class_init (
-    WyreboxDaemonFactMutationServiceClass *klass)
+    wyrebox_daemon_fact_mutation_service_class_init
+    (WyreboxDaemonFactMutationServiceClass * klass)
 {
   GObjectClass *object_class = G_OBJECT_CLASS (klass);
 
@@ -88,5 +88,19 @@ wyrebox_daemon_fact_mutation_service_handle (WyreboxDaemonFactMutationService
 
   return wyrebox_daemon_response_frame_init_fact_mutation_success (out_frame,
       request_id, correlation_id, request, journal_offset, journal_sequence,
+      error);
+}
+
+gboolean
+    wyrebox_daemon_fact_mutation_service_handle_identity
+    (WyreboxDaemonFactMutationService * self,
+    const WyreboxDaemonRequestIdentity * identity,
+    const WyreboxDaemonFactMutationRequest * request,
+    WyreboxDaemonResponseFrame * out_frame, GError ** error)
+{
+  g_return_val_if_fail (identity != NULL, FALSE);
+
+  return wyrebox_daemon_fact_mutation_service_handle (self,
+      identity->request_id, identity->correlation_id, request, out_frame,
       error);
 }

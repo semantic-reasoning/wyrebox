@@ -1,6 +1,7 @@
 #pragma once
 
 #include "wyrebox-daemon-fact-mutation-request.h"
+#include "wyrebox-daemon-request-identity.h"
 #include "wyrebox-daemon-response-frame.h"
 
 #include <glib-object.h>
@@ -24,6 +25,13 @@ gboolean wyrebox_daemon_fact_mutation_service_handle (
     WyreboxDaemonFactMutationService *self,
     const char *request_id,
     const char *correlation_id,
+    const WyreboxDaemonFactMutationRequest *request,
+    WyreboxDaemonResponseFrame *out_frame,
+    GError **error);
+
+gboolean wyrebox_daemon_fact_mutation_service_handle_identity (
+    WyreboxDaemonFactMutationService *self,
+    const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonFactMutationRequest *request,
     WyreboxDaemonResponseFrame *out_frame,
     GError **error);
