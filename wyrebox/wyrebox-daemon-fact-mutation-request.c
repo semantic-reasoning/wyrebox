@@ -162,6 +162,29 @@ wyrebox_daemon_fact_mutation_kind_from_wire_name (const char *wire_name,
 }
 
 gboolean
+    wyrebox_daemon_fact_mutation_kind_to_journal_event_type
+    (WyreboxDaemonFactMutationKind mutation,
+    WyreboxJournalEventType * event_type, GError ** error) {
+  g_return_val_if_fail (event_type != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  switch (mutation) {
+    case WYREBOX_DAEMON_FACT_MUTATION_INSERT:
+      *event_type = WYREBOX_JOURNAL_EVENT_FACT_INSERTED;
+      return TRUE;
+    case WYREBOX_DAEMON_FACT_MUTATION_RETRACT:
+      *event_type = WYREBOX_JOURNAL_EVENT_FACT_RETRACTED;
+      return TRUE;
+    default:
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "unsupported fact mutation journal event type");
+      return FALSE;
+  }
+}
+
+gboolean
 wyrebox_daemon_fact_mutation_request_init (WyreboxDaemonFactMutationRequest
     *request, WyreboxDaemonFactMutationKind mutation, const char *predicate_id,
     const char *scope_id, const char *const *arguments, GError **error)

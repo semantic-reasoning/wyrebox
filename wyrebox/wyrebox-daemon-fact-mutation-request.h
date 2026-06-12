@@ -1,5 +1,7 @@
 #pragma once
 
+#include "wyrebox-journal-writer.h"
+
 #include <glib-object.h>
 
 /* *INDENT-OFF* */
@@ -31,6 +33,11 @@ const char *wyrebox_daemon_fact_mutation_kind_to_wire_name (
 gboolean wyrebox_daemon_fact_mutation_kind_from_wire_name (
     const char *wire_name,
     WyreboxDaemonFactMutationKind *mutation,
+    GError **error);
+
+gboolean wyrebox_daemon_fact_mutation_kind_to_journal_event_type (
+    WyreboxDaemonFactMutationKind mutation,
+    WyreboxJournalEventType *event_type,
     GError **error);
 
 gboolean wyrebox_daemon_fact_mutation_request_init (

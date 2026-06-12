@@ -199,6 +199,35 @@ test_fact_mutation_kind_rejects_unknown_wire_name (void)
   g_assert_cmpint (mutation, ==, WYREBOX_DAEMON_FACT_MUTATION_INSERT);
 }
 
+static void
+test_fact_mutation_kind_maps_to_journal_event_type (void)
+{
+  WyreboxJournalEventType event_type = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_fact_mutation_kind_to_journal_event_type
+      (WYREBOX_DAEMON_FACT_MUTATION_INSERT, &event_type, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (event_type, ==, WYREBOX_JOURNAL_EVENT_FACT_INSERTED);
+
+  g_assert_true (wyrebox_daemon_fact_mutation_kind_to_journal_event_type
+      (WYREBOX_DAEMON_FACT_MUTATION_RETRACT, &event_type, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (event_type, ==, WYREBOX_JOURNAL_EVENT_FACT_RETRACTED);
+}
+
+static void
+test_fact_mutation_kind_rejects_unknown_journal_event_type (void)
+{
+  WyreboxJournalEventType event_type = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
+  g_autoptr (GError) error = NULL;
+
+  g_assert_false (wyrebox_daemon_fact_mutation_kind_to_journal_event_type
+      ((WyreboxDaemonFactMutationKind) 99, &event_type, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpint (event_type, ==, WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -242,6 +271,12 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/fact-mutation-request/"
       "kind-rejects-unknown-wire-name",
       test_fact_mutation_kind_rejects_unknown_wire_name);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "kind-maps-to-journal-event-type",
+      test_fact_mutation_kind_maps_to_journal_event_type);
+  g_test_add_func ("/daemon-api/fact-mutation-request/"
+      "kind-rejects-unknown-journal-event-type",
+      test_fact_mutation_kind_rejects_unknown_journal_event_type);
 
   return g_test_run ();
 }
