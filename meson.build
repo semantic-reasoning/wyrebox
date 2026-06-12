@@ -145,6 +145,7 @@ summary('duckdb', duckdb_summary, section: 'Dependencies')
 glib_dep = dependency('glib-2.0', version: '>=2.74')
 gobject_dep = dependency('gobject-2.0', version: '>=2.74')
 gio_dep = dependency('gio-2.0', version: '>=2.74')
+gio_unix_dep = dependency('gio-unix-2.0', version: '>=2.74')
 
 subdir('wyrebox')
 

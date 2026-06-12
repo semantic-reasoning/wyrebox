@@ -10,6 +10,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-fact-mutation-service.c',
   'daemon/wyrebox-daemon-fact-mutation-request.c',
   'daemon/wyrebox-daemon-runtime.c',
+  'daemon/wyrebox-daemon-socket-listener.c',
   'daemon/wyrebox-daemon-error.c',
   'daemon/wyrebox-daemon-error-frame.c',
   'daemon/wyrebox-daemon-response-frame.c',
@@ -54,11 +55,11 @@ wyrebox_lib = static_library(
   'wyrebox',
   wyrebox_sources,
   include_directories: wyrebox_inc,
-  dependencies: [glib_dep, gobject_dep, gio_dep, duckdb_deps],
+  dependencies: [glib_dep, gobject_dep, gio_dep, gio_unix_dep, duckdb_deps],
 )
 
 wyrebox_dep = declare_dependency(
   include_directories: wyrebox_inc,
   link_with: wyrebox_lib,
-  dependencies: [glib_dep, gobject_dep, gio_dep, duckdb_deps],
+  dependencies: [glib_dep, gobject_dep, gio_dep, gio_unix_dep, duckdb_deps],
 )
