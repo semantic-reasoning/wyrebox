@@ -25,6 +25,12 @@ delivery_materializer_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+delivery_fetcher_test = executable(
+  'test-delivery-fetcher',
+  'test-delivery-fetcher.c',
+  dependencies: [wyrebox_dep],
+)
+
 delivery_catchup_test = executable(
   'test-delivery-catchup',
   'test-delivery-catchup.c',
@@ -58,6 +64,14 @@ test(
 test(
   'delivery materializer',
   delivery_materializer_test,
+)
+
+test(
+  'delivery fetcher',
+  delivery_fetcher_test,
+  env: {
+    'WYREBOX_EML_FIXTURE_DIR': eml_fixture_dir,
+  },
 )
 
 test(

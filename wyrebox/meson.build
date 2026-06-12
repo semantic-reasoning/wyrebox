@@ -44,6 +44,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-stream-chunk-frame.c',
   'daemon/wyrebox-daemon-success-receipt.c',
   'ingestion/wyrebox-delivery-materializer.c',
+  'ingestion/wyrebox-delivery-fetcher.c',
   'ingestion/wyrebox-delivery-catchup.c',
   'ingestion/wyrebox-delivery-projection.c',
   'ingestion/wyrebox-delivery-replay-validator.c',

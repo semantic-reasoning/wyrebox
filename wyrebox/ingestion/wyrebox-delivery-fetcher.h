@@ -1,0 +1,45 @@
+#pragma once
+
+#include "wyrebox-local-object-store.h"
+
+#include <glib-object.h>
+
+/* *INDENT-OFF* */
+G_BEGIN_DECLS
+
+#define WYREBOX_TYPE_DELIVERY_FETCHER (wyrebox_delivery_fetcher_get_type())
+
+G_DECLARE_FINAL_TYPE (WyreboxDeliveryFetcher,
+    wyrebox_delivery_fetcher,
+    WYREBOX,
+    DELIVERY_FETCHER,
+    GObject)
+
+/*
+ * Construct a DuckDB-backed read-only delivery fetcher for @catalog_path.
+ *
+ * @object_store: (transfer none): immutable raw object store used to load
+ *   message bytes after the materialized catalog resolves a visible mailbox UID.
+ *
+ * Returns: (transfer full): caller-owned fetcher, or NULL with @error set.
+ */
+WyreboxDeliveryFetcher *wyrebox_delivery_fetcher_new_duckdb (
+    const gchar *catalog_path,
+    WyreboxLocalObjectStore *object_store,
+    GError **error);
+
+/*
+ * Resolve a visible mailbox UID and return immutable raw RFC 5322 bytes.
+ *
+ * Returns: (transfer full): message bytes on success, or NULL with @error set.
+ */
+GBytes *wyrebox_delivery_fetcher_fetch_bytes (
+    WyreboxDeliveryFetcher *self,
+    const gchar *account_id,
+    const gchar *mailbox_id,
+    guint64 uidvalidity,
+    guint64 uid,
+    GError **error);
+
+G_END_DECLS
+/* *INDENT-ON* */
