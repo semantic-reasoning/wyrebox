@@ -16,6 +16,13 @@ fact_reconciliation_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+fact_journal_snapshot_test = executable(
+  'test-fact-journal-snapshot',
+  'test-fact-journal-snapshot.c',
+  dependencies: [wyrebox_dep],
+)
+
 test('fact record', fact_record_test)
 test('deterministic fact extractor', deterministic_fact_extractor_test)
 test('fact reconciliation', fact_reconciliation_test)
+test('fact journal snapshot', fact_journal_snapshot_test)
