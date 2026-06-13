@@ -45,8 +45,10 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
     #include <stddef.h>
     #include "config.h"
     #include "lib.h"
+    #include "mail-namespace.h"
     #include "mail-storage.h"
     #include "mail-storage-private.h"
+    #include "mail-user.h"
 
     typedef struct mailbox *(*wyrebox_mailbox_alloc_fn)(
         struct mail_storage *storage,
@@ -74,6 +76,8 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
 
     static struct mail_storage wyrebox_mail_storage_probe;
     static struct mailbox wyrebox_mailbox_probe;
+    static struct mail_namespace wyrebox_mail_namespace_probe;
+    static struct mail_user wyrebox_mail_user_probe;
 
     static struct mailbox *wyrebox_probe_mailbox_alloc(
         struct mail_storage *storage,
@@ -190,6 +194,18 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
 
     _Static_assert(
         __builtin_types_compatible_p(
+            __typeof__(wyrebox_mail_namespace_probe.user),
+            struct mail_user *),
+        "mail_namespace struct::user expected struct mail_user pointer");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mail_user_probe.username),
+            const char *),
+        "mail_user struct::username expected const char pointer");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
         __typeof__(((struct mailbox *)0)->v.open),
         wyrebox_mailbox_open_fn),
         "mailbox field .v.open signature mismatch");
@@ -283,8 +299,12 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
       wyrebox_mailbox_probe.v.open = wyrebox_probe_mailbox_open;
       wyrebox_mailbox_probe.v.free = wyrebox_probe_mailbox_free;
       wyrebox_mailbox_probe.v.get_status = wyrebox_probe_mailbox_get_status;
+      wyrebox_mail_user_probe.username = "account";
+      wyrebox_mail_namespace_probe.user = &wyrebox_mail_user_probe;
       (void)wyrebox_mail_storage_probe;
       (void)wyrebox_mailbox_probe;
+      (void)wyrebox_mail_namespace_probe;
+      (void)wyrebox_mail_user_probe;
       return 0;
     }
     """

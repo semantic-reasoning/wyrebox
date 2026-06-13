@@ -5,8 +5,10 @@
 #include "config.h"
 
 #include "lib.h"
+#include "mail-namespace.h"
 #include "mail-storage.h"
 #include "mail-storage-private.h"
+#include "mail-user.h"
 #include "module-dir.h"
 
 struct wyrebox_dovecot_storage
@@ -122,12 +124,20 @@ wyrebox_dovecot_storage_create (struct mail_storage *storage,
 {
   struct wyrebox_dovecot_storage *wstorage =
       (struct wyrebox_dovecot_storage *) storage;
+  const char *account_identity;
 
-  (void) ns;
+  if (ns == NULL || ns->user == NULL || ns->user->username == NULL ||
+      ns->user->username[0] == '\0') {
+    if (error_r != NULL) {
+      *error_r = "Dovecot namespace user identity is unavailable";
+    }
+    return -1;
+  }
+
+  account_identity = ns->user->username;
 
   wstorage->socket_path = wyrebox_dovecot_strdup ("/run/wyrebox/wyrebox.sock");
-  wstorage->account_identity =
-      wyrebox_dovecot_strdup ("dovecot-account-identity-unavailable");
+  wstorage->account_identity = wyrebox_dovecot_strdup (account_identity);
   if (wstorage->socket_path == NULL || wstorage->account_identity == NULL) {
     free (wstorage->socket_path);
     free (wstorage->account_identity);
