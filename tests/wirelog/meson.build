@@ -25,7 +25,14 @@ wirelog_evaluation_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+wirelog_derived_membership_test = executable(
+  'test-wirelog-derived-membership',
+  'test-wirelog-derived-membership.c',
+  dependencies: [wyrebox_dep],
+)
+
 test('wirelog link smoke', wirelog_link_smoke_test)
 test('wirelog program', wirelog_program_test)
 test('wirelog source', wirelog_source_test)
 test('wirelog evaluation', wirelog_evaluation_test)
+test('wirelog derived membership', wirelog_derived_membership_test)
