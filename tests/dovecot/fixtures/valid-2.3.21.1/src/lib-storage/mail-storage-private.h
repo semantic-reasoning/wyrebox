@@ -61,16 +61,18 @@ struct virtual_mailbox_vfuncs {
                           void *virtual_uids_r);
 };
 
+struct mail_storage {
+  const char *name;
+  unsigned int class_flags;
+  struct mail_storage_vfuncs v;
+};
+
 struct mailbox {
   struct mailbox_vfuncs v;
 };
 
 struct mail {
   const struct mail_vfuncs *v;
-};
-
-struct mail_storage {
-  struct mail_storage_vfuncs v;
 };
 
 #endif
