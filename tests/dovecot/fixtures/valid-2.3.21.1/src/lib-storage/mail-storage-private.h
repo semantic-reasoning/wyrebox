@@ -8,6 +8,7 @@ struct file_lock;
 
 struct mailbox;
 struct mailbox_list;
+struct array;
 struct mail_namespace;
 struct mail_storage;
 struct mail;
@@ -26,6 +27,9 @@ struct mailbox_status;
 struct event;
 struct mailbox_vfuncs;
 struct mail_vfuncs;
+
+const char *mailbox_list_get_storage_name (struct mailbox_list *list,
+                                          const char *vname);
 
 struct mail_storage_vfuncs {
   struct mail_storage *(*alloc)(void);
@@ -75,6 +79,7 @@ struct virtual_mailbox_vfuncs {
 struct mail_storage {
   const char *name;
   unsigned int class_flags;
+  struct event *event;
   pool_t pool;
   struct mail_storage_vfuncs v;
 };
@@ -89,6 +94,8 @@ struct mailbox {
   struct mailbox_vfuncs v;
   struct mailbox_vfuncs *vlast;
   const struct mail_vfuncs *mail_vfuncs;
+  array_t search_results;
+  array_t module_contexts;
 
   pool_t pool;
 };
