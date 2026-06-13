@@ -190,6 +190,25 @@ decode_mailbox_list_entry_kind (MailboxListEntryKind in,
 }
 
 static gboolean
+decode_mailbox_list_child_state (MailboxListChildState in,
+    WyreboxDaemonMailboxListChildState *out)
+{
+  switch (in) {
+    case MailboxListChildState::UNKNOWN:
+      *out = WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN;
+      return TRUE;
+    case MailboxListChildState::HAS_CHILDREN:
+      *out = WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN;
+      return TRUE;
+    case MailboxListChildState::HAS_NO_CHILDREN:
+      *out = WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN;
+      return TRUE;
+    default:
+      return FALSE;
+  }
+}
+
+static gboolean
 map_error_class (WyreboxDaemonErrorClass in, ErrorClass *out)
 {
   switch (in) {
@@ -871,6 +890,61 @@ decode_error_response (const ResponseFrame::Reader & response_frame,
 }
 
 static gboolean
+decode_mailbox_list_response (const ResponseFrame::Reader & response_frame,
+    WyreboxDaemonResponseFrame *out_response_frame, GError **error)
+{
+  auto response_list = response_frame.getMailboxList ();
+  auto entries = response_list.getEntries ();
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  const char *request_id = response_frame.getRequestId ().cStr ();
+  const char *payload_request_id = response_list.getRequestId ().cStr ();
+  const char *correlation_id = response_frame.getCorrelationId ().cStr ();
+
+  if (request_id == NULL || *request_id == '\0')
+    return set_invalid_argument (error,
+        "response frame request_id is required");
+
+  if (payload_request_id == NULL || *payload_request_id == '\0')
+    return set_invalid_argument (error,
+        "mailbox LIST response request_id is required");
+
+  if (g_strcmp0 (request_id, payload_request_id) != 0)
+    return set_invalid_argument (error,
+        "mailbox LIST response request_id does not match frame envelope");
+
+  wyrebox_daemon_mailbox_list_result_init_empty (&result);
+
+  for (guint i = 0; i < entries.size (); i++) {
+    auto entry = entries[i];
+    WyreboxDaemonMailboxListEntryKind kind =
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
+    WyreboxDaemonMailboxListChildState child_state =
+        WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN;
+
+    if (!decode_mailbox_list_entry_kind (entry.getKind (), &kind))
+      return set_invalid_argument (error,
+          "unsupported mailbox LIST entry kind");
+
+    if (!decode_mailbox_list_child_state (entry.getChildState (),
+            &child_state))
+      return set_invalid_argument (error,
+          "unsupported mailbox LIST child state");
+
+    if (!wyrebox_daemon_mailbox_list_result_append_entry (&result,
+            kind,
+            entry.getMailboxId ().cStr (),
+            entry.getMailboxName ().cStr (),
+            entry.getHierarchyDelimiter ().cStr (),
+            entry.getSpecialUse ().cStr (),
+            entry.getSelectable (), child_state, error))
+      return FALSE;
+  }
+
+  return wyrebox_daemon_response_frame_init_mailbox_list (out_response_frame,
+      request_id, correlation_id, &result, error);
+}
+
+static gboolean
 decode_mailbox_select_response (const ResponseFrame::Reader & response_frame,
     WyreboxDaemonResponseFrame *out_response_frame, GError **error)
 {
@@ -977,6 +1051,8 @@ decode_response_frame (const capnp::word *words,
         return decode_stream_chunk_response (response_frame,
             out_response_frame, error);
       case ResponseFrame::MAILBOX_LIST:
+        return decode_mailbox_list_response (response_frame,
+            out_response_frame, error);
       default:
         return set_not_supported (error,
             "unsupported response frame union arm");
@@ -1053,6 +1129,33 @@ validate_mailbox_select_encode_input (const WyreboxDaemonRequestIdentity
 }
 
 static gboolean
+validate_mailbox_list_encode_input (const WyreboxDaemonRequestIdentity
+    *identity, const WyreboxDaemonMailboxListRequest *request, GError **error)
+{
+  g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
+  g_auto (WyreboxDaemonMailboxListRequest) validated_request = { 0 };
+
+  if (identity == NULL)
+    return set_invalid_argument (error, "request identity is null");
+
+  if (request == NULL)
+    return set_invalid_argument (error, "mailbox list request is null");
+
+  if (!wyrebox_daemon_request_identity_init (&validated_identity,
+          identity->request_id,
+          identity->caller_identity,
+          identity->account_identity,
+          identity->tool_identity, identity->correlation_id, error))
+    return FALSE;
+
+  if (!wyrebox_daemon_mailbox_list_request_init (&validated_request,
+          request->account_identity, request->namespace_prefix, error))
+    return FALSE;
+
+  return TRUE;
+}
+
+static gboolean
 validate_message_fetch_encode_input (const WyreboxDaemonRequestIdentity
     *identity, const WyreboxDaemonMessageFetchRequest *request, GError **error)
 {
@@ -1079,6 +1182,51 @@ validate_message_fetch_encode_input (const WyreboxDaemonRequestIdentity
     return FALSE;
 
   return TRUE;
+}
+
+static gboolean
+encode_mailbox_list_request (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMailboxListRequest *request, GBytes **out_bytes,
+    GError **error)
+{
+  try {
+    if (!validate_mailbox_list_encode_input (identity, request, error))
+      return FALSE;
+
+    capnp::MallocMessageBuilder request_builder;
+    auto request_frame = request_builder.initRoot < RequestFrame > ();
+
+    auto request_identity = request_frame.initIdentity ();
+    request_identity.setRequestId (identity->request_id);
+    request_identity.setCallerIdentity (identity->caller_identity != NULL
+        ? identity->caller_identity : "");
+    request_identity.setAccountIdentity (identity->account_identity != NULL
+        ? identity->account_identity : "");
+    request_identity.setToolIdentity (identity->tool_identity != NULL
+        ? identity->tool_identity : "");
+    request_identity.setCorrelationId (identity->correlation_id != NULL
+        ? identity->correlation_id : "");
+
+    auto mailbox_list = request_frame.initMailboxList ();
+    mailbox_list.setAccountIdentity (request->account_identity);
+    mailbox_list.setNamespacePrefix (request->namespace_prefix != NULL
+        ? request->namespace_prefix : "");
+
+    auto words = capnp::messageToFlatArray (request_builder);
+    auto bytes = words.asBytes ();
+    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+
+    return TRUE;
+  }
+  catch (const std::exception & e)
+  {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "mailbox LIST request encode failed: %s", e.what ());
+  }
+
+  return FALSE;
 }
 
 static gboolean
@@ -1796,6 +1944,24 @@ wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (const
   g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
   if (!encode_delivery_ingestion_request (identity, request, &out_bytes, error))
+    return NULL;
+
+  return g_steal_pointer (&out_bytes);
+}
+
+GBytes *
+wyrebox_daemon_capnp_codec_encode_mailbox_list_request (const
+    WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMailboxListRequest *request, gpointer user_data,
+    GError **error)
+{
+  g_autoptr (GBytes) out_bytes = NULL;
+
+  (void) user_data;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  if (!encode_mailbox_list_request (identity, request, &out_bytes, error))
     return NULL;
 
   return g_steal_pointer (&out_bytes);
