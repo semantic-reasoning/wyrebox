@@ -48,6 +48,11 @@ REQUIRED_VFUNC_SYMBOLS = {
         "open",
         "get_status",
         "free",
+        "enable",
+        "close",
+        "sync_init",
+        "sync_next",
+        "sync_deinit",
         "search_init",
     ],
     "mail_vfuncs": [
@@ -71,6 +76,8 @@ REQUIRED_PRIVATE_STRUCT_FIELDS = {
         "pool",
         "event",
         "vlast",
+        "opened",
+        "enabled_features",
     ],
 }
 
