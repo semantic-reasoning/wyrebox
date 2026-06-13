@@ -66,6 +66,14 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
     typedef void (*wyrebox_mail_storage_destroy_fn)(
         struct mail_storage *storage);
 
+    typedef void (*wyrebox_mail_storage_add_list_fn)(
+        struct mail_storage *storage,
+        struct mailbox_list *list);
+
+    typedef const char *(*wyrebox_mailbox_list_get_storage_name_fn)(
+        struct mailbox_list *list,
+        const char *vname);
+
     typedef int (*wyrebox_mailbox_open_fn)(struct mailbox *box);
     typedef void (*wyrebox_mailbox_free_fn)(struct mailbox *box);
 
@@ -93,6 +101,10 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
         const char **error_r);
 
     static void wyrebox_probe_mail_storage_destroy(struct mail_storage *storage);
+
+    static void wyrebox_probe_mail_storage_add_list(
+        struct mail_storage *storage,
+        struct mailbox_list *list);
 
     static int wyrebox_probe_mailbox_open(struct mailbox *box);
     static void wyrebox_probe_mailbox_free(struct mailbox *box);
@@ -125,6 +137,18 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
             __typeof__(wyrebox_mail_storage_probe.v.destroy),
             wyrebox_mail_storage_destroy_fn),
         "mail_storage_vfuncs::destroy signature mismatch");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mail_storage_probe.v.add_list),
+            wyrebox_mail_storage_add_list_fn),
+        "mail_storage_vfuncs::add_list signature mismatch");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(&mailbox_list_get_storage_name),
+            wyrebox_mailbox_list_get_storage_name_fn),
+        "mailbox_list_get_storage_name signature mismatch");
 
     _Static_assert(
         __builtin_types_compatible_p(
@@ -217,7 +241,7 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
               .alloc = wyrebox_probe_mail_storage_alloc,
               .create = wyrebox_probe_mail_storage_create,
               .destroy = wyrebox_probe_mail_storage_destroy,
-              .add_list = NULL,
+              .add_list = wyrebox_probe_mail_storage_add_list,
               .mailbox_alloc = NULL,
             },
     };
@@ -270,6 +294,14 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
     static void
     wyrebox_probe_mail_storage_destroy(struct mail_storage *storage) {
       (void) storage;
+    }
+
+    static void
+    wyrebox_probe_mail_storage_add_list(
+        struct mail_storage *storage,
+        struct mailbox_list *list) {
+      (void) storage;
+      (void) list;
     }
 
     static int wyrebox_probe_mailbox_open(struct mailbox *box) {

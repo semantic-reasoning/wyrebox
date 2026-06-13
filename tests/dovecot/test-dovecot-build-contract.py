@@ -13,6 +13,7 @@ FIXTURES_DIR = REPO_ROOT / "tests" / "dovecot" / "fixtures"
 VALID_SOURCE_FIXTURE = FIXTURES_DIR / "valid-2.3.21.1"
 MAILBOX_VFUNC_NEGATIVE_SOURCE_FIXTURE = FIXTURES_DIR / "missing-vfunc"
 MAILBOX_ALLOC_NEGATIVE_SOURCE_FIXTURE = FIXTURES_DIR / "missing-mailbox-allocation"
+LIST_CONTRACT_NEGATIVE_SOURCE_FIXTURE = FIXTURES_DIR / "missing-list-contract"
 BUILD_CHECKER_PATH = REPO_ROOT / "tools" / "check-dovecot-build-contract.py"
 CC_SHIM_LOG_ENV = "WYREBOX_CC_SHIM_LOG"
 
@@ -122,6 +123,14 @@ def test_dovecot_build_contract_missing_mailbox_allocation_surface() -> None:
     )
 
 
+def test_dovecot_build_contract_missing_list_contract() -> None:
+    run_checker(
+        LIST_CONTRACT_NEGATIVE_SOURCE_FIXTURE,
+        FIXTURES_DIR / "missing-list-contract" / "build-config-valid",
+        expect_success=False,
+    )
+
+
 def test_dovecot_build_contract_missing_source_directory() -> None:
     run_checker(
         Path('/definitely-not-a-real-dovecot-source-tree'),
@@ -177,6 +186,7 @@ def main() -> None:
         test_dovecot_build_contract_wrong_abi,
         test_dovecot_build_contract_missing_mailbox_vfunc_shape,
         test_dovecot_build_contract_missing_mailbox_allocation_surface,
+        test_dovecot_build_contract_missing_list_contract,
         test_dovecot_build_contract_missing_source_directory,
         test_dovecot_build_contract_cc_wrapper_and_args,
     ]
