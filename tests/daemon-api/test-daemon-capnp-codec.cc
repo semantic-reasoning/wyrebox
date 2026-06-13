@@ -532,7 +532,7 @@ query_wirelog_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
   FixtureState *state = static_cast<FixtureState *> (user_data);
 
   g_assert_cmpstr (identity->request_id, ==, "request-wirelog-route");
-  g_assert_cmpstr (identity->caller_identity, ==, "skill");
+  g_assert_cmpstr (identity->caller_identity, ==, "trusted-tool");
   g_assert_cmpstr (identity->account_identity, ==, "account-1");
   g_assert_cmpstr (identity->tool_identity, ==, "dovecot-storage");
   g_assert_cmpstr (identity->correlation_id, ==, "corr-wirelog");
@@ -3280,7 +3280,7 @@ assert_request_adapter_routes_wirelog_predicate_query (void)
 
   request = build_wirelog_predicate_query_request_bytes (
       "request-wirelog-route",
-      "skill",
+      "trusted-tool",
       "account-1",
       "query-wirelog",
       "has_label",
