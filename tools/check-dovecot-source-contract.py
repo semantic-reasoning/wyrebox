@@ -321,7 +321,7 @@ def validate_source(source_dir: Path) -> list[ContractIssue]:
     issues.extend(
         find_issues_for_patterns(
             mail_namespace,
-            [r"\bstruct\s+mail_user\s+\*\s*user\s*;"],
+            [r"\bstruct\s+mail_user\s+\*\s*user\s*(?:[,;])"],
             "mail_namespace user identity pointer",
         )
     )

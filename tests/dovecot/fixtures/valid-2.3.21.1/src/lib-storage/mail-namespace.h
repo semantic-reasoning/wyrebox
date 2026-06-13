@@ -4,7 +4,7 @@
 struct mail_user;
 
 struct mail_namespace {
-  struct mail_user *user;
+  struct mail_user *user, *owner;
 };
 
 #endif
