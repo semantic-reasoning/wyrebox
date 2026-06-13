@@ -251,6 +251,12 @@ test(
 )
 
 test(
+  'docs issue 0004 deterministic fact extraction contract',
+  python,
+  args: files('tests/docs/test_issue_0004_deterministic_fact_extraction_contract.py'),
+)
+
+test(
   'docs issue 0004 daemon api schema',
   python,
   args: capnp_schema_args,
