@@ -25,6 +25,31 @@ def forbid(pattern: str, text: str, what: str) -> None:
         raise AssertionError(f"plugin source contract failed: forbidden {what}: {pattern}")
 
 
+def function_body(name: str, text: str) -> str:
+    header = rf"\b{name}\s*\(\s*void\s*\)\s*\{{"
+    match = re.search(header, text, re.MULTILINE)
+    if match is None:
+        raise AssertionError(
+            f"plugin source contract failed: missing function: {name}"
+        )
+
+    depth = 1
+    i = match.end()
+
+    while i < len(text):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[match.end():i]
+        i += 1
+
+    raise AssertionError(
+        f"plugin source contract failed: unbalanced braces in {name}"
+    )
+
+
 def main() -> None:
     if not PLUGIN_SOURCE.is_file():
         raise SystemExit(f"plugin source not found: {PLUGIN_SOURCE}")
@@ -85,16 +110,14 @@ def main() -> None:
         text,
         "destroy is no-op",
     )
-    forbid(
-        r"wyrebox_dovecot_storage_alloc\s*\(\s*void\s*\)\s*\{[\s\S]*?return\s+NULL;",
-        text,
-        "storage allocator null fallback",
-    )
-    forbid(
+    if re.search(
         r"return\s+NULL;\s*",
-        text,
-        "any allocator null return",
-    )
+        function_body("wyrebox_dovecot_storage_alloc", text),
+    ) is not None:
+        raise AssertionError(
+            "plugin source contract failed: forbidden storage allocator "
+            "null fallback"
+        )
     forbid(
         r"pool_unref\s*\(\s*&storage->pool\s*\)",
         text,
