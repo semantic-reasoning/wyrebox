@@ -15,7 +15,8 @@ init_request (WyreboxDaemonDuckDBQueryTemplateRequest *request,
 
 static void
 assert_template_resolves (const char *template_id, const char *parameter,
-    const char *expected_parameter_name, const char *expected_output_format)
+    const char *expected_name, const char *expected_parameter_name,
+    const char *expected_output_format)
 {
   const char *parameters[] = { parameter, NULL };
   const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
@@ -30,7 +31,7 @@ assert_template_resolves (const char *template_id, const char *parameter,
   g_assert_no_error (error);
   g_assert_nonnull (descriptor);
   g_assert_cmpstr (descriptor->template_id, ==, template_id);
-  g_assert_cmpstr (descriptor->name, ==, "mailbox uid map");
+  g_assert_cmpstr (descriptor->name, ==, expected_name);
   g_assert_cmpstr (descriptor->scope_kind, ==, "account_id");
   g_assert_cmpstr (descriptor->output_format, ==, expected_output_format);
   g_assert_cmpuint (descriptor->n_parameters, ==, 1);
@@ -42,7 +43,11 @@ static void
 test_catalog_resolves_allowlisted_templates (void)
 {
   assert_template_resolves ("mailbox.uid_map.v1", "mailbox-inbox",
-      "mailbox_id", "stream-chunk.duckdb-template.uid-map.v1");
+      "mailbox uid map", "mailbox_id",
+      "stream-chunk.duckdb-template.uid-map.v1");
+  assert_template_resolves ("message.by_id.v1", "message-1",
+      "message by id", "message_id",
+      "stream-chunk.duckdb-template.message-by-id.v1");
 }
 
 static void
