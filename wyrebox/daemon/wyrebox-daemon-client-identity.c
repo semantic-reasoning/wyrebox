@@ -12,6 +12,9 @@ wyrebox_daemon_client_identity_classify_name (const char *caller_identity)
   if (g_strcmp0 (caller_identity, "postfix-helper") == 0)
     return WYREBOX_DAEMON_CLIENT_IDENTITY_POSTFIX_HELPER;
 
+  if (g_strcmp0 (caller_identity, "dovecot") == 0)
+    return WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN;
+
   if (g_strcmp0 (caller_identity, "dovecot-plugin") == 0)
     return WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN;
 

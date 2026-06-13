@@ -84,6 +84,13 @@ lookup_template (const char *template_id)
   return NULL;
 }
 
+static gboolean
+is_uid_map_template (const char *template_id)
+{
+  return g_strcmp0 (template_id, "mailbox.uid_map.v1") == 0
+      || g_strcmp0 (template_id, "derived_view.uid_map.v1") == 0;
+}
+
 gboolean
     wyrebox_daemon_duckdb_query_template_catalog_validate
     (WyreboxDaemonClientIdentityClass client_class,
@@ -100,7 +107,9 @@ gboolean
   if (out_descriptor != NULL)
     *out_descriptor = NULL;
 
-  if (!wyrebox_daemon_client_identity_can_query_controlled_views (client_class)) {
+  if (!wyrebox_daemon_client_identity_can_query_controlled_views
+      (client_class) && client_class !=
+      WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN) {
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_PERMISSION_DENIED,
@@ -147,6 +156,16 @@ gboolean
         G_IO_ERROR_INVALID_ARGUMENT,
         "unknown duckdb query template '%s'",
         request->template_id != NULL ? request->template_id : "(null)");
+    return FALSE;
+  }
+
+  if (client_class == WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN &&
+      !is_uid_map_template (descriptor->template_id)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_PERMISSION_DENIED,
+        "caller is not authorized for duckdb query template '%s'",
+        request->template_id);
     return FALSE;
   }
 

@@ -12,6 +12,8 @@ test_classifies_supported_names (void)
   g_assert_cmpint (wyrebox_daemon_client_identity_classify_name
       ("postfix-helper"), ==, WYREBOX_DAEMON_CLIENT_IDENTITY_POSTFIX_HELPER);
   g_assert_cmpint (wyrebox_daemon_client_identity_classify_name
+      ("dovecot"), ==, WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN);
+  g_assert_cmpint (wyrebox_daemon_client_identity_classify_name
       ("dovecot-plugin"), ==, WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN);
 }
 
