@@ -29,6 +29,11 @@ GBytes *wyrebox_daemon_capnp_codec_encode_response_frame (
     gpointer user_data,
     GError **error);
 
+gboolean wyrebox_daemon_capnp_codec_decode_response_frame (
+    GBytes *response,
+    WyreboxDaemonResponseFrame *out_response_frame,
+    GError **error);
+
 GBytes *wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
     const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonDeliveryIngestionRequest *request,

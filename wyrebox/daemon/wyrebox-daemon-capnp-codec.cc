@@ -208,6 +208,33 @@ map_error_class (WyreboxDaemonErrorClass in, ErrorClass *out)
 }
 
 static gboolean
+decode_error_class (ErrorClass in, WyreboxDaemonErrorClass *out)
+{
+  switch (in) {
+    case ErrorClass::TEMPORARY_FAILURE:
+      *out = WYREBOX_DAEMON_ERROR_TEMPORARY_FAILURE;
+      return TRUE;
+    case ErrorClass::PERMANENT_FAILURE:
+      *out = WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE;
+      return TRUE;
+    case ErrorClass::PERMISSION_DENIED:
+      *out = WYREBOX_DAEMON_ERROR_PERMISSION_DENIED;
+      return TRUE;
+    case ErrorClass::NOT_FOUND:
+      *out = WYREBOX_DAEMON_ERROR_NOT_FOUND;
+      return TRUE;
+    case ErrorClass::CONFLICT:
+      *out = WYREBOX_DAEMON_ERROR_CONFLICT;
+      return TRUE;
+    case ErrorClass::INTERNAL_ERROR:
+      *out = WYREBOX_DAEMON_ERROR_INTERNAL_ERROR;
+      return TRUE;
+    default:
+      return FALSE;
+  }
+}
+
+static gboolean
 map_flag_keyword_update_mode (FlagKeywordUpdateMode in,
     WyreboxDaemonFlagKeywordUpdateMode *out)
 {
@@ -814,6 +841,121 @@ decode_request_frame (const capnp::word *words,
 }
 
 static gboolean
+decode_success_response (const ResponseFrame::Reader &response_frame,
+    WyreboxDaemonResponseFrame *out_response_frame,
+    GError **error)
+{
+  auto success = response_frame.getSuccess ();
+  g_auto (WyreboxDaemonSuccessReceipt) receipt = { 0 };
+  const char *request_id = response_frame.getRequestId ().cStr ();
+  const char *payload_request_id = success.getRequestId ().cStr ();
+  const char *correlation_id = response_frame.getCorrelationId ().cStr ();
+
+  if (request_id == NULL || *request_id == '\0')
+    return set_invalid_argument (error,
+        "response frame request_id is required");
+
+  if (payload_request_id == NULL || *payload_request_id == '\0')
+    return set_invalid_argument (error,
+        "success response request_id is required");
+
+  if (g_strcmp0 (request_id, payload_request_id) != 0)
+    return set_invalid_argument (error,
+        "success response request_id does not match frame envelope");
+
+  receipt.request_id = g_strdup (request_id);
+  receipt.durable_marker = g_strdup (success.getDurableMarker ().cStr ());
+  receipt.journal_offset = success.getJournalOffset ();
+  receipt.journal_sequence = success.getJournalSequence ();
+  receipt.summary = g_strdup (success.getSummary ().cStr ());
+
+  return wyrebox_daemon_response_frame_init_success (out_response_frame,
+      &receipt,
+      correlation_id,
+      error);
+}
+
+static gboolean
+decode_error_response (const ResponseFrame::Reader &response_frame,
+    WyreboxDaemonResponseFrame *out_response_frame,
+    GError **error)
+{
+  auto response_error = response_frame.getError ();
+  g_auto (WyreboxDaemonErrorFrame) error_frame = { 0 };
+  WyreboxDaemonErrorClass error_class =
+      WYREBOX_DAEMON_ERROR_INTERNAL_ERROR;
+  const char *request_id = response_frame.getRequestId ().cStr ();
+  const char *payload_request_id = response_error.getRequestId ().cStr ();
+  const char *correlation_id = response_frame.getCorrelationId ().cStr ();
+
+  if (request_id == NULL || *request_id == '\0')
+    return set_invalid_argument (error,
+        "response frame request_id is required");
+
+  if (payload_request_id == NULL || *payload_request_id == '\0')
+    return set_invalid_argument (error,
+        "error response request_id is required");
+
+  if (g_strcmp0 (request_id, payload_request_id) != 0)
+    return set_invalid_argument (error,
+        "error response request_id does not match frame envelope");
+
+  if (!decode_error_class (response_error.getErrorClass (), &error_class))
+    return set_invalid_argument (error, "unsupported daemon error class");
+
+  if (!wyrebox_daemon_error_frame_init (&error_frame,
+          request_id,
+          error_class,
+          response_error.getMessage ().cStr (),
+          response_error.getRetryHint ().cStr (),
+          error))
+    return FALSE;
+
+  return wyrebox_daemon_response_frame_init_error (out_response_frame,
+      &error_frame,
+      correlation_id,
+      error);
+}
+
+static gboolean
+decode_response_frame (const capnp::word *words,
+    gsize word_count,
+    WyreboxDaemonResponseFrame *out_response_frame,
+    GError **error)
+{
+  try {
+    capnp::FlatArrayMessageReader response_reader (
+        kj::ArrayPtr<const capnp::word> (words, word_count));
+    auto response_frame = response_reader.getRoot<ResponseFrame> ();
+
+    switch (response_frame.which ()) {
+      case ResponseFrame::SUCCESS:
+        return decode_success_response (response_frame,
+            out_response_frame,
+            error);
+      case ResponseFrame::ERROR:
+        return decode_error_response (response_frame,
+            out_response_frame,
+            error);
+      case ResponseFrame::STREAM_CHUNK:
+      case ResponseFrame::MAILBOX_LIST:
+      case ResponseFrame::MAILBOX_SELECT:
+      default:
+        return set_not_supported (error,
+            "unsupported response frame union arm");
+    }
+  } catch (const std::exception &e) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "response frame decode failed: %s",
+        e.what ());
+  }
+
+  return FALSE;
+}
+
+static gboolean
 validate_delivery_ingestion_encode_input (
     const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonDeliveryIngestionRequest *request,
@@ -1332,6 +1474,39 @@ wyrebox_daemon_capnp_codec_encode_response_frame (
           "unsupported response frame kind");
       return NULL;
   }
+}
+
+gboolean
+wyrebox_daemon_capnp_codec_decode_response_frame (GBytes *response,
+    WyreboxDaemonResponseFrame *out_response_frame, GError **error)
+{
+  g_return_val_if_fail (out_response_frame != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (response == NULL)
+    return set_invalid_argument (error, "response payload is null");
+
+  const gsize payload_size = g_bytes_get_size (response);
+  if (payload_size == 0)
+    return set_invalid_argument (error, "response payload is empty");
+
+  if (payload_size % sizeof (capnp::word) != 0)
+    return set_invalid_argument (error,
+        "response payload size is not a valid Cap'n Proto byte size");
+
+  g_autofree guint8 *payload_copy = NULL;
+  const guint8 *payload_data = static_cast<const guint8 *> (
+      g_bytes_get_data (response, NULL));
+  payload_copy = static_cast<guint8 *> (g_memdup2 (payload_data, payload_size));
+  if (payload_copy == NULL)
+    return set_invalid_argument (error,
+        "failed to allocate response payload copy");
+
+  return decode_response_frame (
+      reinterpret_cast<const capnp::word *> (payload_copy),
+      payload_size / sizeof (capnp::word),
+      out_response_frame,
+      error);
 }
 
 GBytes *
