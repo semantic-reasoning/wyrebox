@@ -324,6 +324,12 @@ test(
 )
 
 test(
+  'docs duckdb dependency contract',
+  python,
+  args: files('tests/docs/test_duckdb_dependency_contract.py'),
+)
+
+test(
   'docs issue 0004 daemon api schema',
   python,
   args: capnp_schema_args,
