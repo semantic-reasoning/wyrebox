@@ -1,6 +1,7 @@
 #include "wyrebox-daemon-duckdb-query-template-service.h"
 
 #include "wyrebox-daemon-client-identity.h"
+#include "wyrebox-daemon-duckdb-query-template-catalog.h"
 
 #include <gio/gio.h>
 
@@ -15,41 +16,6 @@ struct _WyreboxDaemonDuckDBQueryTemplateService
 
 G_DEFINE_TYPE (WyreboxDaemonDuckDBQueryTemplateService,
     wyrebox_daemon_duckdb_query_template_service, G_TYPE_OBJECT);
-
-static gboolean
-authorize_duckdb_query_template_identity (const WyreboxDaemonRequestIdentity
-    *identity, const WyreboxDaemonDuckDBQueryTemplateRequest *request,
-    GError **error)
-{
-  WyreboxDaemonClientIdentityClass client_class =
-      wyrebox_daemon_client_identity_classify_request (identity);
-
-  if (!wyrebox_daemon_client_identity_can_query_controlled_views (client_class)) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_PERMISSION_DENIED,
-        "caller is not authorized to query duckdb query templates");
-    return FALSE;
-  }
-
-  if (identity->account_identity == NULL || *identity->account_identity == '\0') {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_PERMISSION_DENIED,
-        "caller account scope is required for duckdb query template");
-    return FALSE;
-  }
-
-  if (g_strcmp0 (identity->account_identity, request->scope_id) != 0) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_PERMISSION_DENIED,
-        "caller is not authorized for duckdb query template account scope");
-    return FALSE;
-  }
-
-  return TRUE;
-}
 
 static gboolean
 validate_duckdb_query_template_chunk (const WyreboxDaemonRequestIdentity
@@ -167,6 +133,9 @@ gboolean
   g_auto (WyreboxDaemonStreamChunkFrame) chunk = { 0 };
   g_auto (WyreboxDaemonStreamChunkFrame) response_chunk = { 0 };
   g_autoptr (GError) local_error = NULL;
+  const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
+  WyreboxDaemonClientIdentityClass client_class =
+      WYREBOX_DAEMON_CLIENT_IDENTITY_UNKNOWN;
 
   g_return_val_if_fail (WYREBOX_IS_DAEMON_DUCKDB_QUERY_TEMPLATE_SERVICE
       (self), FALSE);
@@ -175,8 +144,11 @@ gboolean
   g_return_val_if_fail (out_frame != NULL, FALSE);
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  if (!authorize_duckdb_query_template_identity (identity, request, error))
+  client_class = wyrebox_daemon_client_identity_classify_request (identity);
+  if (!wyrebox_daemon_duckdb_query_template_catalog_validate (client_class,
+          identity->account_identity, request, &descriptor, error))
     return FALSE;
+  (void) descriptor;
 
   if (!self->func (identity, request, &chunk, self->user_data, &local_error)) {
     if (local_error == NULL) {

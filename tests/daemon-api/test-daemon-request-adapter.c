@@ -362,7 +362,7 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
     }
 
     case TEST_REQUEST_ADAPTER_SCENARIO_DUCKDB_QUERY_TEMPLATE_SUCCESS:{
-      const char *parameters[] = { "mail-1", NULL };
+      const char *parameters[] = { "mailbox-inbox", NULL };
 
       out_request->request_id = "request-duckdb-query";
       out_request->caller_identity = "admin-cli";
@@ -371,7 +371,7 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
       out_request->correlation_id = "corr-duckdb";
       if (!wyrebox_daemon_duckdb_query_template_request_init
           (&decoded_state->duckdb_query_template_request,
-              "query-1", "template.summary", "account-1", parameters, error))
+              "query-1", "mailbox.uid_map.v1", "account-1", parameters, error))
         return FALSE;
       out_request->operation =
           WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE;
@@ -585,9 +585,10 @@ query_duckdb_template_fixture (const WyreboxDaemonRequestIdentity *identity,
   g_assert_cmpstr (identity->account_identity, ==, "account-1");
   g_assert_cmpstr (identity->tool_identity, ==, "duckdb-tool");
   g_assert_cmpstr (request->query_id, ==, "query-1");
-  g_assert_cmpstr (request->template_id, ==, "template.summary");
+  g_assert_cmpstr (request->template_id, ==, "mailbox.uid_map.v1");
   g_assert_cmpstr (request->scope_id, ==, "account-1");
-  g_assert_cmpstr (request->parameters[0], ==, "mail-1");
+  g_assert_cmpstr (request->parameters[0], ==, "mailbox-inbox");
+  g_assert_null (request->parameters[1]);
 
   *was_called = TRUE;
   bytes = g_bytes_new_static (payload, strlen (payload));

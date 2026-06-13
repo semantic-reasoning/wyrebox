@@ -1,0 +1,154 @@
+#include "wyrebox-daemon-duckdb-query-template-catalog.h"
+
+#include <gio/gio.h>
+
+static const char *const mailbox_uid_map_parameters[] = { "mailbox_id", NULL };
+
+static const WyreboxDaemonDuckDBQueryTemplateDescriptor catalog[] = {
+  {
+        "mailbox.uid_map.v1",
+        "mailbox uid map",
+        "account_id",
+        "stream-chunk.duckdb-template.uid-map.v1",
+        1,
+      mailbox_uid_map_parameters},
+};
+
+static gboolean
+has_control_character (const char *value)
+{
+  for (const char *cursor = value; *cursor != '\0'; cursor++) {
+    if (g_ascii_iscntrl (*cursor))
+      return TRUE;
+  }
+
+  return FALSE;
+}
+
+static gsize
+count_parameters (gchar **parameters)
+{
+  gsize count = 0;
+
+  if (parameters == NULL)
+    return 0;
+
+  while (parameters[count] != NULL)
+    count++;
+
+  return count;
+}
+
+static const WyreboxDaemonDuckDBQueryTemplateDescriptor *
+lookup_template (const char *template_id)
+{
+  for (gsize i = 0; i < G_N_ELEMENTS (catalog); i++) {
+    if (g_strcmp0 (catalog[i].template_id, template_id) == 0)
+      return &catalog[i];
+  }
+
+  return NULL;
+}
+
+gboolean
+    wyrebox_daemon_duckdb_query_template_catalog_validate
+    (WyreboxDaemonClientIdentityClass client_class,
+    const char *caller_account_id,
+    const WyreboxDaemonDuckDBQueryTemplateRequest * request,
+    const WyreboxDaemonDuckDBQueryTemplateDescriptor ** out_descriptor,
+    GError ** error)
+{
+  const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
+  gsize parameter_count = 0;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (out_descriptor != NULL)
+    *out_descriptor = NULL;
+
+  if (!wyrebox_daemon_client_identity_can_query_controlled_views (client_class)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_PERMISSION_DENIED,
+        "caller is not authorized to query duckdb query templates");
+    return FALSE;
+  }
+
+  if (request == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "duckdb query template request is required");
+    return FALSE;
+  }
+
+  if (caller_account_id == NULL || *caller_account_id == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_PERMISSION_DENIED,
+        "caller account scope is required for duckdb query template");
+    return FALSE;
+  }
+
+  if (request->scope_id == NULL || *request->scope_id == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_PERMISSION_DENIED,
+        "duckdb query template account scope is required");
+    return FALSE;
+  }
+
+  if (g_strcmp0 (caller_account_id, request->scope_id) != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_PERMISSION_DENIED,
+        "caller is not authorized for duckdb query template account scope");
+    return FALSE;
+  }
+
+  descriptor = lookup_template (request->template_id);
+  if (descriptor == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "unknown duckdb query template '%s'",
+        request->template_id != NULL ? request->template_id : "(null)");
+    return FALSE;
+  }
+
+  parameter_count = count_parameters (request->parameters);
+  if (parameter_count != descriptor->n_parameters) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "duckdb query template '%s' expects %" G_GSIZE_FORMAT " parameter(s)",
+        descriptor->template_id, descriptor->n_parameters);
+    return FALSE;
+  }
+
+  for (gsize i = 0; i < parameter_count; i++) {
+    const char *parameter = request->parameters[i];
+
+    if (parameter == NULL || *parameter == '\0') {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "duckdb query template parameter is required");
+      return FALSE;
+    }
+
+    if (has_control_character (parameter)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "duckdb query template parameter must not contain control "
+          "characters");
+      return FALSE;
+    }
+  }
+
+  if (out_descriptor != NULL)
+    *out_descriptor = descriptor;
+
+  return TRUE;
+}

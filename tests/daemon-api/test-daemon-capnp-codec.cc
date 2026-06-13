@@ -569,16 +569,15 @@ query_duckdb_template_fixture (const WyreboxDaemonRequestIdentity *identity,
   FixtureState *state = static_cast<FixtureState *> (user_data);
 
   g_assert_cmpstr (identity->request_id, ==, "request-duckdb-route");
-  g_assert_cmpstr (identity->caller_identity, ==, "skill");
+  g_assert_cmpstr (identity->caller_identity, ==, "admin-cli");
   g_assert_cmpstr (identity->account_identity, ==, "account-1");
   g_assert_cmpstr (identity->tool_identity, ==, "duckdb-tool");
   g_assert_cmpstr (identity->correlation_id, ==, "corr-duckdb");
   g_assert_cmpstr (request->query_id, ==, "query-duckdb");
-  g_assert_cmpstr (request->template_id, ==, "template.summary");
+  g_assert_cmpstr (request->template_id, ==, "mailbox.uid_map.v1");
   g_assert_cmpstr (request->scope_id, ==, "account-1");
-  g_assert_cmpstr (request->parameters[0], ==, "mail-1");
-  g_assert_cmpstr (request->parameters[1], ==, "project-a");
-  g_assert_null (request->parameters[2]);
+  g_assert_cmpstr (request->parameters[0], ==, "mailbox-inbox");
+  g_assert_null (request->parameters[1]);
 
   state->was_called = TRUE;
   bytes = g_bytes_new_static (payload, strlen (payload));
@@ -3322,7 +3321,7 @@ assert_request_adapter_routes_wirelog_predicate_query (void)
 static void
 assert_request_adapter_routes_duckdb_query_template (void)
 {
-  const char *parameters[] = { "mail-1", "project-a", NULL };
+  const char *parameters[] = { "mailbox-inbox", NULL };
   g_autoptr (GError) error = NULL;
   g_autofree FixtureState *service_state = g_new0 (FixtureState, 1);
   g_autoptr (GBytes) request = NULL;
@@ -3360,10 +3359,10 @@ assert_request_adapter_routes_duckdb_query_template (void)
 
   request = build_duckdb_query_template_request_bytes (
       "request-duckdb-route",
-      "skill",
+      "admin-cli",
       "account-1",
       "query-duckdb",
-      "template.summary",
+      "mailbox.uid_map.v1",
       "account-1",
       parameters);
 

@@ -24,8 +24,10 @@ query_template_fixture (const WyreboxDaemonRequestIdentity *identity,
   g_assert_true (g_strcmp0 (identity->caller_identity, "admin-cli") == 0
       || g_strcmp0 (identity->caller_identity, "trusted-tool") == 0);
   g_assert_cmpstr (request->query_id, ==, "query-1");
-  g_assert_cmpstr (request->template_id, ==, "template.summary");
+  g_assert_cmpstr (request->template_id, ==, "mailbox.uid_map.v1");
   g_assert_cmpstr (request->scope_id, ==, "account-1");
+  g_assert_cmpstr (request->parameters[0], ==, "mailbox-inbox");
+  g_assert_null (request->parameters[1]);
 
   if (fixture != NULL && fixture->fail_without_error)
     return FALSE;
@@ -44,11 +46,22 @@ query_template_fixture (const WyreboxDaemonRequestIdentity *identity,
 static void
 init_request (WyreboxDaemonDuckDBQueryTemplateRequest *request)
 {
-  const char *parameters[] = { "mail-1", NULL };
+  const char *parameters[] = { "mailbox-inbox", NULL };
   g_autoptr (GError) error = NULL;
 
   g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (request,
-          "query-1", "template.summary", "account-1", parameters, &error));
+          "query-1", "mailbox.uid_map.v1", "account-1", parameters, &error));
+  g_assert_no_error (error);
+}
+
+static void
+init_request_with_parameters (WyreboxDaemonDuckDBQueryTemplateRequest *request,
+    const char *template_id, const char *const *parameters)
+{
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (request,
+          "query-1", template_id, "account-1", parameters, &error));
   g_assert_no_error (error);
 }
 
@@ -136,6 +149,52 @@ test_duckdb_query_template_dispatcher_rejects_scope_mismatch (void)
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
   g_assert_cmpint (frame.error.error_class, ==,
       WYREBOX_DAEMON_ERROR_PERMISSION_DENIED);
+}
+
+static void
+test_duckdb_query_template_dispatcher_rejects_unknown_template (void)
+{
+  const char *parameters[] = { "mailbox-inbox", NULL };
+  DuckDBQueryTemplateFixture fixture = { 0 };
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  g_autoptr (GError) error = NULL;
+
+  init_request_with_parameters (&request, "unknown.template.v1", parameters);
+  service = wyrebox_daemon_duckdb_query_template_service_new
+      (query_template_fixture, &fixture, NULL);
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
+          "request-1", "admin-cli", "account-1", "duckdb-tool",
+          "correlation-1", &request, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+}
+
+static void
+test_duckdb_query_template_dispatcher_rejects_bad_parameter_count (void)
+{
+  const char *parameters[] = { "mailbox-inbox", "extra", NULL };
+  DuckDBQueryTemplateFixture fixture = { 0 };
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  g_autoptr (GError) error = NULL;
+
+  init_request_with_parameters (&request, "mailbox.uid_map.v1", parameters);
+  service = wyrebox_daemon_duckdb_query_template_service_new
+      (query_template_fixture, &fixture, NULL);
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
+          "request-1", "admin-cli", "account-1", "duckdb-tool",
+          "correlation-1", &request, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
 }
 
 static void
@@ -276,6 +335,12 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/dispatcher/rejects-scope-mismatch",
       test_duckdb_query_template_dispatcher_rejects_scope_mismatch);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/dispatcher/rejects-unknown-template",
+      test_duckdb_query_template_dispatcher_rejects_unknown_template);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/dispatcher/rejects-bad-parameter-count",
+      test_duckdb_query_template_dispatcher_rejects_bad_parameter_count);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/dispatcher/rejects-empty-identity-scope",
       test_duckdb_query_template_dispatcher_rejects_empty_identity_scope);
