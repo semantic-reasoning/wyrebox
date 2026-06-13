@@ -102,6 +102,21 @@ REQUIRED_STORAGE_REGISTRATION_SYMBOLS = [
     r"\bvoid\s+mail_storage_class_unregister\s*\(\s*struct\s+mail_storage\s*\*storage_class\)",
 ]
 
+REQUIRED_LIST_CONTRACT_SYMBOLS = [
+    (
+        "mail_storage_vfuncs.add_list signature",
+        r"\bvoid\s*\(\s*\*\s*add_list\s*\)\s*\(\s*"
+        r"struct\s+mail_storage\s*\*\s*\w*\s*,\s*"
+        r"struct\s+mailbox_list\s*\*\s*\w*\s*\)\s*;",
+    ),
+    (
+        "mailbox_list_get_storage_name signature",
+        r"\bconst\s+char\s*\*\s*mailbox_list_get_storage_name\s*\(\s*"
+        r"struct\s+mailbox_list\s*\*\s*\w*\s*,\s*"
+        r"const\s+char\s*\*\s*\w*\s*\)\s*;",
+    ),
+]
+
 @dataclass
 class ContractIssue:
     message: str
@@ -245,6 +260,19 @@ def find_issues_for_vfuncs(path: Path, struct_name: str, symbols: list[str]) -> 
     return issues
 
 
+def find_issues_for_list_contract(path: Path) -> list[ContractIssue]:
+    text = read_text(path)
+    struct_block = find_struct_block(text, "mail_storage_vfuncs")
+    issues: list[ContractIssue] = []
+
+    for label, expression in REQUIRED_LIST_CONTRACT_SYMBOLS:
+        haystack = struct_block if label.startswith("mail_storage_vfuncs.") else text
+        if haystack is None or re.search(expression, haystack, re.MULTILINE) is None:
+            issues.append(ContractIssue(f"{path}: missing {label}: {expression}"))
+
+    return issues
+
+
 def check_version(path: Path) -> list[ContractIssue]:
     text = read_text(path)
     match = re.search(
@@ -354,6 +382,7 @@ def validate_source(source_dir: Path) -> list[ContractIssue]:
     issues.extend(
         find_issues_for_vfuncs(storage_private, "mail_storage_vfuncs", REQUIRED_VFUNC_SYMBOLS["mail_storage_vfuncs"])
     )
+    issues.extend(find_issues_for_list_contract(storage_private))
     issues.extend(
         find_issues_for_vfuncs(storage_private, "mailbox_vfuncs", REQUIRED_VFUNC_SYMBOLS["mailbox_vfuncs"])
     )

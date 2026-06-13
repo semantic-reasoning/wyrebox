@@ -74,6 +74,10 @@ def test_dovecot_source_contract_missing_mailbox_allocation_contract() -> None:
     run_checker(FIXTURES_DIR / "missing-mailbox-allocation", expect_success=False)
 
 
+def test_dovecot_source_contract_missing_list_contract() -> None:
+    run_checker(FIXTURES_DIR / "missing-list-contract", expect_success=False)
+
+
 def test_dovecot_source_contract_missing_namespace_user_identity() -> None:
     run_checker(
         FIXTURES_DIR / "missing-namespace-user-identity",
@@ -110,6 +114,7 @@ def main() -> None:
         test_dovecot_source_contract_wrong_abi_template,
         test_dovecot_source_contract_missing_vfunc_contract,
         test_dovecot_source_contract_missing_mailbox_allocation_contract,
+        test_dovecot_source_contract_missing_list_contract,
         test_dovecot_source_contract_missing_namespace_user_identity,
         test_dovecot_source_contract_missing_plugin_entrypoint,
         test_dovecot_source_contract_missing_storage_registration,
