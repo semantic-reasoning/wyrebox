@@ -144,7 +144,7 @@ def main() -> None:
         r"wyrebox_daemon_mailbox_select_result_init\s*\(\s*&wbox->select_result,\s*"
         r"select_result\.kind,\s*select_result\.mailbox_id,\s*"
         r"select_result\.mailbox_name,\s*select_result\.uid_validity,\s*"
-        r"select_result\.uid_next,\s*error\)\s*\)\s*\{[\s\S]*?"
+        r"select_result\.uid_next,\s*select_result\.message_count,\s*error\)\s*\)\s*\{[\s\S]*?"
         r"wbox->select_result_valid\s*=\s*1;",
         text,
         "mailbox SELECT refresh helper clears stale state and caches result",
@@ -252,7 +252,7 @@ def main() -> None:
         "mailbox get_status lazily refreshes SELECT state",
     )
     require(
-        r"status_r->messages\s*=\s*0;\s*[\s\S]*?"
+        r"status_r->messages\s*=\s*wbox->select_result.message_count;\s*[\s\S]*?"
         r"status_r->uidvalidity\s*=\s*wbox->select_result.uid_validity;\s*[\s\S]*?"
         r"status_r->uidnext\s*=\s*wbox->select_result.uid_next;",
         text,
@@ -391,9 +391,9 @@ def main() -> None:
         "mailbox allocator returns mailbox",
     )
     require(
-        r"status_r->messages\s*=\s*0;",
+        r"status_r->messages\s*=\s*wbox->select_result\.message_count;",
         text,
-        "mailbox get_status sets message count to zero baseline",
+        "mailbox get_status reflects cached SELECT message count",
     )
     forbid(
         r"WyreBox mailbox open is not implemented yet",

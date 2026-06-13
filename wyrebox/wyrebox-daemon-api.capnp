@@ -124,6 +124,7 @@ struct MailboxSelectResponse {
   mailboxName @3 :Text;
   uidValidity @4 :UInt32;
   uidNext @5 :UInt32;
+  messageCount @6 :UInt32;
 }
 
 struct MessageFetchRequest {

@@ -81,7 +81,8 @@ copy_mailbox_select_response (const WyreboxDaemonResponseFrame *response,
       response->mailbox_select.mailbox_id,
       response->mailbox_select.mailbox_name,
       response->mailbox_select.uid_validity,
-      response->mailbox_select.uid_next, error);
+      response->mailbox_select.uid_next,
+      response->mailbox_select.message_count, error);
 }
 
 gboolean

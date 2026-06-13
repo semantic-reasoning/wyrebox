@@ -48,14 +48,15 @@ make_mailbox_select_result (void)
 
   g_assert_true (wyrebox_daemon_mailbox_select_result_init (&result,
           WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
-          "view-project-a", "Projects/Project A", 99, 1, &error));
+          "view-project-a", "Projects/Project A", 99, 1, 11, &error));
   g_assert_no_error (error);
 
   return (WyreboxDaemonMailboxSelectResult) {
   .kind = result.kind,.mailbox_id =
         g_steal_pointer (&result.mailbox_id),.mailbox_name =
         g_steal_pointer (&result.mailbox_name),.uid_validity =
-        result.uid_validity,.uid_next = result.uid_next,};
+        result.uid_validity,.uid_next = result.uid_next,.message_count =
+        result.message_count,};
 }
 
 static WyreboxDaemonStreamChunkFrame
@@ -255,6 +256,7 @@ test_response_frame_init_mailbox_select_copies_payload (void)
   g_assert_cmpstr (frame.mailbox_select.mailbox_name, ==, "Projects/Project A");
   g_assert_cmpuint (frame.mailbox_select.uid_validity, ==, 99);
   g_assert_cmpuint (frame.mailbox_select.uid_next, ==, 1);
+  g_assert_cmpuint (frame.mailbox_select.message_count, ==, 11);
 }
 
 static void
@@ -266,7 +268,7 @@ test_response_frame_mailbox_select_deep_copies_payload (void)
 
   g_assert_true (wyrebox_daemon_mailbox_select_result_init (&result,
           WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
-          "mailbox-inbox", "INBOX", 77, 42, &error));
+          "mailbox-inbox", "INBOX", 77, 42, 9, &error));
   g_assert_no_error (error);
 
   g_assert_true (wyrebox_daemon_response_frame_init_mailbox_select (&frame,
@@ -279,6 +281,7 @@ test_response_frame_mailbox_select_deep_copies_payload (void)
   g_assert_cmpstr (frame.mailbox_select.mailbox_name, ==, "INBOX");
   g_assert_cmpuint (frame.mailbox_select.uid_validity, ==, 77);
   g_assert_cmpuint (frame.mailbox_select.uid_next, ==, 42);
+  g_assert_cmpuint (frame.mailbox_select.message_count, ==, 9);
 }
 
 static void
@@ -366,7 +369,7 @@ test_response_frame_rejects_invalid_mailbox_select_payload (void)
   g_clear_error (&error);
   g_assert_true (wyrebox_daemon_mailbox_select_result_init (&result,
           WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
-          "mailbox-inbox", "INBOX", 77, 42, &error));
+          "mailbox-inbox", "INBOX", 77, 42, 10, &error));
   g_assert_no_error (error);
 
   g_assert_false (wyrebox_daemon_response_frame_init_mailbox_select (&frame,
@@ -800,6 +803,7 @@ test_response_frame_mailbox_select_failure_leaves_existing_contents (void)
   g_assert_cmpstr (frame.mailbox_select.mailbox_name, ==, "Projects/Project A");
   g_assert_cmpuint (frame.mailbox_select.uid_validity, ==, 99);
   g_assert_cmpuint (frame.mailbox_select.uid_next, ==, 1);
+  g_assert_cmpuint (frame.mailbox_select.message_count, ==, 11);
 }
 
 static void

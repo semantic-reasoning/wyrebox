@@ -118,7 +118,7 @@ encode_mailbox_select_response (const char *request_id)
 
   g_assert_true (wyrebox_daemon_mailbox_select_result_init (&select,
           WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
-          "view-projects", "Projects", 77, 42, &error));
+          "view-projects", "Projects", 77, 42, 7, &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_response_frame_init_mailbox_select (&frame,
           request_id, NULL, &select, &error));
@@ -329,7 +329,7 @@ test_open_and_get_status_after_open (void)
       0);
   g_assert_cmpuint (status.uidvalidity, ==, 77);
   g_assert_cmpuint (status.uidnext, ==, 42);
-  g_assert_cmpuint (status.messages, ==, 0);
+  g_assert_cmpuint (status.messages, ==, 7);
 
   fake_server_join (&server);
   remove_tree (socket_root);
@@ -372,7 +372,7 @@ test_lazy_status_before_open (void)
       0);
   g_assert_cmpuint (status.uidvalidity, ==, 77);
   g_assert_cmpuint (status.uidnext, ==, 42);
-  g_assert_cmpuint (status.messages, ==, 0);
+  g_assert_cmpuint (status.messages, ==, 7);
   g_assert_false (box->opened);
 
   fake_server_join (&server);

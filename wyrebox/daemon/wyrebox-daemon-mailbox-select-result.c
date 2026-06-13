@@ -54,13 +54,14 @@ wyrebox_daemon_mailbox_select_result_clear (WyreboxDaemonMailboxSelectResult
   result->kind = WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
   result->uid_validity = 0;
   result->uid_next = 0;
+  result->message_count = 0;
 }
 
 gboolean
 wyrebox_daemon_mailbox_select_result_init (WyreboxDaemonMailboxSelectResult
     *result, WyreboxDaemonMailboxListEntryKind kind, const char *mailbox_id,
     const char *mailbox_name, guint32 uid_validity, guint32 uid_next,
-    GError **error)
+    guint32 message_count, GError **error)
 {
   g_auto (WyreboxDaemonMailboxSelectResult) next = { 0 };
 
@@ -96,6 +97,7 @@ wyrebox_daemon_mailbox_select_result_init (WyreboxDaemonMailboxSelectResult
   next.mailbox_name = g_strdup (mailbox_name);
   next.uid_validity = uid_validity;
   next.uid_next = uid_next;
+  next.message_count = message_count;
 
   wyrebox_daemon_mailbox_select_result_clear (result);
   *result = next;
