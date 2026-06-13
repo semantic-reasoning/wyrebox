@@ -14,6 +14,7 @@ static const char *canonical_event_types[] = {
   "FactInserted",
   "FactRetracted",
   "DerivedViewMembershipChanged",
+  "DaemonAuditRecorded",
 };
 
 static void

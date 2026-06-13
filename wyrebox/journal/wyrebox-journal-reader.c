@@ -99,7 +99,7 @@ parse_event_type (const guint8 *event_type_data,
 
   event_type = g_strndup ((const gchar *) event_type_data, event_type_len);
   for (guint index = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
-      index <= WYREBOX_JOURNAL_EVENT_DERIVED_VIEW_MEMBERSHIP_CHANGED; index++) {
+      index <= WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED; index++) {
     const gchar *canonical = wyrebox_journal_event_type_to_string (index);
 
     if (canonical == NULL)

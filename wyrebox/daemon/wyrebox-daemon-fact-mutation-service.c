@@ -1,6 +1,7 @@
 #include "wyrebox-daemon-fact-mutation-service.h"
 
 #include "wyrebox-daemon-client-identity.h"
+#include "wyrebox-daemon-audit-payload.h"
 
 #include <gio/gio.h>
 
@@ -125,6 +126,43 @@ wyrebox_daemon_fact_mutation_service_new (WyreboxJournalWriter *journal_writer)
 }
 
 static gboolean
+append_audit_record (WyreboxDaemonFactMutationService *self,
+    WyreboxDaemonAuditOperation operation,
+    const WyreboxDaemonRequestIdentity *identity,
+    const char *scope_id,
+    guint64 mutation_count,
+    const char *predicate_id,
+    guint64 final_journal_offset,
+    guint64 final_journal_sequence, GError **error)
+{
+  g_autoptr (GBytes) payload_bytes = NULL;
+  guint64 audit_offset = 0;
+  guint64 audit_sequence = 0;
+  WyreboxDaemonAuditPayload payload = {
+    .operation = operation,
+    .outcome = WYREBOX_DAEMON_AUDIT_OUTCOME_SUCCESS,
+    .request_id = (char *) identity->request_id,
+    .correlation_id = (char *) identity->correlation_id,
+    .caller_identity = (char *) identity->caller_identity,
+    .account_identity = (char *) identity->account_identity,
+    .tool_identity = (char *) identity->tool_identity,
+    .scope_id = (char *) scope_id,
+    .mutation_count = mutation_count,
+    .predicate_id = (char *) predicate_id,
+    .final_journal_offset = final_journal_offset,
+    .final_journal_sequence = final_journal_sequence,
+  };
+
+  payload_bytes = wyrebox_daemon_audit_payload_encode (&payload, error);
+  if (payload_bytes == NULL)
+    return FALSE;
+
+  return wyrebox_journal_writer_append (self->journal_writer,
+      WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED, payload_bytes,
+      &audit_offset, &audit_sequence, error);
+}
+
+static gboolean
 handle_authorized_fact_mutation (WyreboxDaemonFactMutationService
     *self, const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonFactMutationRequest *request,
@@ -144,6 +182,12 @@ handle_authorized_fact_mutation (WyreboxDaemonFactMutationService
 
   if (!wyrebox_daemon_fact_mutation_request_append_journal (request,
           self->journal_writer, &journal_offset, &journal_sequence, error))
+    return FALSE;
+
+  if (!append_audit_record (self,
+          WYREBOX_DAEMON_AUDIT_OPERATION_SINGLE_FACT_MUTATION, identity,
+          request->scope_id, 1, request->predicate_id, journal_offset,
+          journal_sequence, error))
     return FALSE;
 
   return wyrebox_daemon_response_frame_init_fact_mutation_success (out_frame,
@@ -182,6 +226,12 @@ handle_authorized_fact_batch_import (WyreboxDaemonFactMutationService
             self->journal_writer, &journal_offset, &journal_sequence, error))
       return FALSE;
   }
+
+  if (!append_audit_record (self,
+          WYREBOX_DAEMON_AUDIT_OPERATION_FACT_BATCH_IMPORT, identity,
+          wyrebox_daemon_fact_batch_import_request_get_scope_id (request),
+          n_entries, NULL, journal_offset, journal_sequence, error))
+    return FALSE;
 
   return wyrebox_daemon_response_frame_init_fact_batch_import_success
       (out_frame, identity->request_id, identity->correlation_id, request,

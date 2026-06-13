@@ -59,6 +59,7 @@ wyrebox_sources = files(
   'schema/wyrebox-schema-metadata-store.c',
   'ingestion/wyrebox-eml-ingestor.c',
   'ingestion/wyrebox-eml-metadata.c',
+  'journal/wyrebox-daemon-audit-payload.c',
   'journal/wyrebox-message-delivered-payload.c',
   'journal/wyrebox-derived-view-membership-changed-payload.c',
   'journal/wyrebox-journal-writer.c',
