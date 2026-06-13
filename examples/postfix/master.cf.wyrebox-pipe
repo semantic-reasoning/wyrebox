@@ -3,14 +3,21 @@
 # Install path depends on the Meson bindir used at install time. Keep the
 # executable name as wyrebox-postfix-pipe.
 #
-# stdin carries the raw RFC 5322 message bytes to the helper. The helper
-# connects to /run/wyrebox/wyrebox.sock unless --socket is supplied.
+# stdin carries the raw RFC 5322 message bytes to the helper. The pipe flags
+# must not alter message content; q affects command-line address macro
+# expansion only. The helper connects to /run/wyrebox/wyrebox.sock unless
+# --socket is supplied.
+#
+# Add this transport-specific setting to main.cf so ${recipient} expands to one
+# recipient per helper invocation:
+#
+#   wyrebox-pipe_destination_recipient_limit = 1
 #
 # If this service runs chrooted, /run/wyrebox/wyrebox.sock must exist inside
 # the chroot at the same path. Otherwise set the chroot column to "n" for this
 # service or use --socket with a path that exists inside the chroot.
 wyrebox-pipe unix  -       n       n       -       -       pipe
-  flags=Rq user=wyrebox argv=/usr/local/bin/wyrebox-postfix-pipe
+  flags=q user=wyrebox argv=/usr/local/bin/wyrebox-postfix-pipe
   --account-id example-account
   --delivery-id ${queue_id}:${recipient}
   --queue-id ${queue_id}

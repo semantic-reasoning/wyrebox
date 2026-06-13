@@ -58,6 +58,34 @@ def assert_contains_words(text: str, phrase: str) -> None:
     assert normalized_phrase in normalized_text, f"missing phrase: {phrase}"
 
 
+def assert_pipe_flags_preserve_stdin(master_cf: str) -> None:
+    match = re.search(r"^\s*flags=([^\s]+)", master_cf, flags=re.MULTILINE)
+
+    assert match is not None, "master.cf example must set explicit pipe flags"
+
+    flags = set(match.group(1))
+    assert "R" not in flags, "pipe R flag prepends Return-Path and mutates stdin"
+    assert flags == {"q"}, "pipe example must use only non-mutating q flag"
+
+
+def assert_single_recipient_pipe_delivery(master_cf: str) -> None:
+    assert "wyrebox-pipe_destination_recipient_limit = 1" in master_cf
+    assert "--recipient ${recipient}" in master_cf
+
+
+def assert_required_master_cf_metadata(master_cf: str) -> None:
+    required_fragments = [
+        "--account-id example-account",
+        "--delivery-id ${queue_id}:${recipient}",
+        "--queue-id ${queue_id}",
+        "--sender ${sender}",
+        "--recipient ${recipient}",
+    ]
+
+    for fragment in required_fragments:
+        assert fragment in master_cf, f"missing master.cf metadata: {fragment}"
+
+
 def main() -> None:
     examples = read_examples()
     combined = "\n".join(examples.values())
@@ -65,6 +93,9 @@ def main() -> None:
 
     assert "`wyrebox-postfix-pipe`" in examples[README_PATH]
     assert "argv=/usr/local/bin/wyrebox-postfix-pipe" in examples[MASTER_CF_PATH]
+    assert_pipe_flags_preserve_stdin(examples[MASTER_CF_PATH])
+    assert_single_recipient_pipe_delivery(examples[MASTER_CF_PATH])
+    assert_required_master_cf_metadata(examples[MASTER_CF_PATH])
 
     assert_supported_options_only(combined)
 
@@ -83,6 +114,18 @@ def main() -> None:
     assert_contains_words(
         examples[MASTER_CF_PATH],
         "stdin carries the raw RFC 5322 message bytes",
+    )
+    assert_contains_words(
+        examples[README_PATH],
+        "preserves the bytes it receives on standard input",
+    )
+    assert_contains_words(
+        examples[README_PATH],
+        "must not use pipe flags that alter message content",
+    )
+    assert_contains_words(
+        examples[README_PATH],
+        "q flag affects command-line address macro expansion only",
     )
 
     assert "returns success only after `wyreboxd` reports durable ingestion" in (
