@@ -814,6 +814,115 @@ decode_request_frame (const capnp::word *words,
 }
 
 static gboolean
+validate_delivery_ingestion_encode_input (
+    const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDeliveryIngestionRequest *request,
+    GError **error)
+{
+  g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
+  g_auto (WyreboxDaemonDeliveryIngestionRequest) validated_request = { 0 };
+
+  if (identity == NULL)
+    return set_invalid_argument (error, "request identity is null");
+
+  if (request == NULL)
+    return set_invalid_argument (error,
+        "delivery ingestion request is null");
+
+  if (!wyrebox_daemon_request_identity_init (&validated_identity,
+          identity->request_id,
+          identity->caller_identity,
+          identity->account_identity,
+          identity->tool_identity,
+          identity->correlation_id,
+          error))
+    return FALSE;
+
+  if (!wyrebox_daemon_delivery_ingestion_request_init (&validated_request,
+          request->delivery_id,
+          request->queue_id,
+          request->envelope_sender,
+          (const gchar * const *) request->recipients,
+          request->message_bytes,
+          error))
+    return FALSE;
+
+  return TRUE;
+}
+
+static gboolean
+encode_delivery_ingestion_request (
+    const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDeliveryIngestionRequest *request,
+    GBytes **out_bytes,
+    GError **error)
+{
+  try {
+    gsize message_size = 0;
+    const guint8 *message_data = NULL;
+    guint recipient_count = 0;
+
+    if (!validate_delivery_ingestion_encode_input (identity, request, error))
+      return FALSE;
+
+    while (request->recipients[recipient_count] != NULL)
+      recipient_count++;
+
+    message_data = static_cast<const guint8 *> (
+        g_bytes_get_data (request->message_bytes, &message_size));
+
+    capnp::MallocMessageBuilder request_builder;
+    auto request_frame = request_builder.initRoot<RequestFrame> ();
+
+    auto request_identity = request_frame.initIdentity ();
+    request_identity.setRequestId (identity->request_id);
+    request_identity.setCallerIdentity (identity->caller_identity != NULL
+        ? identity->caller_identity
+        : "");
+    request_identity.setAccountIdentity (identity->account_identity != NULL
+        ? identity->account_identity
+        : "");
+    request_identity.setToolIdentity (identity->tool_identity != NULL
+        ? identity->tool_identity
+        : "");
+    request_identity.setCorrelationId (identity->correlation_id != NULL
+        ? identity->correlation_id
+        : "");
+
+    auto delivery_ingestion = request_frame.initDeliveryIngestion ();
+    delivery_ingestion.setDeliveryId (request->delivery_id);
+    delivery_ingestion.setQueueId (request->queue_id != NULL
+        ? request->queue_id
+        : "");
+    delivery_ingestion.setEnvelopeSender (request->envelope_sender != NULL
+        ? request->envelope_sender
+        : "");
+
+    auto encoded_recipients =
+        delivery_ingestion.initRecipients (recipient_count);
+    for (guint i = 0; i < recipient_count; i++)
+      encoded_recipients.set (i, request->recipients[i]);
+
+    delivery_ingestion.setMessageBytes (kj::arrayPtr (
+        reinterpret_cast<const capnp::byte *> (message_data), message_size));
+
+    auto words = capnp::messageToFlatArray (request_builder);
+    auto bytes = words.asBytes ();
+    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+
+    return TRUE;
+  } catch (const std::exception &e) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "delivery ingestion request encode failed: %s",
+        e.what ());
+  }
+
+  return FALSE;
+}
+
+static gboolean
 encode_success_response (const WyreboxDaemonResponseFrame *response_frame,
     GBytes **out_bytes,
     GError **error)
@@ -1223,4 +1332,23 @@ wyrebox_daemon_capnp_codec_encode_response_frame (
           "unsupported response frame kind");
       return NULL;
   }
+}
+
+GBytes *
+wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
+    const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDeliveryIngestionRequest *request,
+    gpointer user_data,
+    GError **error)
+{
+  g_autoptr (GBytes) out_bytes = NULL;
+
+  (void) user_data;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  if (!encode_delivery_ingestion_request (identity, request, &out_bytes, error))
+    return NULL;
+
+  return g_steal_pointer (&out_bytes);
 }

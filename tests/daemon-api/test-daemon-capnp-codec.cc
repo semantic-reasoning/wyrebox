@@ -1616,6 +1616,254 @@ assert_request_bytes_decode_delivery_ingestion (void)
 }
 
 static void
+assert_delivery_ingestion_request_encoder_decodes_valid_request (void)
+{
+  const char *recipients[] = { "alice@example.com", "bob@example.com", NULL };
+  const guint8 message_bytes[] = {
+    'F', 'r', 'o', 'm', ':', ' ', 'a', '@', 'e', 'x', 'a', 'm', 'p', 'l',
+    'e', '\r', '\n', '\0', 'b', 'o', 'd', 'y', 0xff
+  };
+  g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+  g_auto (WyreboxDaemonDeliveryIngestionRequest) request = { 0 };
+  g_autoptr (GBytes) message = g_bytes_new_static (message_bytes,
+      sizeof (message_bytes));
+  g_autoptr (GBytes) encoded = NULL;
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+      "request-encode-delivery",
+      "postfix",
+      "account-1",
+      "pipe-helper",
+      "corr-encode",
+      &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_delivery_ingestion_request_init (&request,
+      "delivery-encode-1",
+      "QID-123",
+      "sender@example.com",
+      recipients,
+      message,
+      &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
+      &identity,
+      &request,
+      NULL,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      encoded,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (decoded.request_id, ==, "request-encode-delivery");
+  g_assert_cmpstr (decoded.caller_identity, ==, "postfix");
+  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.tool_identity, ==, "pipe-helper");
+  g_assert_cmpstr (decoded.correlation_id, ==, "corr-encode");
+  g_assert_cmpint (decoded.operation, ==,
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION);
+  g_assert_nonnull (decoded.delivery_ingestion);
+  g_assert_cmpstr (decoded.delivery_ingestion->delivery_id, ==,
+      "delivery-encode-1");
+  g_assert_cmpstr (decoded.delivery_ingestion->queue_id, ==, "QID-123");
+  g_assert_cmpstr (decoded.delivery_ingestion->envelope_sender, ==,
+      "sender@example.com");
+  g_assert_cmpstr (decoded.delivery_ingestion->recipients[0], ==,
+      "alice@example.com");
+  g_assert_cmpstr (decoded.delivery_ingestion->recipients[1], ==,
+      "bob@example.com");
+  g_assert_null (decoded.delivery_ingestion->recipients[2]);
+
+  gsize decoded_size = 0;
+  const guint8 *decoded_bytes = static_cast<const guint8 *> (
+      g_bytes_get_data (decoded.delivery_ingestion->message_bytes,
+          &decoded_size));
+  g_assert_cmpuint (decoded_size, ==, sizeof (message_bytes));
+  g_assert_cmpmem (decoded_bytes, decoded_size, message_bytes,
+      sizeof (message_bytes));
+
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  decoded_state_clear (decoded_state);
+}
+
+static void
+assert_delivery_ingestion_request_encoder_decodes_missing_optionals (void)
+{
+  const char *recipients[] = { "rcpt@example.com", NULL };
+  const char *payload = "From: sender@example.com\r\n\r\nbody";
+  g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+  g_auto (WyreboxDaemonDeliveryIngestionRequest) request = { 0 };
+  g_autoptr (GBytes) message = g_bytes_new_static (payload, strlen (payload));
+  g_autoptr (GBytes) encoded = NULL;
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+      "request-encode-delivery-optionals",
+      "postfix",
+      "account-1",
+      "pipe-helper",
+      NULL,
+      &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_delivery_ingestion_request_init (&request,
+      "delivery-encode-optionals",
+      NULL,
+      NULL,
+      recipients,
+      message,
+      &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
+      &identity,
+      &request,
+      NULL,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      encoded,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (decoded.correlation_id, ==, "");
+  g_assert_cmpstr (decoded.delivery_ingestion->queue_id, ==, "");
+  g_assert_cmpstr (decoded.delivery_ingestion->envelope_sender, ==, "");
+  g_assert_cmpstr (decoded.delivery_ingestion->recipients[0], ==,
+      "rcpt@example.com");
+  g_assert_null (decoded.delivery_ingestion->recipients[1]);
+
+  gsize decoded_size = 0;
+  const guint8 *decoded_bytes = static_cast<const guint8 *> (
+      g_bytes_get_data (decoded.delivery_ingestion->message_bytes,
+          &decoded_size));
+  g_assert_cmpuint (decoded_size, ==, strlen (payload));
+  g_assert_cmpmem (decoded_bytes, decoded_size, payload, strlen (payload));
+
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  decoded_state_clear (decoded_state);
+}
+
+static void
+assert_delivery_ingestion_request_encoder_rejects_invalid_input (void)
+{
+  const char *recipients[] = { "rcpt@example.com", NULL };
+  const char *payload = "message-bytes";
+  g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+  g_auto (WyreboxDaemonDeliveryIngestionRequest) request = { 0 };
+  g_autoptr (GBytes) message = g_bytes_new_static (payload, strlen (payload));
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+  WyreboxDaemonRequestIdentity invalid_identity = { 0 };
+  WyreboxDaemonDeliveryIngestionRequest invalid_request = { 0 };
+  gchar *invalid_recipients[] = {
+    const_cast<gchar *> ("rcpt@example.com"),
+    NULL
+  };
+
+  g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+      "request-encode-invalid",
+      "postfix",
+      "account-1",
+      "pipe-helper",
+      "corr-invalid",
+      &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_delivery_ingestion_request_init (&request,
+      "delivery-invalid",
+      "QID-123",
+      "sender@example.com",
+      recipients,
+      message,
+      &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (NULL,
+      &request,
+      NULL,
+      &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
+      &identity,
+      NULL,
+      NULL,
+      &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
+      &invalid_identity,
+      &request,
+      NULL,
+      &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  invalid_request.delivery_id = const_cast<char *> ("");
+  invalid_request.queue_id = const_cast<char *> ("QID-123");
+  invalid_request.envelope_sender = const_cast<char *> ("sender@example.com");
+  invalid_request.recipients = invalid_recipients;
+  invalid_request.message_bytes = message;
+
+  encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
+      &identity,
+      &invalid_request,
+      NULL,
+      &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  invalid_request.delivery_id = const_cast<char *> ("delivery-invalid");
+  invalid_request.recipients = NULL;
+
+  encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
+      &identity,
+      &invalid_request,
+      NULL,
+      &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  invalid_request.recipients = invalid_recipients;
+  invalid_request.message_bytes = NULL;
+
+  encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
+      &identity,
+      &invalid_request,
+      NULL,
+      &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
 assert_request_bytes_rejects_delivery_ingestion_missing_delivery_id (void)
 {
   const char *recipients[] = { "alice@example.com", NULL };
@@ -4154,6 +4402,14 @@ main (int argc, char **argv)
       assert_request_bytes_rejects_duckdb_query_template_invalid_parameter);
   g_test_add_func ("/daemon-api/capnp/codec/decode-delivery-ingestion-valid",
       assert_request_bytes_decode_delivery_ingestion);
+  g_test_add_func ("/daemon-api/capnp/codec/encode-delivery-ingestion-valid",
+      assert_delivery_ingestion_request_encoder_decodes_valid_request);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/encode-delivery-ingestion-missing-optionals",
+      assert_delivery_ingestion_request_encoder_decodes_missing_optionals);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-delivery-ingestion-encode-invalid-input",
+      assert_delivery_ingestion_request_encoder_rejects_invalid_input);
   g_test_add_func (
       "/daemon-api/capnp/codec/reject-delivery-ingestion-missing-delivery-id",
       assert_request_bytes_rejects_delivery_ingestion_missing_delivery_id);

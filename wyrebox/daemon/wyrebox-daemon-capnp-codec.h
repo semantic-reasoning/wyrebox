@@ -1,7 +1,9 @@
 #pragma once
 
 #include "wyrebox-build-config.h"
+#include "wyrebox-daemon-delivery-ingestion-request.h"
 #include "wyrebox-daemon-peer-credentials.h"
+#include "wyrebox-daemon-request-identity.h"
 #include "wyrebox-daemon-response-frame.h"
 #include "wyrebox-daemon-request-router.h"
 
@@ -24,6 +26,12 @@ gboolean wyrebox_daemon_capnp_codec_decode_request_frame (
 
 GBytes *wyrebox_daemon_capnp_codec_encode_response_frame (
     const WyreboxDaemonResponseFrame *response_frame,
+    gpointer user_data,
+    GError **error);
+
+GBytes *wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
+    const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDeliveryIngestionRequest *request,
     gpointer user_data,
     GError **error);
 
