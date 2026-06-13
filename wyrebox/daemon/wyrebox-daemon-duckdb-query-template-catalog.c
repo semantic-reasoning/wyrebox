@@ -8,6 +8,7 @@ static const char *const derived_view_uid_map_parameters[] =
 static const char *const message_by_id_parameters[] = { "message_id", NULL };
 static const char *const messages_by_from_addr_parameters[] =
     { "from_addr", NULL };
+static const char *const messages_by_subject_parameters[] = { "subject", NULL };
 
 static const WyreboxDaemonDuckDBQueryTemplateDescriptor catalog[] = {
   {
@@ -38,6 +39,13 @@ static const WyreboxDaemonDuckDBQueryTemplateDescriptor catalog[] = {
         "stream-chunk.duckdb-template.messages-by-from-addr.v1",
         1,
       messages_by_from_addr_parameters},
+  {
+        "messages.by_subject.v1",
+        "messages by subject",
+        "account_id",
+        "stream-chunk.duckdb-template.messages-by-subject.v1",
+        1,
+      messages_by_subject_parameters},
 };
 
 static gboolean
