@@ -118,6 +118,14 @@ daemon_wirelog_predicate_query_dispatcher_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+if wirelog_runtime_found
+  daemon_wirelog_predicate_query_service_wirelog_test = executable(
+    'test-daemon-wirelog-predicate-query-service-wirelog',
+    'test-daemon-wirelog-predicate-query-service-wirelog.c',
+    dependencies: [wyrebox_dep],
+  )
+endif
+
 daemon_duckdb_query_template_request_test = executable(
   'test-daemon-duckdb-query-template-request',
   'test-daemon-duckdb-query-template-request.c',
@@ -281,6 +289,10 @@ test('daemon wirelog predicate query catalog',
   daemon_wirelog_predicate_query_catalog_test)
 test('daemon wirelog predicate query dispatcher',
   daemon_wirelog_predicate_query_dispatcher_test)
+if wirelog_runtime_found
+  test('daemon wirelog predicate query service wirelog',
+    daemon_wirelog_predicate_query_service_wirelog_test)
+endif
 test('daemon duckdb query template request',
   daemon_duckdb_query_template_request_test)
 test('daemon duckdb query template catalog',

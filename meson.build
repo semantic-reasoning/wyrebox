@@ -178,56 +178,45 @@ endif
 summary('duckdb', duckdb_summary, section: 'Dependencies')
 
 wirelog_runtime_option = get_option('wirelog_runtime')
-wirelog_dep = dependency('wirelog', required: wirelog_runtime_option)
-wirelog_runtime_found = wirelog_dep.found()
-if wirelog_runtime_found
-  wirelog_required_symbols = [
-    'wirelog_parse_string',
-    'wirelog_program_free',
-    'wirelog_executor_create',
-    'wirelog_executor_free',
-    'wirelog_evaluate',
-    'wirelog_result_relation_cardinality',
-    'wirelog_result_write_csv',
-    'wirelog_result_free',
-    'wirelog_easy_open',
-    'wirelog_easy_close',
-    'wirelog_easy_intern',
-    'wirelog_easy_snapshot',
-  ]
-  wirelog_missing_symbols = []
-  foreach wirelog_symbol : wirelog_required_symbols
-    if not cc.has_function(
-      wirelog_symbol,
-      prefix: '#include <wirelog/wirelog.h>',
-      dependencies: wirelog_dep,
-    )
-      wirelog_missing_symbols += [wirelog_symbol]
-    endif
-  endforeach
-
-  if wirelog_missing_symbols.length() > 0
-    wirelog_missing_symbols_text = ', '.join(wirelog_missing_symbols)
-    if wirelog_runtime_option.enabled()
-      error('Wirelog runtime dependency is missing required public API ' +
-        'symbols: ' + wirelog_missing_symbols_text)
-    endif
-
-    wirelog_dep = disabler()
-    wirelog_runtime_found = false
-    wirelog_runtime_summary = (
-      'found but missing required public API symbols (' +
-      wirelog_missing_symbols_text +
-      '); optional runtime skipped'
-    )
-  else
-    wirelog_runtime_summary = 'enabled via pkg-config'
-  endif
-elif wirelog_runtime_option.disabled()
-  wirelog_runtime_summary = 'disabled'
-else
-  wirelog_runtime_summary = 'not found; optional smoke test skipped'
+if wirelog_runtime_option.disabled()
+  error('Wirelog runtime is required; ' +
+    '-Dwirelog_runtime=disabled is not supported')
 endif
+
+wirelog_dep = dependency('wirelog', required: true)
+wirelog_runtime_found = true
+wirelog_required_symbols = [
+  'wirelog_parse_string',
+  'wirelog_program_free',
+  'wirelog_executor_create',
+  'wirelog_executor_free',
+  'wirelog_evaluate',
+  'wirelog_result_relation_cardinality',
+  'wirelog_result_write_csv',
+  'wirelog_result_free',
+  'wirelog_easy_open',
+  'wirelog_easy_close',
+  'wirelog_easy_intern',
+  'wirelog_easy_snapshot',
+]
+wirelog_missing_symbols = []
+foreach wirelog_symbol : wirelog_required_symbols
+  if not cc.has_function(
+    wirelog_symbol,
+    prefix: '#include <wirelog/wirelog.h>',
+    dependencies: wirelog_dep,
+  )
+    wirelog_missing_symbols += [wirelog_symbol]
+  endif
+endforeach
+
+if wirelog_missing_symbols.length() > 0
+  wirelog_missing_symbols_text = ', '.join(wirelog_missing_symbols)
+  error('Wirelog runtime dependency is missing required public API symbols: ' +
+    wirelog_missing_symbols_text)
+endif
+
+wirelog_runtime_summary = 'required via pkg-config'
 
 summary('wirelog runtime', wirelog_runtime_summary, section: 'Dependencies')
 

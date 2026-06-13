@@ -32,6 +32,12 @@ wyrebox_daemon_wirelog_predicate_query_service_new (
     gpointer user_data,
     GDestroyNotify user_data_destroy);
 
+WyreboxDaemonWirelogPredicateQueryService *
+wyrebox_daemon_wirelog_predicate_query_service_new_wirelog (
+    const char *rules_source,
+    const char *journal_root_dir,
+    GError **error);
+
 gboolean wyrebox_daemon_wirelog_predicate_query_service_handle_identity (
     WyreboxDaemonWirelogPredicateQueryService *self,
     const WyreboxDaemonRequestIdentity *identity,
