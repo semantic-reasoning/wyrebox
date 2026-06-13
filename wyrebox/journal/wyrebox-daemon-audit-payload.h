@@ -6,11 +6,13 @@ typedef enum
 {
   WYREBOX_DAEMON_AUDIT_OPERATION_SINGLE_FACT_MUTATION,
   WYREBOX_DAEMON_AUDIT_OPERATION_FACT_BATCH_IMPORT,
+  WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE,
 } WyreboxDaemonAuditOperation;
 
 typedef enum
 {
   WYREBOX_DAEMON_AUDIT_OUTCOME_SUCCESS,
+  WYREBOX_DAEMON_AUDIT_OUTCOME_FAILURE,
 } WyreboxDaemonAuditOutcome;
 
 typedef struct
@@ -27,6 +29,12 @@ typedef struct
   char *predicate_id;
   guint64 final_journal_offset;
   guint64 final_journal_sequence;
+  char *query_id;
+  char *template_id;
+  char *error_domain;
+  gint error_code;
+  char *error_class;
+  char *error_message;
 } WyreboxDaemonAuditPayload;
 
 /* *INDENT-OFF* */
