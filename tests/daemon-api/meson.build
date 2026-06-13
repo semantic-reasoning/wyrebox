@@ -252,6 +252,12 @@ daemon_frame_io_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_uds_client_test = executable(
+  'test-daemon-uds-client',
+  'test-daemon-uds-client.c',
+  dependencies: [wyrebox_dep],
+)
+
 if capnp_serialization_found
   daemon_api_capnp_smoke_test = executable(
     'test-daemon-api-capnp-smoke',
@@ -347,6 +353,7 @@ test('daemon connection session', daemon_connection_session_test)
 test('daemon connection server', daemon_connection_server_test)
 test('daemon request adapter', daemon_request_adapter_test)
 test('daemon frame io', daemon_frame_io_test)
+test('daemon uds client', daemon_uds_client_test)
 if capnp_serialization_found
   test('daemon api capnp smoke', daemon_api_capnp_smoke_test)
   test('daemon capnp codec', daemon_api_capnp_codec_test)
