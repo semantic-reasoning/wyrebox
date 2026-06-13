@@ -700,6 +700,103 @@ materializer_append_stale_hide_changes (WyreboxDerivedViewMaterializer *self,
 }
 
 static gboolean
+    materializer_append_other_rule_hide_changes
+    (WyreboxDerivedViewMaterializer * self, const gchar * account_id,
+    const gchar * view_id, const gchar * current_rule_version_hash,
+    guint64 materialized_at_unix_us, GPtrArray * changes, GError ** error)
+{
+  g_auto (duckdb_prepared_statement) statement = NULL;
+  g_auto (duckdb_result) result = { 0 };
+  idx_t row_count = 0;
+
+  if (changes == NULL)
+    return TRUE;
+
+  if (!materializer_prepare (self,
+          "SELECT membership_id, message_id, rule_version_hash, uid "
+          "FROM derived_view_memberships "
+          "WHERE account_id = ? AND view_id = ? "
+          "AND rule_version_hash <> ? AND is_visible = TRUE "
+          "ORDER BY rule_version_hash, uid;", &statement, error) ||
+      !bind_varchar (statement, 1, account_id, error) ||
+      !bind_varchar (statement, 2, view_id, error) ||
+      !bind_varchar (statement, 3, current_rule_version_hash, error))
+    return FALSE;
+
+  if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB derived view materializer rule cleanup select failed: %s",
+        duckdb_result_error (&result) != NULL ?
+        duckdb_result_error (&result) : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  if (duckdb_column_count (&result) != 4) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "DuckDB derived view materializer rule cleanup select returned "
+        "malformed data");
+    return FALSE;
+  }
+
+  row_count = duckdb_row_count (&result);
+  for (idx_t row = 0; row < row_count; row++) {
+    char *membership_id = NULL;
+    char *message_id = NULL;
+    char *rule_version_hash = NULL;
+    guint64 uid = 0;
+
+    if (duckdb_value_is_null (&result, 0, row) ||
+        duckdb_value_is_null (&result, 1, row) ||
+        duckdb_value_is_null (&result, 2, row) ||
+        duckdb_value_is_null (&result, 3, row)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "DuckDB derived view materializer rule cleanup row is malformed");
+      return FALSE;
+    }
+
+    membership_id = duckdb_value_varchar (&result, 0, row);
+    message_id = duckdb_value_varchar (&result, 1, row);
+    rule_version_hash = duckdb_value_varchar (&result, 2, row);
+    uid = (guint64) duckdb_value_uint64 (&result, 3, row);
+
+    append_membership_change (changes, account_id, view_id, message_id,
+        membership_id, rule_version_hash, uid, FALSE, materialized_at_unix_us);
+
+    duckdb_free (membership_id);
+    duckdb_free (message_id);
+    duckdb_free (rule_version_hash);
+  }
+
+  return TRUE;
+}
+
+static gboolean
+materializer_hide_other_rule_versions (WyreboxDerivedViewMaterializer *self,
+    const gchar *account_id, const gchar *view_id,
+    const gchar *current_rule_version_hash, guint64 materialized_at_unix_us,
+    GError **error)
+{
+  g_auto (duckdb_prepared_statement) statement = NULL;
+
+  return materializer_prepare (self,
+      "UPDATE derived_view_memberships "
+      "SET is_visible = FALSE, materialized_at_unix_us = ? "
+      "WHERE account_id = ? AND view_id = ? "
+      "AND rule_version_hash <> ? AND is_visible = TRUE;", &statement, error)
+      && bind_uint64 (statement, 1, materialized_at_unix_us, error)
+      && bind_varchar (statement, 2, account_id, error)
+      && bind_varchar (statement, 3, view_id, error)
+      && bind_varchar (statement, 4, current_rule_version_hash, error)
+      && materializer_execute_prepared (statement, error);
+}
+
+static gboolean
 materializer_collect_hidden_message_ids (WyreboxDerivedViewMaterializer *self,
     const gchar *account_id, const gchar *view_id,
     const gchar *rule_version_hash, GHashTable *hidden_message_ids,
@@ -1202,13 +1299,13 @@ gboolean
       materialized_at_unix_us, memberships, NULL, error);
 }
 
-gboolean
-    wyrebox_derived_view_materializer_refresh_memberships_with_changes
-    (WyreboxDerivedViewMaterializer * self, const gchar * account_id,
-    const gchar * view_id, const gchar * imap_name,
-    const gchar * definition_ref, const gchar * rule_version_hash,
-    guint64 materialized_at_unix_us, GPtrArray * memberships,
-    GPtrArray ** out_changes, GError ** error)
+static gboolean
+materializer_refresh_memberships_with_changes (WyreboxDerivedViewMaterializer
+    *self, const gchar *account_id, const gchar *view_id,
+    const gchar *imap_name, const gchar *definition_ref,
+    const gchar *rule_version_hash, guint64 materialized_at_unix_us,
+    GPtrArray *memberships, gboolean hide_other_rule_versions,
+    GPtrArray **out_changes, GError **error)
 {
   guint64 uidnext = 0;
   g_autoptr (GPtrArray) changes = NULL;
@@ -1277,6 +1374,13 @@ gboolean
   if (!materializer_update_uidnext (self, account_id, view_id, uidnext, error))
     goto fail;
 
+  if (hide_other_rule_versions &&
+      (!materializer_append_other_rule_hide_changes (self, account_id, view_id,
+              rule_version_hash, materialized_at_unix_us, changes, error) ||
+          !materializer_hide_other_rule_versions (self, account_id, view_id,
+              rule_version_hash, materialized_at_unix_us, error)))
+    goto fail;
+
   if (!materializer_query (self, "COMMIT;", error))
     goto fail;
 
@@ -1291,6 +1395,19 @@ fail:
 }
 
 gboolean
+    wyrebox_derived_view_materializer_refresh_memberships_with_changes
+    (WyreboxDerivedViewMaterializer * self, const gchar * account_id,
+    const gchar * view_id, const gchar * imap_name,
+    const gchar * definition_ref, const gchar * rule_version_hash,
+    guint64 materialized_at_unix_us, GPtrArray * memberships,
+    GPtrArray ** out_changes, GError ** error)
+{
+  return materializer_refresh_memberships_with_changes (self, account_id,
+      view_id, imap_name, definition_ref, rule_version_hash,
+      materialized_at_unix_us, memberships, FALSE, out_changes, error);
+}
+
+gboolean
     wyrebox_derived_view_materializer_refresh_memberships
     (WyreboxDerivedViewMaterializer * self, const gchar * account_id,
     const gchar * view_id, const gchar * imap_name,
@@ -1300,4 +1417,17 @@ gboolean
   return wyrebox_derived_view_materializer_refresh_memberships_with_changes
       (self, account_id, view_id, imap_name, definition_ref,
       rule_version_hash, materialized_at_unix_us, memberships, NULL, error);
+}
+
+gboolean
+    wyrebox_derived_view_materializer_refresh_current_rule_version_with_changes
+    (WyreboxDerivedViewMaterializer * self, const gchar * account_id,
+    const gchar * view_id, const gchar * imap_name,
+    const gchar * definition_ref, const gchar * rule_version_hash,
+    guint64 materialized_at_unix_us, GPtrArray * memberships,
+    GPtrArray ** out_changes, GError ** error)
+{
+  return materializer_refresh_memberships_with_changes (self, account_id,
+      view_id, imap_name, definition_ref, rule_version_hash,
+      materialized_at_unix_us, memberships, TRUE, out_changes, error);
 }

@@ -1,6 +1,7 @@
 #include "wyrebox-derived-view-materializer-wirelog.h"
 #include "wyrebox-schema-metadata-store.h"
 #include "wyrebox-schema-migration.h"
+#include "wyrebox-wirelog-rule-version.h"
 
 #include <duckdb.h>
 #include <gio/gio.h>
@@ -188,10 +189,8 @@ refresh_from_facts (const gchar *path,
   return
       wyrebox_derived_view_materializer_refresh_from_rules_and_facts_with_changes
       (materializer, "account-1", "view-project-alpha", "Project Alpha",
-      "wirelog:project-alpha",
-      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      1000, membership_rules, facts, "show_in_virtual_folder", out_changes,
-      error);
+      "wirelog:project-alpha", 1000, membership_rules, facts,
+      "show_in_virtual_folder", out_changes, error);
 }
 
 static guint64
@@ -208,6 +207,29 @@ query_membership_count (const gchar *path, const gchar *where_clause)
   close_duckdb_fixture (&fixture);
 
   return count;
+}
+
+static guint64
+query_membership_count_for_hash (const gchar *path,
+    const gchar *message_id, const gchar *rule_hash)
+{
+  g_autofree gchar *where_clause = NULL;
+
+  where_clause = g_strdup_printf ("message_id = '%s' "
+      "AND rule_version_hash = '%s'", message_id, rule_hash);
+  return query_membership_count (path, where_clause);
+}
+
+static guint64
+query_membership_count_for_hash_visible (const gchar *path,
+    const gchar *message_id, const gchar *rule_hash, gboolean is_visible)
+{
+  g_autofree gchar *where_clause = NULL;
+
+  where_clause = g_strdup_printf ("message_id = '%s' "
+      "AND rule_version_hash = '%s' AND is_visible = %s", message_id,
+      rule_hash, is_visible ? "TRUE" : "FALSE");
+  return query_membership_count (path, where_clause);
 }
 
 static guint64
@@ -244,6 +266,33 @@ query_uidnext (const gchar *path)
   return uidnext;
 }
 
+static gchar *
+query_rule_hash_for_message (const gchar *path, const gchar *message_id)
+{
+  TestDuckdbFixture fixture = { 0 };
+  g_autofree gchar *sql = NULL;
+  g_auto (duckdb_result) result = { 0 };
+  gchar *duckdb_value = NULL;
+  gchar *hash = NULL;
+
+  open_duckdb_fixture (path, &fixture);
+  sql = g_strdup_printf ("SELECT rule_version_hash "
+      "FROM derived_view_memberships "
+      "WHERE view_id = 'view-project-alpha' AND message_id = '%s' "
+      "ORDER BY uid LIMIT 1;", message_id);
+  g_assert_cmpint (duckdb_query (fixture.connection, sql, &result), ==,
+      DuckDBSuccess);
+  g_assert_cmpuint (duckdb_column_count (&result), ==, 1);
+  g_assert_cmpuint (duckdb_row_count (&result), ==, 1);
+  g_assert_false (duckdb_value_is_null (&result, 0, 0));
+  duckdb_value = duckdb_value_varchar (&result, 0, 0);
+  hash = g_strdup (duckdb_value);
+  duckdb_free (duckdb_value);
+  close_duckdb_fixture (&fixture);
+
+  return hash;
+}
+
 static const WyreboxDerivedViewMembershipChange *
 change_at (GPtrArray *changes, guint index)
 {
@@ -257,6 +306,8 @@ static void
 test_bridge_refreshes_sorted_memberships (void)
 {
   g_autofree gchar *path = create_catalog ();
+  g_autofree gchar *expected_hash = NULL;
+  g_autofree gchar *stored_hash = NULL;
   g_autoptr (GPtrArray) facts = new_fact_array ();
   g_autoptr (GPtrArray) changes = NULL;
   g_autoptr (GError) error = NULL;
@@ -264,6 +315,9 @@ test_bridge_refreshes_sorted_memberships (void)
   seed_messages (path);
   add_project_fact (facts, "msg-2", "view-project-alpha");
   add_project_fact (facts, "msg-1", "view-project-alpha");
+  expected_hash = wyrebox_wirelog_rule_version_hash (membership_rules, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (expected_hash);
 
   g_assert_true (refresh_from_facts (path, facts, &changes, &error));
   g_assert_no_error (error);
@@ -277,6 +331,10 @@ test_bridge_refreshes_sorted_memberships (void)
   g_assert_cmpuint (query_uid_for_message (path, "msg-2"), ==, 2);
   g_assert_cmpuint (query_membership_count (path,
           "view_id = 'view-project-alpha' AND is_visible = TRUE"), ==, 2);
+  stored_hash = query_rule_hash_for_message (path, "msg-1");
+  g_assert_cmpstr (stored_hash, ==, expected_hash);
+  g_assert_cmpstr (change_at (changes, 0)->rule_version_hash, ==,
+      expected_hash);
 
   remove_catalog (path);
 }
@@ -346,10 +404,8 @@ test_bridge_unknown_rule_symbol_leaves_state_unchanged (void)
   g_assert_false
       (wyrebox_derived_view_materializer_refresh_from_rules_and_facts_with_changes
       (materializer, "account-1", "view-project-alpha", "Project Alpha",
-          "wirelog:project-alpha",
-          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          1000, unknown_symbol_rules, invalid, "show_in_virtual_folder",
-          &changes, &error));
+          "wirelog:project-alpha", 1000, unknown_symbol_rules, invalid,
+          "show_in_virtual_folder", &changes, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
   g_assert_null (changes);
   g_clear_object (&materializer);
@@ -359,6 +415,108 @@ test_bridge_unknown_rule_symbol_leaves_state_unchanged (void)
   g_assert_cmpuint (query_membership_count (path,
           "message_id = 'msg-3'"), ==, 0);
   g_assert_cmpuint (query_uidnext (path), ==, 3);
+
+  remove_catalog (path);
+}
+
+static void
+test_bridge_changed_rules_use_distinct_hashes (void)
+{
+  const gchar *alternate_rules =
+      ".decl project_keyword(message_id: symbol, view_id: symbol)\n"
+      ".decl show_in_virtual_folder(view_id: symbol, message_id: symbol)\n"
+      "show_in_virtual_folder(view_id, message_id) :- "
+      "project_keyword(message_id, view_id).\n\n";
+  g_autofree gchar *path = create_catalog ();
+  g_autofree gchar *first_hash = NULL;
+  g_autofree gchar *second_hash = NULL;
+  g_autoptr (GPtrArray) facts = new_fact_array ();
+  g_autoptr (GPtrArray) changes = NULL;
+  g_autoptr (WyreboxDerivedViewMaterializer) materializer = NULL;
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  add_project_fact (facts, "msg-2", "view-project-alpha");
+  add_project_fact (facts, "msg-1", "view-project-alpha");
+  first_hash = wyrebox_wirelog_rule_version_hash (membership_rules, &error);
+  g_assert_no_error (error);
+  second_hash = wyrebox_wirelog_rule_version_hash (alternate_rules, &error);
+  g_assert_no_error (error);
+  g_assert_cmpstr (first_hash, !=, second_hash);
+
+  g_assert_true (refresh_from_facts (path, facts, &changes, &error));
+  g_assert_no_error (error);
+  g_clear_pointer (&changes, g_ptr_array_unref);
+
+  materializer = wyrebox_derived_view_materializer_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (materializer);
+  g_assert_true
+      (wyrebox_derived_view_materializer_refresh_from_rules_and_facts_with_changes
+      (materializer, "account-1", "view-project-alpha", "Project Alpha",
+          "wirelog:project-alpha", 1000, alternate_rules, facts,
+          "show_in_virtual_folder", &changes, &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (changes);
+  g_assert_cmpuint (changes->len, ==, 4);
+  g_assert_cmpstr (change_at (changes, 0)->message_id, ==, "msg-1");
+  g_assert_cmpstr (change_at (changes, 0)->rule_version_hash, ==, second_hash);
+  g_assert_true (change_at (changes, 0)->is_visible);
+  g_assert_cmpstr (change_at (changes, 1)->message_id, ==, "msg-2");
+  g_assert_cmpstr (change_at (changes, 1)->rule_version_hash, ==, second_hash);
+  g_assert_true (change_at (changes, 1)->is_visible);
+  g_assert_cmpstr (change_at (changes, 2)->message_id, ==, "msg-1");
+  g_assert_cmpstr (change_at (changes, 2)->rule_version_hash, ==, first_hash);
+  g_assert_false (change_at (changes, 2)->is_visible);
+  g_assert_cmpstr (change_at (changes, 3)->message_id, ==, "msg-2");
+  g_assert_cmpstr (change_at (changes, 3)->rule_version_hash, ==, first_hash);
+  g_assert_false (change_at (changes, 3)->is_visible);
+  g_clear_object (&materializer);
+
+  g_assert_cmpuint (query_membership_count (path,
+          "message_id = 'msg-1'"), ==, 2);
+  g_assert_cmpuint (query_membership_count_for_hash (path, "msg-1",
+          first_hash), ==, 1);
+  g_assert_cmpuint (query_membership_count_for_hash (path, "msg-1",
+          second_hash), ==, 1);
+  g_assert_cmpuint (query_membership_count_for_hash_visible (path, "msg-1",
+          first_hash, FALSE), ==, 1);
+  g_assert_cmpuint (query_membership_count_for_hash_visible (path, "msg-1",
+          first_hash, TRUE), ==, 0);
+  g_assert_cmpuint (query_membership_count_for_hash_visible (path, "msg-1",
+          second_hash, TRUE), ==, 1);
+  g_assert_cmpuint (query_membership_count (path,
+          "view_id = 'view-project-alpha' AND is_visible = TRUE"), ==, 2);
+
+  remove_catalog (path);
+}
+
+static void
+test_bridge_empty_rules_fail_before_materialization (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autoptr (GPtrArray) facts = new_fact_array ();
+  g_autoptr (GPtrArray) changes = NULL;
+  g_autoptr (WyreboxDerivedViewMaterializer) materializer = NULL;
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  add_project_fact (facts, "msg-1", "view-project-alpha");
+
+  materializer = wyrebox_derived_view_materializer_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (materializer);
+  g_assert_false
+      (wyrebox_derived_view_materializer_refresh_from_rules_and_facts_with_changes
+      (materializer, "account-1", "view-project-alpha", "Project Alpha",
+          "wirelog:project-alpha", 1000, "", facts, "show_in_virtual_folder",
+          &changes, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (changes);
+  g_clear_object (&materializer);
+
+  g_assert_cmpuint (query_membership_count (path,
+          "view_id = 'view-project-alpha'"), ==, 0);
 
   remove_catalog (path);
 }
@@ -375,6 +533,10 @@ main (int argc, char **argv)
   g_test_add_func
       ("/wirelog/derived-view-materializer-bridge/unknown-symbol-unchanged",
       test_bridge_unknown_rule_symbol_leaves_state_unchanged);
+  g_test_add_func ("/wirelog/derived-view-materializer-bridge/rule-hash-change",
+      test_bridge_changed_rules_use_distinct_hashes);
+  g_test_add_func ("/wirelog/derived-view-materializer-bridge/empty-rules",
+      test_bridge_empty_rules_fail_before_materialization);
 
   return g_test_run ();
 }

@@ -101,6 +101,18 @@ gboolean wyrebox_derived_view_materializer_refresh_memberships_with_changes (
     GPtrArray **out_changes,
     GError **error);
 
+gboolean wyrebox_derived_view_materializer_refresh_current_rule_version_with_changes (
+    WyreboxDerivedViewMaterializer *self,
+    const gchar *account_id,
+    const gchar *view_id,
+    const gchar *imap_name,
+    const gchar *definition_ref,
+    const gchar *rule_version_hash,
+    guint64 materialized_at_unix_us,
+    GPtrArray *memberships,
+    GPtrArray **out_changes,
+    GError **error);
+
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDerivedViewMembershipChange,
     wyrebox_derived_view_membership_change_clear)
 
