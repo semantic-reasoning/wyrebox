@@ -463,7 +463,9 @@ static gboolean
       operation ==
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES
       || operation ==
-      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE)
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE
+      || operation ==
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS)
     return TRUE;
 
   g_set_error (error,
@@ -615,6 +617,24 @@ static gboolean
 }
 
 static gboolean
+duckdb_store_create_derived_view_memberships (WyreboxSchemaMetadataStoreDuckdb
+    *self, GError **error)
+{
+  return duckdb_store_query (self,
+      "CREATE TABLE IF NOT EXISTS derived_view_memberships ("
+      "membership_id VARCHAR PRIMARY KEY,"
+      "account_id VARCHAR NOT NULL,"
+      "view_id VARCHAR NOT NULL,"
+      "message_id VARCHAR NOT NULL,"
+      "uid UBIGINT NOT NULL CHECK(uid >= 1),"
+      "is_visible BOOLEAN NOT NULL,"
+      "rule_version_hash VARCHAR NOT NULL,"
+      "materialized_at_unix_us UBIGINT NOT NULL,"
+      "UNIQUE(view_id, uid),"
+      "UNIQUE(view_id, message_id, rule_version_hash)" ");", error);
+}
+
+static gboolean
 duckdb_store_create_bootstrap_catalog (WyreboxSchemaMetadataStoreDuckdb *self,
     GError **error)
 {
@@ -662,6 +682,7 @@ duckdb_store_create_bootstrap_catalog (WyreboxSchemaMetadataStoreDuckdb *self,
       "is_selectable BOOLEAN NOT NULL,"
       "is_visible BOOLEAN NOT NULL,"
       "UNIQUE(account_id, imap_name)" ");", error)
+      && duckdb_store_create_derived_view_memberships (self, error)
       && duckdb_store_query (self,
       "CREATE TABLE IF NOT EXISTS mailbox_uid_state ("
       "account_id VARCHAR NOT NULL,"
@@ -912,6 +933,7 @@ static gboolean
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP:
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES:
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE:
+    case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS:
       break;
     default:
       goto unsupported;
@@ -929,7 +951,10 @@ static gboolean
                   error))
           || (operation ==
               WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE
-              && duckdb_store_create_message_header_table (duckdb_store,
+              && duckdb_store_create_message_header_table (duckdb_store, error))
+          || (operation ==
+              WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS
+              && duckdb_store_create_derived_view_memberships (duckdb_store,
                   error))) ||
       !duckdb_store_query (duckdb_store, "COMMIT;", error)) {
     duckdb_store_rollback_quietly (duckdb_store);

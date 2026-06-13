@@ -139,6 +139,16 @@ assert_bootstrap_catalog_schema (const gchar *path)
     {"is_selectable", "BOOLEAN", TRUE},
     {"is_visible", "BOOLEAN", TRUE},
   };
+  static const TestDuckdbBootstrapColumn derived_view_memberships_columns[] = {
+    {"membership_id", "VARCHAR", TRUE},
+    {"account_id", "VARCHAR", TRUE},
+    {"view_id", "VARCHAR", TRUE},
+    {"message_id", "VARCHAR", TRUE},
+    {"uid", "UBIGINT", TRUE},
+    {"is_visible", "BOOLEAN", TRUE},
+    {"rule_version_hash", "VARCHAR", TRUE},
+    {"materialized_at_unix_us", "UBIGINT", TRUE},
+  };
   static const TestDuckdbBootstrapColumn mailbox_uid_state_columns[] = {
     {"account_id", "VARCHAR", TRUE},
     {"namespace_kind", "VARCHAR", TRUE},
@@ -162,6 +172,9 @@ assert_bootstrap_catalog_schema (const gchar *path)
       mailbox_memberships_columns, G_N_ELEMENTS (mailbox_memberships_columns));
   assert_bootstrap_table_schema (connection, "derived_views",
       derived_views_columns, G_N_ELEMENTS (derived_views_columns));
+  assert_bootstrap_table_schema (connection, "derived_view_memberships",
+      derived_view_memberships_columns,
+      G_N_ELEMENTS (derived_view_memberships_columns));
   assert_bootstrap_table_schema (connection, "mailbox_uid_state",
       mailbox_uid_state_columns, G_N_ELEMENTS (mailbox_uid_state_columns));
 
@@ -252,6 +265,69 @@ assert_mailbox_membership_constraints (const gchar *path)
       ") VALUES ("
       "'membership-duplicate-uid', 'account-1', 'mailbox-1', 'message-2', 1, "
       "1005, 2003, 1, TRUE" ");");
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
+}
+
+static void
+assert_derived_view_membership_constraints (const gchar *path)
+{
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  assert_bootstrap_query_succeeds (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-1', 'account-1', 'view-1', 'message-1', 1, TRUE, "
+      "'rule-hash-1', 1000" ");");
+  assert_bootstrap_query_succeeds (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-2', 'account-1', 'view-1', 'message-2', 2, TRUE, "
+      "'rule-hash-1', 1001" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-1', 'account-1', 'view-2', 'message-3', 1, TRUE, "
+      "'rule-hash-1', 1002" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-duplicate-uid', 'account-1', 'view-1', "
+      "'message-3', 1, TRUE, 'rule-hash-1', 1003" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-duplicate-message-rule', 'account-1', 'view-1', "
+      "'message-1', 3, TRUE, 'rule-hash-1', 1004" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-uid-zero', 'account-1', 'view-1', 'message-4', "
+      "0, TRUE, 'rule-hash-1', 1005" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-null-account', NULL, 'view-1', 'message-5', "
+      "4, TRUE, 'rule-hash-1', 1006" ");");
 
   (void) duckdb_disconnect (&connection);
   (void) duckdb_close (&database);
@@ -546,6 +622,22 @@ test_memory_store_accepts_add_message_header_table_migration_operation (void)
 }
 
 static void
+    test_memory_store_accepts_add_derived_view_memberships_migration_operation
+    (void)
+{
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+
+  store = wyrebox_schema_metadata_store_new_memory ();
+  g_assert_nonnull (store);
+
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS,
+          3, wyrebox_schema_migration_get_current_schema_version (), &error));
+  g_assert_no_error (error);
+}
+
+static void
 test_memory_store_rejects_unknown_migration_operation (void)
 {
   g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
@@ -699,6 +791,7 @@ test_duckdb_store_legacy_bootstrap_creates_catalog_tables (void)
 
   assert_bootstrap_catalog_schema (path);
   assert_mailbox_membership_constraints (path);
+  assert_derived_view_membership_constraints (path);
   assert_message_attribute_tables_missing (path);
   assert_message_header_table_missing (path);
 
@@ -916,6 +1009,9 @@ main (int argc, char **argv)
   g_test_add_func ("/migration/schema-metadata-store/"
       "memory-store-accepts-add-message-header-table-operation",
       test_memory_store_accepts_add_message_header_table_migration_operation);
+  g_test_add_func ("/migration/schema-metadata-store/"
+      "memory-store-accepts-add-derived-view-memberships-operation",
+      test_memory_store_accepts_add_derived_view_memberships_migration_operation);
   g_test_add_func ("/migration/schema-metadata-store/"
       "memory-store-rejects-unknown-operation",
       test_memory_store_rejects_unknown_migration_operation);
