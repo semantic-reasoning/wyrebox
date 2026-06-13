@@ -22,14 +22,14 @@ static struct mail_storage wyrebox_mail_storage_class;
 static void
 wyrebox_dovecot_mailbox_free (struct mailbox *box)
 {
-  (void) box;
+  event_unref (&box->event);
 }
 
 static int
 wyrebox_dovecot_mailbox_open (struct mailbox *box)
 {
   (void) box;
-  return 0;
+  return -1;
 }
 
 static int
@@ -51,6 +51,7 @@ wyrebox_dovecot_mailbox_alloc (struct mail_storage *storage,
 {
   pool_t pool;
   struct wyrebox_dovecot_mailbox *wbox;
+  const char *name;
 
   pool = pool_alloconly_create ("wyrebox mailbox",
       sizeof (struct wyrebox_dovecot_mailbox));
@@ -59,14 +60,20 @@ wyrebox_dovecot_mailbox_alloc (struct mail_storage *storage,
   wbox->mailbox.pool = pool;
   wbox->mailbox.storage = storage;
   wbox->mailbox.list = list;
-  wbox->mailbox.vname = vname;
-  wbox->mailbox.name = vname;
-  wbox->mailbox.event = NULL;
+  wbox->mailbox.vname = p_strdup (pool, vname);
+  name = mailbox_list_get_storage_name (list, vname);
+  if (name == NULL) {
+    name = vname;
+  }
+  wbox->mailbox.name = p_strdup (pool, name);
+  wbox->mailbox.event = event_create (storage->event);
   wbox->mailbox.mail_vfuncs = NULL;
   wbox->mailbox.vlast = NULL;
   wbox->mailbox.v.open = wyrebox_dovecot_mailbox_open;
   wbox->mailbox.v.get_status = wyrebox_dovecot_mailbox_get_status;
   wbox->mailbox.v.free = wyrebox_dovecot_mailbox_free;
+  p_array_init (&wbox->mailbox.search_results, pool, 16);
+  p_array_init (&wbox->mailbox.module_contexts, pool, 5);
 
   (void) flags;
   return &wbox->mailbox;

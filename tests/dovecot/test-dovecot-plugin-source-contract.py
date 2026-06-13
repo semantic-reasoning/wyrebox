@@ -59,6 +59,7 @@ def main() -> None:
     require(r"^#include\s+\"mail-storage.h\"$", text, "mail-storage include")
     require(r"^#include\s+\"mail-storage-private.h\"$", text,
             "mail-storage-private include")
+    require(r"^#include\s+\"lib.h\"$", text, "lib include")
     require(
         r"^#include\s+\"module-dir.h\"$",
         text,
@@ -104,6 +105,12 @@ def main() -> None:
         "mailbox open wrapper",
     )
     require(
+        r"static\s+int\s+wyrebox_dovecot_mailbox_open\s*\(\s*struct\s+"
+        r"mailbox\s+\*box\s*\)\s*\{[\s\S]*?return\s+-1;\s*\}",
+        text,
+        "mailbox open returns controlled failure",
+    )
+    require(
         r"wyrebox_dovecot_mailbox_get_status\s*\(\s*struct\s+mailbox\s+\*box\s*,"
         r"[\s\S]*?struct\s+mailbox_status\s+\*status_r\)",
         text,
@@ -130,13 +137,43 @@ def main() -> None:
         r"->mailbox\.pool\s*=\s*pool;\s*[\s\S]*?"
         r"->mailbox\.storage\s*=\s*storage;\s*[\s\S]*?"
         r"->mailbox\.list\s*=\s*list;\s*[\s\S]*?"
-        r"->mailbox\.vname\s*=\s*vname;\s*[\s\S]*?"
-        r"->mailbox\.name\s*=\s*vname;\s*[\s\S]*?"
-        r"->mailbox\.event\s*=\s*NULL;\s*[\s\S]*?"
+        r"->mailbox\.vname\s*=\s*p_strdup\s*\(\s*pool,\s*vname\s*\);\s*[\s\S]*?"
+        r"->mailbox\.name\s*=\s*p_strdup\s*\(\s*pool,\s*name\s*\);\s*[\s\S]*?"
+        r"->mailbox\.event\s*=\s*event_create\s*\(\s*storage->event\s*\);\s*[\s\S]*?"
         r"->mailbox\.mail_vfuncs\s*=\s*NULL;\s*[\s\S]*?"
         r"->mailbox\.vlast\s*=\s*NULL;",
         text,
         "mailbox allocator sets required base fields",
+    )
+    require(
+        r"mailbox_list_get_storage_name\s*\(",
+        text,
+        "mailbox storage-name helper used",
+    )
+    require(
+        r"p_array_init\s*\(\s*&wbox->mailbox\.search_results,\s*pool,\s*16\s*\);",
+        text,
+        "mailbox search_results initialized",
+    )
+    require(
+        r"p_array_init\s*\(\s*&wbox->mailbox\.module_contexts,\s*pool,\s*5\s*\);",
+        text,
+        "mailbox module_contexts initialized",
+    )
+    require(
+        r"->mailbox\.event\s*=\s*event_create\s*\(\s*storage->event\s*\);",
+        text,
+        "mailbox event initialized with event_create",
+    )
+    forbid(
+        r"->mailbox\.event\s*=\s*NULL;\s*",
+        text,
+        "mailbox event initialized to NULL",
+    )
+    require(
+        r"event_unref\s*\(\s*&box->event\s*\);",
+        text,
+        "mailbox free releases event",
     )
     require(
         r"->mailbox\.v\.open\s*=\s*wyrebox_dovecot_mailbox_open;",
