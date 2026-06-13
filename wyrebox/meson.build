@@ -33,6 +33,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-flag-keyword-update-service.c',
   'daemon/wyrebox-daemon-request-identity.c',
   'daemon/wyrebox-daemon-peer-credentials.c',
+  'daemon/wyrebox-daemon-fact-batch-import-request.c',
   'daemon/wyrebox-daemon-fact-mutation-dispatcher.c',
   'daemon/wyrebox-daemon-fact-mutation-service.c',
   'daemon/wyrebox-daemon-fact-mutation-request.c',

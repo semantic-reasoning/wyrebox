@@ -432,6 +432,148 @@ test_request_router_rejects_missing_fact_mutation_payload (void)
 }
 
 static void
+init_fact_batch_router_mutation (WyreboxDaemonFactMutationRequest *request,
+    WyreboxDaemonFactMutationKind kind)
+{
+  const char *args[] = { "mail-1", NULL };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_fact_mutation_request_init (request,
+          kind, "project_mention", "account-1", args, &error));
+  g_assert_no_error (error);
+}
+
+static void
+test_request_router_routes_fact_batch_import (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-request-router-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxDaemonFactMutationService) service = NULL;
+  g_auto (WyreboxDaemonFactMutationRequest) insert = { 0 };
+  g_auto (WyreboxDaemonFactMutationRequest) retract = { 0 };
+  g_auto (WyreboxDaemonFactBatchImportRequest) batch = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autofree char *expected_marker = NULL;
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+  const WyreboxDaemonFactMutationRequest *entries[] = { &insert, &retract };
+
+  g_assert_nonnull (root);
+  init_fact_batch_router_mutation (&insert,
+      WYREBOX_DAEMON_FACT_MUTATION_INSERT);
+  init_fact_batch_router_mutation (&retract,
+      WYREBOX_DAEMON_FACT_MUTATION_RETRACT);
+  g_assert_true (wyrebox_daemon_fact_batch_import_request_init (&batch,
+          entries, G_N_ELEMENTS (entries), &error));
+  g_assert_no_error (error);
+
+  request_frame.request_id = "request-1";
+  request_frame.caller_identity = "trusted-tool";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "fact-importer";
+  request_frame.correlation_id = "correlation-1";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_BATCH_IMPORT;
+  request_frame.fact_batch_import = &batch;
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  service = wyrebox_daemon_fact_mutation_service_new (writer);
+  g_assert_nonnull (service);
+
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, service, NULL, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+  g_assert_cmpstr (frame.request_id, ==, "request-1");
+  g_assert_cmpstr (frame.correlation_id, ==, "correlation-1");
+  g_assert_cmpuint (frame.success.journal_sequence, ==, 2);
+  expected_marker = g_strdup_printf ("journal:%" G_GUINT64_FORMAT ":2",
+      frame.success.journal_offset);
+  g_assert_cmpstr (frame.success.durable_marker, ==, expected_marker);
+  g_assert_cmpstr (frame.success.summary, ==,
+      "fact_batch_import count=2 scope_id=account-1");
+
+  remove_tree (root);
+}
+
+static void
+test_request_router_rejects_missing_fact_batch_import_payload (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-request-router-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxDaemonFactMutationService) service = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  g_assert_nonnull (root);
+
+  request_frame.request_id = "request-1";
+  request_frame.caller_identity = "trusted-tool";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "fact-importer";
+  request_frame.correlation_id = "correlation-1";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_BATCH_IMPORT;
+  request_frame.fact_batch_import = NULL;
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  service = wyrebox_daemon_fact_mutation_service_new (writer);
+  g_assert_nonnull (service);
+
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, service, NULL, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpstr (frame.request_id, ==, "request-1");
+  g_assert_cmpstr (frame.correlation_id, ==, "correlation-1");
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+
+  assert_journal_is_empty (root);
+  remove_tree (root);
+}
+
+static void
+test_request_router_rejects_missing_fact_batch_import_service (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonFactMutationRequest) insert = { 0 };
+  g_auto (WyreboxDaemonFactBatchImportRequest) batch = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+  const WyreboxDaemonFactMutationRequest *entries[] = { &insert };
+
+  init_fact_batch_router_mutation (&insert,
+      WYREBOX_DAEMON_FACT_MUTATION_INSERT);
+  g_assert_true (wyrebox_daemon_fact_batch_import_request_init (&batch,
+          entries, G_N_ELEMENTS (entries), &error));
+  g_assert_no_error (error);
+
+  request_frame.request_id = "request-1";
+  request_frame.caller_identity = "trusted-tool";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "fact-importer";
+  request_frame.correlation_id = "correlation-1";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_BATCH_IMPORT;
+  request_frame.fact_batch_import = &batch;
+
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpstr (frame.request_id, ==, "request-1");
+  g_assert_cmpstr (frame.correlation_id, ==, "correlation-1");
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+}
+
+static void
 test_request_router_rejects_unsupported_operation_with_error_frame (void)
 {
   g_autofree char *root =
@@ -1508,6 +1650,14 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/request-router/"
       "rejects-missing-fact-mutation-payload",
       test_request_router_rejects_missing_fact_mutation_payload);
+  g_test_add_func ("/daemon-api/request-router/routes-fact-batch-import",
+      test_request_router_routes_fact_batch_import);
+  g_test_add_func ("/daemon-api/request-router/"
+      "rejects-missing-fact-batch-import-payload",
+      test_request_router_rejects_missing_fact_batch_import_payload);
+  g_test_add_func ("/daemon-api/request-router/"
+      "rejects-missing-fact-batch-import-service",
+      test_request_router_rejects_missing_fact_batch_import_service);
   g_test_add_func ("/daemon-api/request-router/"
       "rejects-unsupported-operation-with-error-frame",
       test_request_router_rejects_unsupported_operation_with_error_frame);

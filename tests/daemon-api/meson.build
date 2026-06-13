@@ -58,15 +58,33 @@ daemon_fact_mutation_request_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_fact_batch_import_request_test = executable(
+  'test-daemon-fact-batch-import-request',
+  'test-daemon-fact-batch-import-request.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_fact_mutation_service_test = executable(
   'test-daemon-fact-mutation-service',
   'test-daemon-fact-mutation-service.c',
   dependencies: [wyrebox_dep],
 )
 
+daemon_fact_batch_import_service_test = executable(
+  'test-daemon-fact-batch-import-service',
+  'test-daemon-fact-batch-import-service.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_fact_mutation_dispatcher_test = executable(
   'test-daemon-fact-mutation-dispatcher',
   'test-daemon-fact-mutation-dispatcher.c',
+  dependencies: [wyrebox_dep],
+)
+
+daemon_fact_batch_import_dispatcher_test = executable(
+  'test-daemon-fact-batch-import-dispatcher',
+  'test-daemon-fact-batch-import-dispatcher.c',
   dependencies: [wyrebox_dep],
 )
 
@@ -276,8 +294,14 @@ test('daemon mailbox select request', daemon_mailbox_select_request_test)
 test('daemon mailbox select result', daemon_mailbox_select_result_test)
 test('daemon request router', daemon_request_router_test)
 test('daemon fact mutation request', daemon_fact_mutation_request_test)
+test('daemon fact batch import request',
+  daemon_fact_batch_import_request_test)
 test('daemon fact mutation service', daemon_fact_mutation_service_test)
+test('daemon fact batch import service',
+  daemon_fact_batch_import_service_test)
 test('daemon fact mutation dispatcher', daemon_fact_mutation_dispatcher_test)
+test('daemon fact batch import dispatcher',
+  daemon_fact_batch_import_dispatcher_test)
 test('daemon mailbox select dispatcher', daemon_mailbox_select_dispatcher_test)
 test('daemon message fetch request', daemon_message_fetch_request_test)
 test('daemon message fetch dispatcher', daemon_message_fetch_dispatcher_test)

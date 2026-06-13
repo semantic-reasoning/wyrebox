@@ -23,6 +23,7 @@ typedef enum {
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_SEARCH,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_MUTATION,
+  WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_BATCH_IMPORT,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FLAG_KEYWORD_UPDATE,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE,
@@ -40,6 +41,7 @@ typedef struct
   const WyreboxDaemonMailboxListRequest *mailbox_list;
   const WyreboxDaemonMailboxSelectRequest *mailbox_select;
   const WyreboxDaemonFactMutationRequest *fact_mutation;
+  const WyreboxDaemonFactBatchImportRequest *fact_batch_import;
   const WyreboxDaemonMessageFetchRequest *message_fetch;
   const WyreboxDaemonMessageSearchRequest *message_search;
   const WyreboxDaemonDeliveryIngestionRequest *delivery_ingestion;
