@@ -419,6 +419,59 @@ close_unload_box_and_plugin (struct mail_storage *storage, struct mailbox *box)
 }
 
 static void
+test_registered_storage_keeps_add_list_unwired (void)
+{
+  struct mail_storage *storage_class = NULL;
+
+  storage_class = init_plugin_and_get_storage_class ();
+  g_assert_null (storage_class->v.add_list);
+
+  wyrebox_plugin_deinit ();
+  g_assert_true (wyrebox_dovecot_loader_shim_mail_storage_class_unregister_calls
+      > 0);
+}
+
+static void
+test_mailbox_list_sink_captures_published_entries (void)
+{
+  struct mailbox_list *list = NULL;
+  const struct mailbox_list_sink_entry *entry = NULL;
+
+  list = mailbox_list_sink_alloc ();
+  g_assert_nonnull (list);
+
+  g_assert_true (mailbox_list_sink_publish_entry (list, "INBOX", '/',
+          TRUE, MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, "\\Inbox"));
+  g_assert_true (mailbox_list_sink_publish_entry (list,
+          "Virtual/Projects", '/', FALSE,
+          MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN, NULL));
+
+  g_assert_cmpuint (mailbox_list_sink_get_count (list), ==, 2);
+
+  entry = mailbox_list_sink_get_entry (list, 0);
+  g_assert_nonnull (entry);
+  g_assert_cmpstr (entry->name, ==, "INBOX");
+  g_assert_cmpint (entry->hierarchy_delimiter, ==, '/');
+  g_assert_true (entry->selectable);
+  g_assert_cmpint (entry->child_state, ==,
+      MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN);
+  g_assert_cmpstr (entry->special_use, ==, "\\Inbox");
+
+  entry = mailbox_list_sink_get_entry (list, 1);
+  g_assert_nonnull (entry);
+  g_assert_cmpstr (entry->name, ==, "Virtual/Projects");
+  g_assert_cmpint (entry->hierarchy_delimiter, ==, '/');
+  g_assert_false (entry->selectable);
+  g_assert_cmpint (entry->child_state, ==,
+      MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN);
+  g_assert_null (entry->special_use);
+
+  g_assert_null (mailbox_list_sink_get_entry (list, 2));
+
+  mailbox_list_sink_free (list);
+}
+
+static void
 test_open_and_get_status_after_open (void)
 {
   g_autofree char *socket_root = NULL;
@@ -583,6 +636,10 @@ main (int argc, char **argv)
 {
   g_test_init (&argc, &argv, NULL);
 
+  g_test_add_func ("/dovecot/plugin-mailbox-smoke/storage-add-list-unwired",
+      test_registered_storage_keeps_add_list_unwired);
+  g_test_add_func ("/dovecot/plugin-mailbox-smoke/list-sink-captures-entries",
+      test_mailbox_list_sink_captures_published_entries);
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/open-get-status-after-open",
       test_open_and_get_status_after_open);
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/lazy-status-before-open",
