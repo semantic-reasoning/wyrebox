@@ -5,6 +5,11 @@
 
 #include <stdio.h>
 
+#if defined(WYREBOX_DOVECOT_LOADER_STUB_REGISTRATION)
+extern int wyrebox_dovecot_loader_shim_mail_storage_class_register_calls;
+extern int wyrebox_dovecot_loader_shim_mail_storage_class_unregister_calls;
+#endif
+
 int
 main (int argc, char **argv)
 {
@@ -31,6 +36,20 @@ main (int argc, char **argv)
   module_dir_init (modules);
   module_dir_unload (&modules);
   lib_deinit ();
+
+#if defined(WYREBOX_DOVECOT_LOADER_STUB_REGISTRATION)
+  if (wyrebox_dovecot_loader_shim_mail_storage_class_register_calls == 0) {
+    fprintf (stderr,
+        "expected mail_storage_class_register() to be called by wyrebox plugin init\n");
+    return 1;
+  }
+
+  if (wyrebox_dovecot_loader_shim_mail_storage_class_unregister_calls == 0) {
+    fprintf (stderr,
+        "expected mail_storage_class_unregister() to be called by wyrebox plugin deinit\n");
+    return 1;
+  }
+#endif
 
   return 0;
 }

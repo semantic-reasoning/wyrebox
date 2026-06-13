@@ -218,6 +218,7 @@ dovecot_loader_archive_option = get_option('dovecot_loader_archive')
 dovecot_loader_extra_link_args = get_option('dovecot_loader_extra_link_args')
 have_dovecot_backend = false
 have_dovecot_loader_smoke = false
+dovecot_loader_has_real_storage_registration = false
 dovecot_backend_c_args = []
 dovecot_loader_dep = disabler()
 if dovecot_backend_option.enabled()
@@ -388,12 +389,44 @@ if dovecot_loader_smoke_option.enabled()
     )
   endif
 
-  dovecot_loader_link_args = [
+  check_dovecot_loader_storage_symbols = run_command(
+    python,
+    meson.current_source_dir() / 'tools' / 'check-dovecot-loader-storage-symbols.py',
+    dovecot_loader_archive,
+    check: false,
+  )
+  dovecot_loader_has_real_storage_registration = (
+    check_dovecot_loader_storage_symbols.returncode() == 0
+  )
+
+  if not dovecot_loader_has_real_storage_registration
+    warning(
+      'Dovecot loader archive does not define storage registration symbols: ' +
+      check_dovecot_loader_storage_symbols.stderr().strip(),
+    )
+  endif
+
+  if not dovecot_loader_has_real_storage_registration
+    message(
+      'Dovecot loader archive does not expose storage registration symbols; ' +
+      'loader smoke test will run with explicit registration shim symbols.',
+    )
+  endif
+
+  dovecot_loader_link_args = []
+  if dovecot_loader_has_real_storage_registration
+    dovecot_loader_link_args += [
+      '-Wl,-u,mail_storage_class_register',
+      '-Wl,-u,mail_storage_class_unregister',
+    ]
+  endif
+  dovecot_loader_link_args += [
     dovecot_loader_archive,
   ] + dovecot_loader_extra_link_args
   dovecot_loader_dep = declare_dependency(
     link_args: dovecot_loader_link_args,
   )
+
   dovecot_loader_probe = '''
     #include "config.h"
     #include "lib.h"
@@ -422,15 +455,23 @@ if dovecot_loader_smoke_option.enabled()
     args: dovecot_backend_c_args,
     dependencies: [dovecot_loader_dep],
   )
-    error(
-      'Dovecot loader smoke is enabled but the supplied loader archive could ' +
-      'not be linked. Set -Ddovecot_loader_archive to the Dovecot ' +
-      'src/lib/.libs/liblib.a artifact and add any required system libraries ' +
-      'with -Ddovecot_loader_extra_link_args=...',
-    )
-  endif
+    if dovecot_loader_has_real_storage_registration
+      error(
+        'Dovecot loader smoke is enabled but the supplied loader archive ' +
+        'could not be linked. Set -Ddovecot_loader_archive to the Dovecot ' +
+        'src/lib/.libs/liblib.a artifact and add any required system libraries ' +
+        'with -Ddovecot_loader_extra_link_args=...',
+      )
+    endif
 
-  have_dovecot_loader_smoke = true
+    message(
+      'Dovecot loader smoke is enabled but the supplied loader archive could ' +
+      'not be linked; loader smoke is disabled because registration validation ' +
+      'cannot be executed.',
+    )
+  else
+    have_dovecot_loader_smoke = true
+  endif
 endif
 
 summary(
@@ -441,6 +482,11 @@ summary(
 summary(
   'dovecot loader smoke',
   have_dovecot_loader_smoke ? 'enabled' : 'disabled',
+  section: 'Features',
+)
+summary(
+  'dovecot loader smoke registration',
+  dovecot_loader_has_real_storage_registration ? 'real symbols' : 'shimmed validation only',
   section: 'Features',
 )
 

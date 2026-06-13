@@ -14,6 +14,11 @@ REQUIRED_SYMBOLS = {
     "wyrebox_plugin_version": "D",
 }
 
+FORBIDDEN_DEFINED_SYMBOLS = {
+    "mail_storage_class_register",
+    "mail_storage_class_unregister",
+}
+
 
 def derive_dovecot_module_name(module_path: Path) -> str:
     name = module_path.name
@@ -95,6 +100,21 @@ def assert_required_symbols(module_path: Path) -> None:
         raise AssertionError(f"unexpected exported symbols: {unexpected}")
 
 
+def assert_no_dovecot_host_symbols_defined(module_path: Path) -> None:
+    nm = shutil.which("nm")
+    if nm is None:
+        raise AssertionError("nm is required to verify Dovecot plugin symbols")
+
+    symbols = parse_dynamic_symbols(run_tool(nm, "--defined-only",
+                                             str(module_path)))
+    forbidden = sorted(FORBIDDEN_DEFINED_SYMBOLS & set(symbols))
+    if forbidden:
+        raise AssertionError(
+            "Dovecot plugin must not define host storage symbols: " +
+            ", ".join(forbidden)
+        )
+
+
 def assert_readelf_sees_dynamic_symbols(module_path: Path) -> None:
     readelf = shutil.which("readelf")
     if readelf is None:
@@ -119,6 +139,7 @@ def main() -> None:
         raise AssertionError(f"Dovecot plugin module not found: {module_path}")
 
     assert_required_symbols(module_path)
+    assert_no_dovecot_host_symbols_defined(module_path)
     assert_readelf_sees_dynamic_symbols(module_path)
     print(f"Dovecot plugin symbols verified: {module_path}")
 
