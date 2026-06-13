@@ -19,6 +19,10 @@ enum mailbox_status_items {
   STATUS_UNSEEN = 0x10,
 };
 
+enum mail_error {
+  MAIL_ERROR_NOTPOSSIBLE = 3,
+};
+
 struct mailbox_status {
   unsigned int messages;
   unsigned int uidvalidity;

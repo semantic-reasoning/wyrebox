@@ -28,7 +28,8 @@ wyrebox_dovecot_mailbox_free (struct mailbox *box)
 static int
 wyrebox_dovecot_mailbox_open (struct mailbox *box)
 {
-  (void) box;
+  mail_storage_set_error (box->storage, MAIL_ERROR_NOTPOSSIBLE,
+      "WyreBox mailbox open is not implemented yet");
   return -1;
 }
 

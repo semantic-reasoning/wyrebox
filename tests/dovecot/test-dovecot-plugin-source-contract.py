@@ -106,9 +106,13 @@ def main() -> None:
     )
     require(
         r"static\s+int\s+wyrebox_dovecot_mailbox_open\s*\(\s*struct\s+"
-        r"mailbox\s+\*box\s*\)\s*\{[\s\S]*?return\s+-1;\s*\}",
+        r"mailbox\s+\*box\s*\)\s*\{[\s\S]*?"
+        r"mail_storage_set_error\s*\(\s*box->storage\s*,\s*"
+        r"MAIL_ERROR_NOTPOSSIBLE\s*,[\s\S]*?"
+        r"WyreBox mailbox open is not implemented yet[\s\S]*?"
+        r"return\s+-1;\s*\}",
         text,
-        "mailbox open returns controlled failure",
+        "mailbox open sets controlled failure error",
     )
     require(
         r"wyrebox_dovecot_mailbox_get_status\s*\(\s*struct\s+mailbox\s+\*box\s*,"
