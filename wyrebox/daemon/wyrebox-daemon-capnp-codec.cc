@@ -1483,9 +1483,9 @@ encode_stream_chunk_response (const WyreboxDaemonResponseFrame *response_frame,
     const bool has_query_id =
         chunk->query_id != NULL && *chunk->query_id != '\0';
 
-    if (has_message_id == has_query_id)
+    if (!has_message_id && !has_query_id)
       return set_invalid_argument (error,
-          "stream chunk response requires exactly one of message_id or query_id");
+          "stream chunk response requires message_id or query_id");
 
     if (chunk->bytes != NULL)
       chunk_bytes =

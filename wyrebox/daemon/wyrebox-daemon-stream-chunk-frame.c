@@ -73,11 +73,11 @@ wyrebox_daemon_stream_chunk_frame_init (WyreboxDaemonStreamChunkFrame *frame,
     return FALSE;
   }
 
-  if (has_message_id == has_query_id) {
+  if (!has_message_id && !has_query_id) {
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_ARGUMENT,
-        "stream chunk response requires exactly one of message_id or query_id");
+        "stream chunk response requires message_id or query_id");
     return FALSE;
   }
 
