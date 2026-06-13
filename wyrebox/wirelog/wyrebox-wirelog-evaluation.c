@@ -4,6 +4,11 @@
 
 #include <gio/gio.h>
 
+#include <errno.h>
+#include <unistd.h>
+
+#include <glib/gstdio.h>
+
 #include <wirelog/wirelog.h>
 
 struct _WyreboxWirelogEvaluation
@@ -163,5 +168,89 @@ wyrebox_wirelog_evaluation_get_relation_cardinality (WyreboxWirelogEvaluation
 
   *out_cardinality =
       wirelog_result_relation_cardinality (self->result, relation_name);
+  return TRUE;
+}
+
+gboolean
+wyrebox_wirelog_evaluation_export_relation_csv (WyreboxWirelogEvaluation *self,
+    const char *relation_name, char **out_csv, GError **error)
+{
+  g_autofree char *temp_path = NULL;
+  g_autofree char *contents = NULL;
+  g_autoptr (GError) local_error = NULL;
+  wirelog_error_t wirelog_error = WIRELOG_OK;
+  int fd = -1;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (out_csv == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "Output CSV pointer is required");
+    return FALSE;
+  }
+  *out_csv = NULL;
+
+  if (self == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "Wirelog evaluation is required");
+    return FALSE;
+  }
+
+  if (relation_name == NULL || relation_name[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "Wirelog relation name is required");
+    return FALSE;
+  }
+
+  fd = g_file_open_tmp ("wyrebox-wirelog-relation-XXXXXX.csv",
+      &temp_path, &local_error);
+  if (fd < 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "Failed to create temporary Wirelog CSV export file: %s",
+        local_error != NULL ? local_error->message : "unknown error");
+    return FALSE;
+  }
+
+  if (close (fd) != 0) {
+    int saved_errno = errno;
+
+    (void) g_unlink (temp_path);
+    g_set_error (error,
+        G_IO_ERROR,
+        g_io_error_from_errno (saved_errno),
+        "Failed to close temporary Wirelog CSV export file %s: %s",
+        temp_path, g_strerror (saved_errno));
+    return FALSE;
+  }
+
+  if (!wirelog_result_write_csv (self->result,
+          relation_name, temp_path, &wirelog_error)) {
+    (void) g_unlink (temp_path);
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "Failed to export Wirelog relation '%s' as CSV: %s",
+        relation_name, wirelog_error_name (wirelog_error));
+    return FALSE;
+  }
+
+  if (!g_file_get_contents (temp_path, &contents, NULL, &local_error)) {
+    (void) g_unlink (temp_path);
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "Failed to read Wirelog CSV export file %s: %s",
+        temp_path,
+        local_error != NULL ? local_error->message : "unknown error");
+    return FALSE;
+  }
+
+  (void) g_unlink (temp_path);
+  *out_csv = g_steal_pointer (&contents);
   return TRUE;
 }

@@ -188,6 +188,7 @@ if wirelog_runtime_found
     'wirelog_executor_free',
     'wirelog_evaluate',
     'wirelog_result_relation_cardinality',
+    'wirelog_result_write_csv',
     'wirelog_result_free',
   ]
   wirelog_missing_symbols = []
