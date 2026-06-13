@@ -26,5 +26,11 @@ gboolean wyrebox_wirelog_evaluation_get_relation_cardinality (
     guint64 *out_cardinality,
     GError **error);
 
+gboolean wyrebox_wirelog_evaluation_export_relation_csv (
+    WyreboxWirelogEvaluation *self,
+    const char *relation_name,
+    char **out_csv,
+    GError **error);
+
 G_END_DECLS
 /* *INDENT-ON* */
