@@ -16,6 +16,14 @@ test(
   args: files('test-dovecot-build-contract.py'),
 )
 
+dovecot_daemon_client_test = executable(
+  'test-dovecot-daemon-client',
+  'test-dovecot-daemon-client.c',
+  dependencies: [wyrebox_dep],
+)
+
+test('dovecot daemon client', dovecot_daemon_client_test)
+
 if have_dovecot_backend
   test(
     'dovecot plugin symbols',
