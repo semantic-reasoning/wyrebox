@@ -48,3 +48,34 @@ wyrebox_daemon_fact_mutation_dispatch (WyreboxDaemonFactMutationService
   return init_error_response_from_cause (out_frame,
       identity.request_id, identity.correlation_id, local_error, error);
 }
+
+gboolean
+wyrebox_daemon_fact_batch_import_dispatch (WyreboxDaemonFactMutationService
+    *service, const char *request_id, const char *caller_identity,
+    const char *account_identity, const char *tool_identity,
+    const char *correlation_id,
+    const WyreboxDaemonFactBatchImportRequest *request,
+    WyreboxDaemonResponseFrame *out_frame, GError **error)
+{
+  g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+  g_autoptr (GError) local_error = NULL;
+
+  g_return_val_if_fail (WYREBOX_IS_DAEMON_FACT_MUTATION_SERVICE (service),
+      FALSE);
+  g_return_val_if_fail (request != NULL, FALSE);
+  g_return_val_if_fail (out_frame != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (!wyrebox_daemon_request_identity_init (&identity,
+          request_id,
+          caller_identity,
+          account_identity, tool_identity, correlation_id, error))
+    return FALSE;
+
+  if (wyrebox_daemon_fact_mutation_service_handle_batch_identity (service,
+          &identity, request, out_frame, &local_error))
+    return TRUE;
+
+  return init_error_response_from_cause (out_frame,
+      identity.request_id, identity.correlation_id, local_error, error);
+}

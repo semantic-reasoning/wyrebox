@@ -283,6 +283,42 @@ route_fact_mutation (WyreboxDaemonFactMutationService *service,
 }
 
 static gboolean
+route_fact_batch_import (WyreboxDaemonFactMutationService *service,
+    const WyreboxDaemonDecodedRequestFrame *request_frame,
+    WyreboxDaemonResponseFrame *out_frame, GError **error)
+{
+  g_autoptr (GError) local_error = NULL;
+
+  if (!WYREBOX_IS_DAEMON_FACT_MUTATION_SERVICE (service)) {
+    g_set_error (&local_error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "fact batch import request frame cannot be routed without service");
+    return init_error_response (out_frame,
+        request_frame->request_id, request_frame->correlation_id, local_error,
+        error);
+  }
+
+  if (request_frame->fact_batch_import == NULL) {
+    g_set_error (&local_error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "fact batch import request frame is missing payload");
+    return init_error_response (out_frame,
+        request_frame->request_id, request_frame->correlation_id, local_error,
+        error);
+  }
+
+  return wyrebox_daemon_fact_batch_import_dispatch (service,
+      request_frame->request_id,
+      request_frame->caller_identity,
+      request_frame->account_identity,
+      request_frame->tool_identity,
+      request_frame->correlation_id,
+      request_frame->fact_batch_import, out_frame, error);
+}
+
+static gboolean
 route_mailbox_select (WyreboxDaemonMailboxSelectService *service,
     const WyreboxDaemonDecodedRequestFrame *request_frame,
     WyreboxDaemonResponseFrame *out_frame, GError **error)
@@ -398,6 +434,9 @@ wyrebox_daemon_request_router_route (WyreboxDaemonDeliveryIngestionService
           request_frame, out_frame, error);
     case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_MUTATION:
       return route_fact_mutation (fact_mutation_service, request_frame,
+          out_frame, error);
+    case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_BATCH_IMPORT:
+      return route_fact_batch_import (fact_mutation_service, request_frame,
           out_frame, error);
     case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FLAG_KEYWORD_UPDATE:
       return route_flag_keyword_update (flag_keyword_update_service,

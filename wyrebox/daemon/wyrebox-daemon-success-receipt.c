@@ -16,11 +16,9 @@ wyrebox_daemon_success_receipt_clear (WyreboxDaemonSuccessReceipt *receipt)
 }
 
 gboolean
-wyrebox_daemon_success_receipt_init_delivery_ingestion (
-    WyreboxDaemonSuccessReceipt *receipt,
-    const char *request_id,
-    const WyreboxEmlIngestResult *ingest_result,
-    GError **error)
+    wyrebox_daemon_success_receipt_init_delivery_ingestion
+    (WyreboxDaemonSuccessReceipt * receipt, const char *request_id,
+    const WyreboxEmlIngestResult * ingest_result, GError ** error)
 {
   g_auto (WyreboxDaemonSuccessReceipt) next = { 0 };
 
@@ -126,6 +124,59 @@ wyrebox_daemon_success_receipt_init_fact_mutation (WyreboxDaemonSuccessReceipt
       wyrebox_daemon_fact_mutation_kind_to_wire_name (request->mutation),
       request->predicate_id,
       request->scope_id, count_fact_arguments (request->arguments));
+
+  wyrebox_daemon_success_receipt_clear (receipt);
+  *receipt = next;
+  next.request_id = NULL;
+  next.durable_marker = NULL;
+  next.journal_offset = 0;
+  next.journal_sequence = 0;
+  next.summary = NULL;
+
+  return TRUE;
+}
+
+gboolean
+    wyrebox_daemon_success_receipt_init_fact_batch_import
+    (WyreboxDaemonSuccessReceipt * receipt, const char *request_id,
+    const WyreboxDaemonFactBatchImportRequest * request, guint64 journal_offset,
+    guint64 journal_sequence, GError ** error)
+{
+  guint n_entries = 0;
+  g_auto (WyreboxDaemonSuccessReceipt) next = { 0 };
+
+  g_return_val_if_fail (receipt != NULL, FALSE);
+  g_return_val_if_fail (request != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (request_id == NULL || *request_id == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "fact batch import success requires request_id");
+    return FALSE;
+  }
+
+  if (!wyrebox_daemon_fact_batch_import_request_validate (request, error))
+    return FALSE;
+
+  if (journal_sequence == 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "fact batch import success requires a durable journal sequence");
+    return FALSE;
+  }
+
+  n_entries = wyrebox_daemon_fact_batch_import_request_get_n_entries (request);
+  next.request_id = g_strdup (request_id);
+  next.durable_marker = g_strdup_printf ("journal:%" G_GUINT64_FORMAT ":%"
+      G_GUINT64_FORMAT, journal_offset, journal_sequence);
+  next.journal_offset = journal_offset;
+  next.journal_sequence = journal_sequence;
+  next.summary = g_strdup_printf ("fact_batch_import count=%u scope_id=%s",
+      n_entries, wyrebox_daemon_fact_batch_import_request_get_scope_id
+      (request));
 
   wyrebox_daemon_success_receipt_clear (receipt);
   *receipt = next;
