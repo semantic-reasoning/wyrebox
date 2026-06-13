@@ -196,35 +196,34 @@ append_list_rows (WyreboxDaemonMailboxCatalogDuckDB *catalog,
     WyreboxDaemonMailboxListResult *result, GError **error)
 {
   static const gchar *sql =
-      "SELECT kind, stable_id, imap_name, is_selectable "
-      "FROM ("
+      "WITH visible_mailboxes AS ("
       "SELECT 0 AS sort_kind, 'ordinary' AS kind, mailbox_id AS stable_id, "
       "imap_name, is_selectable FROM mailboxes "
       "WHERE account_id = ? AND is_visible = TRUE "
-      "AND (? = '' OR imap_name = ? OR "
-      "substr(imap_name, 1, length(?) + 1) = ? || '/') "
       "UNION ALL "
       "SELECT 1 AS sort_kind, 'virtual' AS kind, view_id AS stable_id, "
       "imap_name, is_selectable FROM derived_views "
-      "WHERE account_id = ? AND is_visible = TRUE "
-      "AND (? = '' OR imap_name = ? OR "
+      "WHERE account_id = ? AND is_visible = TRUE), "
+      "listed_mailboxes AS ("
+      "SELECT * FROM visible_mailboxes "
+      "WHERE ? = '' OR imap_name = ? OR "
       "substr(imap_name, 1, length(?) + 1) = ? || '/') "
-      ") visible_mailboxes "
+      "SELECT kind, stable_id, imap_name, is_selectable, "
+      "EXISTS (SELECT 1 FROM visible_mailboxes child "
+      "WHERE substr(child.imap_name, 1, length(listed.imap_name) + 1) = "
+      "listed.imap_name || '/') AS has_children "
+      "FROM listed_mailboxes listed "
       "ORDER BY imap_name ASC, sort_kind ASC, stable_id ASC;";
   g_auto (duckdb_prepared_statement) statement = NULL;
   g_auto (duckdb_result) query_result = { 0 };
 
   if (!prepare_statement (catalog, sql, &statement, error) ||
       !bind_varchar (statement, 1, account_id, error) ||
-      !bind_varchar (statement, 2, namespace_prefix, error) ||
+      !bind_varchar (statement, 2, account_id, error) ||
       !bind_varchar (statement, 3, namespace_prefix, error) ||
       !bind_varchar (statement, 4, namespace_prefix, error) ||
       !bind_varchar (statement, 5, namespace_prefix, error) ||
-      !bind_varchar (statement, 6, account_id, error) ||
-      !bind_varchar (statement, 7, namespace_prefix, error) ||
-      !bind_varchar (statement, 8, namespace_prefix, error) ||
-      !bind_varchar (statement, 9, namespace_prefix, error) ||
-      !bind_varchar (statement, 10, namespace_prefix, error) ||
+      !bind_varchar (statement, 6, namespace_prefix, error) ||
       !execute_statement (statement, &query_result, error))
     return FALSE;
 
@@ -233,21 +232,27 @@ append_list_rows (WyreboxDaemonMailboxCatalogDuckDB *catalog,
     g_autofree gchar *mailbox_id = NULL;
     g_autofree gchar *mailbox_name = NULL;
     gboolean is_selectable = FALSE;
+    gboolean has_children = FALSE;
     WyreboxDaemonMailboxListEntryKind kind =
         WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
+    WyreboxDaemonMailboxListChildState child_state =
+        WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN;
 
     if (!read_required_varchar (&query_result, 0, row, &kind_text, error) ||
         !read_required_varchar (&query_result, 1, row, &mailbox_id, error) ||
         !read_required_varchar (&query_result, 2, row, &mailbox_name, error) ||
-        !read_required_boolean (&query_result, 3, row, &is_selectable, error))
+        !read_required_boolean (&query_result, 3, row, &is_selectable, error) ||
+        !read_required_boolean (&query_result, 4, row, &has_children, error))
       return FALSE;
 
     if (g_strcmp0 (kind_text, "virtual") == 0)
       kind = WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL;
+    if (has_children)
+      child_state = WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN;
 
     if (!wyrebox_daemon_mailbox_list_result_append_entry (result,
             kind, mailbox_id, mailbox_name, "/", NULL, is_selectable,
-            WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, error))
+            child_state, error))
       return FALSE;
   }
 
