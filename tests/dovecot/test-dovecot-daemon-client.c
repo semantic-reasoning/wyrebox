@@ -18,6 +18,7 @@
 typedef enum
 {
   FAKE_SERVER_RESPONSE_BYTES,
+  FAKE_SERVER_MAILBOX_LIST_RESPONSE,
   FAKE_SERVER_MAILBOX_SELECT_RESPONSE,
   FAKE_SERVER_MESSAGE_FETCH_RESPONSE,
   FAKE_SERVER_DAEMON_ERROR_RESPONSE,
@@ -51,6 +52,8 @@ typedef struct
   guint64 message_fetch_response_chunk_index;
   gboolean message_fetch_response_end_of_stream;
   gboolean expect_message_fetch_request;
+  gboolean expect_mailbox_list_request;
+  const char *expected_mailbox_list_namespace_prefix;
 } FakeServer;
 
 static void
@@ -87,6 +90,13 @@ make_socket_path (char **out_root)
 }
 
 #endif
+
+static void
+assert_mailbox_list_result_is_cleared (const WyreboxDaemonMailboxListResult
+    *result)
+{
+  g_assert_null (result->entries);
+}
 
 static void
 assert_result_is_cleared (const WyreboxDaemonMailboxSelectResult *result)
@@ -158,6 +168,21 @@ init_stale_result (WyreboxDaemonMailboxSelectResult *result)
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
 
 static void
+init_stale_list_result (WyreboxDaemonMailboxListResult *result)
+{
+  g_autoptr (GError) error = NULL;
+
+  wyrebox_daemon_mailbox_list_result_init_empty (result);
+  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (result,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "stale-id",
+          "stale-name",
+          "/",
+          NULL, TRUE, WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN, &error));
+  g_assert_no_error (error);
+}
+
+static void
 write_truncated_response_frame (GOutputStream *output)
 {
   const guint8 truncated_frame[] = {
@@ -173,6 +198,7 @@ write_truncated_response_frame (GOutputStream *output)
 }
 
 static GBytes *encode_mailbox_select_response (const char *request_id);
+static GBytes *encode_mailbox_list_response (const char *request_id);
 static GBytes *encode_message_fetch_response (const char *request_id,
     const char *message_id,
     const char *query_id,
@@ -205,6 +231,40 @@ assert_decoded_select_request (GBytes *request)
   g_assert_cmpstr (decoded.mailbox_select->account_identity, ==, "account-1");
   g_assert_cmpstr (decoded.mailbox_select->mailbox_id, ==, NULL);
   g_assert_cmpstr (decoded.mailbox_select->mailbox_name, ==, "Projects");
+
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  request_id = g_strdup (decoded.request_id);
+  decoded_state_clear (decoded_state);
+
+  return request_id;
+}
+
+static char *
+assert_decoded_list_request (GBytes *request,
+    const char *expected_namespace_prefix)
+{
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+  char *request_id = NULL;
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+          request, &decoded, &decoded_state, &decoded_state_clear, NULL,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.operation, ==,
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_LIST);
+  g_assert_nonnull (decoded.mailbox_list);
+  g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
+  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.tool_identity, ==, "dovecot-storage");
+  g_assert_nonnull (decoded.request_id);
+  g_assert_cmpstr (decoded.correlation_id, ==, "");
+  g_assert_cmpstr (decoded.mailbox_list->account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.mailbox_list->namespace_prefix, ==,
+      expected_namespace_prefix);
 
   g_assert_nonnull (decoded_state_clear);
   g_assert_nonnull (decoded_state);
@@ -337,7 +397,13 @@ fake_server_thread_main (gpointer user_data)
 
   request = wyrebox_daemon_frame_io_read_payload (input, &error);
   g_assert_no_error (error);
-  if (server->behavior == FAKE_SERVER_UID_MAP_CSV_RESPONSE
+  if (server->behavior == FAKE_SERVER_MAILBOX_LIST_RESPONSE
+      || server->expect_mailbox_list_request) {
+    request_id =
+        assert_decoded_list_request (request,
+        server->expected_mailbox_list_namespace_prefix != NULL
+        ? server->expected_mailbox_list_namespace_prefix : "");
+  } else if (server->behavior == FAKE_SERVER_UID_MAP_CSV_RESPONSE
       || server->behavior == FAKE_SERVER_UID_MAP_UNEXPECTED_SUCCESS_RESPONSE) {
     request_id =
         assert_decoded_uid_map_request (request, expected_mailbox_id,
@@ -363,6 +429,16 @@ fake_server_thread_main (gpointer user_data)
 
   switch (server->behavior) {
     case FAKE_SERVER_RESPONSE_BYTES:
+      g_assert_true (wyrebox_daemon_frame_io_write_payload (output,
+              server->response, server->response_size, &error));
+      g_assert_no_error (error);
+      break;
+    case FAKE_SERVER_MAILBOX_LIST_RESPONSE:
+      response =
+          encode_mailbox_list_response (server->response_request_id_override
+          != NULL ? server->response_request_id_override : request_id);
+      g_assert_nonnull (response);
+      server->response = g_bytes_get_data (response, &server->response_size);
       g_assert_true (wyrebox_daemon_frame_io_write_payload (output,
               server->response, server->response_size, &error));
       g_assert_no_error (error);
@@ -476,6 +552,8 @@ fake_server_start (FakeServer *server,
   server->message_fetch_response_chunk_index = 0;
   server->message_fetch_response_end_of_stream = TRUE;
   server->expect_message_fetch_request = FALSE;
+  server->expect_mailbox_list_request = FALSE;
+  server->expected_mailbox_list_namespace_prefix = "";
   if (response_payload != NULL)
     server->response = g_bytes_get_data (response_payload,
         &server->response_size);
@@ -498,6 +576,44 @@ fake_server_join (FakeServer *server)
     g_thread_join (server->thread);
 
   g_clear_object (&server->listener);
+}
+
+static GBytes *
+encode_mailbox_list_response (const char *request_id)
+{
+  g_auto (WyreboxDaemonMailboxListResult) list = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) response_payload = NULL;
+
+  wyrebox_daemon_mailbox_list_result_init_empty (&list);
+  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&list,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "mailbox-inbox",
+          "INBOX",
+          "/",
+          "\\Inbox",
+          TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&list,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
+          "view-projects",
+          "Projects",
+          "/",
+          NULL,
+          FALSE, WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_response_frame_init_mailbox_list (&frame,
+          request_id, NULL, &list, &error));
+  g_assert_no_error (error);
+
+  response_payload =
+      wyrebox_daemon_capnp_codec_encode_response_frame (&frame, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (response_payload);
+
+  return g_steal_pointer (&response_payload);
 }
 
 static GBytes *
@@ -673,6 +789,144 @@ test_dovecot_daemon_client_sends_select_and_returns_copy (void)
   g_assert_cmpuint (result.uid_next, ==, 42);
   g_assert_cmpuint (result.message_count, ==, 7);
 
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_lists_mailboxes_and_returns_copy (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  FakeServer server = { 0 };
+  const WyreboxDaemonMailboxListEntry *entry = NULL;
+
+  fake_server_start (&server, socket_path, FAKE_SERVER_MAILBOX_LIST_RESPONSE,
+      NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  server.expected_mailbox_list_namespace_prefix = "";
+
+  g_assert_true (wyrebox_dovecot_daemon_client_list_mailboxes (socket_path,
+          "account-1", "", &result, &error));
+
+  g_assert_no_error (error);
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
+      (&result), ==, 2);
+
+  entry = wyrebox_daemon_mailbox_list_result_get_entry (&result, 0);
+  g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  g_assert_cmpstr (entry->mailbox_id, ==, "mailbox-inbox");
+  g_assert_cmpstr (entry->mailbox_name, ==, "INBOX");
+  g_assert_cmpstr (entry->hierarchy_delimiter, ==, "/");
+  g_assert_cmpstr (entry->special_use, ==, "\\Inbox");
+  g_assert_true (entry->is_selectable);
+  g_assert_cmpint (entry->child_state, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN);
+
+  entry = wyrebox_daemon_mailbox_list_result_get_entry (&result, 1);
+  g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
+  g_assert_cmpstr (entry->mailbox_id, ==, "view-projects");
+  g_assert_cmpstr (entry->mailbox_name, ==, "Projects");
+  g_assert_cmpstr (entry->hierarchy_delimiter, ==, "/");
+  g_assert_null (entry->special_use);
+  g_assert_false (entry->is_selectable);
+  g_assert_cmpint (entry->child_state, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN);
+
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_list_passes_namespace_prefix (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  FakeServer server = { 0 };
+
+  fake_server_start (&server, socket_path, FAKE_SERVER_MAILBOX_LIST_RESPONSE,
+      NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  server.expected_mailbox_list_namespace_prefix = "Projects/";
+
+  g_assert_true (wyrebox_dovecot_daemon_client_list_mailboxes (socket_path,
+          "account-1", "Projects/", &result, &error));
+
+  g_assert_no_error (error);
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
+      (&result), ==, 2);
+
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_list_daemon_error_fails_cleanly (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  FakeServer server = { 0 };
+
+  init_stale_list_result (&result);
+  fake_server_start (&server, socket_path, FAKE_SERVER_DAEMON_ERROR_RESPONSE,
+      NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  server.expect_mailbox_list_request = TRUE;
+
+  g_assert_false (wyrebox_dovecot_daemon_client_list_mailboxes (socket_path,
+          "account-1", "", &result, &error));
+
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+  assert_mailbox_list_result_is_cleared (&result);
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_list_rejects_bad_request_id (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  FakeServer server = { 0 };
+
+  init_stale_list_result (&result);
+  fake_server_start (&server, socket_path, FAKE_SERVER_MAILBOX_LIST_RESPONSE,
+      NULL, "mismatched-request-id", NULL,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+
+  g_assert_false (wyrebox_dovecot_daemon_client_list_mailboxes (socket_path,
+          "account-1", "", &result, &error));
+
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  assert_mailbox_list_result_is_cleared (&result);
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_list_rejects_unexpected_response_kind (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  FakeServer server = { 0 };
+
+  init_stale_list_result (&result);
+  fake_server_start (&server, socket_path, FAKE_SERVER_MAILBOX_SELECT_RESPONSE,
+      NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  server.expect_mailbox_list_request = TRUE;
+
+  g_assert_false (wyrebox_dovecot_daemon_client_list_mailboxes (socket_path,
+          "account-1", "", &result, &error));
+
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  assert_mailbox_list_result_is_cleared (&result);
   fake_server_join (&server);
   remove_tree (root);
 }
@@ -1258,15 +1512,31 @@ static void
 test_dovecot_daemon_client_capnp_disabled_is_not_supported (void)
 {
   g_auto (WyreboxDaemonMailboxSelectResult) result = { 0 };
+  g_auto (WyreboxDaemonMailboxListResult) list_result = { 0 };
   g_autoptr (GError) error = NULL;
 
   init_stale_result (&result);
+  wyrebox_daemon_mailbox_list_result_init_empty (&list_result);
+  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry
+      (&list_result,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "stale-id",
+          "stale-name",
+          "/",
+          NULL, TRUE, WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN, &error));
+  g_assert_no_error (error);
 
   g_assert_false (wyrebox_dovecot_daemon_client_select_mailbox
       ("/tmp/wyrebox.sock", "account-1", "Projects", &result, &error));
 
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
   assert_result_is_cleared (&result);
+
+  g_clear_error (&error);
+  g_assert_false (wyrebox_dovecot_daemon_client_list_mailboxes
+      ("/tmp/wyrebox.sock", "account-1", "", &list_result, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
+  assert_mailbox_list_result_is_cleared (&list_result);
 
   g_clear_error (&error);
   g_assert_false (wyrebox_dovecot_daemon_client_fetch_message_bytes
@@ -1281,6 +1551,7 @@ static void
 test_dovecot_daemon_client_invalid_inputs_fail_cleanly (void)
 {
   g_auto (WyreboxDaemonMailboxSelectResult) result = { 0 };
+  g_auto (WyreboxDaemonMailboxListResult) list_result = { 0 };
   g_auto (WyreboxDovecotMailboxUidMapSnapshot) uid_map_snapshot = { 0 };
   g_autoptr (GError) error = NULL;
 
@@ -1308,6 +1579,32 @@ test_dovecot_daemon_client_invalid_inputs_fail_cleanly (void)
       ("/tmp/wyrebox.sock", "account-1", "", &result, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   assert_result_is_cleared (&result);
+
+  g_clear_error (&error);
+  init_stale_list_result (&list_result);
+  g_assert_false (wyrebox_dovecot_daemon_client_list_mailboxes (NULL,
+          "account-1", "", &list_result, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  assert_mailbox_list_result_is_cleared (&list_result);
+
+  g_clear_error (&error);
+  init_stale_list_result (&list_result);
+  g_assert_false (wyrebox_dovecot_daemon_client_list_mailboxes
+      ("/tmp/wyrebox.sock", "", "", &list_result, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  assert_mailbox_list_result_is_cleared (&list_result);
+
+  g_clear_error (&error);
+  init_stale_list_result (&list_result);
+  g_assert_false (wyrebox_dovecot_daemon_client_list_mailboxes
+      ("/tmp/wyrebox.sock", "account-1", NULL, &list_result, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  assert_mailbox_list_result_is_cleared (&list_result);
+
+  g_clear_error (&error);
+  g_assert_false (wyrebox_dovecot_daemon_client_list_mailboxes
+      ("/tmp/wyrebox.sock", "account-1", "", NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 
   g_clear_error (&error);
   g_assert_false (wyrebox_dovecot_daemon_client_select_mailbox
@@ -1390,6 +1687,16 @@ main (int argc, char **argv)
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
   g_test_add_func ("/dovecot/daemon-client/select-sends-request-and-copies",
       test_dovecot_daemon_client_sends_select_and_returns_copy);
+  g_test_add_func ("/dovecot/daemon-client/list-sends-request-and-copies",
+      test_dovecot_daemon_client_lists_mailboxes_and_returns_copy);
+  g_test_add_func ("/dovecot/daemon-client/list-passes-namespace-prefix",
+      test_dovecot_daemon_client_list_passes_namespace_prefix);
+  g_test_add_func ("/dovecot/daemon-client/list-daemon-error",
+      test_dovecot_daemon_client_list_daemon_error_fails_cleanly);
+  g_test_add_func ("/dovecot/daemon-client/list-bad-request-id",
+      test_dovecot_daemon_client_list_rejects_bad_request_id);
+  g_test_add_func ("/dovecot/daemon-client/list-unexpected-response-kind",
+      test_dovecot_daemon_client_list_rejects_unexpected_response_kind);
   g_test_add_func ("/dovecot/daemon-client/daemon-error",
       test_dovecot_daemon_client_daemon_error_fails_cleanly);
   g_test_add_func ("/dovecot/daemon-client/fetch-message-bytes-succeeds",

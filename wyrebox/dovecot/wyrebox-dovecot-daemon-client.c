@@ -3,6 +3,7 @@
 #include "wyrebox-build-config.h"
 #include "wyrebox-daemon-capnp-codec.h"
 #include "wyrebox-daemon-duckdb-query-template-request.h"
+#include "wyrebox-daemon-mailbox-list-request.h"
 #include "wyrebox-daemon-mailbox-select-request.h"
 #include "wyrebox-daemon-request-identity.h"
 #include "wyrebox-daemon-response-frame.h"
@@ -162,6 +163,37 @@ validate_fetch_inputs (const char *socket_path,
 }
 
 static gboolean
+validate_list_inputs (const char *socket_path,
+    const char *account_identity, const char *namespace_prefix, GError **error)
+{
+  if (socket_path == NULL || socket_path[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "Dovecot daemon client requires a non-empty socket path");
+    return FALSE;
+  }
+
+  if (account_identity == NULL || account_identity[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "Dovecot daemon client requires a non-empty account identity");
+    return FALSE;
+  }
+
+  if (namespace_prefix == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "Dovecot daemon client requires a namespace prefix");
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
 validate_select_inputs (const char *socket_path,
     const char *account_identity, const char *mailbox_name, GError **error)
 {
@@ -222,6 +254,38 @@ set_daemon_error_response (const WyreboxDaemonResponseFrame *response,
       response->error.message != NULL ? response->error.message :
       "daemon returned an error response");
   return FALSE;
+}
+
+static gboolean
+copy_mailbox_list_response (const WyreboxDaemonResponseFrame *response,
+    WyreboxDaemonMailboxListResult *out_result, GError **error)
+{
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  guint n_entries =
+      wyrebox_daemon_mailbox_list_result_get_n_entries
+      (&response->mailbox_list);
+
+  wyrebox_daemon_mailbox_list_result_init_empty (&result);
+
+  for (guint i = 0; i < n_entries; i++) {
+    const WyreboxDaemonMailboxListEntry *entry =
+        wyrebox_daemon_mailbox_list_result_get_entry
+        (&response->mailbox_list, i);
+
+    if (!wyrebox_daemon_mailbox_list_result_append_entry (&result,
+            entry->kind,
+            entry->mailbox_id,
+            entry->mailbox_name,
+            entry->hierarchy_delimiter,
+            entry->special_use,
+            entry->is_selectable, entry->child_state, error))
+      return FALSE;
+  }
+
+  wyrebox_daemon_mailbox_list_result_clear (out_result);
+  *out_result = result;
+  result.entries = NULL;
+  return TRUE;
 }
 
 static gboolean
@@ -756,6 +820,81 @@ validate_fetch_response (const char *request_id,
 }
 
 gboolean
+wyrebox_dovecot_daemon_client_list_mailboxes (const char *socket_path,
+    const char *account_identity,
+    const char *namespace_prefix,
+    WyreboxDaemonMailboxListResult *out_result, GError **error)
+{
+  g_autofree char *request_id = NULL;
+  g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+  g_auto (WyreboxDaemonMailboxListRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) response = { 0 };
+  g_autoptr (GBytes) request_payload = NULL;
+  g_autoptr (GBytes) response_payload = NULL;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (out_result == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "Dovecot daemon client requires an output mailbox LIST result");
+    return FALSE;
+  }
+
+  wyrebox_daemon_mailbox_list_result_clear (out_result);
+
+  if (!validate_list_inputs (socket_path, account_identity, namespace_prefix,
+          error))
+    return FALSE;
+
+  request_id = g_uuid_string_random ();
+  if (!wyrebox_daemon_request_identity_init (&identity,
+          request_id,
+          WYREBOX_DOVECOT_CALLER_IDENTITY,
+          account_identity, WYREBOX_DOVECOT_TOOL_IDENTITY, NULL, error))
+    return FALSE;
+
+  if (!wyrebox_daemon_mailbox_list_request_init (&request,
+          account_identity, namespace_prefix, error))
+    return FALSE;
+
+  request_payload =
+      wyrebox_daemon_capnp_codec_encode_mailbox_list_request (&identity,
+      &request, NULL, error);
+  if (request_payload == NULL)
+    return FALSE;
+
+  response_payload =
+      wyrebox_daemon_uds_client_send_request (socket_path, request_payload,
+      error);
+  if (response_payload == NULL)
+    return FALSE;
+
+  if (!wyrebox_daemon_capnp_codec_decode_response_frame (response_payload,
+          &response, error))
+    return FALSE;
+
+  if (!validate_response_request_id (&response, request_id, "mailbox LIST",
+          error))
+    return FALSE;
+
+  switch (response.kind) {
+    case WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_LIST:
+      return copy_mailbox_list_response (&response, out_result, error);
+    case WYREBOX_DAEMON_RESPONSE_FRAME_ERROR:
+      return set_daemon_error_response (&response, "mailbox LIST", error);
+    default:
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "daemon returned unexpected response kind %d for mailbox LIST",
+          response.kind);
+      return FALSE;
+  }
+}
+
+gboolean
 wyrebox_dovecot_daemon_client_select_mailbox (const char *socket_path,
     const char *account_identity,
     const char *mailbox_name,
@@ -1006,6 +1145,28 @@ wyrebox_dovecot_daemon_client_load_uid_map (const char *socket_path,
 }
 
 #else
+
+gboolean
+wyrebox_dovecot_daemon_client_list_mailboxes (const char *socket_path,
+    const char *account_identity,
+    const char *namespace_prefix,
+    WyreboxDaemonMailboxListResult *out_result, GError **error)
+{
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  (void) socket_path;
+  (void) account_identity;
+  (void) namespace_prefix;
+
+  if (out_result != NULL)
+    wyrebox_daemon_mailbox_list_result_clear (out_result);
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_NOT_SUPPORTED,
+      "Dovecot daemon client requires Cap'n Proto serialization support");
+  return FALSE;
+}
 
 gboolean
 wyrebox_dovecot_daemon_client_select_mailbox (const char *socket_path,

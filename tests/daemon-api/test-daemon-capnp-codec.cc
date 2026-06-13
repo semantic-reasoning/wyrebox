@@ -761,6 +761,96 @@ assert_mailbox_select_decode_rejects_both_selectors (void)
 }
 
 static void
+assert_mailbox_list_request_encoder_round_trip (void)
+{
+  g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+  g_auto (WyreboxDaemonMailboxListRequest) request = { 0 };
+  g_autoptr (GBytes) encoded = NULL;
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+          "request-encode-mailbox-list",
+          "dovecot",
+          "account-1", "dovecot-storage", "corr-list-encode", &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_mailbox_list_request_init (&request,
+          "account-1", "Projects/", &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_mailbox_list_request (&identity,
+      &request, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+          encoded,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (decoded.request_id, ==, "request-encode-mailbox-list");
+  g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
+  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.tool_identity, ==, "dovecot-storage");
+  g_assert_cmpstr (decoded.correlation_id, ==, "corr-list-encode");
+  g_assert_cmpint (decoded.operation,
+      ==, WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_LIST);
+  g_assert_nonnull (decoded.mailbox_list);
+  g_assert_cmpstr (decoded.mailbox_list->account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.mailbox_list->namespace_prefix, ==, "Projects/");
+
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  decoded_state_clear (decoded_state);
+}
+
+static void
+assert_mailbox_list_request_encoder_rejects_invalid_input (void)
+{
+  g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+  g_auto (WyreboxDaemonRequestIdentity) invalid_identity = { 0 };
+  g_auto (WyreboxDaemonMailboxListRequest) request = { 0 };
+  g_auto (WyreboxDaemonMailboxListRequest) invalid_request = { 0 };
+  g_autoptr (GBytes) encoded = NULL;
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+          "request-encode-mailbox-list-valid",
+          "dovecot", "account-1", "dovecot-storage", NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_mailbox_list_request_init (&request,
+          "account-1", "", &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_mailbox_list_request (NULL,
+      &request, NULL, &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_mailbox_list_request (&identity,
+      NULL, NULL, &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  encoded =
+      wyrebox_daemon_capnp_codec_encode_mailbox_list_request
+      (&invalid_identity, &request, NULL, &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  invalid_request.account_identity = g_strdup ("");
+  invalid_request.namespace_prefix = g_strdup ("INBOX");
+  encoded = wyrebox_daemon_capnp_codec_encode_mailbox_list_request (&identity,
+      &invalid_request, NULL, &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
 assert_mailbox_select_request_encoder_round_trip_by_id (void)
 {
   g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
@@ -2710,6 +2800,81 @@ assert_response_bytes_encode_mailbox_list (void)
 }
 
 static void
+assert_response_bytes_decode_mailbox_list_roundtrip (void)
+{
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) response = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) decoded = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+  const WyreboxDaemonMailboxListEntry *entry = NULL;
+
+  wyrebox_daemon_mailbox_list_result_init_empty (&result);
+  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "mailbox-inbox",
+          "INBOX",
+          "/",
+          "\\Inbox",
+          TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
+          "view-projects",
+          "Projects",
+          "/",
+          NULL,
+          FALSE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_mailbox_list (&response,
+          "request-mailbox-list-decode",
+          "corr-mailbox-list-decode", &result, &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
+      NULL, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (encoded,
+          &decoded, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.kind, ==,
+      WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_LIST);
+  g_assert_cmpstr (decoded.request_id, ==, "request-mailbox-list-decode");
+  g_assert_cmpstr (decoded.correlation_id, ==, "corr-mailbox-list-decode");
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
+      (&decoded.mailbox_list), ==, 2);
+
+  entry = wyrebox_daemon_mailbox_list_result_get_entry
+      (&decoded.mailbox_list, 0);
+  g_assert_cmpint (entry->kind, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  g_assert_cmpstr (entry->mailbox_id, ==, "mailbox-inbox");
+  g_assert_cmpstr (entry->mailbox_name, ==, "INBOX");
+  g_assert_cmpstr (entry->hierarchy_delimiter, ==, "/");
+  g_assert_cmpstr (entry->special_use, ==, "\\Inbox");
+  g_assert_true (entry->is_selectable);
+  g_assert_cmpint (entry->child_state, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN);
+
+  entry = wyrebox_daemon_mailbox_list_result_get_entry
+      (&decoded.mailbox_list, 1);
+  g_assert_cmpint (entry->kind, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
+  g_assert_cmpstr (entry->mailbox_id, ==, "view-projects");
+  g_assert_cmpstr (entry->mailbox_name, ==, "Projects");
+  g_assert_cmpstr (entry->hierarchy_delimiter, ==, "/");
+  g_assert_null (entry->special_use);
+  g_assert_false (entry->is_selectable);
+  g_assert_cmpint (entry->child_state, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN);
+}
+
+static void
 assert_response_bytes_encode_mailbox_select (void)
 {
   g_auto (WyreboxDaemonMailboxSelectResult) result = { };
@@ -3208,38 +3373,32 @@ assert_response_bytes_decode_rejects_malformed (void)
 }
 
 static void
-assert_response_bytes_decode_rejects_unsupported_arm (void)
+assert_response_bytes_rejects_mailbox_list_mismatched_payload_request_id (void)
 {
-  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
-  g_auto (WyreboxDaemonResponseFrame) response = { 0 };
   g_auto (WyreboxDaemonResponseFrame) decoded = { 0 };
-  g_autoptr (GError) error = NULL;
   g_autoptr (GBytes) encoded = NULL;
-
-  wyrebox_daemon_mailbox_list_result_init_empty (&result);
-  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
-          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
-          "mailbox-inbox",
-          "INBOX",
-          "/",
-          "\\Inbox",
-          TRUE,
-          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, &error));
-  g_assert_no_error (error);
-
-  g_assert_true (wyrebox_daemon_response_frame_init_mailbox_list (&response,
-          "request-mailbox-list-decode",
-          "corr-mailbox-list-decode", &result, &error));
-  g_assert_no_error (error);
-
-  encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
-      NULL, &error);
-  g_assert_no_error (error);
-  g_assert_nonnull (encoded);
+  g_autoptr (GError) error = NULL;
+  capnp::MallocMessageBuilder response_builder;
+  auto response_frame = response_builder.initRoot < ResponseFrame > ();
+  response_frame.setRequestId ("request-envelope");
+  response_frame.setCorrelationId ("corr-mailbox-list-decode");
+  auto response_list = response_frame.initMailboxList ();
+  response_list.setRequestId ("request-payload");
+  auto entries = response_list.initEntries (1);
+  entries[0].setKind (MailboxListEntryKind::ORDINARY);
+  entries[0].setMailboxId ("mailbox-inbox");
+  entries[0].setMailboxName ("INBOX");
+  entries[0].setHierarchyDelimiter ("/");
+  entries[0].setSpecialUse ("\\Inbox");
+  entries[0].setSelectable (true);
+  entries[0].setChildState (MailboxListChildState::HAS_NO_CHILDREN);
+  auto words = capnp::messageToFlatArray (response_builder);
+  auto bytes = words.asBytes ();
+  encoded = g_bytes_new (bytes.begin (), bytes.size ());
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_response_frame (encoded,
           &decoded, &error));
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_cmpint (decoded.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_NONE);
 }
 
@@ -4141,6 +4300,11 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/capnp/codec/reject-mailbox-select-encode-invalid-input",
       assert_mailbox_select_request_encoder_rejects_invalid_input);
+  g_test_add_func ("/daemon-api/capnp/codec/encode-mailbox-list-request",
+      assert_mailbox_list_request_encoder_round_trip);
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-mailbox-list-encode-invalid-input",
+      assert_mailbox_list_request_encoder_rejects_invalid_input);
   g_test_add_func ("/daemon-api/capnp/codec/encode-message-fetch-valid",
       assert_message_fetch_request_encoder_round_trip);
   g_test_add_func
@@ -4223,6 +4387,8 @@ main (int argc, char **argv)
       assert_response_bytes_encode_mailbox_select);
   g_test_add_func ("/daemon-api/capnp/codec/decode-mailbox-select-response",
       assert_response_bytes_decode_mailbox_select_roundtrip);
+  g_test_add_func ("/daemon-api/capnp/codec/decode-mailbox-list-response",
+      assert_response_bytes_decode_mailbox_list_roundtrip);
   g_test_add_func
       ("/daemon-api/capnp/codec/reject-mailbox-select-response-missing-payload-request-id",
       assert_response_bytes_rejects_mailbox_select_missing_payload_request_id);
@@ -4251,8 +4417,9 @@ main (int argc, char **argv)
       assert_response_bytes_decode_error_roundtrip);
   g_test_add_func ("/daemon-api/capnp/codec/reject-malformed-response",
       assert_response_bytes_decode_rejects_malformed);
-  g_test_add_func ("/daemon-api/capnp/codec/reject-unsupported-response",
-      assert_response_bytes_decode_rejects_unsupported_arm);
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-mailbox-list-response-mismatched-request-id",
+      assert_response_bytes_rejects_mailbox_list_mismatched_payload_request_id);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-compatible",
       assert_request_adapter_callbacks_are_usable);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-mailbox-select",

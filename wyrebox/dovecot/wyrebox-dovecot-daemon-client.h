@@ -45,6 +45,13 @@ gboolean wyrebox_dovecot_daemon_client_select_mailbox (
     WyreboxDaemonMailboxSelectResult *out_result,
     GError **error);
 
+gboolean wyrebox_dovecot_daemon_client_list_mailboxes (
+    const char *socket_path,
+    const char *account_identity,
+    const char *namespace_prefix,
+    WyreboxDaemonMailboxListResult *out_result,
+    GError **error);
+
 gboolean wyrebox_dovecot_daemon_client_load_uid_map (
     const char *socket_path,
     const char *account_identity,
