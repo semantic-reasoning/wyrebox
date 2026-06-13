@@ -28,6 +28,29 @@ typedef struct
   FakeAdapterState *state;
 } FakeDecodedState;
 
+typedef enum
+{
+  BLOCKING_ROUTE_DECODED_WIRELOG_QUERY,
+  BLOCKING_ROUTE_DECODED_DELIVERY,
+} BlockingRouteDecodedKind;
+
+typedef struct
+{
+  GMutex mutex;
+  GCond query_release_cond;
+  gboolean query_started;
+  gboolean query_release;
+  gboolean delivery_called;
+} BlockingRouteState;
+
+typedef struct
+{
+  BlockingRouteDecodedKind kind;
+  BlockingRouteState *state;
+  WyreboxDaemonWirelogPredicateQueryRequest wirelog_query;
+  WyreboxDaemonDeliveryIngestionRequest delivery_ingestion;
+} BlockingRouteDecodedState;
+
 static void
 remove_tree (const char *path)
 {
@@ -115,7 +138,11 @@ await_framed_response_data (GSocket *socket, guint timeout_ms)
   while (g_get_monotonic_time () < deadline) {
     if (g_socket_get_available_bytes (socket) >= prefix_bytes)
       return;
-    g_main_context_iteration (NULL, TRUE);
+
+    while (g_main_context_pending (NULL))
+      g_main_context_iteration (NULL, FALSE);
+
+    g_usleep (1000);
   }
 
   g_assert_not_reached ();
@@ -219,6 +246,240 @@ fake_adapter_decode_clear (gpointer user_data)
     state->state->clear_calls++;
 
   g_free (state);
+}
+
+static void
+blocking_route_state_init (BlockingRouteState *state)
+{
+  g_mutex_init (&state->mutex);
+  g_cond_init (&state->query_release_cond);
+}
+
+static void
+blocking_route_state_clear (BlockingRouteState *state)
+{
+  g_cond_clear (&state->query_release_cond);
+  g_mutex_clear (&state->mutex);
+}
+
+static void
+blocking_route_decoded_state_clear (gpointer user_data)
+{
+  BlockingRouteDecodedState *state = user_data;
+
+  if (state == NULL)
+    return;
+
+  switch (state->kind) {
+    case BLOCKING_ROUTE_DECODED_WIRELOG_QUERY:
+      wyrebox_daemon_wirelog_predicate_query_request_clear
+          (&state->wirelog_query);
+      break;
+    case BLOCKING_ROUTE_DECODED_DELIVERY:
+      wyrebox_daemon_delivery_ingestion_request_clear
+          (&state->delivery_ingestion);
+      break;
+  }
+
+  g_free (state);
+}
+
+static gboolean
+blocking_route_decode (const WyreboxDaemonPeerCredentials *peer_credentials,
+    GBytes *request, WyreboxDaemonDecodedRequestFrame *out_request,
+    gpointer *out_decoded_state, GDestroyNotify *out_decoded_state_clear,
+    gpointer user_data, GError **error)
+{
+  BlockingRouteState *state = user_data;
+  BlockingRouteDecodedState *decoded_state = NULL;
+  const guint8 *request_data = NULL;
+  gsize request_size = 0;
+
+  (void) peer_credentials;
+
+  request_data = g_bytes_get_data (request, &request_size);
+  decoded_state = g_new0 (BlockingRouteDecodedState, 1);
+  decoded_state->state = state;
+
+  out_request->request_id = NULL;
+  out_request->caller_identity = NULL;
+  out_request->account_identity = NULL;
+  out_request->tool_identity = NULL;
+  out_request->correlation_id = NULL;
+  out_request->operation = WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_NONE;
+  out_request->mailbox_list = NULL;
+  out_request->mailbox_select = NULL;
+  out_request->fact_mutation = NULL;
+  out_request->fact_batch_import = NULL;
+  out_request->message_fetch = NULL;
+  out_request->message_search = NULL;
+  out_request->delivery_ingestion = NULL;
+  out_request->flag_keyword_update = NULL;
+  out_request->wirelog_predicate_query = NULL;
+  out_request->duckdb_query_template = NULL;
+
+  *out_decoded_state = decoded_state;
+  *out_decoded_state_clear = blocking_route_decoded_state_clear;
+
+  if (request_size == strlen ("wirelog-query")
+      && memcmp (request_data, "wirelog-query", request_size) == 0) {
+    const char *bindings[] = { NULL };
+
+    decoded_state->kind = BLOCKING_ROUTE_DECODED_WIRELOG_QUERY;
+    out_request->request_id = "request-wirelog-query";
+    out_request->caller_identity = "trusted-tool";
+    out_request->account_identity = "account-1";
+    out_request->tool_identity = "fact-tool";
+    out_request->correlation_id = "correlation-query";
+    if (!wyrebox_daemon_wirelog_predicate_query_request_init
+        (&decoded_state->wirelog_query,
+            "query-1", "show_in_virtual_folder.v1", "account-1", bindings,
+            error))
+      return FALSE;
+    out_request->operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY;
+    out_request->wirelog_predicate_query = &decoded_state->wirelog_query;
+    return TRUE;
+  }
+
+  if (request_size == strlen ("delivery")
+      && memcmp (request_data, "delivery", request_size) == 0) {
+    const gchar *recipients[] = { "alice@example.com", NULL };
+    g_autoptr (GBytes) message = NULL;
+
+    decoded_state->kind = BLOCKING_ROUTE_DECODED_DELIVERY;
+    out_request->request_id = "request-delivery";
+    out_request->caller_identity = "postfix";
+    out_request->account_identity = "account-1";
+    out_request->tool_identity = "postfix";
+    out_request->correlation_id = "correlation-delivery";
+    message = g_bytes_new_static ("message-bytes", strlen ("message-bytes"));
+    if (!wyrebox_daemon_delivery_ingestion_request_init
+        (&decoded_state->delivery_ingestion,
+            "delivery-1", "queue-1", NULL, recipients, message, error))
+      return FALSE;
+    out_request->operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION;
+    out_request->delivery_ingestion = &decoded_state->delivery_ingestion;
+    return TRUE;
+  }
+
+  g_set_error (error,
+      G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "unexpected blocking route request");
+  return FALSE;
+}
+
+static GBytes *
+blocking_route_encode (const WyreboxDaemonResponseFrame *response_frame,
+    gpointer user_data, GError **error)
+{
+  (void) user_data;
+  (void) error;
+
+  g_assert_nonnull (response_frame);
+
+  switch (response_frame->kind) {
+    case WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS:
+      return g_bytes_new_static ("delivery-success",
+          strlen ("delivery-success"));
+    case WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK:
+      return g_bytes_new_static ("query-success", strlen ("query-success"));
+    default:
+      g_assert_not_reached ();
+  }
+}
+
+static gboolean
+blocking_route_query_wirelog (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonWirelogPredicateQueryRequest *request,
+    WyreboxDaemonStreamChunkFrame *out_chunk, gpointer user_data,
+    GError **error)
+{
+  BlockingRouteState *state = user_data;
+  g_autoptr (GBytes) bytes = NULL;
+  gint64 deadline = 0;
+  const char *payload = "rows";
+
+  g_assert_cmpstr (identity->request_id, ==, "request-wirelog-query");
+  g_assert_cmpstr (request->query_id, ==, "query-1");
+
+  g_mutex_lock (&state->mutex);
+  state->query_started = TRUE;
+  deadline = g_get_monotonic_time () + 5 * G_TIME_SPAN_SECOND;
+  while (!state->query_release) {
+    if (!g_cond_wait_until (&state->query_release_cond, &state->mutex,
+            deadline)) {
+      g_mutex_unlock (&state->mutex);
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_TIMED_OUT, "timed out waiting to release query");
+      return FALSE;
+    }
+  }
+  g_mutex_unlock (&state->mutex);
+
+  bytes = g_bytes_new_static (payload, strlen (payload));
+  return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+      identity->request_id,
+      NULL, request->query_id, identity->correlation_id, 0, bytes, TRUE, error);
+}
+
+static gboolean
+blocking_route_ingest_delivery (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDeliveryIngestionRequest *request,
+    WyreboxEmlIngestResult *out_result, gpointer user_data, GError **error)
+{
+  BlockingRouteState *state = user_data;
+
+  (void) error;
+
+  g_assert_cmpstr (identity->request_id, ==, "request-delivery");
+  g_assert_cmpstr (request->delivery_id, ==, "delivery-1");
+
+  g_mutex_lock (&state->mutex);
+  state->delivery_called = TRUE;
+  g_mutex_unlock (&state->mutex);
+
+  out_result->object_key =
+      g_strdup
+      ("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+  out_result->size_bytes = g_bytes_get_size (request->message_bytes);
+  out_result->journal_offset = 10;
+  out_result->journal_sequence = 11;
+  return TRUE;
+}
+
+static void
+wait_until_query_started (BlockingRouteState *state)
+{
+  gint64 deadline = g_get_monotonic_time () + 2 * G_TIME_SPAN_SECOND;
+
+  while (g_get_monotonic_time () < deadline) {
+    gboolean query_started = FALSE;
+
+    while (g_main_context_pending (NULL))
+      g_main_context_iteration (NULL, FALSE);
+
+    g_mutex_lock (&state->mutex);
+    query_started = state->query_started;
+    g_mutex_unlock (&state->mutex);
+
+    if (query_started)
+      return;
+
+    g_usleep (1000);
+  }
+
+  g_assert_not_reached ();
+}
+
+static void
+release_blocking_query (BlockingRouteState *state)
+{
+  g_mutex_lock (&state->mutex);
+  state->query_release = TRUE;
+  g_cond_signal (&state->query_release_cond);
+  g_mutex_unlock (&state->mutex);
 }
 
 static gboolean
@@ -587,6 +848,72 @@ static void
   remove_tree (root);
 }
 
+static void
+    test_connection_server_blocking_query_does_not_block_delivery_ingestion
+    (void)
+{
+  const guint8 query_request[] = "wirelog-query";
+  const guint8 delivery_request[] = "delivery";
+  BlockingRouteState state = { 0 };
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) delivery_response = NULL;
+  g_autoptr (GBytes) query_response = NULL;
+  g_autoptr (GSocketConnection) query_connection = NULL;
+  g_autoptr (WyreboxDaemonDeliveryIngestionService) delivery_service = NULL;
+  g_autoptr (WyreboxDaemonWirelogPredicateQueryService) wirelog_service = NULL;
+  g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+  g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
+  GInputStream *query_input = NULL;
+  GOutputStream *query_output = NULL;
+  GSocket *query_socket = NULL;
+
+  blocking_route_state_init (&state);
+
+  root = NULL;
+  socket_path = make_socket_path (&root);
+  delivery_service = wyrebox_daemon_delivery_ingestion_service_new
+      (blocking_route_ingest_delivery, &state, NULL);
+  wirelog_service = wyrebox_daemon_wirelog_predicate_query_service_new
+      (blocking_route_query_wirelog, &state, NULL);
+  adapter = wyrebox_daemon_request_adapter_new (delivery_service, NULL, NULL,
+      NULL, NULL, NULL, wirelog_service, NULL,
+      blocking_route_decode, &state, NULL, blocking_route_encode, &state, NULL);
+  server = wyrebox_daemon_connection_server_new (socket_path, adapter);
+  g_assert_true (wyrebox_daemon_connection_server_start (server, &error));
+  g_assert_no_error (error);
+
+  query_connection = connect_with_socket_client (socket_path);
+  query_input = g_io_stream_get_input_stream (G_IO_STREAM (query_connection));
+  query_output = g_io_stream_get_output_stream (G_IO_STREAM (query_connection));
+  query_socket = g_socket_connection_get_socket (query_connection);
+  write_framed_payload (query_output, query_request, strlen ("wirelog-query"));
+  wait_until_query_started (&state);
+
+  delivery_response = send_request_and_read_response (socket_path,
+      delivery_request, strlen ("delivery"));
+  assert_payload_equal (delivery_response, (const guint8 *) "delivery-success",
+      strlen ("delivery-success"));
+
+  g_mutex_lock (&state.mutex);
+  g_assert_true (state.delivery_called);
+  g_mutex_unlock (&state.mutex);
+
+  release_blocking_query (&state);
+  await_framed_response_data (query_socket, 2000);
+  query_response = wyrebox_daemon_frame_io_read_payload (query_input, &error);
+  g_assert_no_error (error);
+  assert_payload_equal (query_response, (const guint8 *) "query-success",
+      strlen ("query-success"));
+
+  g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+  g_assert_no_error (error);
+
+  blocking_route_state_clear (&state);
+  remove_tree (root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -605,6 +932,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/connection-server/idle-client-does-not-block-subsequent",
       test_connection_server_idle_first_client_does_not_block_subsequent_client);
+  g_test_add_func
+      ("/daemon-api/connection-server/blocking-query-does-not-block-delivery",
+      test_connection_server_blocking_query_does_not_block_delivery_ingestion);
 
   return g_test_run ();
 }

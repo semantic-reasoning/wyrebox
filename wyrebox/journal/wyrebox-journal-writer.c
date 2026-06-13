@@ -23,6 +23,7 @@ struct _WyreboxJournalWriter
   int fd;
   guint64 next_sequence;
   gboolean failed;
+  GMutex append_mutex;
 };
 
 G_DEFINE_TYPE (WyreboxJournalWriter, wyrebox_journal_writer, G_TYPE_OBJECT);
@@ -162,6 +163,7 @@ wyrebox_journal_writer_finalize (GObject *object)
 
   g_clear_pointer (&self->journal_root_dir, g_free);
   g_clear_pointer (&self->segment_path, g_free);
+  g_mutex_clear (&self->append_mutex);
 
   G_OBJECT_CLASS (wyrebox_journal_writer_parent_class)->finalize (object);
 }
@@ -179,6 +181,7 @@ wyrebox_journal_writer_init (WyreboxJournalWriter *self)
 {
   self->fd = -1;
   self->next_sequence = 1;
+  g_mutex_init (&self->append_mutex);
 }
 
 WyreboxJournalWriter *
@@ -260,8 +263,8 @@ wyrebox_journal_writer_new (const char *journal_root_dir, GError **error)
   return g_steal_pointer (&self);
 }
 
-gboolean
-wyrebox_journal_writer_append (WyreboxJournalWriter *self,
+static gboolean
+wyrebox_journal_writer_append_unlocked (WyreboxJournalWriter *self,
     WyreboxJournalEventType event_type,
     GBytes *payload, guint64 *out_offset, guint64 *out_sequence, GError **error)
 {
@@ -372,4 +375,24 @@ wyrebox_journal_writer_append (WyreboxJournalWriter *self,
   self->next_sequence = sequence + 1;
 
   return TRUE;
+}
+
+gboolean
+wyrebox_journal_writer_append (WyreboxJournalWriter *self,
+    WyreboxJournalEventType event_type,
+    GBytes *payload, guint64 *out_offset, guint64 *out_sequence, GError **error)
+{
+  gboolean success = FALSE;
+
+  g_return_val_if_fail (WYREBOX_IS_JOURNAL_WRITER (self), FALSE);
+  g_return_val_if_fail (out_offset != NULL, FALSE);
+  g_return_val_if_fail (out_sequence != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  g_mutex_lock (&self->append_mutex);
+  success = wyrebox_journal_writer_append_unlocked (self, event_type, payload,
+      out_offset, out_sequence, error);
+  g_mutex_unlock (&self->append_mutex);
+
+  return success;
 }

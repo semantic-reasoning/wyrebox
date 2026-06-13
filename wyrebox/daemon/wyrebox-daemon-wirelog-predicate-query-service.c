@@ -16,6 +16,7 @@ struct _WyreboxDaemonWirelogPredicateQueryService
   gpointer user_data;
   GDestroyNotify user_data_destroy;
   WyreboxJournalWriter *audit_writer;
+  GMutex backend_mutex;
 };
 
 G_DEFINE_TYPE (WyreboxDaemonWirelogPredicateQueryService,
@@ -90,6 +91,7 @@ wyrebox_daemon_wirelog_predicate_query_service_finalize (GObject *object)
     self->user_data_destroy (self->user_data);
 
   g_clear_object (&self->audit_writer);
+  g_mutex_clear (&self->backend_mutex);
 
   G_OBJECT_CLASS
       (wyrebox_daemon_wirelog_predicate_query_service_parent_class)->finalize
@@ -110,7 +112,7 @@ static void
     wyrebox_daemon_wirelog_predicate_query_service_init
     (WyreboxDaemonWirelogPredicateQueryService * self)
 {
-  (void) self;
+  g_mutex_init (&self->backend_mutex);
 }
 
 WyreboxDaemonWirelogPredicateQueryService
@@ -233,7 +235,9 @@ gboolean
     return FALSE;
   }
 
+  g_mutex_lock (&self->backend_mutex);
   if (!self->func (identity, request, &chunk, self->user_data, &local_error)) {
+    g_mutex_unlock (&self->backend_mutex);
     if (local_error == NULL) {
       g_set_error (&local_error,
           G_IO_ERROR,
@@ -244,6 +248,7 @@ gboolean
     g_propagate_error (error, g_steal_pointer (&local_error));
     return FALSE;
   }
+  g_mutex_unlock (&self->backend_mutex);
 
   if (!validate_wirelog_predicate_query_chunk (identity, request, &chunk,
           &local_error)) {
