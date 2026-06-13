@@ -185,8 +185,10 @@ query_duckdb_template_fixture (const WyreboxDaemonRequestIdentity *identity,
   g_assert_cmpstr (identity->caller_identity, ==, "admin-cli");
   g_assert_cmpstr (identity->account_identity, ==, "account-1");
   g_assert_cmpstr (request->query_id, ==, "query-1");
-  g_assert_cmpstr (request->template_id, ==, "template.summary");
+  g_assert_cmpstr (request->template_id, ==, "mailbox.uid_map.v1");
   g_assert_cmpstr (request->scope_id, ==, "account-1");
+  g_assert_cmpstr (request->parameters[0], ==, "mailbox-inbox");
+  g_assert_null (request->parameters[1]);
 
   *was_called = TRUE;
   return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
@@ -1273,7 +1275,7 @@ static void
 test_request_router_routes_duckdb_query_template (void)
 {
   gboolean was_called = FALSE;
-  const char *parameters[] = { "mail-1", NULL };
+  const char *parameters[] = { "mailbox-inbox", NULL };
   g_autoptr (GError) error = NULL;
   g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
   g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
@@ -1281,7 +1283,7 @@ test_request_router_routes_duckdb_query_template (void)
   WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
 
   g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (&request,
-          "query-1", "template.summary", "account-1", parameters, &error));
+          "query-1", "mailbox.uid_map.v1", "account-1", parameters, &error));
   g_assert_no_error (error);
 
   request_frame.request_id = "request-duckdb-query";
@@ -1352,11 +1354,11 @@ test_request_router_rejects_missing_duckdb_query_template_service (void)
   WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
 
   g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (&request,
-          "query-1", "template.summary", "account-1", parameters, &error));
+          "query-1", "mailbox.uid_map.v1", "account-1", parameters, &error));
   g_assert_no_error (error);
 
   request_frame.request_id = "request-duckdb-query";
-  request_frame.caller_identity = "skill";
+  request_frame.caller_identity = "admin-cli";
   request_frame.account_identity = "account-1";
   request_frame.tool_identity = "duckdb-tool";
   request_frame.correlation_id = "duckdb-query-1";

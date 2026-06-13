@@ -18,6 +18,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-message-search-request.c',
   'daemon/wyrebox-daemon-message-search-service.c',
   'daemon/wyrebox-daemon-duckdb-query-template-dispatcher.c',
+  'daemon/wyrebox-daemon-duckdb-query-template-catalog.c',
   'daemon/wyrebox-daemon-duckdb-query-template-request.c',
   'daemon/wyrebox-daemon-duckdb-query-template-service.c',
   'daemon/wyrebox-daemon-wirelog-predicate-query-dispatcher.c',
