@@ -190,6 +190,10 @@ if wirelog_runtime_found
     'wirelog_result_relation_cardinality',
     'wirelog_result_write_csv',
     'wirelog_result_free',
+    'wirelog_easy_open',
+    'wirelog_easy_close',
+    'wirelog_easy_intern',
+    'wirelog_easy_snapshot',
   ]
   wirelog_missing_symbols = []
   foreach wirelog_symbol : wirelog_required_symbols
