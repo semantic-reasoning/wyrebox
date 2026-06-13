@@ -211,17 +211,26 @@ summary('wirelog runtime', wirelog_runtime_summary, section: 'Dependencies')
 
 dovecot_backend_option = get_option('dovecot_backend')
 dovecot_source_dir_option = get_option('dovecot_source_dir')
+dovecot_build_dir_option = get_option('dovecot_build_dir')
 have_dovecot_backend = false
 if dovecot_backend_option.enabled()
+  if dovecot_build_dir_option == ''
+    error(
+      'Dovecot backend is enabled but no configured build directory was ' +
+      'provided; set -Ddovecot_build_dir=/path/to/dovecot/build',
+    )
+  endif
   if dovecot_source_dir_option == ''
     error('Dovecot backend is enabled but no source directory was provided; set ' +
       '-Ddovecot_source_dir=/path/to/dovecot')
   endif
+  dovecot_source_dir = meson.current_source_dir() / dovecot_source_dir_option
+  dovecot_build_dir = meson.current_source_dir() / dovecot_build_dir_option
 
   check_dovecot_source = run_command(
     python,
     meson.current_source_dir() / 'tools' / 'check-dovecot-source-contract.py',
-    meson.current_source_dir() / dovecot_source_dir_option,
+    dovecot_source_dir,
     check: false,
   )
   if check_dovecot_source.returncode() != 0
@@ -232,6 +241,115 @@ if dovecot_backend_option.enabled()
     error(
       'Dovecot backend is enabled but source contract validation failed:\n' +
       check_error,
+    )
+  endif
+
+  check_dovecot_build = run_command(
+    python,
+    meson.current_source_dir() / 'tools' / 'check-dovecot-build-contract.py',
+    dovecot_source_dir,
+    dovecot_build_dir,
+    check: false,
+  )
+  if check_dovecot_build.returncode() != 0
+    check_error = check_dovecot_build.stderr().strip()
+    if check_error == ''
+      check_error = check_dovecot_build.stdout().strip()
+    endif
+    error(
+      'Dovecot backend is enabled but configured build contract validation failed:\n' +
+      check_error,
+    )
+  endif
+
+  dovecot_configured_header_probe = '''
+    #include "config.h"
+    #include "lib.h"
+    #include "module-dir.h"
+    #include "mail-storage.h"
+    #include "mail-storage-hooks.h"
+
+    #ifndef DOVECOT_ABI_VERSION
+    #error DOVECOT_ABI_VERSION must be defined by the configured build config.h
+    #endif
+
+    #ifndef HAVE__BOOL
+    #error HAVE__BOOL must be defined by the configured build config.h
+    #endif
+
+    #ifndef HAVE_SOCKLEN_T
+    #error HAVE_SOCKLEN_T must be defined by the configured build config.h
+    #endif
+
+    #ifndef OFF_T_MAX
+    #error OFF_T_MAX must be defined by the configured build config.h
+    #endif
+
+    #ifndef PRIuUOFF_T
+    #error PRIuUOFF_T must be defined by the configured build config.h
+    #endif
+
+    #ifndef SIZEOF_INT
+    #error SIZEOF_INT must be defined by the configured build config.h
+    #endif
+
+    #ifndef SIZEOF_LONG
+    #error SIZEOF_LONG must be defined by the configured build config.h
+    #endif
+
+    #ifndef SIZEOF_VOID_P
+    #error SIZEOF_VOID_P must be defined by the configured build config.h
+    #endif
+
+    #ifndef SSIZE_T_MAX
+    #error SSIZE_T_MAX must be defined by the configured build config.h
+    #endif
+
+    #ifndef UOFF_T_MAX
+    #error UOFF_T_MAX must be defined by the configured build config.h
+    #endif
+
+    #if !defined(HAVE_UOFF_T) && !defined(UOFF_T_INT) && \
+        !defined(UOFF_T_LONG) && !defined(UOFF_T_LONG_LONG)
+    #error config.h must define a uoff_t selector macro
+    #endif
+
+    int
+    main (void)
+    {
+      uoff_t offset = 0;
+      struct module *module = 0;
+      struct mail_storage_hooks hooks = { 0 };
+      struct mailbox_status status = { 0 };
+
+      (void) offset;
+      (void) module;
+      (void) hooks;
+      (void) status;
+      (void) PRIuUOFF_T;
+
+      return (UOFF_T_MAX == 0 || SSIZE_T_MAX == 0 || OFF_T_MAX == 0) ? 1 : 0;
+    }
+  '''
+
+  check_dovecot_build_headers = cc.compiles(
+    dovecot_configured_header_probe,
+    name: 'Dovecot configured header contract check',
+    args: [
+      '-std=gnu11',
+      '-I' + (dovecot_source_dir / 'src' / 'lib-index'),
+      '-I' + (dovecot_source_dir / 'src' / 'lib'),
+      '-I' + (dovecot_source_dir / 'src' / 'lib-mail'),
+      '-I' + (dovecot_source_dir / 'src' / 'lib-storage'),
+      '-I' + dovecot_build_dir,
+    ],
+  )
+
+  if not check_dovecot_build_headers
+    error(
+      'Dovecot backend is enabled but configured header contract validation failed '
+      +
+      'for configured build and source directories.',
     )
   endif
 
