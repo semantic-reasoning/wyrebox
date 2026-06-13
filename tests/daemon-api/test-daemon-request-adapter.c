@@ -280,7 +280,7 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
 
     case TEST_REQUEST_ADAPTER_SCENARIO_FACT_MUTATION_SUCCESS:
       out_request->request_id = "request-fact-success";
-      out_request->caller_identity = "skill";
+      out_request->caller_identity = "trusted-tool";
       out_request->account_identity = "account-1";
       out_request->tool_identity = "fact-importer";
       out_request->correlation_id = "correlation-1";
@@ -312,7 +312,7 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
 
     case TEST_REQUEST_ADAPTER_SCENARIO_FACT_MUTATION_MISSING_PAYLOAD:
       out_request->request_id = "request-fact-missing-payload";
-      out_request->caller_identity = "skill";
+      out_request->caller_identity = "trusted-tool";
       out_request->account_identity = "account-1";
       out_request->tool_identity = "fact-importer";
       out_request->correlation_id = "correlation-1";

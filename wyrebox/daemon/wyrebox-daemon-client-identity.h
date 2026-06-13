@@ -30,5 +30,8 @@ const char *wyrebox_daemon_client_identity_class_to_name (
 gboolean wyrebox_daemon_client_identity_can_query_controlled_views (
     WyreboxDaemonClientIdentityClass identity_class);
 
+gboolean wyrebox_daemon_client_identity_can_mutate_facts (
+    WyreboxDaemonClientIdentityClass identity_class);
+
 G_END_DECLS
 /* *INDENT-ON* */

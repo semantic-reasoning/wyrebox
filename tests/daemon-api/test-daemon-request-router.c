@@ -320,7 +320,7 @@ test_request_router_routes_fact_mutation (void)
   g_assert_no_error (error);
 
   request_frame.request_id = "request-1";
-  request_frame.caller_identity = "skill";
+  request_frame.caller_identity = "trusted-tool";
   request_frame.account_identity = "account-1";
   request_frame.tool_identity = "fact-importer";
   request_frame.correlation_id = "correlation-1";
@@ -404,7 +404,7 @@ test_request_router_rejects_missing_fact_mutation_payload (void)
   g_assert_nonnull (root);
 
   request_frame.request_id = "request-1";
-  request_frame.caller_identity = "skill";
+  request_frame.caller_identity = "trusted-tool";
   request_frame.account_identity = "account-1";
   request_frame.tool_identity = "fact-importer";
   request_frame.correlation_id = "correlation-1";
@@ -490,7 +490,7 @@ test_request_router_rejects_missing_request_id_without_error_frame (void)
   g_assert_no_error (error);
 
   request_frame.request_id = "";
-  request_frame.caller_identity = "skill";
+  request_frame.caller_identity = "trusted-tool";
   request_frame.account_identity = "account-1";
   request_frame.tool_identity = "fact-importer";
   request_frame.correlation_id = "correlation-1";
