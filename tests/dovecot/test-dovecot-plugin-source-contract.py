@@ -59,6 +59,8 @@ def main() -> None:
     require(r"^#include\s+\"mail-storage.h\"$", text, "mail-storage include")
     require(r"^#include\s+\"mail-storage-private.h\"$", text,
             "mail-storage-private include")
+    require(r"^#include\s+\"mail-namespace.h\"$", text, "mail-namespace include")
+    require(r"^#include\s+\"mail-user.h\"$", text, "mail-user include")
     require(r"^#include\s+\"lib.h\"$", text, "lib include")
     require(
         r"^#include\s+\"module-dir.h\"$",
@@ -254,11 +256,18 @@ def main() -> None:
         r"[\s\S]*?const\s+char\s+\*\*error_r\s*\)\s*\{[\s\S]*?"
         r"struct\s+wyrebox_dovecot_storage\s+\*wstorage\s*="
         r"\s*\(struct\s+wyrebox_dovecot_storage\s+\*\)\s*storage;\s*"
-        r"[\s\S]*?\(void\)\s*ns;\s*[\s\S]*?"
+        r"[\s\S]*?const\s+char\s+\*account_identity;\s*[\s\S]*?"
+        r"if\s*\(\s*ns\s*==\s*NULL\s*\|\|\s*ns->user\s*==\s*NULL\s*\|\|\s*"
+        r"ns->user->username\s*==\s*NULL\s*\|\|\s*"
+        r"ns->user->username\[0\]\s*==\s*'\\0'\s*\)\s*\{[\s\S]*?"
+        r"if\s*\(\s*error_r\s*!=\s*NULL\s*\)[\s\S]*?"
+        r"\*error_r\s*=\s*\"Dovecot namespace user identity is unavailable\";"
+        r"[\s\S]*?return\s+-1;\s*[\s\S]*?"
+        r"account_identity\s*=\s*ns->user->username;\s*[\s\S]*?"
         r"wstorage->socket_path\s*=\s*[\s\S]*?"
         r"\(\s*\"/run/wyrebox/wyrebox\.sock\"\s*\);[\s\S]*?"
         r"wstorage->account_identity\s*=\s*[\s\S]*?"
-        r"\(\s*\"dovecot-account-identity-unavailable\"\s*\);[\s\S]*?"
+        r"\(\s*account_identity\s*\);[\s\S]*?"
         r"if\s*\(\s*wstorage->socket_path\s*==\s*NULL\s*\|\|\s*"
         r"wstorage->account_identity\s*==\s*NULL\s*\)\s*\{[\s\S]*?"
         r"if\s*\(\s*error_r\s*!=\s*NULL\s*\)[\s\S]*?"
@@ -267,6 +276,11 @@ def main() -> None:
         r"return\s+0;\s*\}",
         text,
         "create initializes plugin-owned daemon config state",
+    )
+    forbid(
+        r"dovecot-account-identity-unavailable",
+        text,
+        "placeholder account identity",
     )
     require(
         r"wyrebox_dovecot_strdup\s*\(\s*const\s+char\s+\*str\s*\)\s*\{[\s\S]*?"

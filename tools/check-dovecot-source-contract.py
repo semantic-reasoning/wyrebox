@@ -21,6 +21,8 @@ REQUIRED_FILES = [
     Path("src/lib-storage/mail-storage.h"),
     Path("src/lib-storage/mail-storage-private.h"),
     Path("src/lib-storage/mail-storage-hooks.h"),
+    Path("src/lib-storage/mail-namespace.h"),
+    Path("src/lib-storage/mail-user.h"),
     Path("src/lib/module-dir.h"),
 ]
 
@@ -280,6 +282,8 @@ def validate_source(source_dir: Path) -> list[ContractIssue]:
     storage = source_dir / "src/lib-storage/mail-storage.h"
     storage_private = source_dir / "src/lib-storage/mail-storage-private.h"
     hooks = source_dir / "src/lib-storage/mail-storage-hooks.h"
+    mail_namespace = source_dir / "src/lib-storage/mail-namespace.h"
+    mail_user = source_dir / "src/lib-storage/mail-user.h"
     module_dir = source_dir / "src/lib/module-dir.h"
 
     issues.extend(
@@ -310,6 +314,27 @@ def validate_source(source_dir: Path) -> list[ContractIssue]:
         issues.extend(
             find_issues_for_struct_fields(storage_private, struct_name, fields),
         )
+
+    issues.extend(
+        find_issues_for_struct_fields(mail_namespace, "mail_namespace", ["user"])
+    )
+    issues.extend(
+        find_issues_for_patterns(
+            mail_namespace,
+            [r"\bstruct\s+mail_user\s+\*\s*user\s*;"],
+            "mail_namespace user identity pointer",
+        )
+    )
+    issues.extend(
+        find_issues_for_struct_fields(mail_user, "mail_user", ["username"])
+    )
+    issues.extend(
+        find_issues_for_patterns(
+            mail_user,
+            [r"\bconst\s+char\s+\*\s*username\s*;"],
+            "mail_user username identity field",
+        )
+    )
 
     issues.extend(
         find_issues_for_patterns(
