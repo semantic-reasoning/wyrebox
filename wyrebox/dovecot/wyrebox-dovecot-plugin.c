@@ -10,6 +10,8 @@
 #include "mail-storage-private.h"
 #include "mail-user.h"
 #include "module-dir.h"
+#include "wyrebox-daemon-mailbox-select-result.h"
+#include "wyrebox-dovecot-daemon-client.h"
 
 struct wyrebox_dovecot_storage
 {
@@ -21,6 +23,8 @@ struct wyrebox_dovecot_storage
 struct wyrebox_dovecot_mailbox
 {
   struct mailbox mailbox;
+  WyreboxDaemonMailboxSelectResult select_result;
+  int select_result_valid;
 };
 
 static struct mail_storage wyrebox_mail_storage_class;
@@ -44,6 +48,10 @@ wyrebox_dovecot_strdup (const char *str)
 static void
 wyrebox_dovecot_mailbox_free (struct mailbox *box)
 {
+  struct wyrebox_dovecot_mailbox *wbox = (struct wyrebox_dovecot_mailbox *) box;
+
+  wyrebox_daemon_mailbox_select_result_clear (&wbox->select_result);
+  wbox->select_result_valid = 0;
   event_unref (&box->event);
 }
 
@@ -95,6 +103,8 @@ wyrebox_dovecot_mailbox_alloc (struct mail_storage *storage,
   wbox->mailbox.v.open = wyrebox_dovecot_mailbox_open;
   wbox->mailbox.v.get_status = wyrebox_dovecot_mailbox_get_status;
   wbox->mailbox.v.free = wyrebox_dovecot_mailbox_free;
+  wyrebox_daemon_mailbox_select_result_clear (&wbox->select_result);
+  wbox->select_result_valid = 0;
   p_array_init (&wbox->mailbox.search_results, pool, 16);
   p_array_init (&wbox->mailbox.module_contexts, pool, 5);
 

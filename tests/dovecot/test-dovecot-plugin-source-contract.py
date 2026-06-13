@@ -68,6 +68,16 @@ def main() -> None:
         "module-dir include",
     )
     require(
+        r"^#include\s+\"wyrebox-daemon-mailbox-select-result.h\"$",
+        text,
+        "daemon mailbox SELECT result include",
+    )
+    require(
+        r"^#include\s+\"wyrebox-dovecot-daemon-client.h\"$",
+        text,
+        "Dovecot daemon client include",
+    )
+    require(
         r"struct\s+wyrebox_dovecot_storage\s*\{\s*"
         r"struct\s+mail_storage\s+storage;",
         text,
@@ -84,9 +94,12 @@ def main() -> None:
     )
     require(
         r"struct\s+wyrebox_dovecot_mailbox\s*\{\s*[\s\S]*?"
-        r"struct\s+mailbox\s+mailbox;\s*}\s*;",
+        r"struct\s+mailbox\s+mailbox;\s*[\s\S]*?"
+        r"WyreboxDaemonMailboxSelectResult\s+select_result;\s*[\s\S]*?"
+        r"int\s+select_result_valid;\s*[\s\S]*?"
+        r"}\s*;",
         text,
-        "wyrebox mailbox wrapper struct",
+        "wyrebox mailbox wrapper embeds SELECT result state",
     )
     require(
         r"wyrebox_dovecot_storage_alloc\s*\(\s*void\s*\)\s*\{[\s\S]*?"
@@ -131,6 +144,7 @@ def main() -> None:
         r"\bconnect\s*\(",
         r"\bsocket\s*\(",
         r"\bwyrebox_daemon_client_",
+        r"\bwyrebox_dovecot_daemon_client_",
         r"\bwyrebox_dovecot_storage_get_daemon_",
     ]:
         if re.search(forbidden_call, mailbox_open_body) is not None:
@@ -189,6 +203,12 @@ def main() -> None:
         "mailbox module_contexts initialized",
     )
     require(
+        r"wyrebox_daemon_mailbox_select_result_clear\s*\(\s*&wbox->select_result\s*\);\s*"
+        r"[\s\S]*?wbox->select_result_valid\s*=\s*0;",
+        text,
+        "mailbox SELECT result state initialized",
+    )
+    require(
         r"->mailbox\.event\s*=\s*event_create\s*\(\s*storage->event\s*\);",
         text,
         "mailbox event initialized with event_create",
@@ -202,6 +222,18 @@ def main() -> None:
         r"event_unref\s*\(\s*&box->event\s*\);",
         text,
         "mailbox free releases event",
+    )
+    require(
+        r"wyrebox_dovecot_mailbox_free\s*\(\s*struct\s+mailbox\s+\*box\s*\)"
+        r"\s*\{[\s\S]*?"
+        r"struct\s+wyrebox_dovecot_mailbox\s+\*wbox\s*="
+        r"\s*\(struct\s+wyrebox_dovecot_mailbox\s+\*\)\s*box;\s*"
+        r"[\s\S]*?"
+        r"wyrebox_daemon_mailbox_select_result_clear\s*\(\s*&wbox->select_result\s*\);"
+        r"[\s\S]*?"
+        r"wbox->select_result_valid\s*=\s*0;",
+        text,
+        "mailbox free clears SELECT result state",
     )
     require(
         r"->mailbox\.v\.open\s*=\s*wyrebox_dovecot_mailbox_open;",

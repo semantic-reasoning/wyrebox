@@ -151,6 +151,8 @@ if have_dovecot_backend
     'wyrebox_plugin',
     'dovecot/wyrebox-dovecot-plugin.c',
     c_args: dovecot_backend_c_args + ['-fvisibility=hidden'],
+    dependencies: [wyrebox_dep],
+    link_args: ['-Wl,--exclude-libs,ALL'],
     name_prefix: '',
     install: false,
   )
