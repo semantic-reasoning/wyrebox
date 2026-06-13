@@ -39,3 +39,24 @@ option(
   value: '',
   description: 'Path to a configured Dovecot build tree containing config.h',
 )
+
+option(
+  'dovecot_loader_smoke',
+  type: 'feature',
+  value: 'disabled',
+  description: 'Enable opt-in Dovecot module loader smoke test',
+)
+
+option(
+  'dovecot_loader_archive',
+  type: 'string',
+  value: '',
+  description: 'Path to Dovecot src/lib/.libs/liblib.a for loader smoke test',
+)
+
+option(
+  'dovecot_loader_extra_link_args',
+  type: 'array',
+  value: [],
+  description: 'Extra linker arguments needed by the Dovecot loader archive',
+)

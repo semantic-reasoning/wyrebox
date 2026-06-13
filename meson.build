@@ -5,6 +5,7 @@ project('wyrebox',
   meson_version: '>=1.0.0',
 )
 
+fs = import('fs')
 python = find_program('python3')
 cc = meson.get_compiler('c')
 
@@ -210,10 +211,15 @@ endif
 summary('wirelog runtime', wirelog_runtime_summary, section: 'Dependencies')
 
 dovecot_backend_option = get_option('dovecot_backend')
+dovecot_loader_smoke_option = get_option('dovecot_loader_smoke')
 dovecot_source_dir_option = get_option('dovecot_source_dir')
 dovecot_build_dir_option = get_option('dovecot_build_dir')
+dovecot_loader_archive_option = get_option('dovecot_loader_archive')
+dovecot_loader_extra_link_args = get_option('dovecot_loader_extra_link_args')
 have_dovecot_backend = false
+have_dovecot_loader_smoke = false
 dovecot_backend_c_args = []
+dovecot_loader_dep = disabler()
 if dovecot_backend_option.enabled()
   if dovecot_build_dir_option == ''
     error(
@@ -358,9 +364,83 @@ if dovecot_backend_option.enabled()
   have_dovecot_backend = true
 endif
 
+if dovecot_loader_smoke_option.enabled()
+  if not have_dovecot_backend
+    error(
+      'Dovecot loader smoke is enabled but the Dovecot backend is not; set ' +
+      '-Ddovecot_backend=enabled with Dovecot source/build directories.',
+    )
+  endif
+  if dovecot_loader_archive_option == ''
+    error(
+      'Dovecot loader smoke is enabled but no loader archive was provided; ' +
+      'set -Ddovecot_loader_archive=/path/to/dovecot/src/lib/.libs/liblib.a',
+    )
+  endif
+
+  dovecot_loader_archive = (
+    meson.current_source_dir() / dovecot_loader_archive_option
+  )
+  if not fs.is_file(dovecot_loader_archive)
+    error(
+      'Dovecot loader smoke archive does not exist or is not a file: ' +
+      dovecot_loader_archive,
+    )
+  endif
+
+  dovecot_loader_link_args = [
+    dovecot_loader_archive,
+  ] + dovecot_loader_extra_link_args
+  dovecot_loader_dep = declare_dependency(
+    link_args: dovecot_loader_link_args,
+  )
+  dovecot_loader_probe = '''
+    #include "config.h"
+    #include "lib.h"
+    #include "module-dir.h"
+
+    int
+    main (void)
+    {
+      struct module *modules = 0;
+      struct module_dir_load_settings settings = { 0 };
+
+      settings.abi_version = DOVECOT_ABI_VERSION;
+      settings.require_init_funcs = 1;
+
+      lib_init ();
+      modules = module_dir_load (".", NULL, &settings);
+      module_dir_unload (&modules);
+      lib_deinit ();
+
+      return settings.require_init_funcs ? 0 : 1;
+    }
+  '''
+  if not cc.links(
+    dovecot_loader_probe,
+    name: 'Dovecot module loader smoke link check',
+    args: dovecot_backend_c_args,
+    dependencies: [dovecot_loader_dep],
+  )
+    error(
+      'Dovecot loader smoke is enabled but the supplied loader archive could ' +
+      'not be linked. Set -Ddovecot_loader_archive to the Dovecot ' +
+      'src/lib/.libs/liblib.a artifact and add any required system libraries ' +
+      'with -Ddovecot_loader_extra_link_args=...',
+    )
+  endif
+
+  have_dovecot_loader_smoke = true
+endif
+
 summary(
   'dovecot backend',
   have_dovecot_backend ? 'enabled' : 'disabled',
+  section: 'Features',
+)
+summary(
+  'dovecot loader smoke',
+  have_dovecot_loader_smoke ? 'enabled' : 'disabled',
   section: 'Features',
 )
 
