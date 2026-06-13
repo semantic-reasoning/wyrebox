@@ -15,6 +15,8 @@ typedef enum
 {
   FAKE_SERVER_SUCCESS,
   FAKE_SERVER_DAEMON_ERROR,
+  FAKE_SERVER_CLOSE_AFTER_REQUEST,
+  FAKE_SERVER_TRUNCATED_RESPONSE,
 } FakeServerResponse;
 
 typedef struct
@@ -22,6 +24,7 @@ typedef struct
   GSocketListener *listener;
   GThread *thread;
   FakeServerResponse response;
+  WyreboxDaemonErrorClass error_class;
   const guint8 *expected_message;
   gsize expected_message_size;
   const char *const *expected_recipients;
@@ -138,8 +141,7 @@ build_success_response (const WyreboxDaemonDecodedRequestFrame *decoded)
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
-      NULL,
-      &error);
+      NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
@@ -147,7 +149,8 @@ build_success_response (const WyreboxDaemonDecodedRequestFrame *decoded)
 }
 
 static GBytes *
-build_daemon_error_response (const WyreboxDaemonDecodedRequestFrame *decoded)
+build_daemon_error_response (const WyreboxDaemonDecodedRequestFrame *decoded,
+    WyreboxDaemonErrorClass error_class)
 {
   g_auto (WyreboxDaemonErrorFrame) error_frame = { 0 };
   g_auto (WyreboxDaemonResponseFrame) response = { 0 };
@@ -156,10 +159,9 @@ build_daemon_error_response (const WyreboxDaemonDecodedRequestFrame *decoded)
 
   g_assert_true (wyrebox_daemon_error_frame_init (&error_frame,
           decoded->request_id,
-          WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE,
+          error_class,
           "daemon-free-form-message-must-not-appear",
-          "daemon-free-form-retry-must-not-appear",
-          &error));
+          "daemon-free-form-retry-must-not-appear", &error));
   g_assert_no_error (error);
 
   g_assert_true (wyrebox_daemon_response_frame_init_error (&response,
@@ -167,12 +169,28 @@ build_daemon_error_response (const WyreboxDaemonDecodedRequestFrame *decoded)
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
-      NULL,
-      &error);
+      NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
   return g_steal_pointer (&encoded);
+}
+
+static void
+write_truncated_response (GOutputStream *output)
+{
+  const guint8 partial_payload[] = "daemon-free-form-message-must-not-appear";
+  guint8 frame_data[4 + sizeof (partial_payload)] = { 0 };
+  gsize bytes_written = 0;
+  g_autoptr (GError) error = NULL;
+
+  frame_data[3] = sizeof (partial_payload) + 1;
+  memcpy (frame_data + 4, partial_payload, sizeof (partial_payload));
+
+  g_assert_true (g_output_stream_write_all (output,
+          frame_data, sizeof (frame_data), &bytes_written, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (bytes_written, ==, sizeof (frame_data));
 }
 
 static gpointer
@@ -204,11 +222,7 @@ fake_server_thread_main (gpointer user_data)
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
           request,
-          &decoded,
-          &decoded_state,
-          &decoded_state_clear,
-          NULL,
-          &error));
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpint (decoded.operation, ==,
       WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION);
@@ -218,8 +232,7 @@ fake_server_thread_main (gpointer user_data)
   g_assert_cmpstr (decoded.tool_identity, ==, "wyrebox-postfix-pipe");
   g_assert_cmpstr (decoded.correlation_id, ==, "postfix:queue-1:delivery-1");
   g_assert_nonnull (decoded.delivery_ingestion);
-  g_assert_cmpstr (decoded.delivery_ingestion->delivery_id, ==,
-      "delivery-1");
+  g_assert_cmpstr (decoded.delivery_ingestion->delivery_id, ==, "delivery-1");
   g_assert_cmpstr (decoded.delivery_ingestion->queue_id, ==, "queue-1");
   g_assert_cmpstr (decoded.delivery_ingestion->envelope_sender, ==,
       "sender@example.com");
@@ -234,17 +247,25 @@ fake_server_thread_main (gpointer user_data)
       response = build_success_response (&decoded);
       break;
     case FAKE_SERVER_DAEMON_ERROR:
-      response = build_daemon_error_response (&decoded);
+      response = build_daemon_error_response (&decoded, server->error_class);
+      break;
+    case FAKE_SERVER_CLOSE_AFTER_REQUEST:
+      break;
+    case FAKE_SERVER_TRUNCATED_RESPONSE:
+      write_truncated_response (output);
       break;
   }
 
-  const guint8 *response_data = NULL;
-  gsize response_size = 0;
+  if (response != NULL) {
+    const guint8 *response_data = NULL;
+    gsize response_size = 0;
 
-  response_data = (const guint8 *) g_bytes_get_data (response, &response_size);
-  g_assert_true (wyrebox_daemon_frame_io_write_payload (output,
-          response_data, response_size, &error));
-  g_assert_no_error (error);
+    response_data = (const guint8 *) g_bytes_get_data (response,
+        &response_size);
+    g_assert_true (wyrebox_daemon_frame_io_write_payload (output,
+            response_data, response_size, &error));
+    g_assert_no_error (error);
+  }
 
   if (decoded_state_clear != NULL)
     decoded_state_clear (decoded_state);
@@ -259,6 +280,7 @@ static void
 fake_server_start (FakeServer *server,
     const char *socket_path,
     FakeServerResponse response,
+    WyreboxDaemonErrorClass error_class,
     const guint8 *expected_message,
     gsize expected_message_size, const char *const *expected_recipients)
 {
@@ -267,6 +289,7 @@ fake_server_start (FakeServer *server,
 
   server->listener = g_socket_listener_new ();
   server->response = response;
+  server->error_class = error_class;
   server->expected_message = expected_message;
   server->expected_message_size = expected_message_size;
   server->expected_recipients = expected_recipients;
@@ -274,17 +297,12 @@ fake_server_start (FakeServer *server,
   address = g_unix_socket_address_new (socket_path);
   g_assert_true (g_socket_listener_add_address (server->listener,
           address,
-          G_SOCKET_TYPE_STREAM,
-          G_SOCKET_PROTOCOL_DEFAULT,
-          NULL,
-          NULL,
-          &error));
+          G_SOCKET_TYPE_STREAM, G_SOCKET_PROTOCOL_DEFAULT, NULL, NULL, &error));
   g_assert_no_error (error);
 
   server->thread =
       g_thread_new ("fake-postfix-pipe-server",
-      fake_server_thread_main,
-      server);
+      fake_server_thread_main, server);
 }
 
 static void
@@ -298,8 +316,7 @@ fake_server_join (FakeServer *server)
 
 static void
 run_pipe (const char *const *arguments,
-    const guint8 *stdin_data,
-    gsize stdin_size, PipeRunResult *result)
+    const guint8 *stdin_data, gsize stdin_size, PipeRunResult *result)
 {
   g_autoptr (GSubprocess) subprocess = NULL;
   g_autoptr (GBytes) stdin_bytes = NULL;
@@ -312,8 +329,7 @@ run_pipe (const char *const *arguments,
   subprocess = g_subprocess_newv (arguments,
       (GSubprocessFlags) (G_SUBPROCESS_FLAGS_STDIN_PIPE |
           G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
-          G_SUBPROCESS_FLAGS_STDERR_PIPE),
-      &error);
+          G_SUBPROCESS_FLAGS_STDERR_PIPE), &error);
   g_assert_no_error (error);
   g_assert_nonnull (subprocess);
 
@@ -382,9 +398,8 @@ test_success_exits_ex_ok_and_sends_delivery_ingestion (void)
   fake_server_start (&server,
       socket_path,
       FAKE_SERVER_SUCCESS,
-      message,
-      sizeof (message),
-      recipients);
+      WYREBOX_DAEMON_ERROR_INTERNAL_ERROR,
+      message, sizeof (message), recipients);
 
   run_pipe (argv, message, sizeof (message), &result);
 
@@ -399,7 +414,7 @@ test_success_exits_ex_ok_and_sends_delivery_ingestion (void)
 static void
 test_daemon_error_maps_to_policy_exit (void)
 {
-  const guint8 message[] = "Subject: hi\r\n\r\nbody\r\n";
+  const guint8 message[] = "Subject: hi\r\n\r\nbody-bytes-must-not-appear\r\n";
   const char *recipients[] = {
     "alice@example.com",
     "bob@example.com",
@@ -424,23 +439,161 @@ test_daemon_error_maps_to_policy_exit (void)
   fake_server_start (&server,
       socket_path,
       FAKE_SERVER_DAEMON_ERROR,
-      message,
-      sizeof (message) - 1,
-      recipients);
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE,
+      message, sizeof (message) - 1, recipients);
 
   run_pipe (argv, message, sizeof (message) - 1, &result);
 
   g_assert_cmpint (result.exit_status, ==, EX_DATAERR);
-  assert_stderr_contains (result.stderr_bytes,
-      "outcome=permanent_failure");
+  assert_stderr_contains (result.stderr_bytes, "outcome=permanent_failure");
   assert_stderr_contains (result.stderr_bytes,
       "daemon_error_class=permanentFailure");
-  assert_stderr_omits (result.stderr_bytes,
-      "daemon-free-form-message");
-  assert_stderr_omits (result.stderr_bytes,
-      "daemon-free-form-retry");
+  assert_stderr_omits (result.stderr_bytes, "daemon-free-form-message");
+  assert_stderr_omits (result.stderr_bytes, "daemon-free-form-retry");
+  assert_stderr_omits (result.stderr_bytes, "body-bytes-must-not-appear");
   fake_server_join (&server);
   remove_tree (root);
+}
+
+static void
+assert_daemon_error_maps_to_exit (WyreboxDaemonErrorClass error_class,
+    int expected_exit_status,
+    const char *expected_outcome, const char *expected_error_class)
+{
+  const guint8 message[] = "Subject: hi\r\n\r\nbody-bytes-must-not-appear\r\n";
+  const char *recipients[] = {
+    "alice@example.com",
+    "bob@example.com",
+    NULL
+  };
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  const char *argv[] = {
+    pipe_executable_path (),
+    "--account-id", "account-1",
+    "--delivery-id", "delivery-1",
+    "--queue-id", "queue-1",
+    "--sender", "sender@example.com",
+    "--recipient", "alice@example.com",
+    "--recipient", "bob@example.com",
+    "--socket", socket_path,
+    NULL
+  };
+  g_autofree char *expected_exit =
+      g_strdup_printf ("exit_status=%d", expected_exit_status);
+  g_autofree char *expected_outcome_context =
+      g_strdup_printf ("outcome=%s", expected_outcome);
+  g_autofree char *expected_error_context =
+      g_strdup_printf ("daemon_error_class=%s", expected_error_class);
+  FakeServer server = { 0 };
+  g_auto (PipeRunResult) result = { 0 };
+
+  fake_server_start (&server,
+      socket_path,
+      FAKE_SERVER_DAEMON_ERROR,
+      error_class, message, sizeof (message) - 1, recipients);
+
+  run_pipe (argv, message, sizeof (message) - 1, &result);
+
+  g_assert_cmpint (result.exit_status, ==, expected_exit_status);
+  assert_stderr_contains (result.stderr_bytes, expected_outcome_context);
+  assert_stderr_contains (result.stderr_bytes, expected_exit);
+  assert_stderr_contains (result.stderr_bytes,
+      "request_id=postfix:queue-1:delivery-1");
+  assert_stderr_contains (result.stderr_bytes, expected_error_context);
+  assert_stderr_omits (result.stderr_bytes, "daemon-free-form-message");
+  assert_stderr_omits (result.stderr_bytes, "daemon-free-form-retry");
+  assert_stderr_omits (result.stderr_bytes, "body-bytes-must-not-appear");
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_daemon_temporary_failure_exits_tempfail (void)
+{
+  assert_daemon_error_maps_to_exit (WYREBOX_DAEMON_ERROR_TEMPORARY_FAILURE,
+      EX_TEMPFAIL, "temporary_failure", "temporaryFailure");
+}
+
+static void
+test_daemon_permission_denied_exits_noperm (void)
+{
+  assert_daemon_error_maps_to_exit (WYREBOX_DAEMON_ERROR_PERMISSION_DENIED,
+      EX_NOPERM, "permanent_failure", "permissionDenied");
+}
+
+static void
+test_daemon_conflict_exits_tempfail (void)
+{
+  assert_daemon_error_maps_to_exit (WYREBOX_DAEMON_ERROR_CONFLICT,
+      EX_TEMPFAIL, "temporary_failure", "conflict");
+}
+
+static void
+test_daemon_internal_error_exits_tempfail (void)
+{
+  assert_daemon_error_maps_to_exit (WYREBOX_DAEMON_ERROR_INTERNAL_ERROR,
+      EX_TEMPFAIL, "temporary_failure", "internalError");
+}
+
+static void
+assert_daemon_transport_failure_exits_tempfail (FakeServerResponse response)
+{
+  const guint8 message[] = "Subject: hi\r\n\r\nbody-bytes-must-not-appear\r\n";
+  const char *recipients[] = {
+    "alice@example.com",
+    "bob@example.com",
+    NULL
+  };
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  const char *argv[] = {
+    pipe_executable_path (),
+    "--account-id", "account-1",
+    "--delivery-id", "delivery-1",
+    "--queue-id", "queue-1",
+    "--sender", "sender@example.com",
+    "--recipient", "alice@example.com",
+    "--recipient", "bob@example.com",
+    "--socket", socket_path,
+    NULL
+  };
+  FakeServer server = { 0 };
+  g_auto (PipeRunResult) result = { 0 };
+
+  fake_server_start (&server,
+      socket_path,
+      response,
+      WYREBOX_DAEMON_ERROR_INTERNAL_ERROR,
+      message, sizeof (message) - 1, recipients);
+
+  run_pipe (argv, message, sizeof (message) - 1, &result);
+
+  g_assert_cmpint (result.exit_status, ==, EX_TEMPFAIL);
+  assert_stderr_contains (result.stderr_bytes, "outcome=temporary_failure");
+  assert_stderr_contains (result.stderr_bytes,
+      "request_id=postfix:queue-1:delivery-1");
+  assert_stderr_contains (result.stderr_bytes,
+      "local_error_domain=g-io-error-quark");
+  assert_stderr_omits (result.stderr_bytes, "body-bytes-must-not-appear");
+  assert_stderr_omits (result.stderr_bytes, "daemon-free-form-message");
+  assert_stderr_omits (result.stderr_bytes, "daemon-free-form-retry");
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_daemon_closes_after_request_exits_tempfail (void)
+{
+  assert_daemon_transport_failure_exits_tempfail
+      (FAKE_SERVER_CLOSE_AFTER_REQUEST);
+}
+
+static void
+test_daemon_truncated_response_exits_tempfail (void)
+{
+  assert_daemon_transport_failure_exits_tempfail
+      (FAKE_SERVER_TRUNCATED_RESPONSE);
 }
 
 static void
@@ -463,8 +616,7 @@ test_missing_socket_exits_tempfail (void)
   run_pipe (argv, message, sizeof (message) - 1, &result);
 
   g_assert_cmpint (result.exit_status, ==, EX_TEMPFAIL);
-  assert_stderr_contains (result.stderr_bytes,
-      "outcome=temporary_failure");
+  assert_stderr_contains (result.stderr_bytes, "outcome=temporary_failure");
   assert_stderr_contains (result.stderr_bytes,
       "local_error_domain=g-io-error-quark");
   assert_stderr_contains (result.stderr_bytes,
@@ -487,10 +639,8 @@ test_invalid_argv_exits_local_error_path (void)
   run_pipe (argv, message, sizeof (message) - 1, &result);
 
   g_assert_cmpint (result.exit_status, ==, EX_TEMPFAIL);
-  assert_stderr_contains (result.stderr_bytes,
-      "outcome=temporary_failure");
-  assert_stderr_contains (result.stderr_bytes,
-      "request_id=<none>");
+  assert_stderr_contains (result.stderr_bytes, "outcome=temporary_failure");
+  assert_stderr_contains (result.stderr_bytes, "request_id=<none>");
   assert_stderr_contains (result.stderr_bytes,
       "local_error_domain=g-io-error-quark");
   assert_stderr_omits (result.stderr_bytes, "delivery-id is required");
@@ -513,10 +663,8 @@ test_empty_stdin_exits_local_error_path (void)
   run_pipe (argv, message, 0, &result);
 
   g_assert_cmpint (result.exit_status, ==, EX_TEMPFAIL);
-  assert_stderr_contains (result.stderr_bytes,
-      "outcome=temporary_failure");
-  assert_stderr_contains (result.stderr_bytes,
-      "request_id=<none>");
+  assert_stderr_contains (result.stderr_bytes, "outcome=temporary_failure");
+  assert_stderr_contains (result.stderr_bytes, "request_id=<none>");
   assert_stderr_contains (result.stderr_bytes,
       "local_error_domain=g-io-error-quark");
   assert_stderr_omits (result.stderr_bytes, "message input must not be empty");
@@ -527,20 +675,35 @@ main (int argc, char **argv)
 {
   g_test_init (&argc, &argv, NULL);
 
-  g_test_add_func (
-      "/postfix/pipe-executable/success-exits-ex-ok-and-sends-request",
+  g_test_add_func
+      ("/postfix/pipe-executable/success-exits-ex-ok-and-sends-request",
       test_success_exits_ex_ok_and_sends_delivery_ingestion);
-  g_test_add_func (
-      "/postfix/pipe-executable/daemon-error-maps-to-policy-exit",
+  g_test_add_func ("/postfix/pipe-executable/daemon-error-maps-to-policy-exit",
       test_daemon_error_maps_to_policy_exit);
-  g_test_add_func (
-      "/postfix/pipe-executable/missing-socket-exits-tempfail",
+  g_test_add_func
+      ("/postfix/pipe-executable/daemon-temporary-failure-exits-tempfail",
+      test_daemon_temporary_failure_exits_tempfail);
+  g_test_add_func
+      ("/postfix/pipe-executable/daemon-permission-denied-exits-noperm",
+      test_daemon_permission_denied_exits_noperm);
+  g_test_add_func ("/postfix/pipe-executable/daemon-conflict-exits-tempfail",
+      test_daemon_conflict_exits_tempfail);
+  g_test_add_func
+      ("/postfix/pipe-executable/daemon-internal-error-exits-tempfail",
+      test_daemon_internal_error_exits_tempfail);
+  g_test_add_func
+      ("/postfix/pipe-executable/daemon-closes-after-request-exits-tempfail",
+      test_daemon_closes_after_request_exits_tempfail);
+  g_test_add_func
+      ("/postfix/pipe-executable/daemon-truncated-response-exits-tempfail",
+      test_daemon_truncated_response_exits_tempfail);
+  g_test_add_func ("/postfix/pipe-executable/missing-socket-exits-tempfail",
       test_missing_socket_exits_tempfail);
-  g_test_add_func (
-      "/postfix/pipe-executable/invalid-argv-exits-local-error-path",
+  g_test_add_func
+      ("/postfix/pipe-executable/invalid-argv-exits-local-error-path",
       test_invalid_argv_exits_local_error_path);
-  g_test_add_func (
-      "/postfix/pipe-executable/empty-stdin-exits-local-error-path",
+  g_test_add_func
+      ("/postfix/pipe-executable/empty-stdin-exits-local-error-path",
       test_empty_stdin_exits_local_error_path);
 
   return g_test_run ();
