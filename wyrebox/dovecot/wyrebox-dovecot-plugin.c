@@ -29,6 +29,21 @@ struct wyrebox_dovecot_mailbox
 
 static struct mail_storage wyrebox_mail_storage_class;
 
+extern const char *wyrebox_dovecot_test_daemon_socket_path
+    __attribute__((weak));
+
+static const char *
+wyrebox_dovecot_socket_path (void)
+{
+  if (&wyrebox_dovecot_test_daemon_socket_path != NULL
+      && wyrebox_dovecot_test_daemon_socket_path != NULL
+      && wyrebox_dovecot_test_daemon_socket_path[0] != '\0') {
+    return wyrebox_dovecot_test_daemon_socket_path;
+  }
+
+  return "/run/wyrebox/wyrebox.sock";
+}
+
 static char *
 wyrebox_dovecot_strdup (const char *str)
 {
@@ -266,7 +281,8 @@ wyrebox_dovecot_storage_create (struct mail_storage *storage,
 
   account_identity = ns->user->username;
 
-  wstorage->socket_path = wyrebox_dovecot_strdup ("/run/wyrebox/wyrebox.sock");
+  wstorage->socket_path =
+      wyrebox_dovecot_strdup (wyrebox_dovecot_socket_path ());
   wstorage->account_identity = wyrebox_dovecot_strdup (account_identity);
   if (wstorage->socket_path == NULL || wstorage->account_identity == NULL) {
     free (wstorage->socket_path);

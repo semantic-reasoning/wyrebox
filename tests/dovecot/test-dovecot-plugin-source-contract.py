@@ -421,6 +421,28 @@ def main() -> None:
         "wired storage lifecycle vfuncs",
     )
     require(
+        r"extern\s+const\s+char\s+\*wyrebox_dovecot_test_daemon_socket_path"
+        r"\s+__attribute__\s*\(\s*\(\s*weak\s*\)\s*\)\s*;",
+        text,
+        "test-only weak daemon socket path seam",
+    )
+    require(
+        r"wyrebox_dovecot_socket_path\s*\(\s*void\s*\)\s*\{[\s\S]*?"
+        r"&wyrebox_dovecot_test_daemon_socket_path\s*!=\s*NULL[\s\S]*?"
+        r"wyrebox_dovecot_test_daemon_socket_path\s*!=\s*NULL[\s\S]*?"
+        r"wyrebox_dovecot_test_daemon_socket_path\[0\]\s*!=\s*'\\0'[\s\S]*?"
+        r"return\s+wyrebox_dovecot_test_daemon_socket_path;[\s\S]*?"
+        r"return\s+\"/run/wyrebox/wyrebox\.sock\";",
+        text,
+        "socket path helper preserves default and allows test weak override",
+    )
+    forbid(
+        r"WYREBOX_DOVECOT_PLUGIN_EXPORT\s+void\s+"
+        r"wyrebox_dovecot_plugin_set_daemon_socket_path_for_testing",
+        text,
+        "exported test socket path setter",
+    )
+    require(
         r"wyrebox_dovecot_storage_create\s*\(\s*struct\s+mail_storage\s+\*storage\s*,"
         r"[\s\S]*?struct\s+mail_namespace\s+\*ns,"
         r"[\s\S]*?const\s+char\s+\*\*error_r\s*\)\s*\{[\s\S]*?"
@@ -435,7 +457,7 @@ def main() -> None:
         r"[\s\S]*?return\s+-1;\s*[\s\S]*?"
         r"account_identity\s*=\s*ns->user->username;\s*[\s\S]*?"
         r"wstorage->socket_path\s*=\s*[\s\S]*?"
-        r"\(\s*\"/run/wyrebox/wyrebox\.sock\"\s*\);[\s\S]*?"
+        r"\(\s*wyrebox_dovecot_socket_path\s*\(\s*\)\s*\);[\s\S]*?"
         r"wstorage->account_identity\s*=\s*[\s\S]*?"
         r"\(\s*account_identity\s*\);[\s\S]*?"
         r"if\s*\(\s*wstorage->socket_path\s*==\s*NULL\s*\|\|\s*"
@@ -498,11 +520,6 @@ def main() -> None:
         r"wyrebox_plugin_deinit\s*\(\s*void\s*\)\s*\{[\s\S]*?mail_storage_class_unregister\s*\(\s*&wyrebox_mail_storage_class\s*\)",
         text,
         "deinit-time unregistration",
-    )
-    forbid(
-        r"__attribute__\s*\(\(\s*weak\s*\)\)",
-        text,
-        "weak symbol declarations",
     )
     forbid(
         r"mail_storage_class_register\s*!=\s*NULL",

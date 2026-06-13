@@ -34,6 +34,19 @@ if have_dovecot_backend
     ],
     depends: wyrebox_dovecot_plugin_module,
   )
+
+  dovecot_plugin_mailbox_smoke = executable(
+    'test-dovecot-plugin-mailbox-smoke',
+    [
+      'test-dovecot-plugin-mailbox-smoke.c',
+      'test-dovecot-plugin-mailbox-smoke-stub-registration.c',
+      meson.project_source_root() / 'wyrebox' / 'dovecot' / 'wyrebox-dovecot-plugin.c',
+    ],
+    c_args: dovecot_backend_c_args + ['-fvisibility=hidden'],
+    dependencies: [wyrebox_dep],
+  )
+
+  test('dovecot plugin mailbox smoke', dovecot_plugin_mailbox_smoke)
 endif
 
 if have_dovecot_loader_smoke
@@ -63,4 +76,5 @@ if have_dovecot_loader_smoke
     ],
     depends: wyrebox_dovecot_plugin_module,
   )
+
 endif
