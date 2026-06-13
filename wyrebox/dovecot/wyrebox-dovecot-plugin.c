@@ -1,4 +1,6 @@
 #include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "config.h"
 
@@ -10,6 +12,8 @@
 struct wyrebox_dovecot_storage
 {
   struct mail_storage storage;
+  char *socket_path;
+  char *account_identity;
 };
 
 struct wyrebox_dovecot_mailbox
@@ -18,6 +22,22 @@ struct wyrebox_dovecot_mailbox
 };
 
 static struct mail_storage wyrebox_mail_storage_class;
+
+static char *
+wyrebox_dovecot_strdup (const char *str)
+{
+  size_t size;
+  char *copy;
+
+  size = strlen (str) + 1;
+  copy = malloc (size);
+  if (copy == NULL) {
+    return NULL;
+  }
+
+  memcpy (copy, str, size);
+  return copy;
+}
 
 static void
 wyrebox_dovecot_mailbox_free (struct mailbox *box)
@@ -100,16 +120,38 @@ static int
 wyrebox_dovecot_storage_create (struct mail_storage *storage,
     struct mail_namespace *ns, const char **error_r)
 {
-  (void) storage;
+  struct wyrebox_dovecot_storage *wstorage =
+      (struct wyrebox_dovecot_storage *) storage;
+
   (void) ns;
-  (void) error_r;
+
+  wstorage->socket_path = wyrebox_dovecot_strdup ("/run/wyrebox/wyrebox.sock");
+  wstorage->account_identity =
+      wyrebox_dovecot_strdup ("dovecot-account-identity-unavailable");
+  if (wstorage->socket_path == NULL || wstorage->account_identity == NULL) {
+    free (wstorage->socket_path);
+    free (wstorage->account_identity);
+    wstorage->socket_path = NULL;
+    wstorage->account_identity = NULL;
+    if (error_r != NULL) {
+      *error_r = "Failed to allocate WyreBox Dovecot storage state";
+    }
+    return -1;
+  }
+
   return 0;
 }
 
 static void
 wyrebox_dovecot_storage_destroy (struct mail_storage *storage)
 {
-  (void) storage;
+  struct wyrebox_dovecot_storage *wstorage =
+      (struct wyrebox_dovecot_storage *) storage;
+
+  free (wstorage->socket_path);
+  free (wstorage->account_identity);
+  wstorage->socket_path = NULL;
+  wstorage->account_identity = NULL;
 }
 
 static struct mail_storage wyrebox_mail_storage_class = {
