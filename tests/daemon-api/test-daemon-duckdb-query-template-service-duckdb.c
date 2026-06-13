@@ -29,7 +29,13 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_database, duckdb_database_clear)
 static void
 exec_sql (duckdb_connection connection, const gchar *sql)
 {
-  g_assert_cmpint (duckdb_query (connection, sql, NULL), ==, DuckDBSuccess);
+  duckdb_result result = { 0 };
+  duckdb_state state = duckdb_query (connection, sql, &result);
+
+  if (state != DuckDBSuccess)
+    g_error ("duckdb query failed: %s", duckdb_result_error (&result));
+
+  duckdb_destroy_result (&result);
 }
 
 static gchar *
@@ -61,6 +67,11 @@ bootstrap_catalog (const gchar *path)
   g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
           0, 1, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE,
+          2, 3, &error));
   g_assert_no_error (error);
 }
 
@@ -135,19 +146,95 @@ seed_sql_looking_mailbox (const gchar *path)
 }
 
 static void
-init_request (WyreboxDaemonDuckDBQueryTemplateRequest *request,
-    const gchar *account_id, const gchar *mailbox_id)
+seed_message_header (const gchar *path)
 {
-  const gchar *parameters[] = { mailbox_id, NULL };
+  g_auto (duckdb_database) database = NULL;
+  g_auto (duckdb_connection) connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  exec_sql (connection,
+      "INSERT INTO message_headers ("
+      "message_id, rfc_message_id, duplicate_message_id_count, subject, "
+      "from_addr, to_addr, cc_addr, bcc_addr, date_raw, journal_offset, "
+      "journal_sequence) VALUES "
+      "('message-a', '<message-a@example.test>', 0, 'Subject A', "
+      "'Alice <alice@example.test>', 'Bob <bob@example.test>', "
+      "'Carol <carol@example.test>', 'Blind <blind@example.test>', "
+      "'Mon, 01 Jan 2024 00:00:00 +0000', 20, 21);");
+}
+
+static void
+seed_sql_looking_message (const gchar *path)
+{
+  g_auto (duckdb_database) database = NULL;
+  g_auto (duckdb_connection) connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  exec_sql (connection,
+      "INSERT INTO messages (message_id, account_id, object_id, "
+      "journal_offset, journal_sequence) VALUES "
+      "('message''; DROP TABLE messages; --', 'account-1', "
+      "'object-sql-looking-message', 7, 7);");
+}
+
+static void
+seed_message_with_escaped_nullable_headers (const gchar *path)
+{
+  g_auto (duckdb_database) database = NULL;
+  g_auto (duckdb_connection) connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  exec_sql (connection,
+      "INSERT INTO messages (message_id, account_id, object_id, "
+      "journal_offset, journal_sequence) VALUES "
+      "('message-escaped', 'account-1', 'object-escaped', 8, 8);");
+  exec_sql (connection,
+      "INSERT INTO message_headers ("
+      "message_id, rfc_message_id, duplicate_message_id_count, subject, "
+      "from_addr, to_addr, cc_addr, bcc_addr, date_raw, journal_offset, "
+      "journal_sequence) VALUES "
+      "('message-escaped', NULL, 0, 'Subject, with comma', "
+      "'Quote \" Sender <quote@example.test>', "
+      "'Line\nBreak <line@example.test>', NULL, '', "
+      "'Tue, 02 Jan 2024 00:00:00 +0000', 30, 31);");
+}
+
+static void
+init_request_with_template (WyreboxDaemonDuckDBQueryTemplateRequest *request,
+    const gchar *template_id, const gchar *account_id, const gchar *parameter)
+{
+  const gchar *parameters[] = { parameter, NULL };
   g_autoptr (GError) error = NULL;
 
   g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (request,
-          "query-1", "mailbox.uid_map.v1", account_id, parameters, &error));
+          "query-1", template_id, account_id, parameters, &error));
   g_assert_no_error (error);
 }
 
+static void
+init_uid_map_request (WyreboxDaemonDuckDBQueryTemplateRequest *request,
+    const gchar *account_id, const gchar *mailbox_id)
+{
+  init_request_with_template (request, "mailbox.uid_map.v1", account_id,
+      mailbox_id);
+}
+
+static void
+init_message_by_id_request (WyreboxDaemonDuckDBQueryTemplateRequest *request,
+    const gchar *account_id, const gchar *message_id)
+{
+  init_request_with_template (request, "message.by_id.v1", account_id,
+      message_id);
+}
+
 static gchar *
-dispatch_csv (const gchar *path, const gchar *account_id,
+dispatch_uid_map_csv (const gchar *path, const gchar *account_id,
     const gchar *mailbox_id)
 {
   g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
@@ -162,7 +249,37 @@ dispatch_csv (const gchar *path, const gchar *account_id,
   g_assert_no_error (error);
   g_assert_nonnull (service);
 
-  init_request (&request, account_id, mailbox_id);
+  init_uid_map_request (&request, account_id, mailbox_id);
+  g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
+          "request-1", "admin-cli", account_id, "duckdb-tool",
+          "correlation-1", &request, &frame, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpuint (frame.stream_chunk.chunk_index, ==, 0);
+  g_assert_true (frame.stream_chunk.end_of_stream);
+
+  data = g_bytes_get_data (frame.stream_chunk.bytes, &size);
+  return g_strndup (data, size);
+}
+
+static gchar *
+dispatch_message_by_id_csv (const gchar *path, const gchar *account_id,
+    const gchar *message_id)
+{
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  gconstpointer data = NULL;
+  gsize size = 0;
+
+  service = wyrebox_daemon_duckdb_query_template_service_new_duckdb (path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (service);
+
+  init_message_by_id_request (&request, account_id, message_id);
   g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
           "request-1", "admin-cli", account_id, "duckdb-tool",
           "correlation-1", &request, &frame, &error));
@@ -185,7 +302,7 @@ test_duckdb_service_returns_uid_map_csv (void)
   bootstrap_catalog (path);
   seed_catalog (path);
 
-  csv = dispatch_csv (path, "account-1", "mailbox-inbox");
+  csv = dispatch_uid_map_csv (path, "account-1", "mailbox-inbox");
   g_assert_cmpstr (csv, ==,
       "account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n"
       "account-1,mailbox-inbox,77,1,message-a,object-a\n"
@@ -202,7 +319,7 @@ test_duckdb_service_empty_result_is_header_only (void)
   bootstrap_catalog (path);
   seed_catalog (path);
 
-  csv = dispatch_csv (path, "account-1", "mailbox-missing");
+  csv = dispatch_uid_map_csv (path, "account-1", "mailbox-missing");
   g_assert_cmpstr (csv, ==,
       "account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n");
   (void) g_remove (path);
@@ -217,7 +334,7 @@ test_duckdb_service_isolates_cross_account_rows (void)
   bootstrap_catalog (path);
   seed_catalog (path);
 
-  csv = dispatch_csv (path, "account-2", "mailbox-inbox");
+  csv = dispatch_uid_map_csv (path, "account-2", "mailbox-inbox");
   g_assert_cmpstr (csv, ==,
       "account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n"
       "account-2,mailbox-inbox,99,5,message-other-account,"
@@ -235,11 +352,117 @@ test_duckdb_service_treats_sql_looking_mailbox_as_value (void)
   seed_catalog (path);
   seed_sql_looking_mailbox (path);
 
-  csv = dispatch_csv (path, "account-1", "mailbox'; DROP TABLE messages; --");
+  csv = dispatch_uid_map_csv (path, "account-1",
+      "mailbox'; DROP TABLE messages; --");
   g_assert_cmpstr (csv, ==,
       "account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n"
       "account-1,mailbox'; DROP TABLE messages; --,123,6,"
       "message-sql-looking,object-sql-looking\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_returns_message_by_id_with_headers (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+  seed_message_header (path);
+
+  csv = dispatch_message_by_id_csv (path, "account-1", "message-a");
+  g_assert_cmpstr (csv, ==,
+      "account_id,message_id,object_id,message_journal_offset,"
+      "message_journal_sequence,rfc_message_id,subject,from_addr,to_addr,"
+      "cc_addr,bcc_addr,date_raw,header_journal_offset,"
+      "header_journal_sequence\n"
+      "account-1,message-a,object-a,2,2,<message-a@example.test>,Subject A,"
+      "Alice <alice@example.test>,Bob <bob@example.test>,"
+      "Carol <carol@example.test>,Blind <blind@example.test>,"
+      "\"Mon, 01 Jan 2024 00:00:00 +0000\",20,21\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_message_by_id_isolates_cross_account_rows (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+
+  csv = dispatch_message_by_id_csv (path, "account-1", "message-other-account");
+  g_assert_cmpstr (csv, ==,
+      "account_id,message_id,object_id,message_journal_offset,"
+      "message_journal_sequence,rfc_message_id,subject,from_addr,to_addr,"
+      "cc_addr,bcc_addr,date_raw,header_journal_offset,"
+      "header_journal_sequence\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_message_by_id_missing_message_is_header_only (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+
+  csv = dispatch_message_by_id_csv (path, "account-1", "message-missing");
+  g_assert_cmpstr (csv, ==,
+      "account_id,message_id,object_id,message_journal_offset,"
+      "message_journal_sequence,rfc_message_id,subject,from_addr,to_addr,"
+      "cc_addr,bcc_addr,date_raw,header_journal_offset,"
+      "header_journal_sequence\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_treats_sql_looking_message_id_as_value (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+  seed_sql_looking_message (path);
+
+  csv = dispatch_message_by_id_csv (path, "account-1",
+      "message'; DROP TABLE messages; --");
+  g_assert_cmpstr (csv, ==,
+      "account_id,message_id,object_id,message_journal_offset,"
+      "message_journal_sequence,rfc_message_id,subject,from_addr,to_addr,"
+      "cc_addr,bcc_addr,date_raw,header_journal_offset,"
+      "header_journal_sequence\n"
+      "account-1,message'; DROP TABLE messages; --,"
+      "object-sql-looking-message,7,7,,,,,,,,,\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_message_by_id_escapes_nullable_headers (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+  seed_message_with_escaped_nullable_headers (path);
+
+  csv = dispatch_message_by_id_csv (path, "account-1", "message-escaped");
+  g_assert_cmpstr (csv, ==,
+      "account_id,message_id,object_id,message_journal_offset,"
+      "message_journal_sequence,rfc_message_id,subject,from_addr,to_addr,"
+      "cc_addr,bcc_addr,date_raw,header_journal_offset,"
+      "header_journal_sequence\n"
+      "account-1,message-escaped,object-escaped,8,8,,"
+      "\"Subject, with comma\","
+      "\"Quote \"\" Sender <quote@example.test>\","
+      "\"Line\nBreak <line@example.test>\",,,"
+      "\"Tue, 02 Jan 2024 00:00:00 +0000\",30,31\n");
   (void) g_remove (path);
 }
 
@@ -273,6 +496,21 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/sql-looking-mailbox-value",
       test_duckdb_service_treats_sql_looking_mailbox_as_value);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/message-by-id-with-headers",
+      test_duckdb_service_returns_message_by_id_with_headers);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/message-by-id-cross-account-isolation",
+      test_duckdb_service_message_by_id_isolates_cross_account_rows);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/message-by-id-missing-message",
+      test_duckdb_service_message_by_id_missing_message_is_header_only);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/sql-looking-message-id-value",
+      test_duckdb_service_treats_sql_looking_message_id_as_value);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/message-by-id-escaped-nullable-headers",
+      test_duckdb_service_message_by_id_escapes_nullable_headers);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/missing-path-fails",
       test_duckdb_service_missing_path_fails);

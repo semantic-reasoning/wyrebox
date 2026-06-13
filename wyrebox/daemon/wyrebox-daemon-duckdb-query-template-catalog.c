@@ -3,6 +3,7 @@
 #include <gio/gio.h>
 
 static const char *const mailbox_uid_map_parameters[] = { "mailbox_id", NULL };
+static const char *const message_by_id_parameters[] = { "message_id", NULL };
 
 static const WyreboxDaemonDuckDBQueryTemplateDescriptor catalog[] = {
   {
@@ -12,6 +13,13 @@ static const WyreboxDaemonDuckDBQueryTemplateDescriptor catalog[] = {
         "stream-chunk.duckdb-template.uid-map.v1",
         1,
       mailbox_uid_map_parameters},
+  {
+        "message.by_id.v1",
+        "message by id",
+        "account_id",
+        "stream-chunk.duckdb-template.message-by-id.v1",
+        1,
+      message_by_id_parameters},
 };
 
 static gboolean
