@@ -93,6 +93,7 @@ const char *mailbox_list_get_storage_name (struct mailbox_list *list,
     const char *vname);
 struct mailbox_list *mailbox_list_sink_alloc (void);
 void mailbox_list_sink_free (struct mailbox_list *list);
+void mailbox_list_sink_fail_next_publish (struct mailbox_list *list);
 bool mailbox_list_sink_publish_entry (struct mailbox_list *list,
     const char *name,
     char hierarchy_delimiter,
