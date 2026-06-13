@@ -21,8 +21,8 @@ query_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
   WirelogPredicateQueryFixture *fixture = user_data;
   g_autoptr (GBytes) bytes = NULL;
 
-  g_assert_true (g_strcmp0 (identity->caller_identity, "skill") == 0
-      || g_strcmp0 (identity->caller_identity, "agent") == 0);
+  g_assert_true (g_strcmp0 (identity->caller_identity, "admin-cli") == 0
+      || g_strcmp0 (identity->caller_identity, "trusted-tool") == 0);
   g_assert_cmpstr (request->query_id, ==, "query-1");
   g_assert_cmpstr (request->predicate_id, ==, "project_mention");
   g_assert_cmpstr (request->scope_id, ==, "account-1");
@@ -66,7 +66,7 @@ test_wirelog_predicate_query_dispatcher_handles_valid_envelope (void)
       (query_predicate_fixture, &fixture, NULL);
 
   g_assert_true (wyrebox_daemon_wirelog_predicate_query_dispatch (service,
-          "request-1", "skill", "account-1", "fact-skill", "correlation-1",
+          "request-1", "admin-cli", "account-1", "fact-skill", "correlation-1",
           &request, &frame, &error));
   g_assert_no_error (error);
 
@@ -77,11 +77,23 @@ test_wirelog_predicate_query_dispatcher_handles_valid_envelope (void)
   g_assert_cmpstr (frame.stream_chunk.query_id, ==, "query-1");
   g_assert_null (frame.stream_chunk.message_id);
   g_assert_true (frame.stream_chunk.end_of_stream);
+
+  wyrebox_daemon_response_frame_clear (&frame);
+  g_assert_true (wyrebox_daemon_wirelog_predicate_query_dispatch (service,
+          "request-2", "trusted-tool", "account-1", "fact-tool",
+          "correlation-2", &request, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpstr (frame.request_id, ==, "request-2");
+  g_assert_cmpstr (frame.correlation_id, ==, "correlation-2");
 }
 
 static void
 test_wirelog_predicate_query_dispatcher_rejects_unauthorized_caller (void)
 {
+  const char *callers[] = { "postfix-helper", "dovecot-plugin", "unknown",
+    NULL
+  };
   WirelogPredicateQueryFixture fixture = { 0 };
   g_auto (WyreboxDaemonWirelogPredicateQueryRequest) request = { 0 };
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
@@ -92,13 +104,16 @@ test_wirelog_predicate_query_dispatcher_rejects_unauthorized_caller (void)
   service = wyrebox_daemon_wirelog_predicate_query_service_new
       (query_predicate_fixture, &fixture, NULL);
 
-  g_assert_true (wyrebox_daemon_wirelog_predicate_query_dispatch (service,
-          "request-1", "dovecot", "account-1", "fact-skill", "correlation-1",
-          &request, &frame, &error));
-  g_assert_no_error (error);
-  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
-  g_assert_cmpint (frame.error.error_class, ==,
-      WYREBOX_DAEMON_ERROR_PERMISSION_DENIED);
+  for (guint i = 0; callers[i] != NULL; i++) {
+    wyrebox_daemon_response_frame_clear (&frame);
+    g_assert_true (wyrebox_daemon_wirelog_predicate_query_dispatch (service,
+            "request-1", callers[i], "account-1", "fact-skill",
+            "correlation-1", &request, &frame, &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+    g_assert_cmpint (frame.error.error_class, ==,
+        WYREBOX_DAEMON_ERROR_PERMISSION_DENIED);
+  }
 }
 
 static void
@@ -115,7 +130,7 @@ test_wirelog_predicate_query_dispatcher_rejects_scope_mismatch (void)
       (query_predicate_fixture, &fixture, NULL);
 
   g_assert_true (wyrebox_daemon_wirelog_predicate_query_dispatch (service,
-          "request-1", "skill", "account-2", "fact-skill", "correlation-1",
+          "request-1", "admin-cli", "account-2", "fact-skill", "correlation-1",
           &request, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
@@ -137,8 +152,8 @@ test_wirelog_predicate_query_dispatcher_rejects_empty_identity_scope (void)
       (query_predicate_fixture, &fixture, NULL);
 
   g_assert_true (wyrebox_daemon_wirelog_predicate_query_dispatch (service,
-          "request-1", "agent", "", "fact-agent", "correlation-1", &request,
-          &frame, &error));
+          "request-1", "trusted-tool", "", "fact-agent", "correlation-1",
+          &request, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
   g_assert_cmpint (frame.error.error_class, ==,
@@ -159,7 +174,7 @@ test_wirelog_predicate_query_dispatcher_converts_silent_failure (void)
       (query_predicate_fixture, &fixture, NULL);
 
   g_assert_true (wyrebox_daemon_wirelog_predicate_query_dispatch (service,
-          "request-1", "skill", "account-1", "fact-skill", "correlation-1",
+          "request-1", "admin-cli", "account-1", "fact-skill", "correlation-1",
           &request, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
@@ -181,7 +196,7 @@ test_wirelog_predicate_query_dispatcher_rejects_bad_chunk_request (void)
       (query_predicate_fixture, &fixture, NULL);
 
   g_assert_true (wyrebox_daemon_wirelog_predicate_query_dispatch (service,
-          "request-1", "skill", "account-1", "fact-skill", "correlation-1",
+          "request-1", "admin-cli", "account-1", "fact-skill", "correlation-1",
           &request, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
@@ -201,7 +216,7 @@ test_wirelog_predicate_query_dispatcher_rejects_bad_chunk_query (void)
       (query_predicate_fixture, &fixture, NULL);
 
   g_assert_true (wyrebox_daemon_wirelog_predicate_query_dispatch (service,
-          "request-1", "skill", "account-1", "fact-skill", "correlation-1",
+          "request-1", "admin-cli", "account-1", "fact-skill", "correlation-1",
           &request, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
@@ -221,7 +236,7 @@ test_wirelog_predicate_query_dispatcher_rejects_message_chunk (void)
       (query_predicate_fixture, &fixture, NULL);
 
   g_assert_true (wyrebox_daemon_wirelog_predicate_query_dispatch (service,
-          "request-1", "skill", "account-1", "fact-skill", "correlation-1",
+          "request-1", "admin-cli", "account-1", "fact-skill", "correlation-1",
           &request, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
@@ -241,7 +256,7 @@ test_wirelog_predicate_query_dispatcher_rejects_bad_correlation (void)
       (query_predicate_fixture, &fixture, NULL);
 
   g_assert_true (wyrebox_daemon_wirelog_predicate_query_dispatch (service,
-          "request-1", "skill", "account-1", "fact-skill", "correlation-1",
+          "request-1", "admin-cli", "account-1", "fact-skill", "correlation-1",
           &request, &frame, &error));
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);

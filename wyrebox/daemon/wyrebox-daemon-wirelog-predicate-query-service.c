@@ -1,5 +1,7 @@
 #include "wyrebox-daemon-wirelog-predicate-query-service.h"
 
+#include "wyrebox-daemon-client-identity.h"
+
 #include <gio/gio.h>
 
 struct _WyreboxDaemonWirelogPredicateQueryService
@@ -15,18 +17,14 @@ G_DEFINE_TYPE (WyreboxDaemonWirelogPredicateQueryService,
     wyrebox_daemon_wirelog_predicate_query_service, G_TYPE_OBJECT);
 
 static gboolean
-caller_can_query_predicate (const char *caller_identity)
-{
-  return g_strcmp0 (caller_identity, "skill") == 0
-      || g_strcmp0 (caller_identity, "agent") == 0;
-}
-
-static gboolean
 authorize_wirelog_predicate_query_identity (const WyreboxDaemonRequestIdentity
     *identity, const WyreboxDaemonWirelogPredicateQueryRequest *request,
     GError **error)
 {
-  if (!caller_can_query_predicate (identity->caller_identity)) {
+  WyreboxDaemonClientIdentityClass client_class =
+      wyrebox_daemon_client_identity_classify_request (identity);
+
+  if (!wyrebox_daemon_client_identity_can_query_controlled_views (client_class)) {
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_PERMISSION_DENIED,

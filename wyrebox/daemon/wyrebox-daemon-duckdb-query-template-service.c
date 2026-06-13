@@ -1,5 +1,7 @@
 #include "wyrebox-daemon-duckdb-query-template-service.h"
 
+#include "wyrebox-daemon-client-identity.h"
+
 #include <gio/gio.h>
 
 struct _WyreboxDaemonDuckDBQueryTemplateService
@@ -15,18 +17,14 @@ G_DEFINE_TYPE (WyreboxDaemonDuckDBQueryTemplateService,
     wyrebox_daemon_duckdb_query_template_service, G_TYPE_OBJECT);
 
 static gboolean
-caller_can_query_template (const char *caller_identity)
-{
-  return g_strcmp0 (caller_identity, "skill") == 0
-      || g_strcmp0 (caller_identity, "agent") == 0;
-}
-
-static gboolean
 authorize_duckdb_query_template_identity (const WyreboxDaemonRequestIdentity
     *identity, const WyreboxDaemonDuckDBQueryTemplateRequest *request,
     GError **error)
 {
-  if (!caller_can_query_template (identity->caller_identity)) {
+  WyreboxDaemonClientIdentityClass client_class =
+      wyrebox_daemon_client_identity_classify_request (identity);
+
+  if (!wyrebox_daemon_client_identity_can_query_controlled_views (client_class)) {
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_PERMISSION_DENIED,
