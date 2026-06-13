@@ -213,6 +213,7 @@ dovecot_backend_option = get_option('dovecot_backend')
 dovecot_source_dir_option = get_option('dovecot_source_dir')
 dovecot_build_dir_option = get_option('dovecot_build_dir')
 have_dovecot_backend = false
+dovecot_backend_c_args = []
 if dovecot_backend_option.enabled()
   if dovecot_build_dir_option == ''
     error(
@@ -226,6 +227,14 @@ if dovecot_backend_option.enabled()
   endif
   dovecot_source_dir = meson.current_source_dir() / dovecot_source_dir_option
   dovecot_build_dir = meson.current_source_dir() / dovecot_build_dir_option
+  dovecot_backend_c_args = [
+    '-std=gnu11',
+    '-I' + (dovecot_source_dir / 'src' / 'lib-index'),
+    '-I' + (dovecot_source_dir / 'src' / 'lib'),
+    '-I' + (dovecot_source_dir / 'src' / 'lib-mail'),
+    '-I' + (dovecot_source_dir / 'src' / 'lib-storage'),
+    '-I' + dovecot_build_dir,
+  ]
 
   check_dovecot_source = run_command(
     python,
@@ -335,14 +344,7 @@ if dovecot_backend_option.enabled()
   check_dovecot_build_headers = cc.compiles(
     dovecot_configured_header_probe,
     name: 'Dovecot configured header contract check',
-    args: [
-      '-std=gnu11',
-      '-I' + (dovecot_source_dir / 'src' / 'lib-index'),
-      '-I' + (dovecot_source_dir / 'src' / 'lib'),
-      '-I' + (dovecot_source_dir / 'src' / 'lib-mail'),
-      '-I' + (dovecot_source_dir / 'src' / 'lib-storage'),
-      '-I' + dovecot_build_dir,
-    ],
+    args: dovecot_backend_c_args,
   )
 
   if not check_dovecot_build_headers

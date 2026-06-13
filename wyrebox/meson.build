@@ -143,6 +143,17 @@ wyrebox_dep = declare_dependency(
   dependencies: wyrebox_link_deps,
 )
 
+wyrebox_dovecot_plugin_module = []
+if have_dovecot_backend
+  wyrebox_dovecot_plugin_module = shared_module(
+    'wyrebox_plugin',
+    'dovecot/wyrebox-dovecot-plugin.c',
+    c_args: dovecot_backend_c_args + ['-fvisibility=hidden'],
+    name_prefix: '',
+    install: false,
+  )
+endif
+
 if capnp_serialization_found
   wyrebox_postfix_pipe = executable(
     'wyrebox-postfix-pipe',
