@@ -4,6 +4,7 @@
 #include "wyrebox-daemon-response-frame.h"
 #include "wyrebox-daemon-stream-chunk-frame.h"
 #include "wyrebox-daemon-duckdb-query-template-request.h"
+#include "wyrebox-journal-writer.h"
 
 #include <glib-object.h>
 
@@ -36,6 +37,10 @@ WyreboxDaemonDuckDBQueryTemplateService *
 wyrebox_daemon_duckdb_query_template_service_new_duckdb (
     const gchar *catalog_path,
     GError **error);
+
+void wyrebox_daemon_duckdb_query_template_service_set_audit_writer (
+    WyreboxDaemonDuckDBQueryTemplateService *self,
+    WyreboxJournalWriter *audit_writer);
 
 gboolean wyrebox_daemon_duckdb_query_template_service_handle_identity (
     WyreboxDaemonDuckDBQueryTemplateService *self,

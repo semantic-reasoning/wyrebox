@@ -2,6 +2,9 @@
 
 #include "wyrebox-daemon-client-identity.h"
 #include "wyrebox-daemon-duckdb-query-template-catalog.h"
+#include "wyrebox-daemon-audit-payload.h"
+#include "wyrebox-daemon-error.h"
+#include "wyrebox-journal-writer.h"
 
 #include <duckdb.h>
 #include <gio/gio.h>
@@ -20,6 +23,7 @@ struct _WyreboxDaemonDuckDBQueryTemplateService
   WyreboxDaemonDuckDBQueryTemplateServiceFunc func;
   gpointer user_data;
   GDestroyNotify user_data_destroy;
+  WyreboxJournalWriter *audit_writer;
 };
 
 G_DEFINE_TYPE (WyreboxDaemonDuckDBQueryTemplateService,
@@ -343,6 +347,8 @@ wyrebox_daemon_duckdb_query_template_service_finalize (GObject *object)
   if (self->user_data_destroy != NULL && self->user_data != NULL)
     self->user_data_destroy (self->user_data);
 
+  g_clear_object (&self->audit_writer);
+
   G_OBJECT_CLASS
       (wyrebox_daemon_duckdb_query_template_service_parent_class)->finalize
       (object);
@@ -379,6 +385,17 @@ WyreboxDaemonDuckDBQueryTemplateService
   self->user_data_destroy = user_data_destroy;
 
   return self;
+}
+
+void wyrebox_daemon_duckdb_query_template_service_set_audit_writer
+    (WyreboxDaemonDuckDBQueryTemplateService * self,
+    WyreboxJournalWriter * audit_writer)
+{
+  g_return_if_fail (WYREBOX_IS_DAEMON_DUCKDB_QUERY_TEMPLATE_SERVICE (self));
+  g_return_if_fail (audit_writer == NULL || WYREBOX_IS_JOURNAL_WRITER
+      (audit_writer));
+
+  g_set_object (&self->audit_writer, audit_writer);
 }
 
 WyreboxDaemonDuckDBQueryTemplateService
@@ -432,6 +449,71 @@ wyrebox_daemon_duckdb_query_template_service_new_duckdb (const gchar
   return g_steal_pointer (&service);
 }
 
+static const gchar *
+audit_required_value (const gchar *value, const gchar *fallback)
+{
+  if (value != NULL && *value != '\0')
+    return value;
+
+  return fallback;
+}
+
+static void
+append_duckdb_query_failure_audit (WyreboxDaemonDuckDBQueryTemplateService
+    *self, const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDuckDBQueryTemplateRequest *request, const GError *cause)
+{
+  g_autoptr (GError) ignored_error = NULL;
+  g_autoptr (GBytes) payload_bytes = NULL;
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  WyreboxDaemonErrorClass error_class = WYREBOX_DAEMON_ERROR_INTERNAL_ERROR;
+  g_autofree gchar *error_domain = NULL;
+  WyreboxDaemonAuditPayload payload = {
+    .operation = WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE,
+    .outcome = WYREBOX_DAEMON_AUDIT_OUTCOME_FAILURE,
+    .request_id = (gchar *) audit_required_value (identity->request_id,
+        "unknown-request"),
+    .correlation_id = identity->correlation_id,
+    .caller_identity = (gchar *) audit_required_value
+        (identity->caller_identity, "unknown"),
+    .account_identity = (gchar *) audit_required_value
+        (identity->account_identity, "unknown"),
+    .tool_identity = identity->tool_identity,
+    .scope_id = (gchar *) audit_required_value (request->scope_id,
+        identity->account_identity != NULL ? identity->account_identity :
+        "unknown"),
+    .query_id = (gchar *) audit_required_value (request->query_id,
+        "unknown-query"),
+    .template_id = (gchar *) audit_required_value (request->template_id,
+        "unknown-template"),
+    .error_code = cause != NULL ? cause->code : G_IO_ERROR_FAILED,
+    .error_message = (gchar *) audit_required_value
+        (cause != NULL ? cause->message : NULL, "unknown duckdb query error"),
+  };
+
+  if (self->audit_writer == NULL)
+    return;
+
+  if (cause != NULL && cause->domain == G_IO_ERROR)
+    error_class = wyrebox_daemon_error_class_from_g_error_code (cause->code);
+
+  error_domain = g_strdup (cause != NULL ?
+      g_quark_to_string (cause->domain) : g_quark_to_string (G_IO_ERROR));
+  payload.error_domain = error_domain;
+  payload.error_class = (gchar *) audit_required_value
+      (wyrebox_daemon_error_class_to_string (error_class), "internalError");
+
+  payload_bytes = wyrebox_daemon_audit_payload_encode (&payload,
+      &ignored_error);
+  if (payload_bytes == NULL)
+    return;
+
+  (void) wyrebox_journal_writer_append (self->audit_writer,
+      WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED, payload_bytes, &offset,
+      &sequence, &ignored_error);
+}
+
 gboolean
     wyrebox_daemon_duckdb_query_template_service_handle_identity
     (WyreboxDaemonDuckDBQueryTemplateService * self,
@@ -455,8 +537,11 @@ gboolean
 
   client_class = wyrebox_daemon_client_identity_classify_request (identity);
   if (!wyrebox_daemon_duckdb_query_template_catalog_validate (client_class,
-          identity->account_identity, request, &descriptor, error))
+          identity->account_identity, request, &descriptor, &local_error)) {
+    append_duckdb_query_failure_audit (self, identity, request, local_error);
+    g_propagate_error (error, g_steal_pointer (&local_error));
     return FALSE;
+  }
   (void) descriptor;
 
   if (!self->func (identity, request, &chunk, self->user_data, &local_error)) {
@@ -466,12 +551,17 @@ gboolean
           G_IO_ERROR_FAILED,
           "duckdb query template service failed without error detail");
     }
+    append_duckdb_query_failure_audit (self, identity, request, local_error);
     g_propagate_error (error, g_steal_pointer (&local_error));
     return FALSE;
   }
 
-  if (!validate_duckdb_query_template_chunk (identity, request, &chunk, error))
+  if (!validate_duckdb_query_template_chunk (identity, request, &chunk,
+          &local_error)) {
+    append_duckdb_query_failure_audit (self, identity, request, local_error);
+    g_propagate_error (error, g_steal_pointer (&local_error));
     return FALSE;
+  }
 
   if (!wyrebox_daemon_stream_chunk_frame_init (&response_chunk,
           identity->request_id,
