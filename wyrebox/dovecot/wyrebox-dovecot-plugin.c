@@ -31,6 +31,20 @@ struct wyrebox_dovecot_mailbox
   WyreboxDovecotMailboxUidMapSnapshot uid_map_snapshot;
 };
 
+typedef gboolean (*WyreboxDovecotMailboxListPublishFunc) (struct mailbox_list
+    * list, const char *name, char hierarchy_delimiter, gboolean selectable,
+    enum mailbox_list_child_state child_state, const char *special_use,
+    gpointer user_data);
+
+typedef struct
+{
+  const char *name;
+  char hierarchy_delimiter;
+  gboolean selectable;
+  enum mailbox_list_child_state child_state;
+  const char *special_use;
+} WyreboxDovecotMailboxListMappedEntry;
+
 static struct mail_storage wyrebox_mail_storage_class;
 
 extern const char *wyrebox_dovecot_test_daemon_socket_path
@@ -73,8 +87,11 @@ wyrebox_dovecot_map_mailbox_list_child_state (WyreboxDaemonMailboxListChildState
 
 gboolean
 wyrebox_dovecot_publish_mailbox_list_result (struct mailbox_list *list,
-    const WyreboxDaemonMailboxListResult *result, GError **error)
+    const WyreboxDaemonMailboxListResult *result,
+    WyreboxDovecotMailboxListPublishFunc publisher, gpointer publisher_data,
+    GError **error)
 {
+  g_autofree WyreboxDovecotMailboxListMappedEntry *mapped_entries = NULL;
   guint n_entries;
 
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
@@ -95,6 +112,14 @@ wyrebox_dovecot_publish_mailbox_list_result (struct mailbox_list *list,
     return FALSE;
   }
 
+  if (publisher == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "Dovecot mailbox LIST publication requires publisher callback");
+    return FALSE;
+  }
+
   if (result->entries == NULL) {
     g_set_error (error,
         G_IO_ERROR,
@@ -104,11 +129,12 @@ wyrebox_dovecot_publish_mailbox_list_result (struct mailbox_list *list,
   }
 
   n_entries = wyrebox_daemon_mailbox_list_result_get_n_entries (result);
+  mapped_entries = g_new0 (WyreboxDovecotMailboxListMappedEntry, n_entries);
+
   for (guint i = 0; i < n_entries; i++) {
     const WyreboxDaemonMailboxListEntry *entry =
         wyrebox_daemon_mailbox_list_result_get_entry (result, i);
-    enum mailbox_list_child_state child_state =
-        MAILBOX_LIST_CHILD_STATE_UNKNOWN;
+    WyreboxDovecotMailboxListMappedEntry *mapped_entry = &mapped_entries[i];
 
     if (entry == NULL || entry->mailbox_name == NULL ||
         entry->mailbox_name[0] == '\0') {
@@ -130,17 +156,26 @@ wyrebox_dovecot_publish_mailbox_list_result (struct mailbox_list *list,
     }
 
     if (!wyrebox_dovecot_map_mailbox_list_child_state (entry->child_state,
-            &child_state, error))
+            &mapped_entry->child_state, error))
       return FALSE;
 
-    if (!mailbox_list_sink_publish_entry (list, entry->mailbox_name,
-            entry->hierarchy_delimiter[0], entry->is_selectable,
-            child_state, entry->special_use)) {
+    mapped_entry->name = entry->mailbox_name;
+    mapped_entry->hierarchy_delimiter = entry->hierarchy_delimiter[0];
+    mapped_entry->selectable = entry->is_selectable;
+    mapped_entry->special_use = entry->special_use;
+  }
+
+  for (guint i = 0; i < n_entries; i++) {
+    const WyreboxDovecotMailboxListMappedEntry *entry = &mapped_entries[i];
+
+    if (!publisher (list, entry->name, entry->hierarchy_delimiter,
+            entry->selectable, entry->child_state, entry->special_use,
+            publisher_data)) {
       g_set_error (error,
           G_IO_ERROR,
           G_IO_ERROR_FAILED,
           "Dovecot mailbox LIST publication failed for mailbox '%s'",
-          entry->mailbox_name);
+          entry->name);
       return FALSE;
     }
   }
