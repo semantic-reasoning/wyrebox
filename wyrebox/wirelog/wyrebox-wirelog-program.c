@@ -1,5 +1,7 @@
 #include "wyrebox-wirelog-program.h"
 
+#include "wyrebox-wirelog-program-private.h"
+
 #include <gio/gio.h>
 
 #include <wirelog/wirelog.h>
@@ -93,4 +95,12 @@ wyrebox_wirelog_program_new_from_source (const char *source, GError **error)
   self->program = program;
 
   return g_steal_pointer (&self);
+}
+
+wirelog_program_t *
+wyrebox_wirelog_program_borrow_wirelog_program (WyreboxWirelogProgram *self)
+{
+  g_return_val_if_fail (WYREBOX_IS_WIRELOG_PROGRAM (self), NULL);
+
+  return self->program;
 }
