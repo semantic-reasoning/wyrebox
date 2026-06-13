@@ -9,8 +9,8 @@ G_BEGIN_DECLS
 typedef struct
 {
   /*
-   * Response identity. At least one discriminator, message_id or query_id, is
-   * required so callers can route or validate the chunk.
+   * Response identity. Exactly one discriminator, message_id or query_id, is
+   * required so callers can route the chunk to a fetch or query stream.
    */
   char *request_id;
   char *message_id;
