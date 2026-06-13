@@ -19,6 +19,7 @@
 #include "wyrebox-daemon-flag-keyword-update-request.h"
 #include "wyrebox-daemon-flag-keyword-update-service.h"
 #include "wyrebox-daemon-request-adapter.h"
+#include "wyrebox-journal-reader.h"
 #include "wyrebox-journal-writer.h"
 
 #include <capnp/message.h>
@@ -33,6 +34,14 @@ typedef struct
 {
   gboolean was_called;
 } FixtureState;
+
+typedef struct
+{
+  FactMutationKind mutation;
+  const char *predicate_id;
+  const char *scope_id;
+  const char * const *arguments;
+} FactBatchImportEntryFixture;
 
 static void
 remove_tree (const char *path)
@@ -136,6 +145,52 @@ build_fact_mutation_request_bytes (FactMutationKind mutation,
   auto encoded_arguments = fact_mutation.initArguments (argument_count);
   for (guint i = 0; i < argument_count; i++)
     encoded_arguments.set (i, arguments[i]);
+
+  auto words = capnp::messageToFlatArray (request_builder);
+  auto bytes = words.asBytes ();
+
+  return g_bytes_new (bytes.begin (), bytes.size ());
+}
+
+static void
+init_fact_batch_import_entry (FactMutationRequest::Builder fact_mutation,
+    const FactBatchImportEntryFixture *entry)
+{
+  guint argument_count = 0;
+
+  fact_mutation.setMutation (entry->mutation);
+  fact_mutation.setPredicateId (entry->predicate_id);
+  fact_mutation.setScopeId (entry->scope_id);
+
+  while (entry->arguments != NULL && entry->arguments[argument_count] != NULL)
+    argument_count++;
+
+  auto encoded_arguments = fact_mutation.initArguments (argument_count);
+  for (guint i = 0; i < argument_count; i++)
+    encoded_arguments.set (i, entry->arguments[i]);
+}
+
+static GBytes *
+build_fact_batch_import_request_bytes (const char *request_id,
+    const char *caller_identity,
+    const char *account_identity,
+    const FactBatchImportEntryFixture *entries,
+    guint n_entries)
+{
+  capnp::MallocMessageBuilder request_builder;
+  auto request_frame = request_builder.initRoot<RequestFrame> ();
+
+  auto identity = request_frame.initIdentity ();
+  identity.setRequestId (request_id);
+  identity.setCallerIdentity (caller_identity);
+  identity.setAccountIdentity (account_identity);
+  identity.setToolIdentity ("fact-importer");
+  identity.setCorrelationId ("corr-fact-batch");
+
+  auto fact_batch_import = request_frame.initFactBatchImport ();
+  auto encoded_entries = fact_batch_import.initEntries (n_entries);
+  for (guint i = 0; i < n_entries; i++)
+    init_fact_batch_import_entry (encoded_entries[i], &entries[i]);
 
   auto words = capnp::messageToFlatArray (request_builder);
   auto bytes = words.asBytes ();
@@ -2516,6 +2571,226 @@ assert_fact_mutation_decode_rejects_empty_argument (void)
 }
 
 static void
+assert_request_bytes_decode_fact_batch_import (void)
+{
+  const char *insert_arguments[] = { "mail-1", "project-a", NULL };
+  const char *retract_arguments[] = { "mail-2", NULL };
+  const FactBatchImportEntryFixture entries[] = {
+    {
+      FactMutationKind::INSERT,
+      "project_mention",
+      "account-1",
+      insert_arguments,
+    },
+    {
+      FactMutationKind::RETRACT,
+      "reference_candidate",
+      "account-1",
+      retract_arguments,
+    },
+  };
+  g_autoptr (GBytes) request = build_fact_batch_import_request_bytes (
+      "request-fact-batch",
+      "trusted-tool",
+      "account-1",
+      entries,
+      G_N_ELEMENTS (entries));
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (decoded.request_id, ==, "request-fact-batch");
+  g_assert_cmpstr (decoded.caller_identity, ==, "trusted-tool");
+  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.tool_identity, ==, "fact-importer");
+  g_assert_cmpstr (decoded.correlation_id, ==, "corr-fact-batch");
+  g_assert_cmpint (decoded.operation, ==,
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_BATCH_IMPORT);
+  g_assert_nonnull (decoded.fact_batch_import);
+  g_assert_cmpuint (wyrebox_daemon_fact_batch_import_request_get_n_entries
+      (decoded.fact_batch_import), ==, 2);
+
+  const WyreboxDaemonFactMutationRequest *first =
+      wyrebox_daemon_fact_batch_import_request_get_entry
+      (decoded.fact_batch_import, 0);
+  const WyreboxDaemonFactMutationRequest *second =
+      wyrebox_daemon_fact_batch_import_request_get_entry
+      (decoded.fact_batch_import, 1);
+  g_assert_cmpint (first->mutation, ==, WYREBOX_DAEMON_FACT_MUTATION_INSERT);
+  g_assert_cmpstr (first->predicate_id, ==, "project_mention");
+  g_assert_cmpstr (first->scope_id, ==, "account-1");
+  g_assert_cmpstr (first->arguments[0], ==, "mail-1");
+  g_assert_cmpstr (first->arguments[1], ==, "project-a");
+  g_assert_cmpint (second->mutation, ==, WYREBOX_DAEMON_FACT_MUTATION_RETRACT);
+  g_assert_cmpstr (second->predicate_id, ==, "reference_candidate");
+  g_assert_cmpstr (second->scope_id, ==, "account-1");
+  g_assert_cmpstr (second->arguments[0], ==, "mail-2");
+  g_assert_null (decoded.fact_mutation);
+
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  decoded_state_clear (decoded_state);
+}
+
+static void
+assert_fact_batch_import_decode_rejects_empty_batch (void)
+{
+  g_autoptr (GBytes) request = build_fact_batch_import_request_bytes (
+      "request-fact-batch-invalid",
+      "trusted-tool",
+      "account-1",
+      NULL,
+      0);
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_fact_batch_import_decode_rejects_over_limit_batch (void)
+{
+  const char *arguments[] = { "mail-1", NULL };
+  const guint n_entries =
+      WYREBOX_DAEMON_FACT_BATCH_IMPORT_REQUEST_MAX_ENTRIES + 1;
+  g_autofree FactBatchImportEntryFixture *entries = NULL;
+  g_autoptr (GBytes) request = NULL;
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  entries = g_new0 (FactBatchImportEntryFixture, n_entries);
+  for (guint i = 0; i < n_entries; i++) {
+    entries[i].mutation = FactMutationKind::INSERT;
+    entries[i].predicate_id = "project_mention";
+    entries[i].scope_id = "account-1";
+    entries[i].arguments = arguments;
+  }
+
+  request = build_fact_batch_import_request_bytes (
+      "request-fact-batch-invalid",
+      "trusted-tool",
+      "account-1",
+      entries,
+      n_entries);
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_fact_batch_import_decode_rejects_invalid_nested_mutation (void)
+{
+  const char *valid_arguments[] = { "mail-1", NULL };
+  const char *invalid_arguments[] = { "", NULL };
+  const FactBatchImportEntryFixture entries[] = {
+    {
+      FactMutationKind::INSERT,
+      "project_mention",
+      "account-1",
+      valid_arguments,
+    },
+    {
+      FactMutationKind::RETRACT,
+      "project_mention",
+      "account-1",
+      invalid_arguments,
+    },
+  };
+  g_autoptr (GBytes) request = build_fact_batch_import_request_bytes (
+      "request-fact-batch-invalid",
+      "trusted-tool",
+      "account-1",
+      entries,
+      G_N_ELEMENTS (entries));
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
+assert_fact_batch_import_decode_rejects_mixed_scope (void)
+{
+  const char *arguments[] = { "mail-1", NULL };
+  const FactBatchImportEntryFixture entries[] = {
+    {
+      FactMutationKind::INSERT,
+      "project_mention",
+      "account-1",
+      arguments,
+    },
+    {
+      FactMutationKind::RETRACT,
+      "project_mention",
+      "account-2",
+      arguments,
+    },
+  };
+  g_autoptr (GBytes) request = build_fact_batch_import_request_bytes (
+      "request-fact-batch-invalid",
+      "trusted-tool",
+      "account-1",
+      entries,
+      G_N_ELEMENTS (entries));
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+      request,
+      &decoded,
+      &decoded_state,
+      &decoded_state_clear,
+      NULL,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (decoded_state);
+  g_assert_null (decoded_state_clear);
+}
+
+static void
 assert_response_bytes_encode_mailbox_list (void)
 {
   g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
@@ -3061,7 +3336,7 @@ assert_request_adapter_routes_fact_mutation (void)
 
   request = build_fact_mutation_request_bytes (FactMutationKind::INSERT,
       "request-fact-route",
-      "skill",
+      "trusted-tool",
       "account-1",
       "project_mention",
       "account-1",
@@ -3092,6 +3367,237 @@ assert_request_adapter_routes_fact_mutation (void)
   g_assert_cmpstr (response_frame.getSuccess ().getDurableMarker ().cStr (), ==,
       "journal:0:1");
   g_assert_cmpuint (response_frame.getSuccess ().getJournalSequence (), ==, 1);
+
+  remove_tree (root);
+}
+
+static void
+read_next_journal_fact_mutation (WyreboxJournalReader *reader,
+    WyreboxJournalEventType expected_event_type,
+    WyreboxDaemonFactMutationRequest *out_request,
+    GError **error)
+{
+  g_auto (WyreboxJournalRecord) record = { 0 };
+  gboolean eof = FALSE;
+
+  g_assert_true (wyrebox_journal_reader_read_next (reader,
+      &record,
+      &eof,
+      error));
+  g_assert_false (eof);
+  g_assert_cmpint (record.event_type, ==, expected_event_type);
+  g_assert_true (wyrebox_daemon_fact_mutation_request_decode (record.payload,
+      out_request,
+      error));
+}
+
+static void
+assert_request_adapter_routes_fact_batch_import (void)
+{
+  const char *insert_arguments[] = { "mail-1", "project-a", NULL };
+  const char *retract_arguments[] = { "mail-2", NULL };
+  const FactBatchImportEntryFixture entries[] = {
+    {
+      FactMutationKind::INSERT,
+      "project_mention",
+      "account-1",
+      insert_arguments,
+    },
+    {
+      FactMutationKind::RETRACT,
+      "reference_candidate",
+      "account-1",
+      retract_arguments,
+    },
+  };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-capnp-fact-batch-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) request = NULL;
+  g_autoptr (GBytes) response_bytes = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_autoptr (WyreboxDaemonFactMutationService) service = NULL;
+  g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+  g_auto (WyreboxDaemonFactMutationRequest) first = {};
+  g_auto (WyreboxDaemonFactMutationRequest) second = {};
+  g_auto (WyreboxJournalRecord) extra = { 0 };
+  gboolean eof = FALSE;
+
+  g_assert_nonnull (root);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+
+  service = wyrebox_daemon_fact_mutation_service_new (writer);
+  g_assert_nonnull (service);
+
+  adapter = wyrebox_daemon_request_adapter_new (NULL, service,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_decode_request_frame,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_encode_response_frame,
+      NULL,
+      NULL);
+  g_assert_nonnull (adapter);
+
+  request = build_fact_batch_import_request_bytes ("request-fact-batch-route",
+      "trusted-tool",
+      "account-1",
+      entries,
+      G_N_ELEMENTS (entries));
+  const WyreboxDaemonPeerCredentials peer_credentials = {
+    .uid = 100,
+    .gid = 101,
+    .pid = 102,
+  };
+
+  response_bytes = wyrebox_daemon_request_adapter_handle_payload (&peer_credentials,
+      request,
+      adapter,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (response_bytes);
+
+  gsize size = 0;
+  const guint8 *data = static_cast<const guint8 *> (
+      g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (
+      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  capnp::FlatArrayMessageReader response_reader (words);
+  auto response_frame = response_reader.getRoot<ResponseFrame> ();
+  g_assert_true (response_frame.which () == ResponseFrame::SUCCESS);
+  g_assert_cmpstr (response_frame.getSuccess ().getRequestId ().cStr (), ==,
+      "request-fact-batch-route");
+  g_assert_cmpuint (response_frame.getSuccess ().getJournalSequence (), ==, 2);
+  g_assert_cmpstr (response_frame.getSuccess ().getSummary ().cStr (), ==,
+      "fact_batch_import count=2 scope_id=account-1");
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  read_next_journal_fact_mutation (reader,
+      WYREBOX_JOURNAL_EVENT_FACT_INSERTED,
+      &first,
+      &error);
+  g_assert_no_error (error);
+  g_assert_cmpint (first.mutation, ==, WYREBOX_DAEMON_FACT_MUTATION_INSERT);
+  g_assert_cmpstr (first.predicate_id, ==, "project_mention");
+  g_assert_cmpstr (first.scope_id, ==, "account-1");
+  g_assert_cmpstr (first.arguments[0], ==, "mail-1");
+  g_assert_cmpstr (first.arguments[1], ==, "project-a");
+
+  read_next_journal_fact_mutation (reader,
+      WYREBOX_JOURNAL_EVENT_FACT_RETRACTED,
+      &second,
+      &error);
+  g_assert_no_error (error);
+  g_assert_cmpint (second.mutation, ==, WYREBOX_DAEMON_FACT_MUTATION_RETRACT);
+  g_assert_cmpstr (second.predicate_id, ==, "reference_candidate");
+  g_assert_cmpstr (second.scope_id, ==, "account-1");
+  g_assert_cmpstr (second.arguments[0], ==, "mail-2");
+
+  g_assert_false (wyrebox_journal_reader_read_next (reader,
+      &extra,
+      &eof,
+      &error));
+  g_assert_no_error (error);
+  g_assert_true (eof);
+
+  remove_tree (root);
+}
+
+static void
+assert_request_adapter_rejects_unauthorized_fact_batch_import (void)
+{
+  const char *arguments[] = { "mail-1", NULL };
+  const FactBatchImportEntryFixture entries[] = {
+    {
+      FactMutationKind::INSERT,
+      "project_mention",
+      "account-1",
+      arguments,
+    },
+  };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-capnp-fact-batch-denied-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) request = NULL;
+  g_autoptr (GBytes) response_bytes = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_autoptr (WyreboxDaemonFactMutationService) service = NULL;
+  g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+  g_auto (WyreboxJournalRecord) record = { 0 };
+  gboolean eof = FALSE;
+
+  g_assert_nonnull (root);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  service = wyrebox_daemon_fact_mutation_service_new (writer);
+  g_assert_nonnull (service);
+
+  adapter = wyrebox_daemon_request_adapter_new (NULL, service,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_decode_request_frame,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_encode_response_frame,
+      NULL,
+      NULL);
+  g_assert_nonnull (adapter);
+
+  request = build_fact_batch_import_request_bytes ("request-fact-batch-denied",
+      "admin-cli",
+      "account-1",
+      entries,
+      G_N_ELEMENTS (entries));
+  const WyreboxDaemonPeerCredentials peer_credentials = {
+    .uid = 100,
+    .gid = 101,
+    .pid = 102,
+  };
+
+  response_bytes = wyrebox_daemon_request_adapter_handle_payload (&peer_credentials,
+      request,
+      adapter,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (response_bytes);
+
+  gsize size = 0;
+  const guint8 *data = static_cast<const guint8 *> (
+      g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (
+      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  capnp::FlatArrayMessageReader response_reader (words);
+  auto response_frame = response_reader.getRoot<ResponseFrame> ();
+  g_assert_true (response_frame.which () == ResponseFrame::ERROR);
+  g_assert_true (
+      response_frame.getError ().getErrorClass () == ErrorClass::PERMISSION_DENIED);
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_false (wyrebox_journal_reader_read_next (reader,
+      &record,
+      &eof,
+      &error));
+  g_assert_no_error (error);
+  g_assert_true (eof);
 
   remove_tree (root);
 }
@@ -3559,6 +4065,8 @@ main (int argc, char **argv)
       assert_request_bytes_decode_fact_mutation_insert);
   g_test_add_func ("/daemon-api/capnp/codec/decode-fact-mutation-retract",
       assert_request_bytes_decode_fact_mutation_retract);
+  g_test_add_func ("/daemon-api/capnp/codec/decode-fact-batch-import",
+      assert_request_bytes_decode_fact_batch_import);
   g_test_add_func ("/daemon-api/capnp/codec/decode-message-fetch-valid",
       assert_request_bytes_decode_message_fetch);
   g_test_add_func ("/daemon-api/capnp/codec/decode-message-search-valid",
@@ -3691,6 +4199,16 @@ main (int argc, char **argv)
       assert_fact_mutation_decode_rejects_missing_scope);
   g_test_add_func ("/daemon-api/capnp/codec/reject-fact-mutation-argument",
       assert_fact_mutation_decode_rejects_empty_argument);
+  g_test_add_func ("/daemon-api/capnp/codec/reject-fact-batch-import-empty",
+      assert_fact_batch_import_decode_rejects_empty_batch);
+  g_test_add_func ("/daemon-api/capnp/codec/reject-fact-batch-import-over-limit",
+      assert_fact_batch_import_decode_rejects_over_limit_batch);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-fact-batch-import-invalid-nested",
+      assert_fact_batch_import_decode_rejects_invalid_nested_mutation);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/reject-fact-batch-import-mixed-scope",
+      assert_fact_batch_import_decode_rejects_mixed_scope);
   g_test_add_func ("/daemon-api/capnp/codec/encode-mailbox-list",
       assert_response_bytes_encode_mailbox_list);
   g_test_add_func ("/daemon-api/capnp/codec/encode-mailbox-select",
@@ -3714,6 +4232,11 @@ main (int argc, char **argv)
       assert_request_adapter_routes_mailbox_select);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-fact-mutation",
       assert_request_adapter_routes_fact_mutation);
+  g_test_add_func ("/daemon-api/capnp/codec/request-adapter-fact-batch-import",
+      assert_request_adapter_routes_fact_batch_import);
+  g_test_add_func (
+      "/daemon-api/capnp/codec/request-adapter-fact-batch-import-unauthorized",
+      assert_request_adapter_rejects_unauthorized_fact_batch_import);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-message-fetch",
       assert_request_adapter_routes_message_fetch);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-message-search",
