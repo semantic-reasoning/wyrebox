@@ -7,7 +7,6 @@
 typedef struct
 {
   grefcount ref_count;
-  GMutex route_mutex;
   GMutex connection_mutex;
   GPtrArray *connections;
   WyreboxDaemonRequestAdapter *request_adapter;
@@ -54,7 +53,6 @@ static void
   g_clear_pointer (&state->connections, g_ptr_array_unref);
   g_clear_object (&state->request_adapter);
   g_mutex_clear (&state->connection_mutex);
-  g_mutex_clear (&state->route_mutex);
   g_free (state);
 }
 
@@ -68,7 +66,6 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (WyreboxDaemonConnectionServerSharedState,
       (WyreboxDaemonConnectionServerSharedState, 1);
 
   g_ref_count_init (&state->ref_count);
-  g_mutex_init (&state->route_mutex);
   g_mutex_init (&state->connection_mutex);
   state->connections = g_ptr_array_new_with_free_func (g_object_unref);
   state->request_adapter = g_object_ref (request_adapter);
@@ -157,10 +154,8 @@ wyrebox_daemon_connection_server_handle_payload (const
 
   g_return_val_if_fail (state != NULL, NULL);
 
-  g_mutex_lock (&state->route_mutex);
   response = wyrebox_daemon_request_adapter_handle_payload (peer_credentials,
       request, state->request_adapter, error);
-  g_mutex_unlock (&state->route_mutex);
 
   return response;
 }

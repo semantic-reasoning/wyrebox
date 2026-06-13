@@ -17,6 +17,8 @@ struct _WyreboxDaemonRequestAdapter
   WyreboxDaemonDuckDBQueryTemplateService *duckdb_query_template_service;
   WyreboxDaemonFlagKeywordUpdateService *flag_keyword_update_service;
 
+  GMutex mutation_route_mutex;
+
     WyreboxDaemonRequestAdapterDecodeRequestFrameCallback
       decode_request_frame_callback;
   gpointer decode_request_frame_user_data;
@@ -76,6 +78,7 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDaemonRequestAdapterDecodedState,
   g_clear_object (&self->wirelog_predicate_query_service);
   g_clear_object (&self->duckdb_query_template_service);
   g_clear_object (&self->flag_keyword_update_service);
+  g_mutex_clear (&self->mutation_route_mutex);
 
   G_OBJECT_CLASS (wyrebox_daemon_request_adapter_parent_class)->finalize
       (object);
@@ -93,7 +96,57 @@ wyrebox_daemon_request_adapter_class_init (WyreboxDaemonRequestAdapterClass
 static void
 wyrebox_daemon_request_adapter_init (WyreboxDaemonRequestAdapter *self)
 {
-  (void) self;
+  g_mutex_init (&self->mutation_route_mutex);
+}
+
+static gboolean
+operation_requires_mutation_route_lock (WyreboxDaemonRequestFrameOperation
+    operation)
+{
+  switch (operation) {
+    case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION:
+    case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_MUTATION:
+    case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_BATCH_IMPORT:
+    case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FLAG_KEYWORD_UPDATE:
+      return TRUE;
+    default:
+      return FALSE;
+  }
+}
+
+static gboolean
+route_decoded_request (WyreboxDaemonRequestAdapter *self,
+    const WyreboxDaemonDecodedRequestFrame *decoded_request,
+    WyreboxDaemonResponseFrame *response_frame, GError **error)
+{
+  return wyrebox_daemon_request_router_route (self->delivery_ingestion_service,
+      self->fact_mutation_service,
+      self->mailbox_list_service,
+      self->mailbox_select_service,
+      self->message_fetch_service,
+      self->message_search_service,
+      self->wirelog_predicate_query_service,
+      self->duckdb_query_template_service,
+      self->flag_keyword_update_service,
+      decoded_request, response_frame, error);
+}
+
+static gboolean
+route_decoded_request_with_mutation_lock (WyreboxDaemonRequestAdapter *self,
+    const WyreboxDaemonDecodedRequestFrame *decoded_request,
+    WyreboxDaemonResponseFrame *response_frame, GError **error)
+{
+  gboolean success = FALSE;
+
+  if (!operation_requires_mutation_route_lock (decoded_request->operation))
+    return route_decoded_request (self, decoded_request, response_frame, error);
+
+  g_mutex_lock (&self->mutation_route_mutex);
+  success = route_decoded_request (self, decoded_request, response_frame,
+      error);
+  g_mutex_unlock (&self->mutation_route_mutex);
+
+  return success;
 }
 
 WyreboxDaemonRequestAdapter *
@@ -215,16 +268,8 @@ wyrebox_daemon_request_adapter_handle_payload (const
           self->decode_request_frame_user_data, &local_error))
     goto decode_failed;
 
-  if (!wyrebox_daemon_request_router_route (self->delivery_ingestion_service,
-          self->fact_mutation_service,
-          self->mailbox_list_service,
-          self->mailbox_select_service,
-          self->message_fetch_service,
-          self->message_search_service,
-          self->wirelog_predicate_query_service,
-          self->duckdb_query_template_service,
-          self->flag_keyword_update_service,
-          &decoded_request, &response_frame, &local_error))
+  if (!route_decoded_request_with_mutation_lock (self, &decoded_request,
+          &response_frame, &local_error))
     goto route_failed;
 
   response = self->encode_response_frame_callback (&response_frame,

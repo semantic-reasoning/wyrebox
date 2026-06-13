@@ -2,10 +2,13 @@
 #include <glib/gstdio.h>
 #include <gio/gio.h>
 
+#include "wyrebox-journal-reader.h"
 #include "wyrebox-journal-writer.h"
 
 #define SEGMENT_NAME "00000000000000000000.wbj"
 #define JOURNAL_MAGIC "WYREJNL1"
+#define CONCURRENT_APPEND_THREADS 8
+#define CONCURRENT_APPEND_RECORDS_PER_THREAD 16
 
 static const char *canonical_event_types[] = {
   "MessageDelivered",
@@ -303,6 +306,123 @@ test_appends_records_in_order (void)
   remove_tree (root);
 }
 
+typedef struct
+{
+  WyreboxJournalWriter *writer;
+  GMutex *start_mutex;
+  GCond *start_cond;
+  gboolean *start;
+  guint thread_index;
+} ConcurrentAppendContext;
+
+static gpointer
+append_concurrent_records (gpointer user_data)
+{
+  ConcurrentAppendContext *context = user_data;
+
+  g_mutex_lock (context->start_mutex);
+  while (!*context->start)
+    g_cond_wait (context->start_cond, context->start_mutex);
+  g_mutex_unlock (context->start_mutex);
+
+  for (guint index = 0; index < CONCURRENT_APPEND_RECORDS_PER_THREAD; index++) {
+    g_autoptr (GError) error = NULL;
+    g_autofree gchar *payload = NULL;
+    g_autoptr (GBytes) payload_bytes = NULL;
+    guint64 offset = 0;
+    guint64 sequence = 0;
+
+    payload = g_strdup_printf ("thread=%u record=%u",
+        context->thread_index, index);
+    payload_bytes = g_bytes_new (payload, strlen (payload));
+
+    g_assert_true (wyrebox_journal_writer_append (context->writer,
+            WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED,
+            payload_bytes, &offset, &sequence, &error));
+    g_assert_no_error (error);
+    (void) offset;
+    g_assert_cmpuint (sequence, >, 0);
+  }
+
+  return NULL;
+}
+
+static void
+test_concurrent_appends_are_serialized (void)
+{
+  const guint expected_records =
+      CONCURRENT_APPEND_THREADS * CONCURRENT_APPEND_RECORDS_PER_THREAD;
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  GThread *threads[CONCURRENT_APPEND_THREADS] = { 0 };
+  ConcurrentAppendContext contexts[CONCURRENT_APPEND_THREADS] = { 0 };
+  GMutex start_mutex;
+  GCond start_cond;
+  gboolean start = FALSE;
+  guint records_read = 0;
+  gboolean eof = FALSE;
+
+  g_assert_nonnull (root);
+  g_mutex_init (&start_mutex);
+  g_cond_init (&start_cond);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+
+  for (guint index = 0; index < CONCURRENT_APPEND_THREADS; index++) {
+    g_autofree gchar *thread_name = NULL;
+
+    contexts[index].writer = writer;
+    contexts[index].start_mutex = &start_mutex;
+    contexts[index].start_cond = &start_cond;
+    contexts[index].start = &start;
+    contexts[index].thread_index = index;
+    thread_name = g_strdup_printf ("journal-append-%u", index);
+    threads[index] = g_thread_new (thread_name, append_concurrent_records,
+        &contexts[index]);
+  }
+
+  g_mutex_lock (&start_mutex);
+  start = TRUE;
+  g_cond_broadcast (&start_cond);
+  g_mutex_unlock (&start_mutex);
+
+  for (guint index = 0; index < CONCURRENT_APPEND_THREADS; index++)
+    g_thread_join (threads[index]);
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  while (TRUE) {
+    g_auto (WyreboxJournalRecord) record = { 0 };
+    gsize payload_size = 0;
+
+    if (!wyrebox_journal_reader_read_next (reader, &record, &eof, &error)) {
+      g_assert_no_error (error);
+      g_assert_true (eof);
+      break;
+    }
+
+    records_read++;
+    g_assert_cmpuint (record.sequence, ==, records_read);
+    g_assert_cmpint (record.event_type, ==,
+        WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED);
+    g_assert_nonnull (g_bytes_get_data (record.payload, &payload_size));
+    g_assert_cmpuint (payload_size, >, 0);
+  }
+
+  g_assert_cmpuint (records_read, ==, expected_records);
+
+  g_cond_clear (&start_cond);
+  g_mutex_clear (&start_mutex);
+  remove_tree (root);
+}
+
 static void
 test_supports_all_canonical_event_names (void)
 {
@@ -424,6 +544,8 @@ main (int argc, char **argv)
       test_appends_message_delivered_record);
   g_test_add_func ("/journal-writer/appends-records-in-order",
       test_appends_records_in_order);
+  g_test_add_func ("/journal-writer/concurrent-appends-are-serialized",
+      test_concurrent_appends_are_serialized);
   g_test_add_func ("/journal-writer/supports-all-canonical-event-names",
       test_supports_all_canonical_event_names);
   g_test_add_func ("/journal-writer/rejects-invalid-event-type",
