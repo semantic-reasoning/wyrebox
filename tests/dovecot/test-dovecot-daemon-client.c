@@ -343,6 +343,8 @@ fake_server_thread_main (gpointer user_data)
         assert_decoded_uid_map_request (request, expected_mailbox_id,
         server->expected_uid_map_kind, &query_id);
   } else if (server->behavior == FAKE_SERVER_MESSAGE_FETCH_RESPONSE
+      || (server->behavior == FAKE_SERVER_DAEMON_ERROR_RESPONSE
+          && server->expect_message_fetch_request)
       || (server->behavior == FAKE_SERVER_RESPONSE_BYTES
           && server->expect_message_fetch_request)) {
     request_id =
@@ -766,7 +768,6 @@ test_dovecot_daemon_client_fetch_message_bytes_rejects_query_id (void)
   fake_server_start (&server, socket_path, FAKE_SERVER_MESSAGE_FETCH_RESPONSE,
       NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
   server.message_fetch_response_query_id = "query-1";
-  server.message_fetch_response_message_id = "";
   server.expect_message_fetch_request = TRUE;
 
   payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
@@ -851,25 +852,23 @@ test_dovecot_daemon_client_fetch_message_bytes_rejects_empty_payload (void)
 }
 
 static void
-    test_dovecot_daemon_client_fetch_message_bytes_rejects_malformed_response_kind
-    (void)
+test_dovecot_daemon_client_fetch_message_bytes_returns_daemon_error (void)
 {
   g_autofree char *root = NULL;
   g_autofree char *socket_path = make_socket_path (&root);
   g_autoptr (GError) error = NULL;
   g_autoptr (GBytes) payload = NULL;
-  g_autoptr (GBytes) response_payload = NULL;
   FakeServer server = { 0 };
-  response_payload = encode_daemon_error_response ("request-fetch-error");
 
-  fake_server_start (&server, socket_path, FAKE_SERVER_RESPONSE_BYTES,
-      response_payload, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  fake_server_start (&server, socket_path, FAKE_SERVER_DAEMON_ERROR_RESPONSE,
+      NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
   server.expect_message_fetch_request = TRUE;
 
   payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
       "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
   g_assert_null (payload);
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+  g_assert_nonnull (g_strstr_len (error->message, -1, "mailbox not found"));
   fake_server_join (&server);
   remove_tree (root);
 }
@@ -1413,8 +1412,8 @@ main (int argc, char **argv)
       ("/dovecot/daemon-client/fetch-message-bytes-rejects-empty-payload",
       test_dovecot_daemon_client_fetch_message_bytes_rejects_empty_payload);
   g_test_add_func
-      ("/dovecot/daemon-client/fetch-message-bytes-rejects-unexpected-response-kind",
-      test_dovecot_daemon_client_fetch_message_bytes_rejects_malformed_response_kind);
+      ("/dovecot/daemon-client/fetch-message-bytes-returns-daemon-error",
+      test_dovecot_daemon_client_fetch_message_bytes_returns_daemon_error);
   g_test_add_func ("/dovecot/daemon-client/mismatched-select-request-id",
       test_dovecot_daemon_client_mismatched_select_request_id_fails_cleanly);
   g_test_add_func ("/dovecot/daemon-client/mismatched-error-request-id",

@@ -96,19 +96,21 @@ test_stream_chunk_rejects_missing_discriminator (void)
 }
 
 static void
-test_stream_chunk_rejects_ambiguous_discriminator (void)
+test_stream_chunk_accepts_message_and_query_ids (void)
 {
   guint8 payload[] = { 0x01 };
   g_autoptr (GBytes) bytes = make_bytes (payload, sizeof (payload));
   g_autoptr (GError) error = NULL;
   g_auto (WyreboxDaemonStreamChunkFrame) frame = { 0 };
 
-  g_assert_false (wyrebox_daemon_stream_chunk_frame_init (&frame,
+  g_assert_true (wyrebox_daemon_stream_chunk_frame_init (&frame,
           "request-stream", "message-1", "query-1", NULL, 0, bytes, FALSE,
           &error));
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
-  g_assert_null (frame.request_id);
-  g_assert_null (frame.bytes);
+  g_assert_no_error (error);
+  g_assert_cmpstr (frame.request_id, ==, "request-stream");
+  g_assert_cmpstr (frame.message_id, ==, "message-1");
+  g_assert_cmpstr (frame.query_id, ==, "query-1");
+  g_assert_nonnull (frame.bytes);
 }
 
 static void
@@ -176,8 +178,8 @@ main (int argc, char **argv)
       test_stream_chunk_rejects_missing_request_id);
   g_test_add_func ("/daemon-api/stream-chunk/rejects-missing-discriminator",
       test_stream_chunk_rejects_missing_discriminator);
-  g_test_add_func ("/daemon-api/stream-chunk/rejects-ambiguous-discriminator",
-      test_stream_chunk_rejects_ambiguous_discriminator);
+  g_test_add_func ("/daemon-api/stream-chunk/accepts-message-and-query-ids",
+      test_stream_chunk_accepts_message_and_query_ids);
   g_test_add_func ("/daemon-api/stream-chunk/rejects-control-characters",
       test_stream_chunk_rejects_control_characters);
   g_test_add_func ("/daemon-api/stream-chunk/rejects-empty-non-final-bytes",

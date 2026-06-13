@@ -2941,7 +2941,7 @@ assert_response_bytes_encode_stream_chunk (void)
 }
 
 static void
-assert_response_bytes_reject_ambiguous_stream_chunk (void)
+assert_response_bytes_encode_stream_chunk_with_message_and_query_ids (void)
 {
   const guint8 payload[] = { 0xde, 0xad };
   g_autoptr (GBytes) chunk_bytes = g_bytes_new_static (payload,
@@ -2957,11 +2957,26 @@ assert_response_bytes_reject_ambiguous_stream_chunk (void)
   response.stream_chunk.query_id = g_strdup ("query-1");
   response.stream_chunk.chunk_index = 0;
   response.stream_chunk.bytes = g_bytes_ref (chunk_bytes);
+  response.stream_chunk.end_of_stream = TRUE;
 
   encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
       NULL, &error);
-  g_assert_null (encoded);
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  gsize size = 0;
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (encoded, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
+  capnp::FlatArrayMessageReader reader (words);
+
+  auto response_frame = reader.getRoot < ResponseFrame > ();
+  g_assert_true (response_frame.which () == ResponseFrame::STREAM_CHUNK);
+  g_assert_cmpstr (response_frame.getStreamChunk ().getMessageId ().cStr (), ==,
+      "message-1");
+  g_assert_cmpstr (response_frame.getStreamChunk ().getQueryId ().cStr (), ==,
+      "query-1");
 }
 
 static void
@@ -4234,8 +4249,9 @@ main (int argc, char **argv)
       assert_response_bytes_rejects_mailbox_select_invalid_fields);
   g_test_add_func ("/daemon-api/capnp/codec/encode-stream-chunk",
       assert_response_bytes_encode_stream_chunk);
-  g_test_add_func ("/daemon-api/capnp/codec/reject-ambiguous-stream-chunk",
-      assert_response_bytes_reject_ambiguous_stream_chunk);
+  g_test_add_func
+      ("/daemon-api/capnp/codec/encode-stream-chunk-with-message-and-query-ids",
+      assert_response_bytes_encode_stream_chunk_with_message_and_query_ids);
   g_test_add_func
       ("/daemon-api/capnp/codec/reject-mismatched-stream-chunk-request",
       assert_response_bytes_reject_mismatched_stream_chunk_request);

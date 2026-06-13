@@ -194,7 +194,7 @@ validate_select_inputs (const char *socket_path,
 
 static gboolean
 validate_response_request_id (const WyreboxDaemonResponseFrame *response,
-    const char *request_id, GError **error)
+    const char *request_id, const char *operation_name, GError **error)
 {
   if (g_strcmp0 (response->request_id, request_id) == 0)
     return TRUE;
@@ -202,18 +202,23 @@ validate_response_request_id (const WyreboxDaemonResponseFrame *response,
   g_set_error (error,
       G_IO_ERROR,
       G_IO_ERROR_INVALID_DATA,
-      "daemon mailbox SELECT response request_id does not match request");
+      "daemon %s response request_id does not match request", operation_name);
   return FALSE;
 }
 
 static gboolean
 set_daemon_error_response (const WyreboxDaemonResponseFrame *response,
-    GError **error)
+    const char *operation_name, GError **error)
 {
+  const char *error_class =
+      wyrebox_daemon_error_class_to_string (response->error.error_class);
+
   g_set_error (error,
       G_IO_ERROR,
       G_IO_ERROR_FAILED,
-      "daemon mailbox SELECT failed: %s",
+      "daemon %s failed (%s): %s",
+      operation_name,
+      error_class != NULL ? error_class : "unknown",
       response->error.message != NULL ? response->error.message :
       "daemon returned an error response");
   return FALSE;
@@ -806,14 +811,15 @@ wyrebox_dovecot_daemon_client_select_mailbox (const char *socket_path,
           &response, error))
     return FALSE;
 
-  if (!validate_response_request_id (&response, request_id, error))
+  if (!validate_response_request_id (&response, request_id, "mailbox SELECT",
+          error))
     return FALSE;
 
   switch (response.kind) {
     case WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_SELECT:
       return copy_mailbox_select_response (&response, out_result, error);
     case WYREBOX_DAEMON_RESPONSE_FRAME_ERROR:
-      return set_daemon_error_response (&response, error);
+      return set_daemon_error_response (&response, "mailbox SELECT", error);
     default:
       g_set_error (error,
           G_IO_ERROR,
@@ -874,9 +880,26 @@ wyrebox_dovecot_daemon_client_fetch_message_bytes (const char *socket_path,
           &response, error))
     return NULL;
 
-  if (!validate_fetch_response (request_id, expected_message_id, &response,
-          &output, error))
+  if (!validate_response_request_id (&response, request_id, "FETCH", error))
     return NULL;
+
+  switch (response.kind) {
+    case WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK:
+      if (!validate_fetch_response (request_id, expected_message_id, &response,
+              &output, error))
+        return NULL;
+      break;
+    case WYREBOX_DAEMON_RESPONSE_FRAME_ERROR:
+      set_daemon_error_response (&response, "FETCH", error);
+      return NULL;
+    default:
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "daemon returned unexpected response kind %d for FETCH",
+          response.kind);
+      return NULL;
+  }
 
   return g_steal_pointer (&output);
 }
