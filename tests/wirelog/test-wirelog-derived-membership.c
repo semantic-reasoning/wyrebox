@@ -1,6 +1,8 @@
 #include "wyrebox-wirelog-derived-membership.h"
 #include "wyrebox-wirelog-evaluation.h"
 #include "wyrebox-wirelog-program.h"
+#include "wyrebox-wirelog-source.h"
+#include "wyrebox-fact-record.h"
 
 #include <gio/gio.h>
 #include <glib.h>
@@ -120,6 +122,56 @@ new_integer_relation_program (GError **error)
 }
 
 static void
+fact_record_free (gpointer data)
+{
+  WyreboxFactRecord *record = data;
+
+  if (record == NULL)
+    return;
+
+  wyrebox_fact_record_clear (record);
+  g_free (record);
+}
+
+static GPtrArray *
+new_fact_array (void)
+{
+  return g_ptr_array_new_with_free_func (fact_record_free);
+}
+
+static void
+add_fact (GPtrArray *facts,
+    const char *predicate, const char *arg0, const char *arg1)
+{
+  const char *args[] = {
+    arg0,
+    arg1,
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  WyreboxFactRecord *record = g_new0 (WyreboxFactRecord, 1);
+
+  g_assert_true (wyrebox_fact_record_init (record,
+          predicate, args, "test:derived-membership", 1000000, 100, &error));
+  g_assert_no_error (error);
+  g_ptr_array_add (facts, record);
+}
+
+static WyreboxWirelogProgram *
+new_symbol_membership_program (GError **error)
+{
+  g_autoptr (GPtrArray) facts = new_fact_array ();
+
+  add_fact (facts, "source_membership", "view-alpha", "message-1");
+
+  return wyrebox_wirelog_program_new_from_rules_and_facts
+      (".decl source_membership(view_id: symbol, message_id: symbol)\n"
+      ".decl show_in_virtual_folder(view_id: symbol, message_id: symbol)\n"
+      "show_in_virtual_folder(view_id, message_id) :- "
+      "source_membership(view_id, message_id).", facts, error);
+}
+
+static void
 test_helper_propagates_missing_relation_failure (void)
 {
   g_autoptr (WyreboxWirelogProgram) program = NULL;
@@ -140,6 +192,29 @@ test_helper_propagates_missing_relation_failure (void)
       (evaluation, "missing_relation", &error);
   g_assert_null (memberships);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+}
+
+static void
+test_helper_rejects_symbol_csv_export (void)
+{
+  g_autoptr (WyreboxWirelogProgram) program = NULL;
+  g_autoptr (WyreboxWirelogEvaluation) evaluation = NULL;
+  g_autoptr (GPtrArray) memberships = NULL;
+  g_autoptr (GError) error = NULL;
+
+  program = new_symbol_membership_program (&error);
+  g_assert_no_error (error);
+  g_assert_nonnull (program);
+  g_assert_true (wyrebox_wirelog_program_evaluate (program, &evaluation,
+          &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (evaluation);
+
+  memberships =
+      wyrebox_wirelog_derived_membership_parse_evaluation_relation
+      (evaluation, "show_in_virtual_folder", &error);
+  g_assert_null (memberships);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
 }
 
 int
@@ -165,6 +240,8 @@ main (int argc, char **argv)
       test_parse_rejects_invalid_args);
   g_test_add_func ("/wirelog/derived-membership/helper-missing-relation",
       test_helper_propagates_missing_relation_failure);
+  g_test_add_func ("/wirelog/derived-membership/helper-symbol-csv-unsupported",
+      test_helper_rejects_symbol_csv_export);
 
   return g_test_run ();
 }
