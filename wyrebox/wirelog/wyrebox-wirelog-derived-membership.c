@@ -240,5 +240,10 @@ GPtrArray *wyrebox_wirelog_derived_membership_parse_evaluation_relation
           relation_name, &csv, error))
     return NULL;
 
-  return wyrebox_wirelog_derived_membership_parse_csv (csv, error);
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_NOT_SUPPORTED,
+      "Wirelog result CSV does not preserve symbol strings for derived "
+      "membership extraction");
+  return NULL;
 }
