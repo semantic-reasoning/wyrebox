@@ -46,6 +46,7 @@ struct mailbox_vfuncs {
   int (*get_status)(struct mailbox *box,
                     enum mailbox_status_items items,
                     struct mailbox_status *status_r);
+  void (*free)(struct mailbox *box);
   struct mail_search_context *(*search_init)(
       struct mailbox_transaction_context *transaction,
       struct mail_search_args *args,

@@ -12,7 +12,65 @@ struct wyrebox_dovecot_storage
   struct mail_storage storage;
 };
 
+struct wyrebox_dovecot_mailbox
+{
+  struct mailbox mailbox;
+};
+
 static struct mail_storage wyrebox_mail_storage_class;
+
+static void
+wyrebox_dovecot_mailbox_free (struct mailbox *box)
+{
+  (void) box;
+}
+
+static int
+wyrebox_dovecot_mailbox_open (struct mailbox *box)
+{
+  (void) box;
+  return 0;
+}
+
+static int
+wyrebox_dovecot_mailbox_get_status (struct mailbox *box,
+    enum mailbox_status_items items, struct mailbox_status *status_r)
+{
+  (void) box;
+  (void) items;
+
+  status_r->messages = 0;
+  status_r->uidvalidity = 1;
+  status_r->uidnext = 1;
+  return 0;
+}
+
+static struct mailbox *
+wyrebox_dovecot_mailbox_alloc (struct mail_storage *storage,
+    struct mailbox_list *list, const char *vname, enum mailbox_flags flags)
+{
+  pool_t pool;
+  struct wyrebox_dovecot_mailbox *wbox;
+
+  pool = pool_alloconly_create ("wyrebox mailbox",
+      sizeof (struct wyrebox_dovecot_mailbox));
+  wbox = p_new (pool, struct wyrebox_dovecot_mailbox, 1);
+
+  wbox->mailbox.pool = pool;
+  wbox->mailbox.storage = storage;
+  wbox->mailbox.list = list;
+  wbox->mailbox.vname = vname;
+  wbox->mailbox.name = vname;
+  wbox->mailbox.event = NULL;
+  wbox->mailbox.mail_vfuncs = NULL;
+  wbox->mailbox.vlast = NULL;
+  wbox->mailbox.v.open = wyrebox_dovecot_mailbox_open;
+  wbox->mailbox.v.get_status = wyrebox_dovecot_mailbox_get_status;
+  wbox->mailbox.v.free = wyrebox_dovecot_mailbox_free;
+
+  (void) flags;
+  return &wbox->mailbox;
+}
 
 static struct mail_storage *
 wyrebox_dovecot_storage_alloc (void)
@@ -54,7 +112,7 @@ static struct mail_storage wyrebox_mail_storage_class = {
         .create = wyrebox_dovecot_storage_create,
         .destroy = wyrebox_dovecot_storage_destroy,
         .add_list = NULL,
-        .mailbox_alloc = NULL,
+        .mailbox_alloc = wyrebox_dovecot_mailbox_alloc,
       },
 };
 

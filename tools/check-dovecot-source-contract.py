@@ -45,6 +45,7 @@ REQUIRED_VFUNC_SYMBOLS = {
     "mailbox_vfuncs": [
         "open",
         "get_status",
+        "free",
         "search_init",
     ],
     "mail_vfuncs": [
