@@ -72,6 +72,8 @@ wyrebox_sources = files(
 
 wyrebox_build_config = configuration_data()
 wyrebox_build_config.set10('WYREBOX_HAVE_DUCKDB', true)
+wyrebox_build_config.set10('WYREBOX_DUCKDB_FROM_SUBPROJECT',
+  duckdb_from_subproject)
 wyrebox_build_config.set10('WYREBOX_HAVE_CAPNP_SERIALIZATION',
   capnp_serialization_found)
 
