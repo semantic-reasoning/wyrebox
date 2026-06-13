@@ -285,16 +285,22 @@ test_list_and_select_from_duckdb_catalog (void)
   g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
   g_assert_cmpstr (entry->mailbox_id, ==, "mb-projects");
   g_assert_false (entry->is_selectable);
+  g_assert_cmpint (entry->child_state, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN);
 
   entry = find_entry (&list_result, "Projects/Alpha");
   g_assert_nonnull (entry);
   g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
   g_assert_cmpstr (entry->mailbox_id, ==, "mb-project-alpha");
   g_assert_true (entry->is_selectable);
+  g_assert_cmpint (entry->child_state, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN);
 
   entry = find_entry (&list_result, "ProjectsX");
   g_assert_nonnull (entry);
   g_assert_cmpstr (entry->mailbox_id, ==, "mb-projectsx");
+  g_assert_cmpint (entry->child_state, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN);
 
   entry = find_entry (&list_result, "Important");
   g_assert_nonnull (entry);
@@ -307,6 +313,8 @@ test_list_and_select_from_duckdb_catalog (void)
   g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
   g_assert_cmpstr (entry->mailbox_id, ==, "view-containers");
   g_assert_false (entry->is_selectable);
+  g_assert_cmpint (entry->child_state, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN);
 
   g_assert_null (find_entry (&list_result, "Hidden"));
   g_assert_null (find_entry (&list_result, "Hidden View"));
