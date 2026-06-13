@@ -3,6 +3,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-mailbox-list-request.c',
   'daemon/wyrebox-daemon-mailbox-list-result.c',
   'daemon/wyrebox-daemon-mailbox-list-service.c',
+  'daemon/wyrebox-daemon-mailbox-catalog-duckdb.c',
   'daemon/wyrebox-daemon-mailbox-select-request.c',
   'daemon/wyrebox-daemon-mailbox-select-result.c',
   'daemon/wyrebox-daemon-mailbox-select-service.c',
