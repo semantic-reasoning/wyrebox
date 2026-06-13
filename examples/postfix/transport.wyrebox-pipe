@@ -1,0 +1,12 @@
+# Example Postfix transport map entries for WyreBox pipe delivery.
+#
+# Compile with:
+#   postmap /etc/postfix/transport
+#
+# Then reference the map from main.cf, for example:
+#   transport_maps = hash:/etc/postfix/transport
+#
+# The right-hand side names the master.cf service in
+# master.cf.wyrebox-pipe.
+example.com wyrebox-pipe:
+.example.com wyrebox-pipe:
