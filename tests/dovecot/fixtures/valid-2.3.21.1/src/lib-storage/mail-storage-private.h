@@ -30,12 +30,15 @@ struct mail_storage_vfuncs {
                    struct mailbox_list *list);
   struct mailbox *(*mailbox_alloc)(struct mail_storage *storage,
                                   struct mailbox_list *list,
-                                  const char *vname);
+                                  const char *vname,
+                                  enum mailbox_flags flags);
 };
 
 struct mailbox_vfuncs {
   int (*open)(struct mailbox *box);
-  int (*get_status)(struct mailbox *box, int items, struct mailbox_status *status_r);
+  int (*get_status)(struct mailbox *box,
+                    enum mailbox_status_items items,
+                    struct mailbox_status *status_r);
   struct mail_search_context *(*search_init)(
       struct mailbox_transaction_context *transaction,
       struct mail_search_args *args,

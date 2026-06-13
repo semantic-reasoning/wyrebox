@@ -28,14 +28,9 @@ struct mail_vfuncs;
 struct mail_storage_vfuncs {
   void (*add_list)(struct mail_storage *storage,
                    struct mailbox_list *list);
-  struct mailbox *(*mailbox_alloc)(struct mail_storage *storage,
-                                  struct mailbox_list *list,
-                                  const char *vname);
 };
 
 struct mailbox_vfuncs {
-  int (*open)(struct mailbox *box);
-  int (*get_status)(struct mailbox *box, int items, struct mailbox_status *status_r);
 };
 
 struct mail_vfuncs {
