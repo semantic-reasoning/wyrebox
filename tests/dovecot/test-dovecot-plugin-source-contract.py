@@ -56,6 +56,11 @@ def main() -> None:
 
     text = read_text(PLUGIN_SOURCE)
 
+    forbid(
+        r"\bmailbox_list_sink_\w+\b",
+        text,
+        "fixture mailbox LIST sink dependency in production plugin",
+    )
     require(r"^#include\s+\"mail-storage.h\"$", text, "mail-storage include")
     require(r"^#include\s+\"mail-storage-private.h\"$", text,
             "mail-storage-private include")
@@ -141,9 +146,21 @@ def main() -> None:
         "mailbox open uses shared SELECT refresh helper",
     )
     require(
+        r"typedef\s+gboolean\s+\(\*WyreboxDovecotMailboxListPublishFunc\)"
+        r"\s*\(\s*struct\s+mailbox_list\s+\*\s*list,\s*"
+        r"const\s+char\s+\*name,\s*char\s+hierarchy_delimiter,\s*"
+        r"gboolean\s+selectable,\s*"
+        r"enum\s+mailbox_list_child_state\s+child_state,\s*"
+        r"const\s+char\s+\*special_use,\s*gpointer\s+user_data\s*\)",
+        text,
+        "mailbox LIST publisher callback seam",
+    )
+    require(
         r"gboolean\s+wyrebox_dovecot_publish_mailbox_list_result"
         r"\s*\(\s*struct\s+mailbox_list\s+\*list,\s*"
         r"const\s+WyreboxDaemonMailboxListResult\s+\*result,\s*"
+        r"WyreboxDovecotMailboxListPublishFunc\s+publisher,\s*"
+        r"gpointer\s+publisher_data,\s*"
         r"GError\s+\*\*\s*error\s*\)",
         text,
         "mailbox LIST publication adapter",
@@ -157,7 +174,8 @@ def main() -> None:
         "entry->hierarchy_delimiter",
         "entry->is_selectable",
         "entry->special_use",
-        "mailbox_list_sink_publish_entry",
+        "publisher (list",
+        "publisher_data",
     ]:
         if required_fragment not in mailbox_list_publish_body:
             raise AssertionError(
@@ -178,6 +196,7 @@ def main() -> None:
     for required_fragment in [
         "list == NULL",
         "result == NULL",
+        "publisher == NULL",
         "result->entries == NULL",
         "entry->hierarchy_delimiter[1] != '\\0'",
         "G_IO_ERROR_FAILED",

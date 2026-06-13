@@ -22,8 +22,16 @@ extern int wyrebox_dovecot_loader_shim_mail_storage_class_register_calls;
 extern int wyrebox_dovecot_loader_shim_mail_storage_class_unregister_calls;
 extern void wyrebox_plugin_init (struct module *module);
 extern void wyrebox_plugin_deinit (void);
+
+typedef gboolean (*WyreboxDovecotMailboxListPublishFunc) (struct mailbox_list
+    * list, const char *name, char hierarchy_delimiter, gboolean selectable,
+    enum mailbox_list_child_state child_state, const char *special_use,
+    gpointer user_data);
+
 extern gboolean wyrebox_dovecot_publish_mailbox_list_result (struct mailbox_list
-    *list, const WyreboxDaemonMailboxListResult * result, GError ** error);
+    *list, const WyreboxDaemonMailboxListResult * result,
+    WyreboxDovecotMailboxListPublishFunc publisher, gpointer publisher_data,
+    GError ** error);
 
 const char *wyrebox_dovecot_test_daemon_socket_path;
 
@@ -80,6 +88,17 @@ make_socket_path (char **out_root)
   socket_path = g_build_filename (*out_root, "wyrebox.sock", NULL);
   g_assert_nonnull (socket_path);
   return socket_path;
+}
+
+static gboolean
+publish_mailbox_list_entry_to_sink (struct mailbox_list *list,
+    const char *name, char hierarchy_delimiter, gboolean selectable,
+    enum mailbox_list_child_state child_state, const char *special_use,
+    gpointer user_data)
+{
+  g_assert_null (user_data);
+  return mailbox_list_sink_publish_entry (list, name, hierarchy_delimiter,
+      selectable, child_state, special_use);
 }
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
@@ -496,7 +515,7 @@ test_publish_mailbox_list_result_maps_entries (void)
   list = mailbox_list_sink_alloc ();
   g_assert_nonnull (list);
   g_assert_true (wyrebox_dovecot_publish_mailbox_list_result (list, &result,
-          &error));
+          publish_mailbox_list_entry_to_sink, NULL, &error));
   g_assert_no_error (error);
 
   g_assert_cmpuint (mailbox_list_sink_get_count (list), ==, 2);
@@ -534,7 +553,7 @@ test_publish_mailbox_list_result_accepts_empty_result (void)
   g_assert_nonnull (list);
 
   g_assert_true (wyrebox_dovecot_publish_mailbox_list_result (list, &result,
-          &error));
+          publish_mailbox_list_entry_to_sink, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpuint (mailbox_list_sink_get_count (list), ==, 0);
 
@@ -553,12 +572,17 @@ test_publish_mailbox_list_result_rejects_null_inputs (void)
   g_assert_nonnull (list);
 
   g_assert_false (wyrebox_dovecot_publish_mailbox_list_result (NULL, &result,
-          &error));
+          publish_mailbox_list_entry_to_sink, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_clear_error (&error);
 
   g_assert_false (wyrebox_dovecot_publish_mailbox_list_result (list, NULL,
-          &error));
+          publish_mailbox_list_entry_to_sink, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  g_assert_false (wyrebox_dovecot_publish_mailbox_list_result (list, &result,
+          NULL, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 
   mailbox_list_sink_free (list);
@@ -587,7 +611,7 @@ test_publish_mailbox_list_result_rejects_invalid_delimiter (void)
   list = mailbox_list_sink_alloc ();
   g_assert_nonnull (list);
   g_assert_false (wyrebox_dovecot_publish_mailbox_list_result (list, &result,
-          &error));
+          publish_mailbox_list_entry_to_sink, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
   g_assert_cmpuint (mailbox_list_sink_get_count (list), ==, 0);
 
@@ -616,7 +640,41 @@ test_publish_mailbox_list_result_rejects_invalid_child_state (void)
   list = mailbox_list_sink_alloc ();
   g_assert_nonnull (list);
   g_assert_false (wyrebox_dovecot_publish_mailbox_list_result (list, &result,
-          &error));
+          publish_mailbox_list_entry_to_sink, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_cmpuint (mailbox_list_sink_get_count (list), ==, 0);
+
+  mailbox_list_sink_free (list);
+}
+
+static void
+test_publish_mailbox_list_result_validates_before_publishing (void)
+{
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  struct mailbox_list *list = NULL;
+  WyreboxDaemonMailboxListEntry *entry = NULL;
+
+  wyrebox_daemon_mailbox_list_result_init_empty (&result);
+  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "mailbox-inbox", "INBOX", "/", "\\Inbox", TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
+          "view-projects", "Virtual/Projects", "/", NULL, FALSE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN, &error));
+  g_assert_no_error (error);
+
+  entry = g_ptr_array_index (result.entries, 1);
+  g_assert_nonnull (entry);
+  entry->child_state = (WyreboxDaemonMailboxListChildState) 999;
+
+  list = mailbox_list_sink_alloc ();
+  g_assert_nonnull (list);
+  g_assert_false (wyrebox_dovecot_publish_mailbox_list_result (list, &result,
+          publish_mailbox_list_entry_to_sink, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
   g_assert_cmpuint (mailbox_list_sink_get_count (list), ==, 0);
 
@@ -642,7 +700,7 @@ test_publish_mailbox_list_result_reports_publish_failure (void)
   mailbox_list_sink_fail_next_publish (list);
 
   g_assert_false (wyrebox_dovecot_publish_mailbox_list_result (list, &result,
-          &error));
+          publish_mailbox_list_entry_to_sink, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
   g_assert_cmpuint (mailbox_list_sink_get_count (list), ==, 0);
 
@@ -830,6 +888,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/dovecot/plugin-mailbox-smoke/list-publish-invalid-child-state",
       test_publish_mailbox_list_result_rejects_invalid_child_state);
+  g_test_add_func
+      ("/dovecot/plugin-mailbox-smoke/list-publish-validates-before-publish",
+      test_publish_mailbox_list_result_validates_before_publishing);
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/list-publish-failure",
       test_publish_mailbox_list_result_reports_publish_failure);
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/open-get-status-after-open",
