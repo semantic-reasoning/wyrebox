@@ -54,6 +54,16 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
         const char *vname,
         enum mailbox_flags flags);
 
+    typedef struct mail_storage *(*wyrebox_mail_storage_alloc_fn)(void);
+
+    typedef int (*wyrebox_mail_storage_create_fn)(
+        struct mail_storage *storage,
+        struct mail_namespace *ns,
+        const char **error_r);
+
+    typedef void (*wyrebox_mail_storage_destroy_fn)(
+        struct mail_storage *storage);
+
     typedef int (*wyrebox_mailbox_open_fn)(struct mailbox *box);
 
     typedef int (*wyrebox_mailbox_get_status_fn)(
@@ -64,11 +74,51 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
     static struct mail_storage wyrebox_mail_storage_probe;
     static struct mailbox wyrebox_mailbox_probe;
 
+    static struct mailbox *wyrebox_probe_mailbox_alloc(
+        struct mail_storage *storage,
+        struct mailbox_list *list,
+        const char *vname,
+        enum mailbox_flags flags);
+
+    static struct mail_storage *wyrebox_probe_mail_storage_alloc(void);
+
+    static int wyrebox_probe_mail_storage_create(
+        struct mail_storage *storage,
+        struct mail_namespace *ns,
+        const char **error_r);
+
+    static void wyrebox_probe_mail_storage_destroy(struct mail_storage *storage);
+
+    static int wyrebox_probe_mailbox_open(struct mailbox *box);
+
+    static int wyrebox_probe_mailbox_get_status(
+        struct mailbox *box,
+        enum mailbox_status_items items,
+        struct mailbox_status *status_r);
+
     _Static_assert(
         __builtin_types_compatible_p(
             __typeof__(wyrebox_mail_storage_probe.v.mailbox_alloc),
             wyrebox_mailbox_alloc_fn),
         "mail_storage_vfuncs::mailbox_alloc signature mismatch");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mail_storage_probe.v.alloc),
+            wyrebox_mail_storage_alloc_fn),
+        "mail_storage_vfuncs::alloc signature mismatch");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mail_storage_probe.v.create),
+            wyrebox_mail_storage_create_fn),
+        "mail_storage_vfuncs::create signature mismatch");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mail_storage_probe.v.destroy),
+            wyrebox_mail_storage_destroy_fn),
+        "mail_storage_vfuncs::destroy signature mismatch");
 
     _Static_assert(
         __builtin_types_compatible_p(
@@ -82,6 +132,18 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
             wyrebox_mailbox_get_status_fn),
         "mailbox_vfuncs::get_status signature mismatch");
 
+    static struct mail_storage wyrebox_mail_storage_probe_template = {
+        .name = "wyrebox",
+        .class_flags = 0,
+        .v = {
+              .alloc = wyrebox_probe_mail_storage_alloc,
+              .create = wyrebox_probe_mail_storage_create,
+              .destroy = wyrebox_probe_mail_storage_destroy,
+              .add_list = NULL,
+              .mailbox_alloc = NULL,
+            },
+    };
+
     static struct mailbox *wyrebox_probe_mailbox_alloc(
         struct mail_storage *storage,
         struct mailbox_list *list,
@@ -92,6 +154,31 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
       (void)vname;
       (void)flags;
       return NULL;
+    }
+
+    static struct mail_storage wyrebox_mail_storage_probe_storage = {
+        .name = "wyrebox",
+    };
+
+    static struct mail_storage *
+    wyrebox_probe_mail_storage_alloc(void) {
+      return &wyrebox_mail_storage_probe_storage;
+    }
+
+    static int
+    wyrebox_probe_mail_storage_create(
+        struct mail_storage *storage,
+        struct mail_namespace *ns,
+        const char **error_r) {
+      (void) storage;
+      (void) ns;
+      (void) error_r;
+      return 0;
+    }
+
+    static void
+    wyrebox_probe_mail_storage_destroy(struct mail_storage *storage) {
+      (void) storage;
     }
 
     static int wyrebox_probe_mailbox_open(struct mailbox *box) {
@@ -112,13 +199,13 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
     int
     main(void)
     {
-      wyrebox_mail_storage_probe.v.mailbox_alloc = wyrebox_probe_mailbox_alloc;
+      wyrebox_mail_storage_probe.v = wyrebox_mail_storage_probe_template.v;
+      wyrebox_mail_storage_probe_template.v = wyrebox_mail_storage_probe.v;
       wyrebox_mailbox_probe.v.open = wyrebox_probe_mailbox_open;
       wyrebox_mailbox_probe.v.get_status = wyrebox_probe_mailbox_get_status;
-
-      return wyrebox_mail_storage_probe.v.mailbox_alloc(
-          NULL, NULL, NULL, (enum mailbox_flags)0) == NULL
-        ? 0 : 1;
+      (void)wyrebox_mail_storage_probe;
+      (void)wyrebox_mailbox_probe;
+      return 0;
     }
     """
 )

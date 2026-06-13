@@ -36,6 +36,9 @@ REQUIRED_TYPES = {
 
 REQUIRED_VFUNC_SYMBOLS = {
     "mail_storage_vfuncs": [
+        "alloc",
+        "create",
+        "destroy",
         "add_list",
         "mailbox_alloc",
     ],
