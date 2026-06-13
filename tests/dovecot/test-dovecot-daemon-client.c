@@ -18,6 +18,9 @@
 typedef enum
 {
   FAKE_SERVER_RESPONSE_BYTES,
+  FAKE_SERVER_MAILBOX_SELECT_RESPONSE,
+  FAKE_SERVER_DAEMON_ERROR_RESPONSE,
+  FAKE_SERVER_UNEXPECTED_SUCCESS_RESPONSE,
   FAKE_SERVER_CLOSE_WITHOUT_RESPONSE,
   FAKE_SERVER_TRUNCATED_RESPONSE,
 } FakeServerBehavior;
@@ -29,6 +32,7 @@ typedef struct
   FakeServerBehavior behavior;
   const guint8 *response;
   gsize response_size;
+  const char *response_request_id_override;
 } FakeServer;
 
 static void
@@ -104,13 +108,18 @@ write_truncated_response_frame (GOutputStream *output)
   g_assert_cmpuint (bytes_written, ==, sizeof (truncated_frame));
 }
 
-static void
+static GBytes *encode_mailbox_select_response (const char *request_id);
+static GBytes *encode_daemon_error_response (const char *request_id);
+static GBytes *encode_unexpected_success_response (const char *request_id);
+
+static char *
 assert_decoded_select_request (GBytes *request)
 {
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
+  char *request_id = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
           request, &decoded, &decoded_state, &decoded_state_clear, NULL,
@@ -130,7 +139,10 @@ assert_decoded_select_request (GBytes *request)
 
   g_assert_nonnull (decoded_state_clear);
   g_assert_nonnull (decoded_state);
+  request_id = g_strdup (decoded.request_id);
   decoded_state_clear (decoded_state);
+
+  return request_id;
 }
 
 static gpointer
@@ -140,6 +152,8 @@ fake_server_thread_main (gpointer user_data)
   g_autoptr (GError) error = NULL;
   g_autoptr (GSocketConnection) connection = NULL;
   g_autoptr (GBytes) request = NULL;
+  g_autoptr (GBytes) response = NULL;
+  g_autofree char *request_id = NULL;
   GInputStream *input = NULL;
   GOutputStream *output = NULL;
 
@@ -154,10 +168,41 @@ fake_server_thread_main (gpointer user_data)
 
   request = wyrebox_daemon_frame_io_read_payload (input, &error);
   g_assert_no_error (error);
-  assert_decoded_select_request (request);
+  request_id = assert_decoded_select_request (request);
 
   switch (server->behavior) {
     case FAKE_SERVER_RESPONSE_BYTES:
+      g_assert_true (wyrebox_daemon_frame_io_write_payload (output,
+              server->response, server->response_size, &error));
+      g_assert_no_error (error);
+      break;
+    case FAKE_SERVER_MAILBOX_SELECT_RESPONSE:
+      response =
+          encode_mailbox_select_response (server->response_request_id_override
+          != NULL ? server->response_request_id_override : request_id);
+      g_assert_nonnull (response);
+      server->response = g_bytes_get_data (response, &server->response_size);
+      g_assert_true (wyrebox_daemon_frame_io_write_payload (output,
+              server->response, server->response_size, &error));
+      g_assert_no_error (error);
+      break;
+    case FAKE_SERVER_DAEMON_ERROR_RESPONSE:
+      response =
+          encode_daemon_error_response (server->response_request_id_override !=
+          NULL ? server->response_request_id_override : request_id);
+      g_assert_nonnull (response);
+      server->response = g_bytes_get_data (response, &server->response_size);
+      g_assert_true (wyrebox_daemon_frame_io_write_payload (output,
+              server->response, server->response_size, &error));
+      g_assert_no_error (error);
+      break;
+    case FAKE_SERVER_UNEXPECTED_SUCCESS_RESPONSE:
+      response =
+          encode_unexpected_success_response
+          (server->response_request_id_override !=
+          NULL ? server->response_request_id_override : request_id);
+      g_assert_nonnull (response);
+      server->response = g_bytes_get_data (response, &server->response_size);
       g_assert_true (wyrebox_daemon_frame_io_write_payload (output,
               server->response, server->response_size, &error));
       g_assert_no_error (error);
@@ -178,13 +223,15 @@ fake_server_thread_main (gpointer user_data)
 static void
 fake_server_start (FakeServer *server,
     const char *socket_path,
-    FakeServerBehavior behavior, GBytes *response_payload)
+    FakeServerBehavior behavior, GBytes *response_payload,
+    const char *response_request_id_override)
 {
   g_autoptr (GError) error = NULL;
   g_autoptr (GSocketAddress) address = NULL;
 
   server->listener = g_socket_listener_new ();
   server->behavior = behavior;
+  server->response_request_id_override = response_request_id_override;
   if (response_payload != NULL)
     server->response = g_bytes_get_data (response_payload,
         &server->response_size);
@@ -210,7 +257,7 @@ fake_server_join (FakeServer *server)
 }
 
 static GBytes *
-encode_mailbox_select_response (void)
+encode_mailbox_select_response (const char *request_id)
 {
   g_auto (WyreboxDaemonMailboxSelectResult) select = { 0 };
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
@@ -221,7 +268,7 @@ encode_mailbox_select_response (void)
           "view-projects", "Projects", 77, 42, &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_response_frame_init_mailbox_select (&frame,
-          "request-id", NULL, &select, &error));
+          request_id, NULL, &select, &error));
   g_assert_no_error (error);
 
   return wyrebox_daemon_capnp_codec_encode_response_frame (&frame, NULL,
@@ -229,14 +276,14 @@ encode_mailbox_select_response (void)
 }
 
 static GBytes *
-encode_daemon_error_response (void)
+encode_daemon_error_response (const char *request_id)
 {
   g_auto (WyreboxDaemonErrorFrame) daemon_error = { 0 };
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
   g_autoptr (GError) error = NULL;
 
   g_assert_true (wyrebox_daemon_error_frame_init (&daemon_error,
-          "request-id", WYREBOX_DAEMON_ERROR_NOT_FOUND,
+          request_id, WYREBOX_DAEMON_ERROR_NOT_FOUND,
           "mailbox not found", NULL, &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_response_frame_init_error (&frame,
@@ -248,7 +295,7 @@ encode_daemon_error_response (void)
 }
 
 static GBytes *
-encode_unexpected_success_response (void)
+encode_unexpected_success_response (const char *request_id)
 {
   const char *args[] = { "message-1", "project-a", NULL };
   g_auto (WyreboxDaemonFactMutationRequest) mutation = { 0 };
@@ -261,7 +308,7 @@ encode_unexpected_success_response (void)
           "project_mention", "account-1", args, &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_success_receipt_init_fact_mutation (&receipt,
-          "request-id", &mutation, 4096, 7, &error));
+          request_id, &mutation, 4096, 7, &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_response_frame_init_success (&frame,
           &receipt, NULL, &error));
@@ -283,7 +330,7 @@ assert_select_call_fails_with_response (GBytes *response_payload,
 
   init_stale_result (&result);
   fake_server_start (&server, socket_path, FAKE_SERVER_RESPONSE_BYTES,
-      response_payload);
+      response_payload, NULL);
 
   g_assert_false (wyrebox_dovecot_daemon_client_select_mailbox (socket_path,
           "account-1", "Projects", &result, &error));
@@ -299,14 +346,12 @@ test_dovecot_daemon_client_sends_select_and_returns_copy (void)
 {
   g_autofree char *root = NULL;
   g_autofree char *socket_path = make_socket_path (&root);
-  g_autoptr (GBytes) response_payload = encode_mailbox_select_response ();
   g_auto (WyreboxDaemonMailboxSelectResult) result = { 0 };
   g_autoptr (GError) error = NULL;
   FakeServer server = { 0 };
 
-  g_assert_nonnull (response_payload);
-  fake_server_start (&server, socket_path, FAKE_SERVER_RESPONSE_BYTES,
-      response_payload);
+  fake_server_start (&server, socket_path, FAKE_SERVER_MAILBOX_SELECT_RESPONSE,
+      NULL, NULL);
 
   g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox (socket_path,
           "account-1", "Projects", &result, &error));
@@ -325,20 +370,82 @@ test_dovecot_daemon_client_sends_select_and_returns_copy (void)
 static void
 test_dovecot_daemon_client_daemon_error_fails_cleanly (void)
 {
-  g_autoptr (GBytes) response_payload = encode_daemon_error_response ();
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_auto (WyreboxDaemonMailboxSelectResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  FakeServer server = { 0 };
 
-  g_assert_nonnull (response_payload);
-  assert_select_call_fails_with_response (response_payload, G_IO_ERROR_FAILED);
+  init_stale_result (&result);
+  fake_server_start (&server, socket_path, FAKE_SERVER_DAEMON_ERROR_RESPONSE,
+      NULL, NULL);
+
+  g_assert_false (wyrebox_dovecot_daemon_client_select_mailbox (socket_path,
+          "account-1", "Projects", &result, &error));
+
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+  assert_result_is_cleared (&result);
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+assert_select_call_rejects_mismatched_request_id (FakeServerBehavior
+    response_behavior)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_auto (WyreboxDaemonMailboxSelectResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  FakeServer server = { 0 };
+
+  init_stale_result (&result);
+  fake_server_start (&server, socket_path, response_behavior,
+      NULL, "mismatched-request-id");
+
+  g_assert_false (wyrebox_dovecot_daemon_client_select_mailbox (socket_path,
+          "account-1", "Projects", &result, &error));
+
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  assert_result_is_cleared (&result);
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_mismatched_select_request_id_fails_cleanly (void)
+{
+  assert_select_call_rejects_mismatched_request_id
+      (FAKE_SERVER_MAILBOX_SELECT_RESPONSE);
+}
+
+static void
+test_dovecot_daemon_client_mismatched_error_request_id_fails_cleanly (void)
+{
+  assert_select_call_rejects_mismatched_request_id
+      (FAKE_SERVER_DAEMON_ERROR_RESPONSE);
 }
 
 static void
 test_dovecot_daemon_client_unexpected_response_fails_cleanly (void)
 {
-  g_autoptr (GBytes) response_payload = encode_unexpected_success_response ();
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_auto (WyreboxDaemonMailboxSelectResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  FakeServer server = { 0 };
 
-  g_assert_nonnull (response_payload);
-  assert_select_call_fails_with_response (response_payload,
-      G_IO_ERROR_INVALID_DATA);
+  init_stale_result (&result);
+  fake_server_start (&server, socket_path,
+      FAKE_SERVER_UNEXPECTED_SUCCESS_RESPONSE, NULL, NULL);
+
+  g_assert_false (wyrebox_dovecot_daemon_client_select_mailbox (socket_path,
+          "account-1", "Projects", &result, &error));
+
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  assert_result_is_cleared (&result);
+  fake_server_join (&server);
+  remove_tree (root);
 }
 
 static void
@@ -365,7 +472,7 @@ test_dovecot_daemon_client_no_response_fails_cleanly (void)
 
   init_stale_result (&result);
   fake_server_start (&server, socket_path, FAKE_SERVER_CLOSE_WITHOUT_RESPONSE,
-      NULL);
+      NULL, NULL);
 
   g_assert_false (wyrebox_dovecot_daemon_client_select_mailbox (socket_path,
           "account-1", "Projects", &result, &error));
@@ -387,7 +494,7 @@ test_dovecot_daemon_client_truncated_response_fails_cleanly (void)
 
   init_stale_result (&result);
   fake_server_start (&server, socket_path, FAKE_SERVER_TRUNCATED_RESPONSE,
-      NULL);
+      NULL, NULL);
 
   g_assert_false (wyrebox_dovecot_daemon_client_select_mailbox (socket_path,
           "account-1", "Projects", &result, &error));
@@ -465,6 +572,10 @@ main (int argc, char **argv)
       test_dovecot_daemon_client_sends_select_and_returns_copy);
   g_test_add_func ("/dovecot/daemon-client/daemon-error",
       test_dovecot_daemon_client_daemon_error_fails_cleanly);
+  g_test_add_func ("/dovecot/daemon-client/mismatched-select-request-id",
+      test_dovecot_daemon_client_mismatched_select_request_id_fails_cleanly);
+  g_test_add_func ("/dovecot/daemon-client/mismatched-error-request-id",
+      test_dovecot_daemon_client_mismatched_error_request_id_fails_cleanly);
   g_test_add_func ("/dovecot/daemon-client/unexpected-response",
       test_dovecot_daemon_client_unexpected_response_fails_cleanly);
   g_test_add_func ("/dovecot/daemon-client/malformed-response",

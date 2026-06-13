@@ -46,6 +46,20 @@ validate_select_inputs (const char *socket_path,
 }
 
 static gboolean
+validate_response_request_id (const WyreboxDaemonResponseFrame *response,
+    const char *request_id, GError **error)
+{
+  if (g_strcmp0 (response->request_id, request_id) == 0)
+    return TRUE;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_INVALID_DATA,
+      "daemon mailbox SELECT response request_id does not match request");
+  return FALSE;
+}
+
+static gboolean
 set_daemon_error_response (const WyreboxDaemonResponseFrame *response,
     GError **error)
 {
@@ -124,6 +138,9 @@ wyrebox_dovecot_daemon_client_select_mailbox (const char *socket_path,
 
   if (!wyrebox_daemon_capnp_codec_decode_response_frame (response_payload,
           &response, error))
+    return FALSE;
+
+  if (!validate_response_request_id (&response, request_id, error))
     return FALSE;
 
   switch (response.kind) {
