@@ -457,9 +457,9 @@ test_open_and_get_status_after_open (void)
   g_assert_cmpuint (status.uidvalidity, ==, 77);
   g_assert_cmpuint (status.uidnext, ==, 42);
   g_assert_cmpuint (status.messages, ==, 7);
-  g_assert_cmpuint (server.request_count, ==, 2);
 
   fake_server_join (&server);
+  g_assert_cmpuint (server.request_count, ==, 2);
   remove_tree (socket_root);
 
   wyrebox_dovecot_test_daemon_socket_path = NULL;
@@ -506,9 +506,9 @@ test_lazy_status_before_open (void)
   g_assert_cmpuint (status.uidnext, ==, 42);
   g_assert_cmpuint (status.messages, ==, 7);
   g_assert_false (box->opened);
-  g_assert_cmpuint (server.request_count, ==, 2);
 
   fake_server_join (&server);
+  g_assert_cmpuint (server.request_count, ==, 2);
   remove_tree (socket_root);
 
   wyrebox_dovecot_test_daemon_socket_path = NULL;
