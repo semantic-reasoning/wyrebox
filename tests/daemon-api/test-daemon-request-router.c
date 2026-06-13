@@ -159,7 +159,7 @@ query_wirelog_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
   g_autoptr (GBytes) bytes = g_bytes_new_static ("rows", strlen ("rows"));
 
   g_assert_cmpstr (identity->request_id, ==, "request-wirelog-query");
-  g_assert_cmpstr (identity->caller_identity, ==, "skill");
+  g_assert_cmpstr (identity->caller_identity, ==, "trusted-tool");
   g_assert_cmpstr (identity->account_identity, ==, "account-1");
   g_assert_cmpstr (request->query_id, ==, "query-1");
   g_assert_cmpstr (request->predicate_id, ==, "project_mention");
@@ -182,7 +182,7 @@ query_duckdb_template_fixture (const WyreboxDaemonRequestIdentity *identity,
       g_bytes_new_static ("duckdb-rows", strlen ("duckdb-rows"));
 
   g_assert_cmpstr (identity->request_id, ==, "request-duckdb-query");
-  g_assert_cmpstr (identity->caller_identity, ==, "skill");
+  g_assert_cmpstr (identity->caller_identity, ==, "admin-cli");
   g_assert_cmpstr (identity->account_identity, ==, "account-1");
   g_assert_cmpstr (request->query_id, ==, "query-1");
   g_assert_cmpstr (request->template_id, ==, "template.summary");
@@ -1183,9 +1183,9 @@ test_request_router_routes_wirelog_predicate_query (void)
   g_assert_no_error (error);
 
   request_frame.request_id = "request-wirelog-query";
-  request_frame.caller_identity = "skill";
+  request_frame.caller_identity = "trusted-tool";
   request_frame.account_identity = "account-1";
-  request_frame.tool_identity = "fact-skill";
+  request_frame.tool_identity = "fact-tool";
   request_frame.correlation_id = "wirelog-query-1";
   request_frame.operation =
       WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY;
@@ -1285,7 +1285,7 @@ test_request_router_routes_duckdb_query_template (void)
   g_assert_no_error (error);
 
   request_frame.request_id = "request-duckdb-query";
-  request_frame.caller_identity = "skill";
+  request_frame.caller_identity = "admin-cli";
   request_frame.account_identity = "account-1";
   request_frame.tool_identity = "duckdb-tool";
   request_frame.correlation_id = "duckdb-query-1";
