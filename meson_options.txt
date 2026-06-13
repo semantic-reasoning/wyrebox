@@ -15,6 +15,6 @@ option(
 option(
   'wirelog_runtime',
   type: 'feature',
-  value: 'auto',
-  description: 'Wirelog runtime dependency for optional integration smoke tests',
+  value: 'enabled',
+  description: 'Required Wirelog runtime dependency',
 )
