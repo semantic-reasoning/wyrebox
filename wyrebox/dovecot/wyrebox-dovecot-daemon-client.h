@@ -54,5 +54,14 @@ gboolean wyrebox_dovecot_daemon_client_load_uid_map (
     WyreboxDovecotMailboxUidMapSnapshot *out_snapshot,
     GError **error);
 
+GBytes *wyrebox_dovecot_daemon_client_fetch_message_bytes (
+    const char *socket_path,
+    const char *account_identity,
+    const char *mailbox_id,
+    guint64 uid_validity,
+    guint64 mailbox_uid,
+    const char *expected_message_id,
+    GError **error);
+
 G_END_DECLS
 /* *INDENT-ON* */

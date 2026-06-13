@@ -104,6 +104,64 @@ validate_uid_map_inputs (const char *socket_path,
 }
 
 static gboolean
+validate_fetch_inputs (const char *socket_path,
+    const char *account_identity,
+    const char *mailbox_id,
+    guint64 uid_validity,
+    guint64 mailbox_uid, const char *expected_message_id, GError **error)
+{
+  if (socket_path == NULL || socket_path[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "Dovecot daemon client requires a non-empty socket path");
+    return FALSE;
+  }
+
+  if (account_identity == NULL || account_identity[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "Dovecot daemon client requires a non-empty account identity");
+    return FALSE;
+  }
+
+  if (mailbox_id == NULL || mailbox_id[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "Dovecot daemon client requires a non-empty mailbox id");
+    return FALSE;
+  }
+
+  if (uid_validity == 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "Dovecot daemon client requires non-zero uid validity");
+    return FALSE;
+  }
+
+  if (mailbox_uid == 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "Dovecot daemon client requires non-zero mailbox uid");
+    return FALSE;
+  }
+
+  if (expected_message_id == NULL || expected_message_id[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "Dovecot daemon client requires a non-empty expected message_id");
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
 validate_select_inputs (const char *socket_path,
     const char *account_identity, const char *mailbox_name, GError **error)
 {
@@ -605,6 +663,93 @@ decode_uid_map_response (const char *request_id,
       mailbox_id, is_derived_view, uid_validity, snapshot->rows, error);
 }
 
+static gboolean
+validate_fetch_response (const char *request_id,
+    const char *expected_message_id,
+    const WyreboxDaemonResponseFrame *response,
+    GBytes **out_bytes, GError **error)
+{
+  const guint8 *bytes_data = NULL;
+  gsize bytes_size = 0;
+
+  if (response->kind != WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA, "daemon FETCH response has unexpected kind");
+    return FALSE;
+  }
+
+  if (g_strcmp0 (response->request_id, request_id) != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon FETCH response request_id does not match request");
+    return FALSE;
+  }
+
+  if (response->stream_chunk.message_id == NULL
+      || response->stream_chunk.message_id[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon FETCH stream response must include message_id");
+    return FALSE;
+  }
+
+  if (g_strcmp0 (response->stream_chunk.message_id, expected_message_id) != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon FETCH stream response message_id does not match request");
+    return FALSE;
+  }
+
+  if (response->stream_chunk.query_id != NULL
+      && response->stream_chunk.query_id[0] != '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon FETCH stream response must not include query_id");
+    return FALSE;
+  }
+
+  if (response->stream_chunk.chunk_index != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon FETCH stream response must contain only chunk index zero");
+    return FALSE;
+  }
+
+  if (!response->stream_chunk.end_of_stream) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon FETCH stream response must be final chunk");
+    return FALSE;
+  }
+
+  if (response->stream_chunk.bytes == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon FETCH stream response payload is missing");
+    return FALSE;
+  }
+
+  bytes_data = g_bytes_get_data (response->stream_chunk.bytes, &bytes_size);
+  if (bytes_data == NULL || bytes_size == 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon FETCH stream response payload is empty");
+    return FALSE;
+  }
+
+  *out_bytes = g_bytes_ref (response->stream_chunk.bytes);
+  return TRUE;
+}
+
 gboolean
 wyrebox_dovecot_daemon_client_select_mailbox (const char *socket_path,
     const char *account_identity,
@@ -677,6 +822,63 @@ wyrebox_dovecot_daemon_client_select_mailbox (const char *socket_path,
           response.kind);
       return FALSE;
   }
+}
+
+GBytes *
+wyrebox_dovecot_daemon_client_fetch_message_bytes (const char *socket_path,
+    const char *account_identity,
+    const char *mailbox_id,
+    guint64 uid_validity,
+    guint64 mailbox_uid, const char *expected_message_id, GError **error)
+{
+  g_autofree char *request_id = NULL;
+  g_autoptr (GBytes) request_payload = NULL;
+  g_autoptr (GBytes) response_payload = NULL;
+  g_autoptr (GBytes) output = NULL;
+  g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+  g_auto (WyreboxDaemonMessageFetchRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) response = { 0 };
+
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  if (!validate_fetch_inputs (socket_path,
+          account_identity,
+          mailbox_id, uid_validity, mailbox_uid, expected_message_id, error))
+    return NULL;
+
+  request_id = g_uuid_string_random ();
+
+  if (!wyrebox_daemon_request_identity_init (&identity,
+          request_id,
+          WYREBOX_DOVECOT_CALLER_IDENTITY,
+          account_identity, WYREBOX_DOVECOT_TOOL_IDENTITY, NULL, error))
+    return NULL;
+
+  if (!wyrebox_daemon_message_fetch_request_init (&request,
+          account_identity, mailbox_id, uid_validity, mailbox_uid, error))
+    return NULL;
+
+  request_payload =
+      wyrebox_daemon_capnp_codec_encode_message_fetch_request (&identity,
+      &request, NULL, error);
+  if (request_payload == NULL)
+    return NULL;
+
+  response_payload =
+      wyrebox_daemon_uds_client_send_request (socket_path, request_payload,
+      error);
+  if (response_payload == NULL)
+    return NULL;
+
+  if (!wyrebox_daemon_capnp_codec_decode_response_frame (response_payload,
+          &response, error))
+    return NULL;
+
+  if (!validate_fetch_response (request_id, expected_message_id, &response,
+          &output, error))
+    return NULL;
+
+  return g_steal_pointer (&output);
 }
 
 gboolean
@@ -824,6 +1026,29 @@ wyrebox_dovecot_daemon_client_load_uid_map (const char *socket_path,
       G_IO_ERROR_NOT_SUPPORTED,
       "Dovecot daemon client requires Cap'n Proto serialization support");
   return FALSE;
+}
+
+GBytes *
+wyrebox_dovecot_daemon_client_fetch_message_bytes (const char *socket_path,
+    const char *account_identity,
+    const char *mailbox_id,
+    guint64 uid_validity,
+    guint64 mailbox_uid, const char *expected_message_id, GError **error)
+{
+  (void) socket_path;
+  (void) account_identity;
+  (void) mailbox_id;
+  (void) uid_validity;
+  (void) mailbox_uid;
+  (void) expected_message_id;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_NOT_SUPPORTED,
+      "Dovecot daemon client requires Cap'n Proto serialization support");
+  return NULL;
 }
 
 #endif
