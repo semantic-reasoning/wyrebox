@@ -130,33 +130,133 @@ def main() -> None:
         "mailbox open wrapper",
     )
     require(
-        r"static\s+int\s+wyrebox_dovecot_mailbox_open\s*\(\s*struct\s+"
-        r"mailbox\s+\*box\s*\)\s*\{[\s\S]*?"
-        r"mail_storage_set_error\s*\(\s*box->storage\s*,\s*"
-        r"MAIL_ERROR_NOTPOSSIBLE\s*,[\s\S]*?"
-        r"WyreBox mailbox open is not implemented yet[\s\S]*?"
-        r"return\s+-1;\s*\}",
+        r"static\s+gboolean\s+wyrebox_dovecot_mailbox_refresh_select_result",
         text,
-        "mailbox open sets controlled failure error",
+        "mailbox open uses shared SELECT refresh helper",
+    )
+    require(
+        r"wyrebox_dovecot_mailbox_refresh_select_result\s*\(\s*struct\s+mailbox\s+\*box,\s*GError\s+\*\*\s*\*?error\)\s*\{[\s\S]*?"
+        r"wyrebox_daemon_mailbox_select_result_clear\s*\(\s*&wbox->select_result\s*\);\s*"
+        r"[\s\S]*?wbox->select_result_valid\s*=\s*0;\s*"
+        r"[\s\S]*?wyrebox_dovecot_daemon_client_select_mailbox\s*\(\s*"
+        r"storage->socket_path,\s*storage->account_identity,\s*box->vname,\s*"
+        r"&select_result,\s*error\)\s*\)\s*\{[\s\S]*?"
+        r"wyrebox_daemon_mailbox_select_result_init\s*\(\s*&wbox->select_result,\s*"
+        r"select_result\.kind,\s*select_result\.mailbox_id,\s*"
+        r"select_result\.mailbox_name,\s*select_result\.uid_validity,\s*"
+        r"select_result\.uid_next,\s*error\)\s*\)\s*\{[\s\S]*?"
+        r"wbox->select_result_valid\s*=\s*1;",
+        text,
+        "mailbox SELECT refresh helper clears stale state and caches result",
+    )
+    require(
+        r"wyrebox_dovecot_mailbox_open\s*\(\s*struct\s+mailbox\s+\*box\s*\)\s*\{[\s\S]*?"
+        r"wyrebox_dovecot_mailbox_set_opened\s*\(\s*box,\s*FALSE\);\s*"
+        r"[\s\S]*?if\s*\(\s*!\s*wyrebox_dovecot_mailbox_refresh_select_result\s*\(\s*box,\s*&error\)\)\s*\{[\s\S]*?"
+        r"mail_storage_set_error\s*\(\s*box->storage,\s*MAIL_ERROR_NOTPOSSIBLE,\s*"
+        r"wyrebox_dovecot_mailbox_error_message\s*\(\s*error\s*\)\s*\)\s*;\s*"
+        r"[\s\S]*?return\s+-1;\s*\}\s*[\s\S]*?"
+        r"wyrebox_dovecot_mailbox_set_opened\s*\(\s*box,\s*TRUE\)\s*;\s*[\s\S]*?"
+        r"return\s+0;",
+        text,
+        "mailbox open sets opened state only after successful SELECT refresh",
+    )
+    require(
+        r"wyrebox_dovecot_mailbox_enable\s*\(\s*struct\s+mailbox\s+\*box,\s*"
+        r"enum\s+mailbox_feature\s+features\s*\)",
+        text,
+        "mailbox enable helper exists",
+    )
+    require(
+        r"wyrebox_dovecot_mailbox_enable\s*\(\s*struct\s+mailbox\s+\*box,\s*enum\s+"
+        r"mailbox_feature\s+features\s*\)\s*\{[\s\S]*?"
+        r"box->enabled_features\s*\|\=\s*features;\s*[\s\S]*?"
+        r"return\s+0;",
+        text,
+        "mailbox enable updates enabled_features and succeeds",
+    )
+    require(
+        r"wyrebox_dovecot_mailbox_close\s*\(\s*struct\s+mailbox\s+\*box\s*\)",
+        text,
+        "mailbox close helper exists",
+    )
+    require(
+        r"wyrebox_dovecot_mailbox_close\s*\(\s*struct\s+mailbox\s+\*box\s*\)\s*\{[\s\S]*?"
+        r"wyrebox_daemon_mailbox_select_result_clear\s*\(\s*&wbox->select_result\s*\);\s*"
+        r"[\s\S]*?wbox->select_result_valid\s*=\s*0;",
+        text,
+        "mailbox close clears cached SELECT state",
+    )
+    require(
+        r"wyrebox_dovecot_mailbox_close\s*\(\s*struct\s+mailbox\s+\*box\s*\)\s*\{[\s\S]*?"
+        r"wyrebox_dovecot_mailbox_set_opened\s*\(\s*box,\s*FALSE\);\s*"
+        r"[\s\S]*?wyrebox_daemon_mailbox_select_result_clear\s*\(\s*&wbox->select_result\s*\);\s*"
+        r"[\s\S]*?wbox->select_result_valid\s*=\s*0;",
+        text,
+        "mailbox close resets opened state",
+    )
+    require(
+        r"wyrebox_dovecot_mailbox_sync_init\s*\(\s*struct\s+mailbox\s+\*box\s*,\s*"
+        r"enum\s+mailbox_sync_flags\s+flags\)",
+        text,
+        "mailbox sync_init helper exists",
+    )
+    require(
+        r"wyrebox_dovecot_mailbox_sync_init\s*\(\s*struct\s+mailbox\s+\*box,\s*"
+        r"enum\s+mailbox_sync_flags\s+flags\s*\)\s*\{[\s\S]*?"
+        r"struct\s+mailbox_sync_context\s+\*ctx;\s*"
+        r"[\s\S]*?ctx\s*=\s*malloc\s*\(\s*sizeof\s*\(\s*\*ctx\s*\)\s*\);\s*"
+        r"[\s\S]*?ctx->box\s*=\s*box;\s*[\s\S]*?ctx->flags\s*=\s*flags;\s*[\s\S]*?"
+        r"return\s+ctx;",
+        text,
+        "mailbox sync_init allocates and initializes sync context",
+    )
+    require(
+        r"wyrebox_dovecot_mailbox_sync_next\s*\(\s*struct\s+mailbox_sync_context\s+\*ctx,\s*"
+        r"struct\s+mailbox_sync_rec\s+\*sync_rec_r\s*\)\s*\{[\s\S]*?return\s+FALSE;",
+        text,
+        "mailbox sync_next returns FALSE/no changes",
+    )
+    require(
+        r"wyrebox_dovecot_mailbox_sync_deinit\s*\(\s*struct\s+mailbox_sync_context\s+\*ctx,\s*"
+        r"struct\s+mailbox_sync_status\s+\*status_r\s*\)\s*\{[\s\S]*?"
+        r"if\s*\(\s*status_r\s*!=\s*NULL\)\s*\{[\s\S]*?memset\s*\(\s*status_r,\s*0,\s*sizeof\s*\(\s*\*status_r\s*\)\s*\);\s*\}\s*[\s\S]*?free\s*\(\s*ctx\s*\);\s*return\s+0;",
+        text,
+        "mailbox sync_deinit zeros sync status and frees context",
     )
     mailbox_open_body = function_body("wyrebox_dovecot_mailbox_open", text)
     for forbidden_call in [
         r"\bconnect\s*\(",
         r"\bsocket\s*\(",
-        r"\bwyrebox_daemon_client_",
-        r"\bwyrebox_dovecot_daemon_client_",
         r"\bwyrebox_dovecot_storage_get_daemon_",
     ]:
         if re.search(forbidden_call, mailbox_open_body) is not None:
             raise AssertionError(
-                "plugin source contract failed: mailbox open must not do "
-                f"daemon I/O yet: {forbidden_call}"
+                "plugin source contract failed: mailbox open must not use "
+                f"unsupported daemon helper path: {forbidden_call}"
             )
     require(
         r"wyrebox_dovecot_mailbox_get_status\s*\(\s*struct\s+mailbox\s+\*box\s*,"
         r"[\s\S]*?struct\s+mailbox_status\s+\*status_r\)",
         text,
         "mailbox get_status wrapper",
+    )
+    require(
+        r"if\s*\(!wbox->select_result_valid\s*&&\s*"
+        r"!\s*wyrebox_dovecot_mailbox_refresh_select_result\s*\(\s*box,\s*&error\)\)\s*\{[\s\S]*?"
+        r"mail_storage_set_error\s*\(\s*box->storage,\s*"
+        r"MAIL_ERROR_NOTPOSSIBLE,\s*"
+        r"wyrebox_dovecot_mailbox_error_message\s*\(\s*error\s*\)\s*\);\s*[\s\S]*?"
+        r"return\s+-1;\s*\}",
+        text,
+        "mailbox get_status lazily refreshes SELECT state",
+    )
+    require(
+        r"status_r->messages\s*=\s*0;\s*[\s\S]*?"
+        r"status_r->uidvalidity\s*=\s*wbox->select_result.uid_validity;\s*[\s\S]*?"
+        r"status_r->uidnext\s*=\s*wbox->select_result.uid_next;",
+        text,
+        "mailbox get_status reflects cached SELECT uid state",
     )
     require(
         r"wyrebox_dovecot_mailbox_alloc\s*\(\s*struct\s+mail_storage\s+\*storage\s*,"
@@ -251,16 +351,54 @@ def main() -> None:
         "mailbox get_status vfunc wired",
     )
     require(
+        r"->mailbox\.v\.enable\s*=\s*wyrebox_dovecot_mailbox_enable;",
+        text,
+        "mailbox enable vfunc wired",
+    )
+    require(
+        r"->mailbox\.v\.close\s*=\s*wyrebox_dovecot_mailbox_close;",
+        text,
+        "mailbox close vfunc wired",
+    )
+    require(
+        r"->mailbox\.v\.sync_init\s*=\s*wyrebox_dovecot_mailbox_sync_init;",
+        text,
+        "mailbox sync_init vfunc wired",
+    )
+    require(
+        r"->mailbox\.v\.sync_next\s*=\s*wyrebox_dovecot_mailbox_sync_next;",
+        text,
+        "mailbox sync_next vfunc wired",
+    )
+    require(
+        r"->mailbox\.v\.sync_deinit\s*=\s*wyrebox_dovecot_mailbox_sync_deinit;",
+        text,
+        "mailbox sync_deinit vfunc wired",
+    )
+    require(
+        r"->mailbox\.opened\s*=\s*FALSE;",
+        text,
+        "mailbox opened state initialized false",
+    )
+    require(
+        r"->mailbox\.enabled_features\s*=\s*0;",
+        text,
+        "mailbox enabled_features initialized zero",
+    )
+    require(
         r"return\s+&\w+->mailbox;",
         text,
         "mailbox allocator returns mailbox",
     )
     require(
-        r"status_r->messages\s*=\s*0;\s*[\s\S]*?"
-        r"status_r->uidvalidity\s*=\s*1;\s*[\s\S]*?"
-        r"status_r->uidnext\s*=\s*1;",
+        r"status_r->messages\s*=\s*0;",
         text,
-        "mailbox get_status sets inert defaults",
+        "mailbox get_status sets message count to zero baseline",
+    )
+    forbid(
+        r"WyreBox mailbox open is not implemented yet",
+        text,
+        "obsolete open not-implemented message",
     )
     require(
         r"static\s+struct\s+mail_storage\s+wyrebox_mail_storage_class\s*=\s*\{",

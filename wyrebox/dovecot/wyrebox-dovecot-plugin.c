@@ -45,6 +45,102 @@ wyrebox_dovecot_strdup (const char *str)
   return copy;
 }
 
+static const char *
+wyrebox_dovecot_mailbox_error_message (const GError *error)
+{
+  return error != NULL && error->message != NULL
+      ? error->message : "WyreBox mailbox open failed";
+}
+
+static void
+wyrebox_dovecot_mailbox_set_opened (struct mailbox *box, gboolean opened)
+{
+  box->opened = opened;
+}
+
+static int
+wyrebox_dovecot_mailbox_enable (struct mailbox *box,
+    enum mailbox_feature features)
+{
+  box->enabled_features |= features;
+  return 0;
+}
+
+static void
+wyrebox_dovecot_mailbox_close (struct mailbox *box)
+{
+  struct wyrebox_dovecot_mailbox *wbox = (struct wyrebox_dovecot_mailbox *) box;
+
+  wyrebox_dovecot_mailbox_set_opened (box, FALSE);
+  wyrebox_daemon_mailbox_select_result_clear (&wbox->select_result);
+  wbox->select_result_valid = 0;
+}
+
+static struct mailbox_sync_context *
+wyrebox_dovecot_mailbox_sync_init (struct mailbox *box,
+    enum mailbox_sync_flags flags)
+{
+  struct mailbox_sync_context *ctx;
+
+  ctx = malloc (sizeof (*ctx));
+  if (ctx == NULL) {
+    return NULL;
+  }
+
+  ctx->box = box;
+  ctx->flags = flags;
+  ctx->open_failed = FALSE;
+  return ctx;
+}
+
+static bool
+wyrebox_dovecot_mailbox_sync_next (struct mailbox_sync_context *ctx,
+    struct mailbox_sync_rec *sync_rec_r)
+{
+  (void) ctx;
+  (void) sync_rec_r;
+  return FALSE;
+}
+
+static int
+wyrebox_dovecot_mailbox_sync_deinit (struct mailbox_sync_context *ctx,
+    struct mailbox_sync_status *status_r)
+{
+  if (status_r != NULL) {
+    memset (status_r, 0, sizeof (*status_r));
+  }
+  free (ctx);
+  return 0;
+}
+
+static gboolean
+wyrebox_dovecot_mailbox_refresh_select_result (struct mailbox *box,
+    GError **error)
+{
+  struct wyrebox_dovecot_mailbox *wbox = (struct wyrebox_dovecot_mailbox *) box;
+  struct wyrebox_dovecot_storage *storage =
+      (struct wyrebox_dovecot_storage *) box->storage;
+  g_auto (WyreboxDaemonMailboxSelectResult) select_result = { 0 };
+
+  wyrebox_daemon_mailbox_select_result_clear (&wbox->select_result);
+  wbox->select_result_valid = 0;
+
+  if (!wyrebox_dovecot_daemon_client_select_mailbox (storage->socket_path,
+          storage->account_identity, box->vname, &select_result, error)) {
+    return FALSE;
+  }
+
+  if (!wyrebox_daemon_mailbox_select_result_init (&wbox->select_result,
+          select_result.kind, select_result.mailbox_id,
+          select_result.mailbox_name, select_result.uid_validity,
+          select_result.uid_next, error)) {
+    return FALSE;
+  }
+
+  wbox->select_result_valid = 1;
+  return TRUE;
+}
+
 static void
 wyrebox_dovecot_mailbox_free (struct mailbox *box)
 {
@@ -58,21 +154,38 @@ wyrebox_dovecot_mailbox_free (struct mailbox *box)
 static int
 wyrebox_dovecot_mailbox_open (struct mailbox *box)
 {
-  mail_storage_set_error (box->storage, MAIL_ERROR_NOTPOSSIBLE,
-      "WyreBox mailbox open is not implemented yet");
-  return -1;
+  g_autoptr (GError) error = NULL;
+
+  wyrebox_dovecot_mailbox_set_opened (box, FALSE);
+  if (!wyrebox_dovecot_mailbox_refresh_select_result (box, &error)) {
+    mail_storage_set_error (box->storage, MAIL_ERROR_NOTPOSSIBLE,
+        wyrebox_dovecot_mailbox_error_message (error));
+    return -1;
+  }
+
+  wyrebox_dovecot_mailbox_set_opened (box, TRUE);
+  return 0;
 }
 
 static int
 wyrebox_dovecot_mailbox_get_status (struct mailbox *box,
     enum mailbox_status_items items, struct mailbox_status *status_r)
 {
-  (void) box;
+  struct wyrebox_dovecot_mailbox *wbox = (struct wyrebox_dovecot_mailbox *) box;
+  g_autoptr (GError) error = NULL;
+
+  if (!wbox->select_result_valid
+      && !wyrebox_dovecot_mailbox_refresh_select_result (box, &error)) {
+    mail_storage_set_error (box->storage, MAIL_ERROR_NOTPOSSIBLE,
+        wyrebox_dovecot_mailbox_error_message (error));
+    return -1;
+  }
+
   (void) items;
 
   status_r->messages = 0;
-  status_r->uidvalidity = 1;
-  status_r->uidnext = 1;
+  status_r->uidvalidity = wbox->select_result.uid_validity;
+  status_r->uidnext = wbox->select_result.uid_next;
   return 0;
 }
 
@@ -103,6 +216,13 @@ wyrebox_dovecot_mailbox_alloc (struct mail_storage *storage,
   wbox->mailbox.v.open = wyrebox_dovecot_mailbox_open;
   wbox->mailbox.v.get_status = wyrebox_dovecot_mailbox_get_status;
   wbox->mailbox.v.free = wyrebox_dovecot_mailbox_free;
+  wbox->mailbox.v.enable = wyrebox_dovecot_mailbox_enable;
+  wbox->mailbox.v.close = wyrebox_dovecot_mailbox_close;
+  wbox->mailbox.v.sync_init = wyrebox_dovecot_mailbox_sync_init;
+  wbox->mailbox.v.sync_next = wyrebox_dovecot_mailbox_sync_next;
+  wbox->mailbox.v.sync_deinit = wyrebox_dovecot_mailbox_sync_deinit;
+  wbox->mailbox.opened = FALSE;
+  wbox->mailbox.enabled_features = 0;
   wyrebox_daemon_mailbox_select_result_clear (&wbox->select_result);
   wbox->select_result_valid = 0;
   p_array_init (&wbox->mailbox.search_results, pool, 16);
