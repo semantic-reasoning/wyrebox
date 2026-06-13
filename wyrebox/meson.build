@@ -102,6 +102,7 @@ endif
 
 if wirelog_runtime_found
   wyrebox_sources += [
+    'wirelog/wyrebox-wirelog-derived-membership.c',
     'wirelog/wyrebox-wirelog-evaluation.c',
     'wirelog/wyrebox-wirelog-program.c',
     'wirelog/wyrebox-wirelog-source.c',
