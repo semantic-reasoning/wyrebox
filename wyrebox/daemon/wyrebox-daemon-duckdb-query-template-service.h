@@ -32,6 +32,11 @@ wyrebox_daemon_duckdb_query_template_service_new (
     gpointer user_data,
     GDestroyNotify user_data_destroy);
 
+WyreboxDaemonDuckDBQueryTemplateService *
+wyrebox_daemon_duckdb_query_template_service_new_duckdb (
+    const gchar *catalog_path,
+    GError **error);
+
 gboolean wyrebox_daemon_duckdb_query_template_service_handle_identity (
     WyreboxDaemonDuckDBQueryTemplateService *self,
     const WyreboxDaemonRequestIdentity *identity,

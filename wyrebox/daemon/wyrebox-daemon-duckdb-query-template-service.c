@@ -3,7 +3,15 @@
 #include "wyrebox-daemon-client-identity.h"
 #include "wyrebox-daemon-duckdb-query-template-catalog.h"
 
+#include <duckdb.h>
 #include <gio/gio.h>
+
+typedef struct
+{
+  gchar *catalog_path;
+  duckdb_database database;
+  duckdb_connection connection;
+} DuckDBQueryTemplateExecutor;
 
 struct _WyreboxDaemonDuckDBQueryTemplateService
 {
@@ -16,6 +24,256 @@ struct _WyreboxDaemonDuckDBQueryTemplateService
 
 G_DEFINE_TYPE (WyreboxDaemonDuckDBQueryTemplateService,
     wyrebox_daemon_duckdb_query_template_service, G_TYPE_OBJECT);
+
+static void
+duckdb_result_clear (duckdb_result *result)
+{
+  duckdb_destroy_result (result);
+}
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_result, duckdb_result_clear)
+/* *INDENT-ON* */
+
+static void
+duckdb_prepared_statement_clear (duckdb_prepared_statement *statement)
+{
+  duckdb_destroy_prepare (statement);
+}
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_prepared_statement,
+    duckdb_prepared_statement_clear)
+/* *INDENT-ON* */
+
+static void
+duckdb_config_clear (duckdb_config *config)
+{
+  duckdb_destroy_config (config);
+}
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_config, duckdb_config_clear)
+/* *INDENT-ON* */
+
+static void
+duckdb_query_template_executor_free (gpointer data)
+{
+  DuckDBQueryTemplateExecutor *executor = data;
+
+  if (executor == NULL)
+    return;
+
+  if (executor->connection != NULL)
+    duckdb_disconnect (&executor->connection);
+  if (executor->database != NULL)
+    duckdb_close (&executor->database);
+  g_clear_pointer (&executor->catalog_path, g_free);
+  g_free (executor);
+}
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (DuckDBQueryTemplateExecutor,
+    duckdb_query_template_executor_free)
+/* *INDENT-ON* */
+
+static gboolean
+duckdb_query_template_prepare (DuckDBQueryTemplateExecutor *executor,
+    const gchar *sql, duckdb_prepared_statement *out_statement, GError **error)
+{
+  if (duckdb_prepare (executor->connection, sql, out_statement) ==
+      DuckDBSuccess)
+    return TRUE;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_FAILED,
+      "DuckDB query template prepare failed: %s",
+      *out_statement != NULL ?
+      duckdb_prepare_error (*out_statement) : "unknown DuckDB error");
+  return FALSE;
+}
+
+static gboolean
+duckdb_query_template_bind_varchar (duckdb_prepared_statement statement,
+    idx_t index, const gchar *value, GError **error)
+{
+  if (duckdb_bind_varchar (statement, index, value) == DuckDBSuccess)
+    return TRUE;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_FAILED,
+      "DuckDB query template string bind failed at index %" G_GUINT64_FORMAT,
+      (guint64) index);
+  return FALSE;
+}
+
+static void
+csv_append_value (GString *csv, const gchar *value)
+{
+  gboolean needs_quote = FALSE;
+
+  for (const gchar * cursor = value; *cursor != '\0'; cursor++) {
+    if (*cursor == '"' || *cursor == ',' || *cursor == '\n' || *cursor == '\r') {
+      needs_quote = TRUE;
+      break;
+    }
+  }
+
+  if (!needs_quote) {
+    g_string_append (csv, value);
+    return;
+  }
+
+  g_string_append_c (csv, '"');
+  for (const gchar * cursor = value; *cursor != '\0'; cursor++) {
+    if (*cursor == '"')
+      g_string_append_c (csv, '"');
+    g_string_append_c (csv, *cursor);
+  }
+  g_string_append_c (csv, '"');
+}
+
+static void
+csv_append_uint64 (GString *csv, guint64 value)
+{
+  g_string_append_printf (csv, "%" G_GUINT64_FORMAT, value);
+}
+
+static void
+duckdb_owned_string_clear (char **value)
+{
+  if (value != NULL && *value != NULL)
+    duckdb_free (*value);
+}
+
+typedef char *DuckDBOwnedString;
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (DuckDBOwnedString,
+    duckdb_owned_string_clear)
+/* *INDENT-ON* */
+
+static gboolean
+duckdb_query_template_append_uid_map_row (GString *csv,
+    duckdb_result *result, idx_t row, GError **error)
+{
+  g_auto (DuckDBOwnedString) account_id = NULL;
+  g_auto (DuckDBOwnedString) mailbox_id = NULL;
+  g_auto (DuckDBOwnedString) message_id = NULL;
+  g_auto (DuckDBOwnedString) object_id = NULL;
+
+  for (idx_t column = 0; column < 6; column++) {
+    if (duckdb_value_is_null (result, column, row)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "DuckDB query template returned NULL in mailbox uid map");
+      return FALSE;
+    }
+  }
+
+  account_id = duckdb_value_varchar (result, 0, row);
+  mailbox_id = duckdb_value_varchar (result, 1, row);
+  message_id = duckdb_value_varchar (result, 4, row);
+  object_id = duckdb_value_varchar (result, 5, row);
+
+  csv_append_value (csv, account_id);
+  g_string_append_c (csv, ',');
+  csv_append_value (csv, mailbox_id);
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 2, row));
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 3, row));
+  g_string_append_c (csv, ',');
+  csv_append_value (csv, message_id);
+  g_string_append_c (csv, ',');
+  csv_append_value (csv, object_id);
+  g_string_append_c (csv, '\n');
+
+  return TRUE;
+}
+
+static gboolean
+duckdb_query_template_execute_uid_map (DuckDBQueryTemplateExecutor *executor,
+    const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDuckDBQueryTemplateRequest *request,
+    WyreboxDaemonStreamChunkFrame *out_chunk, GError **error)
+{
+  static const gchar *sql =
+      "SELECT mm.account_id, mm.mailbox_id, mus.uidvalidity, "
+      "mm.uid, mm.message_id, m.object_id "
+      "FROM mailbox_memberships mm "
+      "JOIN mailbox_uid_state mus ON mus.account_id = mm.account_id "
+      "AND mus.namespace_kind = 'mailbox' "
+      "AND mus.namespace_id = mm.mailbox_id "
+      "JOIN messages m ON m.account_id = mm.account_id "
+      "AND m.message_id = mm.message_id "
+      "WHERE mm.account_id = ? "
+      "AND mm.mailbox_id = ? "
+      "AND mm.is_visible = TRUE " "ORDER BY mm.uid ASC, mm.message_id ASC;";
+  g_auto (duckdb_prepared_statement) statement = NULL;
+  g_auto (duckdb_result) result = { 0 };
+  g_autoptr (GString) csv = NULL;
+  g_autoptr (GBytes) bytes = NULL;
+  const gchar *mailbox_id = request->parameters[0];
+
+  if (!duckdb_query_template_prepare (executor, sql, &statement, error) ||
+      !duckdb_query_template_bind_varchar (statement, 1, request->scope_id,
+          error) ||
+      !duckdb_query_template_bind_varchar (statement, 2, mailbox_id, error))
+    return FALSE;
+
+  if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+    const char *detail = duckdb_result_error (&result);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB query template execution failed: %s",
+        detail != NULL ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  csv = g_string_new
+      ("account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n");
+
+  for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+    if (!duckdb_query_template_append_uid_map_row (csv, &result, row, error))
+      return FALSE;
+  }
+
+  {
+    gsize csv_len = csv->len;
+    gchar *csv_data = g_string_free (g_steal_pointer (&csv), FALSE);
+
+    bytes = g_bytes_new_take (csv_data, csv_len);
+  }
+
+  return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+      identity->request_id,
+      NULL, request->query_id, identity->correlation_id, 0, bytes, TRUE, error);
+}
+
+static gboolean
+duckdb_query_template_service_execute (const WyreboxDaemonRequestIdentity
+    *identity, const WyreboxDaemonDuckDBQueryTemplateRequest *request,
+    WyreboxDaemonStreamChunkFrame *out_chunk, gpointer user_data,
+    GError **error)
+{
+  DuckDBQueryTemplateExecutor *executor = user_data;
+
+  if (g_strcmp0 (request->template_id, "mailbox.uid_map.v1") == 0)
+    return duckdb_query_template_execute_uid_map (executor, identity, request,
+        out_chunk, error);
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_INVALID_ARGUMENT,
+      "unsupported duckdb query template '%s'", request->template_id);
+  return FALSE;
+}
 
 static gboolean
 validate_duckdb_query_template_chunk (const WyreboxDaemonRequestIdentity
@@ -121,6 +379,57 @@ WyreboxDaemonDuckDBQueryTemplateService
   self->user_data_destroy = user_data_destroy;
 
   return self;
+}
+
+WyreboxDaemonDuckDBQueryTemplateService
+    *
+wyrebox_daemon_duckdb_query_template_service_new_duckdb (const gchar
+    *catalog_path, GError **error)
+{
+  g_auto (duckdb_config) config = NULL;
+  char *open_error = NULL;
+  g_autoptr (DuckDBQueryTemplateExecutor) executor = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+
+  g_return_val_if_fail (catalog_path != NULL, NULL);
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  if (duckdb_create_config (&config) != DuckDBSuccess ||
+      duckdb_set_config (config, "access_mode", "READ_ONLY") != DuckDBSuccess) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB query template read-only configuration failed");
+    return NULL;
+  }
+
+  executor = g_new0 (DuckDBQueryTemplateExecutor, 1);
+  executor->catalog_path = g_strdup (catalog_path);
+
+  if (duckdb_open_ext (catalog_path, &executor->database, config,
+          &open_error) != DuckDBSuccess) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB query template read-only open failed: %s",
+        open_error != NULL ? open_error : "unknown DuckDB error");
+    if (open_error != NULL)
+      duckdb_free (open_error);
+    return NULL;
+  }
+
+  if (duckdb_connect (executor->database, &executor->connection) !=
+      DuckDBSuccess) {
+    g_set_error (error,
+        G_IO_ERROR, G_IO_ERROR_FAILED, "DuckDB query template connect failed");
+    return NULL;
+  }
+
+  service = wyrebox_daemon_duckdb_query_template_service_new
+      (duckdb_query_template_service_execute,
+      g_steal_pointer (&executor), duckdb_query_template_executor_free);
+
+  return g_steal_pointer (&service);
 }
 
 gboolean
