@@ -163,6 +163,7 @@ wyrebox_dovecot_mailbox_refresh_select_result (struct mailbox *box,
 
   if (!wyrebox_dovecot_daemon_client_load_uid_map (storage->socket_path,
           storage->account_identity, select_result.mailbox_id,
+          select_result.kind,
           select_result.uid_validity, &uid_map_snapshot, error)) {
     wyrebox_dovecot_mailbox_clear_cache (wbox);
     return FALSE;

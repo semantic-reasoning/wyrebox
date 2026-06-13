@@ -12,7 +12,9 @@
 
 #define WYREBOX_DOVECOT_CALLER_IDENTITY "dovecot"
 #define WYREBOX_DOVECOT_TOOL_IDENTITY "dovecot-storage"
-#define WYREBOX_DOVECOT_UID_MAP_TEMPLATE_ID "mailbox.uid_map.v1"
+#define WYREBOX_DOVECOT_MAILBOX_UID_MAP_TEMPLATE_ID "mailbox.uid_map.v1"
+#define WYREBOX_DOVECOT_DERIVED_VIEW_UID_MAP_TEMPLATE_ID \
+    "derived_view.uid_map.v1"
 
 void
 wyrebox_dovecot_mailbox_uid_map_row_clear (WyreboxDovecotMailboxUidMapRow *row)
@@ -58,7 +60,9 @@ void wyrebox_dovecot_mailbox_uid_map_snapshot_clear
 
 static gboolean
 validate_uid_map_inputs (const char *socket_path,
-    const char *account_identity, const char *mailbox_id, GError **error)
+    const char *account_identity,
+    const char *mailbox_id,
+    WyreboxDaemonMailboxListEntryKind kind, GError **error)
 {
   if (socket_path == NULL || socket_path[0] == '\0') {
     g_set_error (error,
@@ -84,7 +88,19 @@ validate_uid_map_inputs (const char *socket_path,
     return FALSE;
   }
 
-  return TRUE;
+  switch (kind) {
+    case WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY:
+    case WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL:
+      return TRUE;
+    default:
+      break;
+  }
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_INVALID_ARGUMENT,
+      "Dovecot daemon client requires a known mailbox SELECT kind");
+  return FALSE;
 }
 
 static gboolean
@@ -219,6 +235,7 @@ static gboolean
 append_uid_map_row_from_csv_fields (GPtrArray *row_fields,
     const char *account_id,
     const char *mailbox_id,
+    gboolean is_derived_view,
     guint64 uid_validity, GPtrArray *rows, GError **error)
 {
   const char *row_account_id = NULL;
@@ -227,15 +244,19 @@ append_uid_map_row_from_csv_fields (GPtrArray *row_fields,
   const char *row_uid = NULL;
   const char *row_message_id = NULL;
   const char *row_object_id = NULL;
+  const char *row_rule_version_hash = NULL;
   WyreboxDovecotMailboxUidMapRow *row = NULL;
   guint64 parsed_uid_validity = 0;
   guint64 parsed_uid = 0;
+  gsize expected_field_count = is_derived_view ? 7 : 6;
 
-  if (row_fields->len != 6) {
+  if (row_fields->len != expected_field_count) {
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_DATA,
-        "UID map CSV row must have exactly six columns");
+        "UID map %s row must have exactly %" G_GSIZE_FORMAT
+        " columns",
+        is_derived_view ? "derived view" : "mailbox", expected_field_count);
     return FALSE;
   }
 
@@ -245,6 +266,8 @@ append_uid_map_row_from_csv_fields (GPtrArray *row_fields,
   row_uid = g_ptr_array_index (row_fields, 3);
   row_message_id = g_ptr_array_index (row_fields, 4);
   row_object_id = g_ptr_array_index (row_fields, 5);
+  if (is_derived_view)
+    row_rule_version_hash = g_ptr_array_index (row_fields, 6);
 
   if (g_strcmp0 (row_account_id, account_id) != 0) {
     g_set_error (error,
@@ -300,6 +323,14 @@ append_uid_map_row_from_csv_fields (GPtrArray *row_fields,
     return FALSE;
   }
 
+  if (is_derived_view && is_empty_string (row_rule_version_hash)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "UID map row rule_version_hash must not be empty");
+    return FALSE;
+  }
+
   row = g_new0 (WyreboxDovecotMailboxUidMapRow, 1);
   row->account_id = g_strdup (row_account_id);
   row->mailbox_id = g_strdup (row_mailbox_id);
@@ -317,10 +348,26 @@ append_uid_map_record (GPtrArray *row_fields,
     gboolean *header_seen,
     const char *account_id,
     const char *mailbox_id,
+    gboolean is_derived_view,
     guint64 uid_validity, GPtrArray *rows, GError **error)
 {
   if (!*header_seen) {
-    if (row_fields->len != 6
+    if (is_derived_view) {
+      if (row_fields->len != 7
+          || g_strcmp0 (g_ptr_array_index (row_fields, 0), "account_id") != 0
+          || g_strcmp0 (g_ptr_array_index (row_fields, 1), "view_id") != 0
+          || g_strcmp0 (g_ptr_array_index (row_fields, 2), "uidvalidity") != 0
+          || g_strcmp0 (g_ptr_array_index (row_fields, 3), "uid") != 0
+          || g_strcmp0 (g_ptr_array_index (row_fields, 4), "message_id") != 0
+          || g_strcmp0 (g_ptr_array_index (row_fields, 5), "object_id") != 0
+          || g_strcmp0 (g_ptr_array_index (row_fields, 6),
+              "rule_version_hash") != 0) {
+        g_set_error (error,
+            G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+            "UID map CSV header is invalid");
+        return FALSE;
+      }
+    } else if (row_fields->len != 6
         || g_strcmp0 (g_ptr_array_index (row_fields, 0), "account_id") != 0
         || g_strcmp0 (g_ptr_array_index (row_fields, 1), "mailbox_id") != 0
         || g_strcmp0 (g_ptr_array_index (row_fields, 2), "uidvalidity") != 0
@@ -337,13 +384,14 @@ append_uid_map_record (GPtrArray *row_fields,
   }
 
   return append_uid_map_row_from_csv_fields (row_fields,
-      account_id, mailbox_id, uid_validity, rows, error);
+      account_id, mailbox_id, is_derived_view, uid_validity, rows, error);
 }
 
 static gboolean
 parse_uid_map_csv_rows (const char *csv,
     const char *account_id,
     const char *mailbox_id,
+    gboolean is_derived_view,
     guint64 uid_validity, GPtrArray *rows, GError **error)
 {
   g_autoptr (GPtrArray) row_fields = NULL;
@@ -395,7 +443,8 @@ parse_uid_map_csv_rows (const char *csv,
         append_field (row_fields, field);
         if (!append_uid_map_record (row_fields,
                 &header_seen,
-                account_id, mailbox_id, uid_validity, rows, error))
+                account_id,
+                mailbox_id, is_derived_view, uid_validity, rows, error))
           return FALSE;
         g_ptr_array_set_size (row_fields, 0);
         have_field = FALSE;
@@ -416,7 +465,8 @@ parse_uid_map_csv_rows (const char *csv,
       if (c != ',') {
         if (!append_uid_map_record (row_fields,
                 &header_seen,
-                account_id, mailbox_id, uid_validity, rows, error))
+                account_id,
+                mailbox_id, is_derived_view, uid_validity, rows, error))
           return FALSE;
         g_ptr_array_set_size (row_fields, 0);
         i += newline_advance;
@@ -457,7 +507,8 @@ parse_uid_map_csv_rows (const char *csv,
   if (after_quote || have_field || quoted_field || row_fields->len > 0) {
     append_field (row_fields, field);
     if (!append_uid_map_record (row_fields,
-            &header_seen, account_id, mailbox_id, uid_validity, rows, error))
+            &header_seen,
+            account_id, mailbox_id, is_derived_view, uid_validity, rows, error))
       return FALSE;
   }
 
@@ -476,6 +527,7 @@ decode_uid_map_response (const char *request_id,
     const char *query_id,
     const char *account_id,
     const char *mailbox_id,
+    gboolean is_derived_view,
     guint64 uid_validity,
     const WyreboxDaemonResponseFrame *response,
     WyreboxDovecotMailboxUidMapSnapshot *snapshot, GError **error)
@@ -549,7 +601,8 @@ decode_uid_map_response (const char *request_id,
 
   csv = g_strndup ((const char *) csv_data, csv_size);
   return parse_uid_map_csv_rows (csv,
-      account_id, mailbox_id, uid_validity, snapshot->rows, error);
+      account_id,
+      mailbox_id, is_derived_view, uid_validity, snapshot->rows, error);
 }
 
 gboolean
@@ -630,6 +683,7 @@ gboolean
 wyrebox_dovecot_daemon_client_load_uid_map (const char *socket_path,
     const char *account_identity,
     const char *mailbox_id,
+    WyreboxDaemonMailboxListEntryKind kind,
     guint64 uid_validity,
     WyreboxDovecotMailboxUidMapSnapshot *out_snapshot, GError **error)
 {
@@ -641,6 +695,8 @@ wyrebox_dovecot_daemon_client_load_uid_map (const char *socket_path,
   g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
   g_auto (WyreboxDaemonResponseFrame) response = { 0 };
   g_auto (WyreboxDovecotMailboxUidMapSnapshot) parsed_snapshot = { 0 };
+  const char *template_id = NULL;
+  gboolean is_derived_view = FALSE;
   const char *parameters[] = { mailbox_id, NULL };
 
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
@@ -653,8 +709,25 @@ wyrebox_dovecot_daemon_client_load_uid_map (const char *socket_path,
     return FALSE;
   }
 
+  switch (kind) {
+    case WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY:
+      template_id = WYREBOX_DOVECOT_MAILBOX_UID_MAP_TEMPLATE_ID;
+      is_derived_view = FALSE;
+      break;
+    case WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL:
+      template_id = WYREBOX_DOVECOT_DERIVED_VIEW_UID_MAP_TEMPLATE_ID;
+      is_derived_view = TRUE;
+      break;
+    default:
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "Dovecot daemon client requires a known mailbox SELECT kind");
+      return FALSE;
+  }
+
   if (!validate_uid_map_inputs (socket_path, account_identity, mailbox_id,
-          error))
+          kind, error))
     return FALSE;
 
   wyrebox_dovecot_mailbox_uid_map_snapshot_clear (out_snapshot);
@@ -669,9 +742,7 @@ wyrebox_dovecot_daemon_client_load_uid_map (const char *socket_path,
     return FALSE;
 
   if (!wyrebox_daemon_duckdb_query_template_request_init (&request,
-          query_id,
-          WYREBOX_DOVECOT_UID_MAP_TEMPLATE_ID,
-          account_identity, parameters, error))
+          query_id, template_id, account_identity, parameters, error))
     return FALSE;
 
   request_payload =
@@ -697,7 +768,8 @@ wyrebox_dovecot_daemon_client_load_uid_map (const char *socket_path,
   if (!decode_uid_map_response (request_id,
           query_id,
           account_identity,
-          mailbox_id, uid_validity, &response, &parsed_snapshot, error)) {
+          mailbox_id,
+          is_derived_view, uid_validity, &response, &parsed_snapshot, error)) {
     wyrebox_dovecot_mailbox_uid_map_snapshot_clear (&parsed_snapshot);
     return FALSE;
   }
@@ -732,6 +804,7 @@ gboolean
 wyrebox_dovecot_daemon_client_load_uid_map (const char *socket_path,
     const char *account_identity,
     const char *mailbox_id,
+    WyreboxDaemonMailboxListEntryKind kind,
     guint64 uid_validity,
     WyreboxDovecotMailboxUidMapSnapshot *out_snapshot, GError **error)
 {
@@ -740,6 +813,7 @@ wyrebox_dovecot_daemon_client_load_uid_map (const char *socket_path,
   (void) socket_path;
   (void) account_identity;
   (void) mailbox_id;
+  (void) kind;
   (void) uid_validity;
 
   if (out_snapshot != NULL)

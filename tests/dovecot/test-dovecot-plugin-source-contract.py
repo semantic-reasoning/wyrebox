@@ -148,6 +148,7 @@ def main() -> None:
         r"[\s\S]*?wyrebox_dovecot_daemon_client_load_uid_map\s*\(\s*"
         r"storage->socket_path,\s*storage->account_identity,\s*"
         r"select_result\.mailbox_id,\s*"
+        r"select_result\.kind,\s*"
         r"select_result\.uid_validity,\s*&uid_map_snapshot,\s*error\)[\s\S]*?"
         r"wbox->uid_map_snapshot\.rows\s*=\s*g_steal_pointer\s*\(\s*&uid_map_snapshot\.rows\s*\);\s*"
         r"wbox->select_result_valid\s*=\s*1;",

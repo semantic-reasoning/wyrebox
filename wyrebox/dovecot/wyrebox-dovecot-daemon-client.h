@@ -49,6 +49,7 @@ gboolean wyrebox_dovecot_daemon_client_load_uid_map (
     const char *socket_path,
     const char *account_identity,
     const char *mailbox_id,
+    WyreboxDaemonMailboxListEntryKind kind,
     guint64 uid_validity,
     WyreboxDovecotMailboxUidMapSnapshot *out_snapshot,
     GError **error);
