@@ -28,6 +28,12 @@ GPtrArray *wyrebox_wirelog_derived_membership_parse_evaluation_relation (
     const char *relation_name,
     GError **error);
 
+GPtrArray *wyrebox_wirelog_derived_membership_snapshot_from_rules_and_facts (
+    const char *rules_source,
+    GPtrArray *facts,
+    const char *relation_name,
+    GError **error);
+
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxWirelogDerivedMembership,
     wyrebox_wirelog_derived_membership_clear)
 

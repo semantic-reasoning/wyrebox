@@ -217,6 +217,71 @@ test_helper_rejects_symbol_csv_export (void)
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
 }
 
+static void
+test_snapshot_known_symbol_memberships (void)
+{
+  g_autoptr (GPtrArray) facts = new_fact_array ();
+  g_autoptr (GPtrArray) memberships = NULL;
+  g_autoptr (GError) error = NULL;
+
+  add_fact (facts, "project_keyword", "message-2", "view-beta");
+  add_fact (facts, "project_keyword", "message-1", "view-alpha");
+
+  memberships =
+      wyrebox_wirelog_derived_membership_snapshot_from_rules_and_facts
+      (".decl project_keyword(message_id: symbol, view_id: symbol)\n"
+      ".decl show_in_virtual_folder(view_id: symbol, message_id: symbol)\n"
+      "show_in_virtual_folder(view_id, message_id) :- "
+      "project_keyword(message_id, view_id).\n",
+      facts, "show_in_virtual_folder", &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (memberships);
+  g_assert_cmpuint (memberships->len, ==, 2);
+  g_assert_cmpstr (membership_at (memberships, 0)->view_id, ==, "view-alpha");
+  g_assert_cmpstr (membership_at (memberships, 0)->message_id, ==, "message-1");
+  g_assert_cmpstr (membership_at (memberships, 1)->view_id, ==, "view-beta");
+  g_assert_cmpstr (membership_at (memberships, 1)->message_id, ==, "message-2");
+}
+
+static void
+test_snapshot_rejects_unknown_symbol_id (void)
+{
+  g_autoptr (GPtrArray) facts = new_fact_array ();
+  g_autoptr (GPtrArray) memberships = NULL;
+  g_autoptr (GError) error = NULL;
+
+  add_fact (facts, "source_message", "message-1", "flag");
+
+  memberships =
+      wyrebox_wirelog_derived_membership_snapshot_from_rules_and_facts
+      (".decl source_message(message_id: symbol, marker: symbol)\n"
+      ".decl show_in_virtual_folder(view_id: symbol, message_id: symbol)\n"
+      "show_in_virtual_folder(\"view-from-rule\", message_id) :- "
+      "source_message(message_id, \"flag\").\n",
+      facts, "show_in_virtual_folder", &error);
+  g_assert_null (memberships);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
+}
+
+static void
+test_snapshot_rejects_wrong_arity (void)
+{
+  g_autoptr (GPtrArray) facts = new_fact_array ();
+  g_autoptr (GPtrArray) memberships = NULL;
+  g_autoptr (GError) error = NULL;
+
+  add_fact (facts, "project_keyword", "message-1", "view-alpha");
+
+  memberships =
+      wyrebox_wirelog_derived_membership_snapshot_from_rules_and_facts
+      (".decl project_keyword(message_id: symbol, view_id: symbol)\n"
+      ".decl bad_membership(view_id: symbol)\n"
+      "bad_membership(view_id) :- project_keyword(message_id, view_id).\n",
+      facts, "bad_membership", &error);
+  g_assert_null (memberships);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -242,6 +307,12 @@ main (int argc, char **argv)
       test_helper_propagates_missing_relation_failure);
   g_test_add_func ("/wirelog/derived-membership/helper-symbol-csv-unsupported",
       test_helper_rejects_symbol_csv_export);
+  g_test_add_func ("/wirelog/derived-membership/snapshot-known-symbols",
+      test_snapshot_known_symbol_memberships);
+  g_test_add_func ("/wirelog/derived-membership/snapshot-unknown-symbol",
+      test_snapshot_rejects_unknown_symbol_id);
+  g_test_add_func ("/wirelog/derived-membership/snapshot-wrong-arity",
+      test_snapshot_rejects_wrong_arity);
 
   return g_test_run ();
 }
