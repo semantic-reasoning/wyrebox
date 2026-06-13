@@ -114,7 +114,7 @@ assert_decoded_select_request (GBytes *request)
 
 static char *
 assert_decoded_uid_map_request (GBytes *request,
-    const char *expected_mailbox_id)
+    const char *expected_mailbox_id, char **out_query_id)
 {
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
@@ -140,9 +140,12 @@ assert_decoded_uid_map_request (GBytes *request,
   g_assert_cmpstr (decoded.duckdb_query_template->parameters[0], ==,
       expected_mailbox_id);
   g_assert_null (decoded.duckdb_query_template->parameters[1]);
+  g_assert_nonnull (decoded.duckdb_query_template->query_id);
 
   g_assert_nonnull (decoded_state_clear);
   g_assert_nonnull (decoded_state);
+  if (out_query_id != NULL)
+    *out_query_id = g_strdup (decoded.duckdb_query_template->query_id);
   request_id = g_strdup (decoded.request_id);
   decoded_state_clear (decoded_state);
 
@@ -189,11 +192,14 @@ encode_daemon_error_response (const char *request_id)
 }
 
 static GBytes *
-encode_uid_map_response (const char *request_id, const char *uid_map_csv)
+encode_uid_map_response (const char *request_id, const char *query_id,
+    const char *uid_map_csv)
 {
   g_auto (WyreboxDaemonStreamChunkFrame) chunk = { 0 };
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
-  g_autofree char *query_id = g_uuid_string_random ();
+  g_autofree char *allocated_query_id = g_uuid_string_random ();
+  const char *response_query_id =
+      query_id != NULL ? query_id : allocated_query_id;
   g_autoptr (GBytes) csv_bytes = NULL;
   g_autoptr (GError) error = NULL;
   g_autoptr (GBytes) response_payload = NULL;
@@ -201,7 +207,8 @@ encode_uid_map_response (const char *request_id, const char *uid_map_csv)
   csv_bytes = g_bytes_new (uid_map_csv, strlen (uid_map_csv));
   g_assert_nonnull (csv_bytes);
   g_assert_true (wyrebox_daemon_stream_chunk_frame_init (&chunk,
-          request_id, NULL, query_id, NULL, 0, csv_bytes, TRUE, &error));
+          request_id, NULL, response_query_id, NULL, 0, csv_bytes, TRUE,
+          &error));
   g_assert_no_error (error);
 
   g_assert_true (wyrebox_daemon_response_frame_init_stream_chunk (&frame,
@@ -227,6 +234,7 @@ fake_server_thread_main (gpointer user_data)
     g_autoptr (GBytes) request = NULL;
     g_autoptr (GBytes) response = NULL;
     g_autofree char *request_id = NULL;
+    g_autofree char *query_id = NULL;
     gsize response_size = 0;
     GInputStream *input = NULL;
     GOutputStream *output = NULL;
@@ -278,12 +286,14 @@ fake_server_thread_main (gpointer user_data)
 
           uid_map_request_id = assert_decoded_uid_map_request (request,
               server->expected_uid_map_mailbox_id != NULL
-              ? server->expected_uid_map_mailbox_id : "view-projects");
+              ? server->expected_uid_map_mailbox_id : "view-projects",
+              &query_id);
           g_clear_pointer (&request_id, g_free);
           request_id = g_steal_pointer (&uid_map_request_id);
           g_assert_nonnull (server->uid_map_csv);
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
-          response = encode_uid_map_response (request_id, server->uid_map_csv);
+          response = encode_uid_map_response (request_id, query_id,
+              server->uid_map_csv);
 #else
           g_assert_not_reached ();
 #endif
