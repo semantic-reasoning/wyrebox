@@ -13,6 +13,7 @@ struct mailbox_list
   struct mailbox_list_sink_entry *entries;
   unsigned int n_entries;
   unsigned int capacity;
+  bool fail_next_publish;
 };
 
 static void
@@ -66,6 +67,13 @@ mailbox_list_sink_free (struct mailbox_list *list)
   free (list);
 }
 
+void
+mailbox_list_sink_fail_next_publish (struct mailbox_list *list)
+{
+  if (list != NULL)
+    list->fail_next_publish = true;
+}
+
 bool
 mailbox_list_sink_publish_entry (struct mailbox_list *list,
     const char *name, char hierarchy_delimiter, bool selectable,
@@ -75,6 +83,11 @@ mailbox_list_sink_publish_entry (struct mailbox_list *list,
 
   if (list == NULL || name == NULL)
     return false;
+
+  if (list->fail_next_publish) {
+    list->fail_next_publish = false;
+    return false;
+  }
 
   if (list->n_entries == list->capacity) {
     unsigned int new_capacity = list->capacity == 0 ? 4 : list->capacity * 2;

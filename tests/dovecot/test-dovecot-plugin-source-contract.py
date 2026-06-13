@@ -73,6 +73,11 @@ def main() -> None:
         "daemon mailbox SELECT result include",
     )
     require(
+        r"^#include\s+\"wyrebox-daemon-mailbox-list-result.h\"$",
+        text,
+        "daemon mailbox LIST result include",
+    )
+    require(
         r"^#include\s+\"wyrebox-dovecot-daemon-client.h\"$",
         text,
         "Dovecot daemon client include",
@@ -135,6 +140,53 @@ def main() -> None:
         text,
         "mailbox open uses shared SELECT refresh helper",
     )
+    require(
+        r"gboolean\s+wyrebox_dovecot_publish_mailbox_list_result"
+        r"\s*\(\s*struct\s+mailbox_list\s+\*list,\s*"
+        r"const\s+WyreboxDaemonMailboxListResult\s+\*result,\s*"
+        r"GError\s+\*\*\s*error\s*\)",
+        text,
+        "mailbox LIST publication adapter",
+    )
+    mailbox_list_publish_body = function_body(
+        "wyrebox_dovecot_publish_mailbox_list_result", text)
+    for required_fragment in [
+        "wyrebox_daemon_mailbox_list_result_get_n_entries (result)",
+        "wyrebox_daemon_mailbox_list_result_get_entry (result, i)",
+        "entry->mailbox_name",
+        "entry->hierarchy_delimiter",
+        "entry->is_selectable",
+        "entry->special_use",
+        "mailbox_list_sink_publish_entry",
+    ]:
+        if required_fragment not in mailbox_list_publish_body:
+            raise AssertionError(
+                "plugin source contract failed: mailbox LIST adapter missing "
+                f"publication fragment: {required_fragment}"
+            )
+    require(
+        r"wyrebox_dovecot_map_mailbox_list_child_state\s*\([^)]*\)\s*\{"
+        r"[\s\S]*?WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN"
+        r"[\s\S]*?MAILBOX_LIST_CHILD_STATE_UNKNOWN"
+        r"[\s\S]*?WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN"
+        r"[\s\S]*?MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN"
+        r"[\s\S]*?WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN"
+        r"[\s\S]*?MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN",
+        text,
+        "mailbox LIST adapter maps child state enum values",
+    )
+    for required_fragment in [
+        "list == NULL",
+        "result == NULL",
+        "result->entries == NULL",
+        "entry->hierarchy_delimiter[1] != '\\0'",
+        "G_IO_ERROR_FAILED",
+    ]:
+        if required_fragment not in mailbox_list_publish_body:
+            raise AssertionError(
+                "plugin source contract failed: mailbox LIST adapter missing "
+                f"validation fragment: {required_fragment}"
+            )
     require(
         r"wyrebox_dovecot_mailbox_refresh_select_result\s*\(\s*struct\s+mailbox\s+\*box,\s*GError\s+\*\*\s*\*?error\)\s*\{[\s\S]*?"
         r"wyrebox_dovecot_mailbox_clear_cache\s*\(\s*wbox\s*\);\s*"

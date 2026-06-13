@@ -10,8 +10,11 @@
 #include "mail-storage-private.h"
 #include "mail-user.h"
 #include "module-dir.h"
+#include "wyrebox-daemon-mailbox-list-result.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
 #include "wyrebox-dovecot-daemon-client.h"
+
+#include <gio/gio.h>
 
 struct wyrebox_dovecot_storage
 {
@@ -43,6 +46,106 @@ wyrebox_dovecot_socket_path (void)
   }
 
   return "/run/wyrebox/wyrebox.sock";
+}
+
+static gboolean
+wyrebox_dovecot_map_mailbox_list_child_state (WyreboxDaemonMailboxListChildState
+    in, enum mailbox_list_child_state *out, GError **error)
+{
+  switch (in) {
+    case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN:
+      *out = MAILBOX_LIST_CHILD_STATE_UNKNOWN;
+      return TRUE;
+    case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN:
+      *out = MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN;
+      return TRUE;
+    case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN:
+      *out = MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN;
+      return TRUE;
+    default:
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "Dovecot mailbox LIST publication received unsupported child state");
+      return FALSE;
+  }
+}
+
+gboolean
+wyrebox_dovecot_publish_mailbox_list_result (struct mailbox_list *list,
+    const WyreboxDaemonMailboxListResult *result, GError **error)
+{
+  guint n_entries;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (list == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "Dovecot mailbox LIST publication requires mailbox_list");
+    return FALSE;
+  }
+
+  if (result == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "Dovecot mailbox LIST publication requires daemon result");
+    return FALSE;
+  }
+
+  if (result->entries == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "Dovecot mailbox LIST publication requires initialized daemon result");
+    return FALSE;
+  }
+
+  n_entries = wyrebox_daemon_mailbox_list_result_get_n_entries (result);
+  for (guint i = 0; i < n_entries; i++) {
+    const WyreboxDaemonMailboxListEntry *entry =
+        wyrebox_daemon_mailbox_list_result_get_entry (result, i);
+    enum mailbox_list_child_state child_state =
+        MAILBOX_LIST_CHILD_STATE_UNKNOWN;
+
+    if (entry == NULL || entry->mailbox_name == NULL ||
+        entry->mailbox_name[0] == '\0') {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "Dovecot mailbox LIST publication received invalid mailbox name");
+      return FALSE;
+    }
+
+    if (entry->hierarchy_delimiter == NULL
+        || entry->hierarchy_delimiter[0] == '\0'
+        || entry->hierarchy_delimiter[1] != '\0') {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "Dovecot mailbox LIST publication requires one-character delimiter");
+      return FALSE;
+    }
+
+    if (!wyrebox_dovecot_map_mailbox_list_child_state (entry->child_state,
+            &child_state, error))
+      return FALSE;
+
+    if (!mailbox_list_sink_publish_entry (list, entry->mailbox_name,
+            entry->hierarchy_delimiter[0], entry->is_selectable,
+            child_state, entry->special_use)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_FAILED,
+          "Dovecot mailbox LIST publication failed for mailbox '%s'",
+          entry->mailbox_name);
+      return FALSE;
+    }
+  }
+
+  return TRUE;
 }
 
 static char *
