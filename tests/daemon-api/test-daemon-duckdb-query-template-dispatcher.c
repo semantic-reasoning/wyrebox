@@ -48,12 +48,12 @@ query_template_fixture (const WyreboxDaemonRequestIdentity *identity,
   g_autoptr (GBytes) bytes = NULL;
 
   g_assert_true (g_strcmp0 (identity->caller_identity, "admin-cli") == 0
-      || g_strcmp0 (identity->caller_identity, "trusted-tool") == 0);
+      || g_strcmp0 (identity->caller_identity, "trusted-tool") == 0
+      || g_strcmp0 (identity->caller_identity, "dovecot") == 0);
   g_assert_cmpstr (request->query_id, ==, "query-1");
-  g_assert_cmpstr (request->template_id, ==, "mailbox.uid_map.v1");
   g_assert_cmpstr (request->scope_id, ==, "account-1");
-  g_assert_cmpstr (request->parameters[0], ==, "mailbox-inbox");
-  g_assert_null (request->parameters[1]);
+  g_assert_nonnull (request->parameters);
+  g_assert_nonnull (request->parameters[0]);
 
   if (fixture != NULL && fixture->fail_without_error)
     return FALSE;
@@ -171,6 +171,84 @@ test_duckdb_query_template_dispatcher_handles_valid_envelope (void)
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
   g_assert_cmpstr (frame.request_id, ==, "request-2");
   g_assert_cmpstr (frame.correlation_id, ==, "correlation-2");
+}
+
+static void
+test_duckdb_query_template_dispatcher_allows_dovecot_uid_map (void)
+{
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  g_autoptr (GError) error = NULL;
+  const char *parameters[] = { "mailbox-inbox", NULL };
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (&request,
+          "query-1", "mailbox.uid_map.v1", "account-1", parameters, &error));
+  g_assert_no_error (error);
+
+  service = wyrebox_daemon_duckdb_query_template_service_new
+      (query_template_fixture, NULL, NULL);
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
+          "request-1", "dovecot", "account-1", "dovecot-storage",
+          "correlation-dovecot", &request, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpstr (frame.request_id, ==, "request-1");
+  g_assert_cmpstr (frame.correlation_id, ==, "correlation-dovecot");
+  g_assert_cmpstr (frame.stream_chunk.request_id, ==, "request-1");
+  g_assert_cmpstr (frame.stream_chunk.query_id, ==, "query-1");
+}
+
+static void
+test_duckdb_query_template_dispatcher_allows_dovecot_derived_view_uid_map (void)
+{
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  g_autoptr (GError) error = NULL;
+  const char *parameters[] = { "view-important", NULL };
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (&request,
+          "query-1", "derived_view.uid_map.v1", "account-1", parameters,
+          &error));
+  g_assert_no_error (error);
+
+  service = wyrebox_daemon_duckdb_query_template_service_new
+      (query_template_fixture, NULL, NULL);
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
+          "request-1", "dovecot", "account-1", "dovecot-storage",
+          "correlation-dovecot", &request, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpstr (frame.request_id, ==, "request-1");
+  g_assert_cmpstr (frame.correlation_id, ==, "correlation-dovecot");
+  g_assert_cmpstr (frame.stream_chunk.request_id, ==, "request-1");
+  g_assert_cmpstr (frame.stream_chunk.query_id, ==, "query-1");
+}
+
+static void
+test_duckdb_query_template_dispatcher_rejects_dovecot_message_by_id (void)
+{
+  const char *parameters[] = { "message-1", NULL };
+  DuckDBQueryTemplateFixture fixture = { 0 };
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  g_autoptr (GError) error = NULL;
+
+  init_request_with_parameters (&request, "message.by_id.v1", parameters);
+  service = wyrebox_daemon_duckdb_query_template_service_new
+      (query_template_fixture, &fixture, NULL);
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
+          "request-1", "dovecot", "account-1", "dovecot-storage",
+          "correlation-1", &request, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMISSION_DENIED);
 }
 
 static void
@@ -342,7 +420,7 @@ test_duckdb_query_template_dispatcher_audits_bad_chunk (void)
 static void
 test_duckdb_query_template_dispatcher_rejects_unauthorized_caller (void)
 {
-  const char *callers[] = { "postfix-helper", "dovecot-plugin", "unknown",
+  const char *callers[] = { "postfix-helper", "unknown",
     NULL
   };
   DuckDBQueryTemplateFixture fixture = { 0 };
@@ -567,6 +645,15 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/dispatcher/handles-valid-envelope",
       test_duckdb_query_template_dispatcher_handles_valid_envelope);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/dispatcher/allows-dovecot-mailbox-uid-map",
+      test_duckdb_query_template_dispatcher_allows_dovecot_uid_map);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/dispatcher/allows-dovecot-derived-view-uid-map",
+      test_duckdb_query_template_dispatcher_allows_dovecot_derived_view_uid_map);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/dispatcher/rejects-dovecot-message-by-id",
+      test_duckdb_query_template_dispatcher_rejects_dovecot_message_by_id);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/dispatcher/success-writes-no-audit",
       test_duckdb_query_template_dispatcher_success_writes_no_audit);

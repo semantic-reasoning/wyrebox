@@ -77,12 +77,44 @@ test_catalog_allows_trusted_tool (void)
 }
 
 static void
+test_catalog_allows_dovecot_uid_map_templates (void)
+{
+  const char *mailbox_parameters[] = { "mailbox-inbox", NULL };
+  const char *derived_view_parameters[] = { "view-important", NULL };
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) mailbox_request = { 0 };
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) derived_view_request = {
+    0
+  };
+  g_autoptr (GError) error = NULL;
+  const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
+
+  init_request (&mailbox_request, "mailbox.uid_map.v1", mailbox_parameters);
+  init_request (&derived_view_request, "derived_view.uid_map.v1",
+      derived_view_parameters);
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_catalog_validate
+      (WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN, "account-1",
+          &mailbox_request, &descriptor, &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (descriptor);
+  g_assert_cmpstr (descriptor->template_id, ==, "mailbox.uid_map.v1");
+
+  g_clear_error (&error);
+  descriptor = NULL;
+  g_assert_true (wyrebox_daemon_duckdb_query_template_catalog_validate
+      (WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN, "account-1",
+          &derived_view_request, &descriptor, &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (descriptor);
+  g_assert_cmpstr (descriptor->template_id, ==, "derived_view.uid_map.v1");
+}
+
+static void
 test_catalog_rejects_unauthorized_clients (void)
 {
   const char *parameters[] = { "mailbox-inbox", NULL };
   WyreboxDaemonClientIdentityClass classes[] = {
     WYREBOX_DAEMON_CLIENT_IDENTITY_POSTFIX_HELPER,
-    WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN,
     WYREBOX_DAEMON_CLIENT_IDENTITY_UNKNOWN,
   };
   g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
@@ -98,6 +130,23 @@ test_catalog_rejects_unauthorized_clients (void)
     g_assert_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
     g_assert_null (descriptor);
   }
+}
+
+static void
+test_catalog_rejects_dovecot_for_search_templates (void)
+{
+  const char *parameters[] = { "message-1", NULL };
+  const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  init_request (&request, "message.by_id.v1", parameters);
+
+  g_assert_false (wyrebox_daemon_duckdb_query_template_catalog_validate
+      (WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN, "account-1", &request,
+          &descriptor, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
+  g_assert_null (descriptor);
 }
 
 static void
@@ -193,6 +242,12 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/catalog/rejects-unauthorized-clients",
       test_catalog_rejects_unauthorized_clients);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/catalog/allows-dovecot-uid-map-templates",
+      test_catalog_allows_dovecot_uid_map_templates);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/catalog/rejects-dovecot-for-search-templates",
+      test_catalog_rejects_dovecot_for_search_templates);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/catalog/rejects-unknown-template",
       test_catalog_rejects_unknown_template);
