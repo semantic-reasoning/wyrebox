@@ -110,6 +110,7 @@ if wirelog_runtime_found
     'wirelog/wyrebox-wirelog-derived-membership.c',
     'wirelog/wyrebox-wirelog-evaluation.c',
     'wirelog/wyrebox-wirelog-program.c',
+    'wirelog/wyrebox-wirelog-rule-definition.c',
     'wirelog/wyrebox-wirelog-source.c',
   ]
   wyrebox_link_deps += [wirelog_dep]

@@ -29,6 +29,12 @@ if wirelog_runtime_found
     dependencies: [wyrebox_dep],
   )
 
+  wirelog_rule_definition_test = executable(
+    'test-wirelog-rule-definition',
+    'test-wirelog-rule-definition.c',
+    dependencies: [wyrebox_dep],
+  )
+
   wirelog_source_test = executable(
     'test-wirelog-source',
     'test-wirelog-source.c',
@@ -55,6 +61,7 @@ if wirelog_runtime_found
 
   test('wirelog link smoke', wirelog_link_smoke_test)
   test('wirelog program', wirelog_program_test)
+  test('wirelog rule definition', wirelog_rule_definition_test)
   test('wirelog source', wirelog_source_test)
   test('wirelog evaluation', wirelog_evaluation_test)
   test('wirelog derived membership', wirelog_derived_membership_test)
