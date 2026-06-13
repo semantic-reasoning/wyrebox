@@ -346,9 +346,9 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
       const char *bindings[] = { "mail-1", NULL };
 
       out_request->request_id = "request-wirelog-query";
-      out_request->caller_identity = "skill";
+      out_request->caller_identity = "trusted-tool";
       out_request->account_identity = "account-1";
-      out_request->tool_identity = "fact-skill";
+      out_request->tool_identity = "fact-tool";
       out_request->correlation_id = "corr-wirelog";
       if (!wyrebox_daemon_wirelog_predicate_query_request_init
           (&decoded_state->wirelog_predicate_query_request,
@@ -365,7 +365,7 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
       const char *parameters[] = { "mail-1", NULL };
 
       out_request->request_id = "request-duckdb-query";
-      out_request->caller_identity = "skill";
+      out_request->caller_identity = "admin-cli";
       out_request->account_identity = "account-1";
       out_request->tool_identity = "duckdb-tool";
       out_request->correlation_id = "corr-duckdb";
@@ -554,9 +554,9 @@ query_wirelog_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
   g_autoptr (GBytes) bytes = NULL;
 
   g_assert_cmpstr (identity->request_id, ==, "request-wirelog-query");
-  g_assert_cmpstr (identity->caller_identity, ==, "skill");
+  g_assert_cmpstr (identity->caller_identity, ==, "trusted-tool");
   g_assert_cmpstr (identity->account_identity, ==, "account-1");
-  g_assert_cmpstr (identity->tool_identity, ==, "fact-skill");
+  g_assert_cmpstr (identity->tool_identity, ==, "fact-tool");
   g_assert_cmpstr (request->query_id, ==, "query-1");
   g_assert_cmpstr (request->predicate_id, ==, "project_mention");
   g_assert_cmpstr (request->scope_id, ==, "account-1");
@@ -581,7 +581,7 @@ query_duckdb_template_fixture (const WyreboxDaemonRequestIdentity *identity,
   g_autoptr (GBytes) bytes = NULL;
 
   g_assert_cmpstr (identity->request_id, ==, "request-duckdb-query");
-  g_assert_cmpstr (identity->caller_identity, ==, "skill");
+  g_assert_cmpstr (identity->caller_identity, ==, "admin-cli");
   g_assert_cmpstr (identity->account_identity, ==, "account-1");
   g_assert_cmpstr (identity->tool_identity, ==, "duckdb-tool");
   g_assert_cmpstr (request->query_id, ==, "query-1");
