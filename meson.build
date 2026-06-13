@@ -94,7 +94,6 @@ if capnp_serialization_found
   daemon_api_capnp_schema_include = include_directories('.')
 endif
 
-duckdb_found = false
 duckdb_deps = []
 duckdb_api_probe = '''
   #include <stddef.h>
@@ -112,58 +111,26 @@ duckdb_api_probe = '''
   }
 '''
 
-duckdb_force_fallback = get_option('wrap_mode') == 'forcefallback'
-if duckdb_force_fallback
-  duckdb_pkg_dep = disabler()
-else
-  duckdb_pkg_dep = dependency(
-    'duckdb',
-    method: 'pkg-config',
-    required: false,
-    allow_fallback: false,
-  )
-endif
-if duckdb_pkg_dep.found()
-  duckdb_api_usable = cc.links(
-    duckdb_api_probe,
-    name: 'DuckDB C API via pkg-config',
-    dependencies: duckdb_pkg_dep,
-  )
-  if duckdb_api_usable
-    duckdb_found = true
-    duckdb_deps = [duckdb_pkg_dep]
-    duckdb_summary = 'enabled via pkg-config'
-  else
-    error('pkg-config found duckdb, but it did not provide a ' +
-      'compile/link usable C API.')
-  endif
-else
-  if host_machine.cpu_family() != 'x86_64'
-    error('DuckDB is required, but the bundled DuckDB prebuilt ' +
-      'subproject supports Linux x86_64 only.')
-  endif
-
-  duckdb_subproject_dep = dependency(
-    'duckdb-prebuilt-linux',
-    fallback: ['duckdb-prebuilt-linux', 'duckdb_dep'],
-    required: true,
-  )
-  duckdb_api_usable = cc.links(
-    duckdb_api_probe,
-    name: 'DuckDB C API via linux prebuilt subproject',
-    dependencies: duckdb_subproject_dep,
-  )
-
-  if not duckdb_api_usable
-    error('DuckDB is required, but the DuckDB linux prebuilt ' +
-      'subproject did not provide a compile/link usable C API.')
-  endif
-
-  duckdb_found = true
-  duckdb_deps = [duckdb_subproject_dep]
-  duckdb_summary = 'enabled via linux prebuilt subproject'
+if host_machine.cpu_family() != 'x86_64'
+  error('DuckDB is required, but the bundled DuckDB prebuilt ' +
+    'subproject supports Linux x86_64 only.')
 endif
 
+duckdb_project = subproject('duckdb-prebuilt-linux')
+duckdb_subproject_dep = duckdb_project.get_variable('duckdb_dep')
+duckdb_api_usable = cc.links(
+  duckdb_api_probe,
+  name: 'DuckDB C API via linux prebuilt subproject',
+  dependencies: duckdb_subproject_dep,
+)
+
+if not duckdb_api_usable
+  error('DuckDB is required, but the DuckDB linux prebuilt ' +
+    'subproject did not provide a compile/link usable C API.')
+endif
+
+duckdb_deps = [duckdb_subproject_dep]
+duckdb_summary = 'enabled via linux prebuilt subproject wrap'
 summary('duckdb', duckdb_summary, section: 'Dependencies')
 
 wirelog_runtime_option = get_option('wirelog_runtime')
