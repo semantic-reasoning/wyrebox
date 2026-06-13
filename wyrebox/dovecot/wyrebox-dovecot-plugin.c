@@ -25,6 +25,7 @@ struct wyrebox_dovecot_mailbox
   struct mailbox mailbox;
   WyreboxDaemonMailboxSelectResult select_result;
   int select_result_valid;
+  WyreboxDovecotMailboxUidMapSnapshot uid_map_snapshot;
 };
 
 static struct mail_storage wyrebox_mail_storage_class;
@@ -73,6 +74,14 @@ wyrebox_dovecot_mailbox_set_opened (struct mailbox *box, gboolean opened)
   box->opened = opened;
 }
 
+static void
+wyrebox_dovecot_mailbox_clear_cache (struct wyrebox_dovecot_mailbox *wbox)
+{
+  wyrebox_daemon_mailbox_select_result_clear (&wbox->select_result);
+  wyrebox_dovecot_mailbox_uid_map_snapshot_clear (&wbox->uid_map_snapshot);
+  wbox->select_result_valid = 0;
+}
+
 static int
 wyrebox_dovecot_mailbox_enable (struct mailbox *box,
     enum mailbox_feature features)
@@ -87,8 +96,7 @@ wyrebox_dovecot_mailbox_close (struct mailbox *box)
   struct wyrebox_dovecot_mailbox *wbox = (struct wyrebox_dovecot_mailbox *) box;
 
   wyrebox_dovecot_mailbox_set_opened (box, FALSE);
-  wyrebox_daemon_mailbox_select_result_clear (&wbox->select_result);
-  wbox->select_result_valid = 0;
+  wyrebox_dovecot_mailbox_clear_cache (wbox);
 }
 
 static struct mailbox_sync_context *
@@ -136,9 +144,9 @@ wyrebox_dovecot_mailbox_refresh_select_result (struct mailbox *box,
   struct wyrebox_dovecot_storage *storage =
       (struct wyrebox_dovecot_storage *) box->storage;
   g_auto (WyreboxDaemonMailboxSelectResult) select_result = { 0 };
+  g_auto (WyreboxDovecotMailboxUidMapSnapshot) uid_map_snapshot = { 0 };
 
-  wyrebox_daemon_mailbox_select_result_clear (&wbox->select_result);
-  wbox->select_result_valid = 0;
+  wyrebox_dovecot_mailbox_clear_cache (wbox);
 
   if (!wyrebox_dovecot_daemon_client_select_mailbox (storage->socket_path,
           storage->account_identity, box->vname, &select_result, error)) {
@@ -149,9 +157,18 @@ wyrebox_dovecot_mailbox_refresh_select_result (struct mailbox *box,
           select_result.kind, select_result.mailbox_id,
           select_result.mailbox_name, select_result.uid_validity,
           select_result.uid_next, select_result.message_count, error)) {
+    wyrebox_dovecot_mailbox_clear_cache (wbox);
     return FALSE;
   }
 
+  if (!wyrebox_dovecot_daemon_client_load_uid_map (storage->socket_path,
+          storage->account_identity, select_result.mailbox_id,
+          select_result.uid_validity, &uid_map_snapshot, error)) {
+    wyrebox_dovecot_mailbox_clear_cache (wbox);
+    return FALSE;
+  }
+
+  wbox->uid_map_snapshot.rows = g_steal_pointer (&uid_map_snapshot.rows);
   wbox->select_result_valid = 1;
   return TRUE;
 }
@@ -161,8 +178,7 @@ wyrebox_dovecot_mailbox_free (struct mailbox *box)
 {
   struct wyrebox_dovecot_mailbox *wbox = (struct wyrebox_dovecot_mailbox *) box;
 
-  wyrebox_daemon_mailbox_select_result_clear (&wbox->select_result);
-  wbox->select_result_valid = 0;
+  wyrebox_dovecot_mailbox_clear_cache (wbox);
   event_unref (&box->event);
 }
 
