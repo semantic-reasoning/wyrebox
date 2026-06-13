@@ -66,6 +66,11 @@ REQUIRED_MODULE_SYMBOLS = [
     r"\bmodule_get_plugin_name\b",
 ]
 
+REQUIRED_STORAGE_REGISTRATION_SYMBOLS = [
+    r"\bvoid\s+mail_storage_class_register\s*\(\s*struct\s+mail_storage\s*\*storage_class\)",
+    r"\bvoid\s+mail_storage_class_unregister\s*\(\s*struct\s+mail_storage\s*\*storage_class\)",
+]
+
 @dataclass
 class ContractIssue:
     message: str
@@ -278,6 +283,14 @@ def validate_source(source_dir: Path) -> list[ContractIssue]:
             continue
 
         issues.extend(find_issues_for_patterns(storage, expressions, symbol))
+
+    issues.extend(
+        find_issues_for_patterns(
+            storage,
+            REQUIRED_STORAGE_REGISTRATION_SYMBOLS,
+            "storage registration declaration",
+        )
+    )
 
     issues.extend(
         find_issues_for_vfuncs(storage_private, "mail_storage_vfuncs", REQUIRED_VFUNC_SYMBOLS["mail_storage_vfuncs"])

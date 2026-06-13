@@ -13,7 +13,4 @@ struct mailbox_status {
   unsigned int uidnext;
 };
 
-void mail_storage_class_register(struct mail_storage *storage_class);
-void mail_storage_class_unregister(struct mail_storage *storage_class);
-
 #endif

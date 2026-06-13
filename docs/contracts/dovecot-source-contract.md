@@ -53,6 +53,8 @@ Checker validation requires these ABI/storage names to be present:
 - `struct module_dir_load_settings` with `abi_version` and `require_init_funcs`
 - `module_get_symbol`
 - `module_get_plugin_name`
+- `mail_storage_class_register`
+- `mail_storage_class_unregister`
 
 ## Required Storage Vfunc Coverage
 
@@ -85,8 +87,16 @@ This contract forbids ad-hoc module ABI declarations in the plugin skeleton; the
 module header surface from Dovecot must be used directly.
 
 The checker validates only the Dovecot module ABI surface needed by those future
-WyreBox plugin symbols. It does not validate a WyreBox plugin implementation,
-storage-backend semantics, or plugin behavior.
+WyreBox plugin symbols and storage registration hooks. It does not validate a
+WyreBox plugin implementation, storage-backend semantics, or plugin behavior.
+
+## Required Storage Registration API
+
+Backend registration is pinned to these Dovecot storage APIs in
+`mail-storage.h`:
+
+- `void mail_storage_class_register(struct mail_storage *storage_class);`
+- `void mail_storage_class_unregister(struct mail_storage *storage_class);`
 
 ## Verification
 
