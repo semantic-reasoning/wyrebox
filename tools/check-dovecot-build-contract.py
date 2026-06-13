@@ -128,9 +128,63 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
 
     _Static_assert(
         __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_probe.name),
+            const char *),
+        "mailbox struct::name expected const char pointer");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_probe.vname),
+            const char *),
+        "mailbox struct::vname expected const char pointer");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_probe.storage),
+            struct mail_storage *),
+        "mailbox struct::storage expected struct mail_storage pointer");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_probe.list),
+            struct mailbox_list *),
+        "mailbox struct::list expected struct mailbox_list pointer");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_probe.vlast),
+            struct mailbox_vfuncs *),
+        "mailbox struct::vlast expected struct mailbox_vfuncs pointer");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
             __typeof__(wyrebox_mailbox_probe.v.get_status),
             wyrebox_mailbox_get_status_fn),
         "mailbox_vfuncs::get_status signature mismatch");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_probe.mail_vfuncs),
+            const struct mail_vfuncs *),
+        "mailbox::mail_vfuncs type mismatch");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_probe.pool),
+            pool_t),
+        "mailbox struct::pool expected pool_t");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_probe.event),
+            struct event *),
+        "mailbox struct::event expected struct event pointer");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+        __typeof__(((struct mailbox *)0)->v.open),
+        wyrebox_mailbox_open_fn),
+        "mailbox field .v.open signature mismatch");
 
     static struct mail_storage wyrebox_mail_storage_probe_template = {
         .name = "wyrebox",
@@ -149,11 +203,23 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
         struct mailbox_list *list,
         const char *vname,
         enum mailbox_flags flags) {
-      (void)storage;
-      (void)list;
-      (void)vname;
+      struct mailbox *box;
+      pool_t pool;
+
+      pool = pool_alloconly_create("wyrebox mailbox probe", 1024);
+      box = p_new(pool, struct mailbox, 1);
+      box->pool = pool;
+      box->storage = storage;
+      box->list = list;
+      box->vname = vname;
+      box->name = vname;
+      box->mail_vfuncs = NULL;
+
+      box->vlast = NULL;
+      box->v.open = wyrebox_probe_mailbox_open;
+      box->v.get_status = wyrebox_probe_mailbox_get_status;
       (void)flags;
-      return NULL;
+      return box;
     }
 
     static struct mail_storage wyrebox_mail_storage_probe_storage = {
@@ -308,6 +374,7 @@ def validate_mailbox_vfunc_probe(
             *cc_argv[1:],
             "-std=gnu11",
             "-fsyntax-only",
+            "-Werror=incompatible-pointer-types",
             f"-I{build_dir}",
             f"-I{source_dir / 'src' / 'lib-index'}",
             f"-I{source_dir / 'src' / 'lib'}",

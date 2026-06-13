@@ -60,6 +60,14 @@ REQUIRED_PRIVATE_STRUCT_FIELDS = {
     ],
     "mailbox": [
         "v",
+        "name",
+        "vname",
+        "storage",
+        "list",
+        "mail_vfuncs",
+        "pool",
+        "event",
+        "vlast",
     ],
 }
 

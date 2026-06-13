@@ -12,6 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_DIR = REPO_ROOT / "tests" / "dovecot" / "fixtures"
 VALID_SOURCE_FIXTURE = FIXTURES_DIR / "valid-2.3.21.1"
 MAILBOX_VFUNC_NEGATIVE_SOURCE_FIXTURE = FIXTURES_DIR / "missing-vfunc"
+MAILBOX_ALLOC_NEGATIVE_SOURCE_FIXTURE = FIXTURES_DIR / "missing-mailbox-allocation"
 BUILD_CHECKER_PATH = REPO_ROOT / "tools" / "check-dovecot-build-contract.py"
 CC_SHIM_LOG_ENV = "WYREBOX_CC_SHIM_LOG"
 
@@ -113,6 +114,14 @@ def test_dovecot_build_contract_missing_mailbox_vfunc_shape() -> None:
     )
 
 
+def test_dovecot_build_contract_missing_mailbox_allocation_surface() -> None:
+    run_checker(
+        MAILBOX_ALLOC_NEGATIVE_SOURCE_FIXTURE,
+        FIXTURES_DIR / "missing-mailbox-allocation" / "build-config-valid",
+        expect_success=False,
+    )
+
+
 def test_dovecot_build_contract_missing_source_directory() -> None:
     run_checker(
         Path('/definitely-not-a-real-dovecot-source-tree'),
@@ -144,6 +153,7 @@ def test_dovecot_build_contract_cc_wrapper_and_args() -> None:
         fixed_probe_args = [
             "-std=gnu11",
             "-fsyntax-only",
+            "-Werror=incompatible-pointer-types",
             f"-I{FIXTURES_DIR / 'valid-2.3.21.1' / 'build-config-valid'}",
             f"-I{VALID_SOURCE_FIXTURE / 'src' / 'lib-index'}",
             f"-I{VALID_SOURCE_FIXTURE / 'src' / 'lib'}",
@@ -166,6 +176,7 @@ def main() -> None:
         test_dovecot_build_contract_invalid_macros,
         test_dovecot_build_contract_wrong_abi,
         test_dovecot_build_contract_missing_mailbox_vfunc_shape,
+        test_dovecot_build_contract_missing_mailbox_allocation_surface,
         test_dovecot_build_contract_missing_source_directory,
         test_dovecot_build_contract_cc_wrapper_and_args,
     ]

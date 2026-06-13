@@ -23,7 +23,6 @@ struct mail_save_context;
 struct mail_index_transaction_commit_result;
 struct mailbox_update;
 struct mailbox_status;
-struct event;
 struct mailbox_vfuncs;
 struct mail_vfuncs;
 
@@ -79,17 +78,7 @@ struct mail_storage {
 };
 
 struct mailbox {
-  const char *name;
-  const char *vname;
-  struct mail_storage *storage;
-  struct mailbox_list *list;
-  struct event *event;
-
   struct mailbox_vfuncs v;
-  struct mailbox_vfuncs *vlast;
-  const struct mail_vfuncs *mail_vfuncs;
-
-  pool_t pool;
 };
 
 struct mail {
