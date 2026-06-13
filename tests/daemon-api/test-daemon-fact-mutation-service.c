@@ -1,4 +1,5 @@
 #include "wyrebox-daemon-fact-mutation-service.h"
+#include "wyrebox-daemon-audit-payload.h"
 #include "wyrebox-journal-reader.h"
 
 #include <gio/gio.h>
@@ -56,6 +57,8 @@ test_fact_mutation_service_handles_request (void)
   g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
   g_auto (WyreboxJournalRecord) record = { 0 };
+  g_auto (WyreboxJournalRecord) audit_record = { 0 };
+  g_auto (WyreboxDaemonAuditPayload) audit = { 0 };
   gboolean eof = FALSE;
 
   g_assert_nonnull (root);
@@ -93,6 +96,38 @@ test_fact_mutation_service_handles_request (void)
   g_assert_false (eof);
   g_assert_cmpint (record.event_type, ==, WYREBOX_JOURNAL_EVENT_FACT_INSERTED);
   g_assert_cmpuint (record.sequence, ==, 1);
+
+  g_assert_true (wyrebox_journal_reader_read_next (reader,
+          &audit_record, &eof, &error));
+  g_assert_no_error (error);
+  g_assert_false (eof);
+  g_assert_cmpint (audit_record.event_type, ==,
+      WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED);
+  g_assert_cmpuint (audit_record.sequence, ==, 2);
+  g_assert_true (wyrebox_daemon_audit_payload_decode (audit_record.payload,
+          &audit, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (audit.operation, ==,
+      WYREBOX_DAEMON_AUDIT_OPERATION_SINGLE_FACT_MUTATION);
+  g_assert_cmpint (audit.outcome, ==, WYREBOX_DAEMON_AUDIT_OUTCOME_SUCCESS);
+  g_assert_cmpstr (audit.request_id, ==, "request-1");
+  g_assert_cmpstr (audit.correlation_id, ==, "correlation-1");
+  g_assert_cmpstr (audit.caller_identity, ==, "trusted-tool");
+  g_assert_cmpstr (audit.account_identity, ==, "account-1");
+  g_assert_cmpstr (audit.tool_identity, ==, "fact-importer");
+  g_assert_cmpstr (audit.scope_id, ==, "account-1");
+  g_assert_cmpuint (audit.mutation_count, ==, 1);
+  g_assert_cmpstr (audit.predicate_id, ==, "project_mention");
+  g_assert_cmpuint (audit.final_journal_offset, ==,
+      frame.success.journal_offset);
+  g_assert_cmpuint (audit.final_journal_sequence, ==,
+      frame.success.journal_sequence);
+
+  wyrebox_journal_record_clear (&record);
+  g_assert_false (wyrebox_journal_reader_read_next (reader,
+          &record, &eof, &error));
+  g_assert_no_error (error);
+  g_assert_true (eof);
 
   remove_tree (root);
 }

@@ -1,4 +1,5 @@
 #include "wyrebox-daemon-fact-mutation-service.h"
+#include "wyrebox-daemon-audit-payload.h"
 #include "wyrebox-journal-reader.h"
 
 #include <gio/gio.h>
@@ -67,7 +68,8 @@ assert_journal_is_empty (const char *root)
 
 static void
 assert_journal_events (const char *root,
-    const WyreboxJournalEventType *event_types, guint n_event_types)
+    const WyreboxJournalEventType *event_types,
+    guint n_event_types, WyreboxDaemonAuditPayload *out_audit)
 {
   g_autoptr (GError) error = NULL;
   g_autoptr (WyreboxJournalReader) reader = NULL;
@@ -85,6 +87,13 @@ assert_journal_events (const char *root,
     g_assert_false (eof);
     g_assert_cmpint (record.event_type, ==, event_types[i]);
     g_assert_cmpuint (record.sequence, ==, i + 1);
+
+    if (record.event_type == WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED &&
+        out_audit != NULL) {
+      g_assert_true (wyrebox_daemon_audit_payload_decode (record.payload,
+              out_audit, &error));
+      g_assert_no_error (error);
+    }
   }
 
   g_auto (WyreboxJournalRecord) record = { 0 };
@@ -100,6 +109,7 @@ test_fact_batch_import_service_handles_valid_batch (void)
   const WyreboxJournalEventType expected[] = {
     WYREBOX_JOURNAL_EVENT_FACT_INSERTED,
     WYREBOX_JOURNAL_EVENT_FACT_RETRACTED,
+    WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED,
   };
   g_autofree char *root =
       g_dir_make_tmp ("wyrebox-fact-batch-service-XXXXXX", NULL);
@@ -111,6 +121,7 @@ test_fact_batch_import_service_handles_valid_batch (void)
   g_auto (WyreboxDaemonFactBatchImportRequest) batch = { 0 };
   g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_auto (WyreboxDaemonAuditPayload) audit = { 0 };
   g_autofree char *expected_marker = NULL;
   const WyreboxDaemonFactMutationRequest *entries[] = { &insert, &retract };
 
@@ -141,7 +152,22 @@ test_fact_batch_import_service_handles_valid_batch (void)
   g_assert_cmpstr (frame.success.durable_marker, ==, expected_marker);
   g_assert_cmpstr (frame.success.summary, ==,
       "fact_batch_import count=2 scope_id=account-1");
-  assert_journal_events (root, expected, G_N_ELEMENTS (expected));
+  assert_journal_events (root, expected, G_N_ELEMENTS (expected), &audit);
+  g_assert_cmpint (audit.operation, ==,
+      WYREBOX_DAEMON_AUDIT_OPERATION_FACT_BATCH_IMPORT);
+  g_assert_cmpint (audit.outcome, ==, WYREBOX_DAEMON_AUDIT_OUTCOME_SUCCESS);
+  g_assert_cmpstr (audit.request_id, ==, "request-1");
+  g_assert_cmpstr (audit.correlation_id, ==, "correlation-1");
+  g_assert_cmpstr (audit.caller_identity, ==, "trusted-tool");
+  g_assert_cmpstr (audit.account_identity, ==, "account-1");
+  g_assert_cmpstr (audit.tool_identity, ==, "fact-importer");
+  g_assert_cmpstr (audit.scope_id, ==, "account-1");
+  g_assert_cmpuint (audit.mutation_count, ==, 2);
+  g_assert_null (audit.predicate_id);
+  g_assert_cmpuint (audit.final_journal_offset, ==,
+      frame.success.journal_offset);
+  g_assert_cmpuint (audit.final_journal_sequence, ==,
+      frame.success.journal_sequence);
 
   remove_tree (root);
 }

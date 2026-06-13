@@ -1,4 +1,5 @@
 #include "wyrebox-daemon-fact-mutation-request.h"
+#include "wyrebox-daemon-audit-payload.h"
 #include "wyrebox-fact-journal-snapshot.h"
 #include "wyrebox-journal-writer.h"
 
@@ -73,6 +74,35 @@ append_unrelated_event (WyreboxJournalWriter *writer)
   g_assert_true (wyrebox_journal_writer_append (writer,
           WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED, bytes, &offset, &sequence,
           &error));
+  g_assert_no_error (error);
+}
+
+static void
+append_audit_event (WyreboxJournalWriter *writer)
+{
+  g_autoptr (GBytes) bytes = NULL;
+  g_autoptr (GError) error = NULL;
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  WyreboxDaemonAuditPayload payload = {
+    .operation = WYREBOX_DAEMON_AUDIT_OPERATION_SINGLE_FACT_MUTATION,
+    .outcome = WYREBOX_DAEMON_AUDIT_OUTCOME_SUCCESS,
+    .request_id = "request-1",
+    .caller_identity = "trusted-tool",
+    .account_identity = "account-1",
+    .scope_id = "account-1",
+    .mutation_count = 1,
+    .predicate_id = "project_keyword",
+    .final_journal_offset = 0,
+    .final_journal_sequence = 2,
+  };
+
+  bytes = wyrebox_daemon_audit_payload_encode (&payload, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (bytes);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED, bytes, &offset,
+          &sequence, &error));
   g_assert_no_error (error);
 }
 
@@ -269,6 +299,7 @@ test_unrelated_events_are_ignored (void)
   append_unrelated_event (writer);
   append_mutation (writer, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
       "project_keyword", "account-1", args, &sequence);
+  append_audit_event (writer);
   append_unrelated_event (writer);
 
   records = load_snapshot (root);

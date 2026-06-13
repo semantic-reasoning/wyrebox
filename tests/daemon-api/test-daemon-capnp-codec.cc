@@ -19,6 +19,7 @@
 #include "wyrebox-daemon-flag-keyword-update-request.h"
 #include "wyrebox-daemon-flag-keyword-update-service.h"
 #include "wyrebox-daemon-request-adapter.h"
+#include "wyrebox-daemon-audit-payload.h"
 #include "wyrebox-journal-reader.h"
 #include "wyrebox-journal-writer.h"
 
@@ -3422,6 +3423,7 @@ assert_request_adapter_routes_fact_batch_import (void)
   g_auto (WyreboxDaemonFactMutationRequest) first = {};
   g_auto (WyreboxDaemonFactMutationRequest) second = {};
   g_auto (WyreboxJournalRecord) extra = { 0 };
+  g_auto (WyreboxDaemonAuditPayload) audit = {};
   gboolean eof = FALSE;
 
   g_assert_nonnull (root);
@@ -3505,6 +3507,31 @@ assert_request_adapter_routes_fact_batch_import (void)
   g_assert_cmpstr (second.scope_id, ==, "account-1");
   g_assert_cmpstr (second.arguments[0], ==, "mail-2");
 
+  g_assert_true (wyrebox_journal_reader_read_next (reader,
+      &extra,
+      &eof,
+      &error));
+  g_assert_no_error (error);
+  g_assert_false (eof);
+  g_assert_cmpint (extra.event_type, ==,
+      WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED);
+  g_assert_cmpuint (extra.sequence, ==, 3);
+  g_assert_true (wyrebox_daemon_audit_payload_decode (extra.payload,
+      &audit,
+      &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (audit.operation, ==,
+      WYREBOX_DAEMON_AUDIT_OPERATION_FACT_BATCH_IMPORT);
+  g_assert_cmpint (audit.outcome, ==,
+      WYREBOX_DAEMON_AUDIT_OUTCOME_SUCCESS);
+  g_assert_cmpstr (audit.request_id, ==, "request-fact-batch-route");
+  g_assert_cmpstr (audit.caller_identity, ==, "trusted-tool");
+  g_assert_cmpstr (audit.account_identity, ==, "account-1");
+  g_assert_cmpstr (audit.scope_id, ==, "account-1");
+  g_assert_cmpuint (audit.mutation_count, ==, 2);
+  g_assert_cmpuint (audit.final_journal_sequence, ==, 2);
+
+  wyrebox_journal_record_clear (&extra);
   g_assert_false (wyrebox_journal_reader_read_next (reader,
       &extra,
       &eof,
