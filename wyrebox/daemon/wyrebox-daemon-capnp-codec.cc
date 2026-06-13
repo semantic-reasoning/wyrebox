@@ -3,6 +3,7 @@
 #include "wyrebox-daemon-error-frame.h"
 #include "wyrebox-daemon-delivery-ingestion-request.h"
 #include "wyrebox-daemon-duckdb-query-template-request.h"
+#include "wyrebox-daemon-fact-batch-import-request.h"
 #include "wyrebox-daemon-fact-mutation-request.h"
 #include "wyrebox-daemon-flag-keyword-update-request.h"
 #include "wyrebox-daemon-mailbox-list-request.h"
@@ -33,6 +34,7 @@ typedef struct
   WyreboxDaemonMailboxListRequest mailbox_list;
   WyreboxDaemonMailboxSelectRequest mailbox_select;
   WyreboxDaemonFactMutationRequest fact_mutation;
+  WyreboxDaemonFactBatchImportRequest fact_batch_import;
   WyreboxDaemonMessageFetchRequest message_fetch;
   WyreboxDaemonMessageSearchRequest message_search;
   WyreboxDaemonWirelogPredicateQueryRequest wirelog_predicate_query;
@@ -76,6 +78,7 @@ wyrebox_daemon_capnp_codec_decoded_state_clear (gpointer decoded_state)
   wyrebox_daemon_mailbox_list_request_clear (&state->mailbox_list);
   wyrebox_daemon_mailbox_select_request_clear (&state->mailbox_select);
   wyrebox_daemon_fact_mutation_request_clear (&state->fact_mutation);
+  wyrebox_daemon_fact_batch_import_request_clear (&state->fact_batch_import);
   wyrebox_daemon_message_fetch_request_clear (&state->message_fetch);
   wyrebox_daemon_message_search_request_clear (&state->message_search);
   wyrebox_daemon_wirelog_predicate_query_request_clear
@@ -102,6 +105,44 @@ map_fact_mutation_kind (FactMutationKind in,
     default:
       return FALSE;
   }
+}
+
+static gboolean
+decode_fact_mutation_payload (const FactMutationRequest::Reader &fact_mutation,
+    WyreboxDaemonFactMutationRequest *out_request,
+    GError **error)
+{
+  auto arguments = fact_mutation.getArguments ();
+  WyreboxDaemonFactMutationKind mutation =
+      WYREBOX_DAEMON_FACT_MUTATION_INSERT;
+  g_auto (GStrv) argument_vector = NULL;
+
+  if (!map_fact_mutation_kind (fact_mutation.getMutation (), &mutation))
+    return set_invalid_argument (error, "unsupported fact mutation kind");
+
+  argument_vector = g_new0 (char *, arguments.size () + 1);
+  for (guint i = 0; i < arguments.size (); i++)
+    argument_vector[i] = g_strdup (arguments[i].cStr ());
+
+  return wyrebox_daemon_fact_mutation_request_init (out_request,
+      mutation,
+      fact_mutation.getPredicateId ().cStr (),
+      fact_mutation.getScopeId ().cStr (),
+      (const char * const *) argument_vector,
+      error);
+}
+
+static void
+free_decoded_fact_mutation_request (gpointer data)
+{
+  WyreboxDaemonFactMutationRequest *request =
+      static_cast<WyreboxDaemonFactMutationRequest *> (data);
+
+  if (request == NULL)
+    return;
+
+  wyrebox_daemon_fact_mutation_request_clear (request);
+  g_free (request);
 }
 
 static gboolean
@@ -343,6 +384,71 @@ decode_fact_mutation_request (const RequestFrame::Reader &request_frame,
   out_request_frame->mailbox_list = NULL;
   out_request_frame->mailbox_select = NULL;
   out_request_frame->fact_mutation = &state->fact_mutation;
+  out_request_frame->message_fetch = NULL;
+  out_request_frame->message_search = NULL;
+  out_request_frame->wirelog_predicate_query = NULL;
+  out_request_frame->duckdb_query_template = NULL;
+  out_request_frame->flag_keyword_update = NULL;
+
+  return TRUE;
+}
+
+static gboolean
+decode_fact_batch_import_request (const RequestFrame::Reader &request_frame,
+    WyreboxDaemonCapnpDecodedRequestState *state,
+    WyreboxDaemonDecodedRequestFrame *out_request_frame,
+    GError **error)
+{
+  auto fact_batch_import = request_frame.getFactBatchImport ();
+  auto entries = fact_batch_import.getEntries ();
+  g_autoptr (GPtrArray) decoded_entries = NULL;
+  g_autofree const WyreboxDaemonFactMutationRequest **entry_vector = NULL;
+
+  if (!decode_request_identity (request_frame, state, error))
+    return FALSE;
+
+  if (entries.size () > WYREBOX_DAEMON_FACT_BATCH_IMPORT_REQUEST_MAX_ENTRIES)
+    return set_invalid_argument (error, "fact batch import exceeds max entries");
+
+  decoded_entries = g_ptr_array_new_with_free_func
+      (free_decoded_fact_mutation_request);
+
+  for (guint i = 0; i < entries.size (); i++) {
+    WyreboxDaemonFactMutationRequest *entry =
+        g_new0 (WyreboxDaemonFactMutationRequest, 1);
+
+    if (!decode_fact_mutation_payload (entries[i], entry, error)) {
+      free_decoded_fact_mutation_request (entry);
+      return FALSE;
+    }
+
+    g_ptr_array_add (decoded_entries, entry);
+  }
+
+  entry_vector = g_new0 (const WyreboxDaemonFactMutationRequest *,
+      decoded_entries->len);
+  for (guint i = 0; i < decoded_entries->len; i++)
+    entry_vector[i] = static_cast<const WyreboxDaemonFactMutationRequest *>
+        (g_ptr_array_index (decoded_entries, i));
+
+  if (!wyrebox_daemon_fact_batch_import_request_init
+      (&state->fact_batch_import,
+          entry_vector,
+          decoded_entries->len,
+          error))
+    return FALSE;
+
+  out_request_frame->request_id = state->request_id;
+  out_request_frame->caller_identity = state->caller_identity;
+  out_request_frame->account_identity = state->account_identity;
+  out_request_frame->tool_identity = state->tool_identity;
+  out_request_frame->correlation_id = state->correlation_id;
+  out_request_frame->operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_BATCH_IMPORT;
+  out_request_frame->mailbox_list = NULL;
+  out_request_frame->mailbox_select = NULL;
+  out_request_frame->fact_mutation = NULL;
+  out_request_frame->fact_batch_import = &state->fact_batch_import;
   out_request_frame->message_fetch = NULL;
   out_request_frame->message_search = NULL;
   out_request_frame->wirelog_predicate_query = NULL;
@@ -675,6 +781,11 @@ decode_request_frame (const capnp::word *words,
             error);
       case RequestFrame::FACT_MUTATION:
         return decode_fact_mutation_request (request_frame,
+            state,
+            out_request_frame,
+            error);
+      case RequestFrame::FACT_BATCH_IMPORT:
+        return decode_fact_batch_import_request (request_frame,
             state,
             out_request_frame,
             error);

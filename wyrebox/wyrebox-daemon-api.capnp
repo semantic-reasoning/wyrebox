@@ -13,6 +13,7 @@ struct RequestFrame {
     factMutation @7 :FactMutationRequest;
     wirelogPredicateQuery @8 :WirelogPredicateQueryRequest;
     duckDBQueryTemplate @9 :DuckDBQueryTemplateRequest;
+    factBatchImport @10 :FactBatchImportRequest;
   }
 }
 
@@ -160,6 +161,10 @@ struct FactMutationRequest {
   predicateId @1 :Text;
   scopeId @2 :Text;
   arguments @3 :List(Text);
+}
+
+struct FactBatchImportRequest {
+  entries @0 :List(FactMutationRequest);
 }
 
 enum FactMutationKind {
