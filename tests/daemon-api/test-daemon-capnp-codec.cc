@@ -3421,6 +3421,157 @@ assert_response_bytes_encode_success (void)
 }
 
 static void
+assert_response_bytes_decode_success_roundtrip (void)
+{
+  const char *arguments[] = { "mail-1", NULL };
+  g_auto (WyreboxDaemonFactMutationRequest) request = {};
+  g_auto (WyreboxDaemonResponseFrame) response = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) decoded = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+
+  g_assert_true (wyrebox_daemon_fact_mutation_request_init (&request,
+      WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+      "project_mention",
+      "account-1",
+      arguments,
+      &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_fact_mutation_success (
+      &response,
+      "request-fact-success-decode",
+      "corr-fact-decode",
+      &request,
+      8192,
+      11,
+      &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
+      NULL,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (encoded,
+      &decoded,
+      &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+  g_assert_cmpstr (decoded.request_id, ==, "request-fact-success-decode");
+  g_assert_cmpstr (decoded.correlation_id, ==, "corr-fact-decode");
+  g_assert_cmpstr (decoded.success.request_id, ==,
+      "request-fact-success-decode");
+  g_assert_cmpstr (decoded.success.durable_marker, ==, "journal:8192:11");
+  g_assert_cmpuint (decoded.success.journal_offset, ==, 8192);
+  g_assert_cmpuint (decoded.success.journal_sequence, ==, 11);
+  g_assert_cmpstr (decoded.success.summary, ==,
+      "fact_mutation mutation=insert predicate_id=project_mention "
+      "scope_id=account-1 argument_count=1");
+}
+
+static void
+assert_response_bytes_decode_error_roundtrip (void)
+{
+  g_auto (WyreboxDaemonErrorFrame) error_frame = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) response = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) decoded = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+
+  g_assert_true (wyrebox_daemon_error_frame_init (&error_frame,
+      "request-error-decode",
+      WYREBOX_DAEMON_ERROR_PERMISSION_DENIED,
+      "denied",
+      "retry",
+      &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_error (&response,
+      &error_frame,
+      "corr-error-decode",
+      &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
+      NULL,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (encoded,
+      &decoded,
+      &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpstr (decoded.request_id, ==, "request-error-decode");
+  g_assert_cmpstr (decoded.correlation_id, ==, "corr-error-decode");
+  g_assert_cmpstr (decoded.error.request_id, ==, "request-error-decode");
+  g_assert_cmpint (decoded.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMISSION_DENIED);
+  g_assert_cmpstr (decoded.error.message, ==, "denied");
+  g_assert_cmpstr (decoded.error.retry_hint, ==, "retry");
+}
+
+static void
+assert_response_bytes_decode_rejects_malformed (void)
+{
+  const guint8 payload[] = { 0xff, 0xff, 0xff };
+  g_autoptr (GBytes) encoded = g_bytes_new_static (payload,
+      sizeof (payload));
+  g_auto (WyreboxDaemonResponseFrame) decoded = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_response_frame (encoded,
+      &decoded,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpint (decoded.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_NONE);
+}
+
+static void
+assert_response_bytes_decode_rejects_unsupported_arm (void)
+{
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) response = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) decoded = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+
+  wyrebox_daemon_mailbox_list_result_init_empty (&result);
+  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+      "mailbox-inbox",
+      "INBOX",
+      "/",
+      "\\Inbox",
+      TRUE,
+      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN,
+      &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_mailbox_list (&response,
+      "request-mailbox-list-decode",
+      "corr-mailbox-list-decode",
+      &result,
+      &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
+      NULL,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  g_assert_false (wyrebox_daemon_capnp_codec_decode_response_frame (encoded,
+      &decoded,
+      &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
+  g_assert_cmpint (decoded.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_NONE);
+}
+
+static void
 assert_request_adapter_callbacks_are_usable (void)
 {
   g_autoptr (GError) error = NULL;
@@ -4509,6 +4660,14 @@ main (int argc, char **argv)
       assert_response_bytes_encode_error);
   g_test_add_func ("/daemon-api/capnp/codec/encode-success",
       assert_response_bytes_encode_success);
+  g_test_add_func ("/daemon-api/capnp/codec/decode-success-response",
+      assert_response_bytes_decode_success_roundtrip);
+  g_test_add_func ("/daemon-api/capnp/codec/decode-error-response",
+      assert_response_bytes_decode_error_roundtrip);
+  g_test_add_func ("/daemon-api/capnp/codec/reject-malformed-response",
+      assert_response_bytes_decode_rejects_malformed);
+  g_test_add_func ("/daemon-api/capnp/codec/reject-unsupported-response",
+      assert_response_bytes_decode_rejects_unsupported_arm);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-compatible",
       assert_request_adapter_callbacks_are_usable);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-mailbox-select",
