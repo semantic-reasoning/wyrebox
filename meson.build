@@ -209,6 +209,41 @@ endif
 
 summary('wirelog runtime', wirelog_runtime_summary, section: 'Dependencies')
 
+dovecot_backend_option = get_option('dovecot_backend')
+dovecot_source_dir_option = get_option('dovecot_source_dir')
+have_dovecot_backend = false
+if dovecot_backend_option.enabled()
+  if dovecot_source_dir_option == ''
+    error('Dovecot backend is enabled but no source directory was provided; set ' +
+      '-Ddovecot_source_dir=/path/to/dovecot')
+  endif
+
+  check_dovecot_source = run_command(
+    python,
+    meson.current_source_dir() / 'tools' / 'check-dovecot-source-contract.py',
+    meson.current_source_dir() / dovecot_source_dir_option,
+    check: false,
+  )
+  if check_dovecot_source.returncode() != 0
+    check_error = check_dovecot_source.stderr().strip()
+    if check_error == ''
+      check_error = check_dovecot_source.stdout().strip()
+    endif
+    error(
+      'Dovecot backend is enabled but source contract validation failed:\n' +
+      check_error,
+    )
+  endif
+
+  have_dovecot_backend = true
+endif
+
+summary(
+  'dovecot backend',
+  have_dovecot_backend ? 'enabled' : 'disabled',
+  section: 'Features',
+)
+
 glib_dep = dependency('glib-2.0', version: '>=2.74')
 gobject_dep = dependency('gobject-2.0', version: '>=2.74')
 gio_dep = dependency('gio-2.0', version: '>=2.74')
