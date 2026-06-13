@@ -65,6 +65,7 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
         struct mail_storage *storage);
 
     typedef int (*wyrebox_mailbox_open_fn)(struct mailbox *box);
+    typedef void (*wyrebox_mailbox_free_fn)(struct mailbox *box);
 
     typedef int (*wyrebox_mailbox_get_status_fn)(
         struct mailbox *box,
@@ -90,6 +91,7 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
     static void wyrebox_probe_mail_storage_destroy(struct mail_storage *storage);
 
     static int wyrebox_probe_mailbox_open(struct mailbox *box);
+    static void wyrebox_probe_mailbox_free(struct mailbox *box);
 
     static int wyrebox_probe_mailbox_get_status(
         struct mailbox *box,
@@ -125,6 +127,12 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
             __typeof__(wyrebox_mailbox_probe.v.open),
             wyrebox_mailbox_open_fn),
         "mailbox_vfuncs::open signature mismatch");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_probe.v.free),
+            wyrebox_mailbox_free_fn),
+        "mailbox_vfuncs::free signature mismatch");
 
     _Static_assert(
         __builtin_types_compatible_p(
@@ -217,6 +225,7 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
 
       box->vlast = NULL;
       box->v.open = wyrebox_probe_mailbox_open;
+      box->v.free = wyrebox_probe_mailbox_free;
       box->v.get_status = wyrebox_probe_mailbox_get_status;
       (void)flags;
       return box;
@@ -252,6 +261,10 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
       return 0;
     }
 
+    static void wyrebox_probe_mailbox_free(struct mailbox *box) {
+      (void)box;
+    }
+
     static int wyrebox_probe_mailbox_get_status(
         struct mailbox *box,
         enum mailbox_status_items items,
@@ -268,6 +281,7 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
       wyrebox_mail_storage_probe.v = wyrebox_mail_storage_probe_template.v;
       wyrebox_mail_storage_probe_template.v = wyrebox_mail_storage_probe.v;
       wyrebox_mailbox_probe.v.open = wyrebox_probe_mailbox_open;
+      wyrebox_mailbox_probe.v.free = wyrebox_probe_mailbox_free;
       wyrebox_mailbox_probe.v.get_status = wyrebox_probe_mailbox_get_status;
       (void)wyrebox_mail_storage_probe;
       (void)wyrebox_mailbox_probe;
