@@ -133,7 +133,7 @@ copy_mailbox_select_result (WyreboxDaemonMailboxSelectResult *dest,
 {
   return wyrebox_daemon_mailbox_select_result_init (dest,
       src->kind, src->mailbox_id, src->mailbox_name, src->uid_validity,
-      src->uid_next, error);
+      src->uid_next, src->message_count, error);
 }
 
 static gboolean

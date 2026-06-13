@@ -214,7 +214,7 @@ select_fixture_mailbox (const WyreboxDaemonRequestIdentity *identity,
 
   return wyrebox_daemon_mailbox_select_result_init (out_result,
       WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
-      "mailbox-inbox", "INBOX", 77, 42, error);
+      "mailbox-inbox", "INBOX", 77, 42, 123, error);
 }
 
 static gboolean
@@ -938,6 +938,7 @@ test_request_router_routes_mailbox_select (void)
   g_assert_cmpstr (frame.mailbox_select.mailbox_name, ==, "INBOX");
   g_assert_cmpuint (frame.mailbox_select.uid_validity, ==, 77);
   g_assert_cmpuint (frame.mailbox_select.uid_next, ==, 42);
+  g_assert_cmpuint (frame.mailbox_select.message_count, ==, 123);
 }
 
 static void

@@ -967,6 +967,7 @@ decode_mailbox_select_response (const ResponseFrame::Reader &response_frame,
           response_select.getMailboxName ().cStr (),
           response_select.getUidValidity (),
           response_select.getUidNext (),
+          response_select.getMessageCount (),
           error))
     return FALSE;
 
@@ -1458,6 +1459,7 @@ encode_mailbox_select_response (const WyreboxDaemonResponseFrame *response_frame
     response_select.setMailboxName (result->mailbox_name);
     response_select.setUidValidity (result->uid_validity);
     response_select.setUidNext (result->uid_next);
+    response_select.setMessageCount (result->message_count);
 
     auto words = capnp::messageToFlatArray (response_builder);
     auto bytes = words.asBytes ();

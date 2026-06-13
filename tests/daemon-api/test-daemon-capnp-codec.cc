@@ -471,6 +471,7 @@ select_mailbox_fixture (const WyreboxDaemonRequestIdentity *identity,
       "INBOX",
       77,
       42,
+      123,
       error);
 }
 
@@ -3297,6 +3298,7 @@ assert_response_bytes_encode_mailbox_select (void)
       "Projects/Project A",
       99,
       1234,
+      56,
       &error));
   g_assert_no_error (error);
 
@@ -3341,6 +3343,8 @@ assert_response_bytes_encode_mailbox_select (void)
       99);
   g_assert_cmpuint (response_frame.getMailboxSelect ().getUidNext (), ==,
       1234);
+  g_assert_cmpuint (response_frame.getMailboxSelect ().getMessageCount (), ==,
+      56);
 }
 
 static void
@@ -3358,6 +3362,7 @@ assert_response_bytes_decode_mailbox_select_roundtrip (void)
       "Projects/Project A",
       99,
       1234,
+      56,
       &error));
   g_assert_no_error (error);
 
@@ -3388,6 +3393,7 @@ assert_response_bytes_decode_mailbox_select_roundtrip (void)
       "Projects/Project A");
   g_assert_cmpuint (decoded.mailbox_select.uid_validity, ==, 99);
   g_assert_cmpuint (decoded.mailbox_select.uid_next, ==, 1234);
+  g_assert_cmpuint (decoded.mailbox_select.message_count, ==, 56);
 }
 
 static void
@@ -4019,6 +4025,8 @@ assert_request_adapter_routes_mailbox_select (void)
   g_assert_cmpuint (response_frame.getMailboxSelect ().getUidValidity (), ==,
       77);
   g_assert_cmpuint (response_frame.getMailboxSelect ().getUidNext (), ==, 42);
+  g_assert_cmpuint (response_frame.getMailboxSelect ().getMessageCount (), ==,
+      123);
 }
 
 static void

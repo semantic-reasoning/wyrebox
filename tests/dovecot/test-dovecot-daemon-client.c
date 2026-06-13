@@ -78,6 +78,7 @@ assert_result_is_cleared (const WyreboxDaemonMailboxSelectResult *result)
   g_assert_null (result->mailbox_name);
   g_assert_cmpuint (result->uid_validity, ==, 0);
   g_assert_cmpuint (result->uid_next, ==, 0);
+  g_assert_cmpuint (result->message_count, ==, 0);
 }
 
 static void
@@ -87,7 +88,7 @@ init_stale_result (WyreboxDaemonMailboxSelectResult *result)
 
   g_assert_true (wyrebox_daemon_mailbox_select_result_init (result,
           WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
-          "stale-id", "stale-name", 1, 2, &error));
+          "stale-id", "stale-name", 1, 2, 0, &error));
   g_assert_no_error (error);
 }
 
@@ -265,7 +266,7 @@ encode_mailbox_select_response (const char *request_id)
 
   g_assert_true (wyrebox_daemon_mailbox_select_result_init (&select,
           WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
-          "view-projects", "Projects", 77, 42, &error));
+          "view-projects", "Projects", 77, 42, 7, &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_response_frame_init_mailbox_select (&frame,
           request_id, NULL, &select, &error));
@@ -362,6 +363,7 @@ test_dovecot_daemon_client_sends_select_and_returns_copy (void)
   g_assert_cmpstr (result.mailbox_name, ==, "Projects");
   g_assert_cmpuint (result.uid_validity, ==, 77);
   g_assert_cmpuint (result.uid_next, ==, 42);
+  g_assert_cmpuint (result.message_count, ==, 7);
 
   fake_server_join (&server);
   remove_tree (root);

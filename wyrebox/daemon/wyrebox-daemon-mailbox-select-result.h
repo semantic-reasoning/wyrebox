@@ -18,6 +18,7 @@ typedef struct
   char *mailbox_name;
   guint32 uid_validity;
   guint32 uid_next;
+  guint32 message_count;
 } WyreboxDaemonMailboxSelectResult;
 
 void wyrebox_daemon_mailbox_select_result_clear (
@@ -33,6 +34,7 @@ gboolean wyrebox_daemon_mailbox_select_result_init (
     const char *mailbox_name,
     guint32 uid_validity,
     guint32 uid_next,
+    guint32 message_count,
     GError **error);
 
 G_END_DECLS

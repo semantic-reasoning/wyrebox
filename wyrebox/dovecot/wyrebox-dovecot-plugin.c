@@ -148,7 +148,7 @@ wyrebox_dovecot_mailbox_refresh_select_result (struct mailbox *box,
   if (!wyrebox_daemon_mailbox_select_result_init (&wbox->select_result,
           select_result.kind, select_result.mailbox_id,
           select_result.mailbox_name, select_result.uid_validity,
-          select_result.uid_next, error)) {
+          select_result.uid_next, select_result.message_count, error)) {
     return FALSE;
   }
 
@@ -198,7 +198,7 @@ wyrebox_dovecot_mailbox_get_status (struct mailbox *box,
 
   (void) items;
 
-  status_r->messages = 0;
+  status_r->messages = wbox->select_result.message_count;
   status_r->uidvalidity = wbox->select_result.uid_validity;
   status_r->uidnext = wbox->select_result.uid_next;
   return 0;
