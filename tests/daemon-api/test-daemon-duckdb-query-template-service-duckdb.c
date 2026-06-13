@@ -101,6 +101,9 @@ seed_catalog (const gchar *path)
       "('account-1', 'mailbox', 'mailbox-inbox', 4, 77),"
       "('account-1', 'mailbox', 'mailbox-archive', 2, 88),"
       "('account-2', 'mailbox', 'mailbox-inbox', 3, 99),"
+      "('account-1', 'derived_view', 'view-important', 4, 177),"
+      "('account-1', 'derived_view', 'view-archive', 2, 188),"
+      "('account-2', 'derived_view', 'view-important', 6, 199),"
       "('account-1', 'derived_view', 'mailbox-inbox', 2, 55);");
   exec_sql (connection,
       "INSERT INTO mailbox_memberships (membership_id, account_id, "
@@ -116,6 +119,20 @@ seed_catalog (const gchar *path)
       "'message-other-mailbox', 4, 4, 4, 4, TRUE),"
       "('membership-other-account', 'account-2', 'mailbox-inbox', "
       "'message-other-account', 5, 5, 5, 5, TRUE);");
+  exec_sql (connection,
+      "INSERT INTO derived_view_memberships (membership_id, account_id, "
+      "view_id, message_id, uid, is_visible, rule_version_hash, "
+      "materialized_at_unix_us) VALUES "
+      "('derived-membership-b', 'account-1', 'view-important', "
+      "'message-b', 2, TRUE, 'rule-hash-1', 10),"
+      "('derived-membership-a', 'account-1', 'view-important', "
+      "'message-a', 1, TRUE, 'rule-hash-1', 11),"
+      "('derived-membership-hidden', 'account-1', 'view-important', "
+      "'message-hidden', 3, FALSE, 'rule-hash-1', 12),"
+      "('derived-membership-other-view', 'account-1', 'view-archive', "
+      "'message-other-mailbox', 4, TRUE, 'rule-hash-archive', 13),"
+      "('derived-membership-other-account', 'account-2', 'view-important', "
+      "'message-other-account', 5, TRUE, 'rule-hash-other-account', 14);");
 }
 
 static void
@@ -143,6 +160,34 @@ seed_sql_looking_mailbox (const gchar *path)
       "('membership-sql-looking', 'account-1', "
       "'mailbox''; DROP TABLE messages; --', 'message-sql-looking', 6, 6, "
       "6, 6, TRUE);");
+}
+
+static void
+seed_sql_looking_derived_view (const gchar *path)
+{
+  g_auto (duckdb_database) database = NULL;
+  g_auto (duckdb_connection) connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  exec_sql (connection,
+      "INSERT INTO messages (message_id, account_id, object_id, "
+      "journal_offset, journal_sequence) VALUES "
+      "('message-sql-looking-view', 'account-1', 'object-sql-looking-view', "
+      "9, 9);");
+  exec_sql (connection,
+      "INSERT INTO mailbox_uid_state (account_id, namespace_kind, "
+      "namespace_id, uidnext, uidvalidity) VALUES "
+      "('account-1', 'derived_view', 'view''; DROP TABLE messages; --', 2, "
+      "223);");
+  exec_sql (connection,
+      "INSERT INTO derived_view_memberships (membership_id, account_id, "
+      "view_id, message_id, uid, is_visible, rule_version_hash, "
+      "materialized_at_unix_us) VALUES "
+      "('derived-membership-sql-looking', 'account-1', "
+      "'view''; DROP TABLE messages; --', 'message-sql-looking-view', 6, "
+      "TRUE, 'rule-hash-sql-looking', 16);");
 }
 
 static void
@@ -234,6 +279,37 @@ init_message_by_id_request (WyreboxDaemonDuckDBQueryTemplateRequest *request,
 }
 
 static gchar *
+dispatch_derived_view_uid_map_csv (const gchar *path, const gchar *account_id,
+    const gchar *view_id)
+{
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  gconstpointer data = NULL;
+  gsize size = 0;
+
+  service = wyrebox_daemon_duckdb_query_template_service_new_duckdb (path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (service);
+
+  init_request_with_template (&request, "derived_view.uid_map.v1", account_id,
+      view_id);
+  g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
+          "request-1", "admin-cli", account_id, "duckdb-tool",
+          "correlation-1", &request, &frame, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpuint (frame.stream_chunk.chunk_index, ==, 0);
+  g_assert_true (frame.stream_chunk.end_of_stream);
+
+  data = g_bytes_get_data (frame.stream_chunk.bytes, &size);
+  return g_strndup (data, size);
+}
+
+static gchar *
 dispatch_uid_map_csv (const gchar *path, const gchar *account_id,
     const gchar *mailbox_id)
 {
@@ -291,6 +367,79 @@ dispatch_message_by_id_csv (const gchar *path, const gchar *account_id,
 
   data = g_bytes_get_data (frame.stream_chunk.bytes, &size);
   return g_strndup (data, size);
+}
+
+static void
+test_duckdb_service_returns_derived_view_uid_map_csv (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+
+  csv = dispatch_derived_view_uid_map_csv (path, "account-1", "view-important");
+  g_assert_cmpstr (csv, ==,
+      "account_id,view_id,uidvalidity,uid,message_id,object_id,"
+      "rule_version_hash\n"
+      "account-1,view-important,177,1,message-a,object-a,rule-hash-1\n"
+      "account-1,view-important,177,2,message-b,object-b,rule-hash-1\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_derived_view_empty_result_is_header_only (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+
+  csv = dispatch_derived_view_uid_map_csv (path, "account-1", "view-missing");
+  g_assert_cmpstr (csv, ==,
+      "account_id,view_id,uidvalidity,uid,message_id,object_id,"
+      "rule_version_hash\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_derived_view_isolates_cross_account_rows (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+
+  csv = dispatch_derived_view_uid_map_csv (path, "account-2", "view-important");
+  g_assert_cmpstr (csv, ==,
+      "account_id,view_id,uidvalidity,uid,message_id,object_id,"
+      "rule_version_hash\n"
+      "account-2,view-important,199,5,message-other-account,"
+      "object-other-account,rule-hash-other-account\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_treats_sql_looking_derived_view_as_value (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+  seed_sql_looking_derived_view (path);
+
+  csv = dispatch_derived_view_uid_map_csv (path, "account-1",
+      "view'; DROP TABLE messages; --");
+  g_assert_cmpstr (csv, ==,
+      "account_id,view_id,uidvalidity,uid,message_id,object_id,"
+      "rule_version_hash\n"
+      "account-1,view'; DROP TABLE messages; --,223,6,"
+      "message-sql-looking-view,object-sql-looking-view,"
+      "rule-hash-sql-looking\n");
+  (void) g_remove (path);
 }
 
 static void
@@ -484,6 +633,18 @@ main (int argc, char **argv)
 {
   g_test_init (&argc, &argv, NULL);
 
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/derived-view-uid-map-csv",
+      test_duckdb_service_returns_derived_view_uid_map_csv);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/derived-view-empty-result-header-only",
+      test_duckdb_service_derived_view_empty_result_is_header_only);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/derived-view-cross-account-isolation",
+      test_duckdb_service_derived_view_isolates_cross_account_rows);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/sql-looking-derived-view-value",
+      test_duckdb_service_treats_sql_looking_derived_view_as_value);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/returns-uid-map-csv",
       test_duckdb_service_returns_uid_map_csv);

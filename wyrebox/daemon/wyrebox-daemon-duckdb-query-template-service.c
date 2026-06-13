@@ -224,6 +224,50 @@ duckdb_query_template_append_uid_map_row (GString *csv,
 }
 
 static gboolean
+duckdb_query_template_append_derived_view_uid_map_row (GString *csv,
+    duckdb_result *result, idx_t row, GError **error)
+{
+  g_auto (DuckDBOwnedString) account_id = NULL;
+  g_auto (DuckDBOwnedString) view_id = NULL;
+  g_auto (DuckDBOwnedString) message_id = NULL;
+  g_auto (DuckDBOwnedString) object_id = NULL;
+  g_auto (DuckDBOwnedString) rule_version_hash = NULL;
+
+  for (idx_t column = 0; column < 7; column++) {
+    if (duckdb_value_is_null (result, column, row)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "DuckDB query template returned NULL in derived view uid map");
+      return FALSE;
+    }
+  }
+
+  account_id = duckdb_value_varchar (result, 0, row);
+  view_id = duckdb_value_varchar (result, 1, row);
+  message_id = duckdb_value_varchar (result, 4, row);
+  object_id = duckdb_value_varchar (result, 5, row);
+  rule_version_hash = duckdb_value_varchar (result, 6, row);
+
+  csv_append_value (csv, account_id);
+  g_string_append_c (csv, ',');
+  csv_append_value (csv, view_id);
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 2, row));
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 3, row));
+  g_string_append_c (csv, ',');
+  csv_append_value (csv, message_id);
+  g_string_append_c (csv, ',');
+  csv_append_value (csv, object_id);
+  g_string_append_c (csv, ',');
+  csv_append_value (csv, rule_version_hash);
+  g_string_append_c (csv, '\n');
+
+  return TRUE;
+}
+
+static gboolean
 duckdb_query_template_append_message_by_id_row (GString *csv,
     duckdb_result *result, idx_t row, GError **error)
 {
@@ -267,6 +311,69 @@ duckdb_query_template_append_message_by_id_row (GString *csv,
   g_string_append_c (csv, '\n');
 
   return TRUE;
+}
+
+static gboolean
+duckdb_query_template_execute_derived_view_uid_map (DuckDBQueryTemplateExecutor
+    *executor, const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDuckDBQueryTemplateRequest *request,
+    WyreboxDaemonStreamChunkFrame *out_chunk, GError **error)
+{
+  static const gchar *sql =
+      "SELECT dvm.account_id, dvm.view_id, mus.uidvalidity, "
+      "dvm.uid, dvm.message_id, m.object_id, dvm.rule_version_hash "
+      "FROM derived_view_memberships dvm "
+      "JOIN mailbox_uid_state mus ON mus.account_id = dvm.account_id "
+      "AND mus.namespace_kind = 'derived_view' "
+      "AND mus.namespace_id = dvm.view_id "
+      "JOIN messages m ON m.account_id = dvm.account_id "
+      "AND m.message_id = dvm.message_id "
+      "WHERE dvm.account_id = ? "
+      "AND dvm.view_id = ? "
+      "AND dvm.is_visible = TRUE " "ORDER BY dvm.uid ASC, dvm.message_id ASC;";
+  g_auto (duckdb_prepared_statement) statement = NULL;
+  g_auto (duckdb_result) result = { 0 };
+  g_autoptr (GString) csv = NULL;
+  g_autoptr (GBytes) bytes = NULL;
+  const gchar *view_id = request->parameters[0];
+
+  if (!duckdb_query_template_prepare (executor, sql, &statement, error) ||
+      !duckdb_query_template_bind_varchar (statement, 1, request->scope_id,
+          error) ||
+      !duckdb_query_template_bind_varchar (statement, 2, view_id, error))
+    return FALSE;
+
+  if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+    const char *detail = duckdb_result_error (&result);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB query template execution failed: %s",
+        detail != NULL ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  csv = g_string_new
+      ("account_id,view_id,uidvalidity,uid,message_id,object_id,"
+      "rule_version_hash\n");
+
+  for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+    if (!duckdb_query_template_append_derived_view_uid_map_row (csv, &result,
+            row, error))
+      return FALSE;
+  }
+
+  {
+    gsize csv_len = csv->len;
+    gchar *csv_data = g_string_free (g_steal_pointer (&csv), FALSE);
+
+    bytes = g_bytes_new_take (csv_data, csv_len);
+  }
+
+  return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+      identity->request_id,
+      NULL, request->query_id, identity->correlation_id, 0, bytes, TRUE, error);
 }
 
 static gboolean
@@ -403,6 +510,10 @@ duckdb_query_template_service_execute (const WyreboxDaemonRequestIdentity
   if (g_strcmp0 (request->template_id, "mailbox.uid_map.v1") == 0)
     return duckdb_query_template_execute_uid_map (executor, identity, request,
         out_chunk, error);
+
+  if (g_strcmp0 (request->template_id, "derived_view.uid_map.v1") == 0)
+    return duckdb_query_template_execute_derived_view_uid_map (executor,
+        identity, request, out_chunk, error);
 
   if (g_strcmp0 (request->template_id, "message.by_id.v1") == 0)
     return duckdb_query_template_execute_message_by_id (executor, identity,
