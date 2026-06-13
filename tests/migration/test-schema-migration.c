@@ -18,6 +18,20 @@ typedef struct
   guint expected_fail_at_call;
 } TestMigrationFixtureData;
 
+typedef char *TestDuckdbOwnedString;
+
+static void
+duckdb_owned_string_clear (char **value)
+{
+  if (value != NULL && *value != NULL)
+    duckdb_free (*value);
+}
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (TestDuckdbOwnedString,
+    duckdb_owned_string_clear)
+/* *INDENT-ON* */
+
 static void
 remove_directory_tree (const char *path)
 {
@@ -62,7 +76,8 @@ assert_bootstrap_catalog_tables_exist (const gchar *path)
   duckdb_connection connection = NULL;
 
   static const char *tables[] = { "accounts", "objects", "messages",
-    "mailboxes", "mailbox_memberships", "derived_views", "mailbox_uid_state"
+    "mailboxes", "mailbox_memberships", "derived_views",
+    "derived_view_memberships", "mailbox_uid_state"
   };
 
   g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
@@ -321,7 +336,9 @@ static gboolean
       operation ==
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES
       || operation ==
-      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE;
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE
+      || operation ==
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS;
 }
 
 static void
@@ -551,10 +568,10 @@ static void
   g_assert_no_error (error);
   g_assert_true (spy->save_called);
   g_assert_cmpuint (spy->save_call_count, ==, 1);
-  g_assert_cmpuint (spy->migration_operation_call_count, ==, 3);
+  g_assert_cmpuint (spy->migration_operation_call_count, ==, 4);
   g_assert_cmpint (spy->observed_operation, ==,
-      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE);
-  g_assert_cmpuint (spy->observed_operation_source_version, ==, 2);
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS);
+  g_assert_cmpuint (spy->observed_operation_source_version, ==, 3);
   g_assert_cmpuint (spy->observed_operation_target_version, ==,
       wyrebox_schema_migration_get_current_schema_version ());
   g_assert_false (spy->observed_checkpoint_precondition_satisfied);
@@ -585,13 +602,15 @@ test_schema_migration_run_store_missing_metadata_applies_full_path (void)
   g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
           (WyreboxSchemaMetadataStore *) spy, FALSE, &error));
   g_assert_no_error (error);
-  g_assert_cmpuint (spy->migration_operation_call_count, ==, 3);
+  g_assert_cmpuint (spy->migration_operation_call_count, ==, 4);
   g_assert_cmpint (spy->observed_operations[0], ==,
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP);
   g_assert_cmpint (spy->observed_operations[1], ==,
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES);
   g_assert_cmpint (spy->observed_operations[2], ==,
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE);
+  g_assert_cmpint (spy->observed_operations[3], ==,
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS);
   g_assert_cmpuint (spy->save_call_count, ==, 1);
 
   g_object_unref (spy);
@@ -981,6 +1000,211 @@ test_schema_migration_duckdb_run_store_v2_adds_message_header_table (void)
   g_assert_false (loaded.materialization_checkpoint_present);
   g_assert_cmpuint (loaded.materialization_checkpoint_journal_offset, ==, 0);
   g_assert_cmpuint (loaded.materialization_checkpoint_sequence, ==, 0);
+  g_assert_false (loaded.checkpoint_precondition_satisfied);
+
+  g_clear_object (&store);
+  remove_directory_tree (root);
+}
+
+static void
+assert_bootstrap_query_succeeds (duckdb_connection connection,
+    const gchar *query)
+{
+  duckdb_result result = { 0 };
+
+  g_assert_cmpint (duckdb_query (connection, query, &result), ==,
+      DuckDBSuccess);
+  duckdb_destroy_result (&result);
+}
+
+static void
+assert_bootstrap_query_fails (duckdb_connection connection, const gchar *query)
+{
+  duckdb_result result = { 0 };
+
+  g_assert_cmpint (duckdb_query (connection, query, &result), ==, DuckDBError);
+  duckdb_destroy_result (&result);
+}
+
+static void
+assert_derived_view_memberships_table_shape (duckdb_connection connection)
+{
+  duckdb_result result = { 0 };
+  static const gchar *expected_names[] = {
+    "membership_id",
+    "account_id",
+    "view_id",
+    "message_id",
+    "uid",
+    "is_visible",
+    "rule_version_hash",
+    "materialized_at_unix_us",
+  };
+  static const gchar *expected_types[] = {
+    "VARCHAR",
+    "VARCHAR",
+    "VARCHAR",
+    "VARCHAR",
+    "UBIGINT",
+    "BOOLEAN",
+    "VARCHAR",
+    "UBIGINT",
+  };
+
+  g_assert_cmpint (duckdb_query (connection,
+          "PRAGMA table_info('derived_view_memberships');", &result), ==,
+      DuckDBSuccess);
+  g_assert_cmpuint (duckdb_row_count (&result), ==,
+      G_N_ELEMENTS (expected_names));
+
+  for (guint row = 0; row < G_N_ELEMENTS (expected_names); row++) {
+    g_auto (TestDuckdbOwnedString) name =
+        duckdb_value_varchar (&result, 1, row);
+    g_auto (TestDuckdbOwnedString) type =
+        duckdb_value_varchar (&result, 2, row);
+    const gint64 not_null = duckdb_value_int64 (&result, 3, row);
+
+    g_assert_cmpstr (name, ==, expected_names[row]);
+    g_assert_cmpstr (type, ==, expected_types[row]);
+    g_assert_cmpint (not_null, ==, 1);
+  }
+
+  duckdb_destroy_result (&result);
+}
+
+static void
+drop_derived_view_memberships_table (const gchar *path)
+{
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+  duckdb_result result = { 0 };
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_query (connection,
+          "DROP TABLE derived_view_memberships;", &result), ==, DuckDBSuccess);
+  duckdb_destroy_result (&result);
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
+}
+
+static void
+assert_derived_view_memberships_table_exists (const gchar *path)
+{
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+  g_assert_true (duckdb_table_exists (connection, "derived_view_memberships"));
+  assert_derived_view_memberships_table_shape (connection);
+
+  assert_bootstrap_query_succeeds (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-1', 'account-1', 'view-1', 'message-1', 1, TRUE, "
+      "'rule-hash-1', 1000" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-1', 'account-1', 'view-2', "
+      "'message-2', 1, TRUE, 'rule-hash-1', 1001" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-duplicate-uid', 'account-1', 'view-1', "
+      "'message-2', 1, TRUE, 'rule-hash-1', 1001" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-duplicate-message-rule', 'account-1', 'view-1', "
+      "'message-1', 2, TRUE, 'rule-hash-1', 1002" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-uid-zero', 'account-1', 'view-1', 'message-3', "
+      "0, TRUE, 'rule-hash-1', 1003" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-null-account', NULL, 'view-1', 'message-4', "
+      "3, TRUE, 'rule-hash-1', 1004" ");");
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
+}
+
+static void
+test_schema_migration_duckdb_run_store_v3_adds_derived_view_memberships (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  base.schema_version_present = TRUE;
+  base.schema_version = 3;
+  test_schema_migration_set_materialization_checkpoint_fields (&base);
+  g_assert_true (wyrebox_schema_metadata_store_save (store, &base, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
+          0, wyrebox_schema_migration_get_first_supported_schema_version (),
+          &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES,
+          wyrebox_schema_migration_get_first_supported_schema_version (), 2,
+          &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE,
+          2, 3, &error));
+  g_assert_no_error (error);
+  g_clear_object (&store);
+
+  drop_derived_view_memberships_table (path);
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
+          store, FALSE, &error));
+  g_assert_no_error (error);
+  g_clear_object (&store);
+
+  assert_derived_view_memberships_table_exists (path);
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_metadata_store_load (store, &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==,
+      wyrebox_schema_migration_get_current_schema_version ());
+  g_assert_false (loaded.materialization_checkpoint_present);
   g_assert_false (loaded.checkpoint_precondition_satisfied);
 
   g_clear_object (&store);
@@ -1413,7 +1637,7 @@ test_missing_schema_metadata_runs_legacy_bootstrap_to_first_version (void)
 
   g_assert_false (metadata.schema_version_present);
   g_assert_cmpuint (first_version, ==, 1);
-  g_assert_cmpuint (current_version, ==, 3);
+  g_assert_cmpuint (current_version, ==, 4);
   g_assert_true (wyrebox_schema_migration_evaluate_to_version (migration,
           &metadata, first_version, &error));
   g_assert_no_error (error);
@@ -1549,8 +1773,8 @@ test_explicit_forward_path_succeeds_with_checkpoint_precondition (void)
   g_assert_true (wyrebox_schema_migration_evaluate_to_current (migration,
           &metadata, &error));
   g_assert_no_error (error);
-  g_assert_cmpuint (fixture_data.operation_call_count, ==, 3);
-  g_assert_cmpuint (fixture_data.validation_call_count, ==, 3);
+  g_assert_cmpuint (fixture_data.operation_call_count, ==, 4);
+  g_assert_cmpuint (fixture_data.validation_call_count, ==, 4);
   g_assert_cmpuint (metadata.schema_version, ==, current_version);
   g_assert_false (metadata.materialization_checkpoint_present);
   g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==, 0);
@@ -1638,7 +1862,7 @@ test_schema_version_constants_are_testable (void)
   g_assert_cmpuint (wyrebox_schema_migration_get_first_supported_schema_version
       (), ==, 1);
   g_assert_cmpuint (wyrebox_schema_migration_get_current_schema_version (),
-      ==, 3);
+      ==, 4);
 }
 
 int
@@ -1700,6 +1924,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/migration/schema/duckdb-run-store-v2-adds-message-header-table",
       test_schema_migration_duckdb_run_store_v2_adds_message_header_table);
+  g_test_add_func
+      ("/migration/schema/duckdb-run-store-v3-adds-derived-view-memberships",
+      test_schema_migration_duckdb_run_store_v3_adds_derived_view_memberships);
   g_test_add_func
       ("/migration/schema/duckdb-run-store-v2-adds-message-header-table-rejects-shape-mismatch",
       test_schema_migration_duckdb_run_store_v2_adds_message_header_table_rejects_shape_mismatch);
