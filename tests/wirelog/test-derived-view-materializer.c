@@ -224,6 +224,21 @@ apply_memberships (const gchar *path, GPtrArray *memberships, GError **error)
       "aaaaaaaaaaaaaaaaaaaaaaaa", 1000, memberships, error);
 }
 
+static gboolean
+refresh_memberships (const gchar *path, GPtrArray *memberships, GError **error)
+{
+  g_autoptr (WyreboxDerivedViewMaterializer) materializer = NULL;
+
+  materializer = wyrebox_derived_view_materializer_new_duckdb (path, error);
+  if (materializer == NULL)
+    return FALSE;
+
+  return wyrebox_derived_view_materializer_refresh_memberships (materializer,
+      "account-1", "view-project-alpha", "Project Alpha",
+      "wirelog:project-alpha", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "aaaaaaaaaaaaaaaaaaaaaaaa", 1000, memberships, error);
+}
+
 static void
 assert_materialized_state (const gchar *path, guint64 expected_memberships,
     guint64 expected_uidnext)
@@ -298,6 +313,22 @@ query_count (const gchar *path, const gchar *table)
 }
 
 static guint64
+query_membership_count_where (const gchar *path, const gchar *where_clause)
+{
+  TestDuckdbFixture fixture = { 0 };
+  g_autofree gchar *sql = NULL;
+  guint64 count = 0;
+
+  open_duckdb_fixture (path, &fixture);
+  sql = g_strdup_printf ("SELECT COUNT(*) FROM derived_view_memberships "
+      "WHERE %s;", where_clause);
+  count = query_uint64 (fixture.connection, sql);
+  close_duckdb_fixture (&fixture);
+
+  return count;
+}
+
+static guint64
 query_uidnext (const gchar *path)
 {
   TestDuckdbFixture fixture = { 0 };
@@ -312,6 +343,260 @@ query_uidnext (const gchar *path)
   close_duckdb_fixture (&fixture);
 
   return uidnext;
+}
+
+static void
+test_refresh_initial_snapshot_inserts_two (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autoptr (GPtrArray) memberships = new_memberships ();
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  add_membership (memberships, "view-project-alpha", "msg-1");
+  add_membership (memberships, "view-project-alpha", "msg-2");
+
+  g_assert_true (refresh_memberships (path, memberships, &error));
+  g_assert_no_error (error);
+  assert_materialized_state (path, 2, 3);
+  g_assert_cmpuint (query_uid_for_message (path, "msg-1"), ==, 1);
+  g_assert_cmpuint (query_uid_for_message (path, "msg-2"), ==, 2);
+  g_assert_cmpuint (query_membership_count_where (path,
+          "view_id = 'view-project-alpha' AND is_visible = TRUE"), ==, 2);
+
+  remove_catalog (path);
+}
+
+static void
+test_refresh_removes_stale_and_preserves_retained_uid (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autoptr (GPtrArray) initial = new_memberships ();
+  g_autoptr (GPtrArray) refreshed = new_memberships ();
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  add_membership (initial, "view-project-alpha", "msg-1");
+  add_membership (initial, "view-project-alpha", "msg-2");
+  add_membership (refreshed, "view-project-alpha", "msg-1");
+
+  g_assert_true (refresh_memberships (path, initial, &error));
+  g_assert_no_error (error);
+  g_assert_true (refresh_memberships (path, refreshed, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpuint (query_count (path, "derived_view_memberships"), ==, 2);
+  g_assert_cmpuint (query_uidnext (path), ==, 3);
+  g_assert_cmpuint (query_uid_for_message (path, "msg-1"), ==, 1);
+  g_assert_cmpuint (query_membership_count_where (path,
+          "message_id = 'msg-1' AND is_visible = TRUE"), ==, 1);
+  g_assert_cmpuint (query_membership_count_where (path,
+          "message_id = 'msg-2' AND is_visible = FALSE"), ==, 1);
+
+  remove_catalog (path);
+}
+
+static void
+test_refresh_readding_hidden_row_restores_original_uid (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autoptr (GPtrArray) initial = new_memberships ();
+  g_autoptr (GPtrArray) removed = new_memberships ();
+  g_autoptr (GPtrArray) restored = new_memberships ();
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  add_membership (initial, "view-project-alpha", "msg-1");
+  add_membership (initial, "view-project-alpha", "msg-2");
+  add_membership (removed, "view-project-alpha", "msg-1");
+  add_membership (restored, "view-project-alpha", "msg-1");
+  add_membership (restored, "view-project-alpha", "msg-2");
+
+  g_assert_true (refresh_memberships (path, initial, &error));
+  g_assert_no_error (error);
+  g_assert_true (refresh_memberships (path, removed, &error));
+  g_assert_no_error (error);
+  g_assert_true (refresh_memberships (path, restored, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpuint (query_count (path, "derived_view_memberships"), ==, 2);
+  g_assert_cmpuint (query_uidnext (path), ==, 3);
+  g_assert_cmpuint (query_uid_for_message (path, "msg-1"), ==, 1);
+  g_assert_cmpuint (query_uid_for_message (path, "msg-2"), ==, 2);
+  g_assert_cmpuint (query_membership_count_where (path,
+          "view_id = 'view-project-alpha' AND is_visible = TRUE"), ==, 2);
+
+  remove_catalog (path);
+}
+
+static void
+test_refresh_new_message_after_cleanup_uses_next_uid (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autoptr (GPtrArray) initial = new_memberships ();
+  g_autoptr (GPtrArray) removed = new_memberships ();
+  g_autoptr (GPtrArray) appended = new_memberships ();
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  add_membership (initial, "view-project-alpha", "msg-1");
+  add_membership (initial, "view-project-alpha", "msg-2");
+  add_membership (removed, "view-project-alpha", "msg-1");
+  add_membership (appended, "view-project-alpha", "msg-1");
+  add_membership (appended, "view-project-alpha", "msg-3");
+
+  g_assert_true (refresh_memberships (path, initial, &error));
+  g_assert_no_error (error);
+  g_assert_true (refresh_memberships (path, removed, &error));
+  g_assert_no_error (error);
+  g_assert_true (refresh_memberships (path, appended, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpuint (query_uidnext (path), ==, 4);
+  g_assert_cmpuint (query_uid_for_message (path, "msg-3"), ==, 3);
+  g_assert_cmpuint (query_membership_count_where (path,
+          "message_id = 'msg-2' AND is_visible = FALSE"), ==, 1);
+
+  remove_catalog (path);
+}
+
+static void
+test_refresh_other_rule_hash_is_untouched (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autoptr (GPtrArray) first_hash = new_memberships ();
+  g_autoptr (GPtrArray) second_hash = new_memberships ();
+  g_autoptr (GPtrArray) empty = new_memberships ();
+  g_autoptr (WyreboxDerivedViewMaterializer) materializer = NULL;
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  add_membership (first_hash, "view-project-alpha", "msg-1");
+  add_membership (second_hash, "view-project-alpha", "msg-2");
+
+  materializer = wyrebox_derived_view_materializer_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (materializer);
+  g_assert_true (wyrebox_derived_view_materializer_refresh_memberships
+      (materializer, "account-1", "view-project-alpha", "Project Alpha",
+          "wirelog:project-alpha", "sha256:first", 1000, first_hash, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_derived_view_materializer_refresh_memberships
+      (materializer, "account-1", "view-project-alpha", "Project Alpha",
+          "wirelog:project-alpha", "sha256:second", 1000, second_hash, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_derived_view_materializer_refresh_memberships
+      (materializer, "account-1", "view-project-alpha", "Project Alpha",
+          "wirelog:project-alpha", "sha256:second", 1000, empty, &error));
+  g_assert_no_error (error);
+  g_clear_object (&materializer);
+
+  g_assert_cmpuint (query_membership_count_where (path,
+          "rule_version_hash = 'sha256:first' AND is_visible = TRUE"), ==, 1);
+  g_assert_cmpuint (query_membership_count_where (path,
+          "rule_version_hash = 'sha256:second' AND is_visible = FALSE"), ==, 1);
+
+  remove_catalog (path);
+}
+
+static void
+test_refresh_other_view_is_untouched (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autoptr (GPtrArray) first_view = new_memberships ();
+  g_autoptr (GPtrArray) second_view = new_memberships ();
+  g_autoptr (GPtrArray) empty = new_memberships ();
+  g_autoptr (WyreboxDerivedViewMaterializer) materializer = NULL;
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  add_membership (first_view, "view-project-alpha", "msg-1");
+  add_membership (second_view, "view-project-beta", "msg-2");
+
+  materializer = wyrebox_derived_view_materializer_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (materializer);
+  g_assert_true (wyrebox_derived_view_materializer_refresh_memberships
+      (materializer, "account-1", "view-project-alpha", "Project Alpha",
+          "wirelog:project-alpha",
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          1000, first_view, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_derived_view_materializer_refresh_memberships
+      (materializer, "account-1", "view-project-beta", "Project Beta",
+          "wirelog:project-beta",
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          1000, second_view, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_derived_view_materializer_refresh_memberships
+      (materializer, "account-1", "view-project-beta", "Project Beta",
+          "wirelog:project-beta",
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          1000, empty, &error));
+  g_assert_no_error (error);
+  g_clear_object (&materializer);
+
+  g_assert_cmpuint (query_membership_count_where (path,
+          "view_id = 'view-project-alpha' AND is_visible = TRUE"), ==, 1);
+  g_assert_cmpuint (query_membership_count_where (path,
+          "view_id = 'view-project-beta' AND is_visible = FALSE"), ==, 1);
+
+  remove_catalog (path);
+}
+
+static void
+test_refresh_failure_rolls_back_visibility (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autoptr (GPtrArray) initial = new_memberships ();
+  g_autoptr (GPtrArray) invalid = new_memberships ();
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  add_membership (initial, "view-project-alpha", "msg-1");
+  add_membership (initial, "view-project-alpha", "msg-2");
+  add_membership (invalid, "view-project-alpha", "msg-1");
+  add_membership (invalid, "view-project-alpha", "missing-message");
+
+  g_assert_true (refresh_memberships (path, initial, &error));
+  g_assert_no_error (error);
+  g_assert_false (refresh_memberships (path, invalid, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+  g_assert_cmpuint (query_membership_count_where (path,
+          "view_id = 'view-project-alpha' AND is_visible = TRUE"), ==, 2);
+  g_assert_cmpuint (query_membership_count_where (path,
+          "view_id = 'view-project-alpha' AND is_visible = FALSE"), ==, 0);
+  g_assert_cmpuint (query_uidnext (path), ==, 3);
+
+  remove_catalog (path);
+}
+
+static void
+test_empty_refresh_hides_visible_rows_without_rewinding_uidnext (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autoptr (GPtrArray) initial = new_memberships ();
+  g_autoptr (GPtrArray) empty = new_memberships ();
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  add_membership (initial, "view-project-alpha", "msg-1");
+  add_membership (initial, "view-project-alpha", "msg-2");
+
+  g_assert_true (refresh_memberships (path, initial, &error));
+  g_assert_no_error (error);
+  g_assert_true (refresh_memberships (path, empty, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpuint (query_count (path, "derived_view_memberships"), ==, 2);
+  g_assert_cmpuint (query_membership_count_where (path,
+          "view_id = 'view-project-alpha' AND is_visible = TRUE"), ==, 0);
+  g_assert_cmpuint (query_membership_count_where (path,
+          "view_id = 'view-project-alpha' AND is_visible = FALSE"), ==, 2);
+  g_assert_cmpuint (query_uidnext (path), ==, 3);
+
+  remove_catalog (path);
 }
 
 static void
@@ -610,6 +895,22 @@ main (int argc, char **argv)
       test_later_append_allocates_next_uid);
   g_test_add_func ("/wirelog/derived-view-materializer/colon-collision",
       test_colon_join_collision_tuples_get_distinct_membership_ids);
+  g_test_add_func ("/wirelog/derived-view-materializer/refresh-initial",
+      test_refresh_initial_snapshot_inserts_two);
+  g_test_add_func ("/wirelog/derived-view-materializer/refresh-removes-stale",
+      test_refresh_removes_stale_and_preserves_retained_uid);
+  g_test_add_func ("/wirelog/derived-view-materializer/refresh-restores",
+      test_refresh_readding_hidden_row_restores_original_uid);
+  g_test_add_func ("/wirelog/derived-view-materializer/refresh-next-uid",
+      test_refresh_new_message_after_cleanup_uses_next_uid);
+  g_test_add_func ("/wirelog/derived-view-materializer/refresh-rule-scope",
+      test_refresh_other_rule_hash_is_untouched);
+  g_test_add_func ("/wirelog/derived-view-materializer/refresh-view-scope",
+      test_refresh_other_view_is_untouched);
+  g_test_add_func ("/wirelog/derived-view-materializer/refresh-rollback",
+      test_refresh_failure_rolls_back_visibility);
+  g_test_add_func ("/wirelog/derived-view-materializer/refresh-empty",
+      test_empty_refresh_hides_visible_rows_without_rewinding_uidnext);
   g_test_add_func ("/wirelog/derived-view-materializer/view-mismatch",
       test_rejects_view_id_mismatch_and_rolls_back);
   g_test_add_func ("/wirelog/derived-view-materializer/unknown-message",
