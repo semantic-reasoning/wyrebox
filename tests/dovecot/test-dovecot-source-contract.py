@@ -62,8 +62,16 @@ def test_dovecot_source_contract_wrong_version() -> None:
     run_checker(FIXTURES_DIR / "wrong-version", expect_success=False)
 
 
+def test_dovecot_source_contract_wrong_abi_template() -> None:
+    run_checker(FIXTURES_DIR / "wrong-abi-template", expect_success=False)
+
+
 def test_dovecot_source_contract_missing_vfunc_contract() -> None:
     run_checker(FIXTURES_DIR / "missing-vfunc", expect_success=False)
+
+
+def test_dovecot_source_contract_missing_plugin_entrypoint() -> None:
+    run_checker(FIXTURES_DIR / "missing-plugin-entrypoint", expect_success=False)
 
 
 def test_dovecot_source_contract_missing_source_directory() -> None:
@@ -81,7 +89,9 @@ def main() -> None:
         test_dovecot_source_contract_env_override,
         test_dovecot_source_contract_missing_required_file,
         test_dovecot_source_contract_wrong_version,
+        test_dovecot_source_contract_wrong_abi_template,
         test_dovecot_source_contract_missing_vfunc_contract,
+        test_dovecot_source_contract_missing_plugin_entrypoint,
         test_dovecot_source_contract_missing_source_directory,
     ]
     failures: list[tuple[str, Exception]] = []

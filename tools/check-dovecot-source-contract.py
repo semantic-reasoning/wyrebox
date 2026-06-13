@@ -13,12 +13,15 @@ import sys
 
 
 PINNED_DOVECOT_VERSION = "2.3.21.1"
+PINNED_DOVECOT_ABI_TEMPLATE = "2.3.ABIv21($PACKAGE_VERSION)"
 
 REQUIRED_FILES = [
     Path("configure.ac"),
+    Path("config.h.in"),
     Path("src/lib-storage/mail-storage.h"),
     Path("src/lib-storage/mail-storage-private.h"),
     Path("src/lib-storage/mail-storage-hooks.h"),
+    Path("src/lib/module-dir.h"),
 ]
 
 REQUIRED_TYPES = {
@@ -46,6 +49,22 @@ REQUIRED_VFUNC_SYMBOLS = {
         "update_keywords",
     ],
 }
+
+REQUIRED_MODULE_STRUCT_MEMBERS = {
+    "module": [
+        "init",
+        "deinit",
+    ],
+    "module_dir_load_settings": [
+        "abi_version",
+        "require_init_funcs",
+    ],
+}
+
+REQUIRED_MODULE_SYMBOLS = [
+    r"\bmodule_get_symbol\b",
+    r"\bmodule_get_plugin_name\b",
+]
 
 @dataclass
 class ContractIssue:
@@ -142,6 +161,37 @@ def find_issues_for_struct_fields(path: Path, struct_name: str, fields: list[str
     return issues
 
 
+def check_config_h_template(path: Path) -> list[ContractIssue]:
+    text = read_text(path)
+    if re.search(r"^\s*#undef\s+DOVECOT_ABI_VERSION\b", text, re.MULTILINE):
+        return []
+
+    return [
+        ContractIssue(
+            f"{path}: missing DOVECOT_ABI_VERSION config.h.in template"
+        )
+    ]
+
+
+def check_configure_abi_template(path: Path) -> list[ContractIssue]:
+    text = read_text(path)
+    match = re.search(
+        r"AC_DEFINE_UNQUOTED\(\s*\[DOVECOT_ABI_VERSION\]\s*,\s*"
+        r'"([^"]+)"',
+        text,
+        re.MULTILINE,
+    )
+    if match is not None and match.group(1) == PINNED_DOVECOT_ABI_TEMPLATE:
+        return []
+
+    return [
+        ContractIssue(
+            f"{path}: DOVECOT_ABI_VERSION must use template "
+            f"{PINNED_DOVECOT_ABI_TEMPLATE}"
+        )
+    ]
+
+
 def find_issues_for_vfuncs(path: Path, struct_name: str, symbols: list[str]) -> list[ContractIssue]:
     text = read_text(path)
     struct_block = find_struct_block(text, struct_name)
@@ -199,16 +249,26 @@ def validate_source(source_dir: Path) -> list[ContractIssue]:
         return issues
 
     configure = source_dir / "configure.ac"
+    config_h_in = source_dir / "config.h.in"
     storage = source_dir / "src/lib-storage/mail-storage.h"
     storage_private = source_dir / "src/lib-storage/mail-storage-private.h"
     hooks = source_dir / "src/lib-storage/mail-storage-hooks.h"
+    module_dir = source_dir / "src/lib/module-dir.h"
 
     issues.extend(
         find_issues_for_patterns(configure, [r"\bDOVECOT_ABI_VERSION\b"], "DOVECOT_ABI_VERSION define")
     )
     issues.extend(check_version(configure))
+    issues.extend(check_configure_abi_template(configure))
+    issues.extend(check_config_h_template(config_h_in))
 
-    issues.extend(find_issues_for_patterns(hooks, [r"\bmail_storage_hooks_add\b"], "mail_storage_hooks_add"))
+    issues.extend(
+        find_issues_for_patterns(
+            hooks,
+            [r"\bmail_storage_hooks_add\s*\(\s*struct\s+module\s*\*"],
+            "mail_storage_hooks_add(struct module *, ...)",
+        )
+    )
 
     for symbol, expressions in REQUIRED_TYPES.items():
         if symbol == "struct mailbox_status uid fields":
@@ -228,6 +288,9 @@ def validate_source(source_dir: Path) -> list[ContractIssue]:
     issues.extend(
         find_issues_for_vfuncs(storage_private, "mail_vfuncs", REQUIRED_VFUNC_SYMBOLS["mail_vfuncs"])
     )
+    for struct_name, fields in REQUIRED_MODULE_STRUCT_MEMBERS.items():
+        issues.extend(find_issues_for_struct_fields(module_dir, struct_name, fields))
+    issues.extend(find_issues_for_patterns(module_dir, REQUIRED_MODULE_SYMBOLS, "module entrypoint ABI declarations"))
 
     return issues
 
