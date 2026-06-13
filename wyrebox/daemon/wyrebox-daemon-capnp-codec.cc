@@ -1053,6 +1053,35 @@ validate_mailbox_select_encode_input (const WyreboxDaemonRequestIdentity
 }
 
 static gboolean
+validate_message_fetch_encode_input (const WyreboxDaemonRequestIdentity
+    *identity, const WyreboxDaemonMessageFetchRequest *request, GError **error)
+{
+  g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
+  g_auto (WyreboxDaemonMessageFetchRequest) validated_request = { 0 };
+
+  if (identity == NULL)
+    return set_invalid_argument (error, "request identity is null");
+
+  if (request == NULL)
+    return set_invalid_argument (error, "message fetch request is null");
+
+  if (!wyrebox_daemon_request_identity_init (&validated_identity,
+          identity->request_id,
+          identity->caller_identity,
+          identity->account_identity,
+          identity->tool_identity, identity->correlation_id, error))
+    return FALSE;
+
+  if (!wyrebox_daemon_message_fetch_request_init (&validated_request,
+          request->account_identity,
+          request->mailbox_id,
+          request->uid_validity, request->mailbox_uid, error))
+    return FALSE;
+
+  return TRUE;
+}
+
+static gboolean
 encode_mailbox_select_request (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonMailboxSelectRequest *request,
     GBytes **out_bytes, GError **error)
@@ -1094,6 +1123,53 @@ encode_mailbox_select_request (const WyreboxDaemonRequestIdentity *identity,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_DATA,
         "mailbox SELECT request encode failed: %s", e.what ());
+  }
+
+  return FALSE;
+}
+
+static gboolean
+encode_message_fetch_request (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMessageFetchRequest *request, GBytes **out_bytes,
+    GError **error)
+{
+  try {
+    if (!validate_message_fetch_encode_input (identity, request, error))
+      return FALSE;
+
+    capnp::MallocMessageBuilder request_builder;
+    auto request_frame = request_builder.initRoot < RequestFrame > ();
+
+    auto request_identity = request_frame.initIdentity ();
+    request_identity.setRequestId (identity->request_id);
+    request_identity.setCallerIdentity (identity->caller_identity != NULL
+        ? identity->caller_identity : "");
+    request_identity.setAccountIdentity (identity->account_identity != NULL
+        ? identity->account_identity : "");
+    request_identity.setToolIdentity (identity->tool_identity != NULL
+        ? identity->tool_identity : "");
+    request_identity.setCorrelationId (identity->correlation_id != NULL
+        ? identity->correlation_id : "");
+
+    auto message_fetch = request_frame.initMessageFetch ();
+    message_fetch.setAccountIdentity (request->account_identity);
+    message_fetch.setMailboxId (request->mailbox_id != NULL
+        ? request->mailbox_id : "");
+    message_fetch.setUidValidity (request->uid_validity);
+    message_fetch.setMailboxUid (request->mailbox_uid);
+
+    auto words = capnp::messageToFlatArray (request_builder);
+    auto bytes = words.asBytes ();
+    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+
+    return TRUE;
+  }
+  catch (const std::exception & e)
+  {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "message FETCH request encode failed: %s", e.what ());
   }
 
   return FALSE;
@@ -1738,6 +1814,24 @@ wyrebox_daemon_capnp_codec_encode_mailbox_select_request (const
   g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
   if (!encode_mailbox_select_request (identity, request, &out_bytes, error))
+    return NULL;
+
+  return g_steal_pointer (&out_bytes);
+}
+
+GBytes *
+wyrebox_daemon_capnp_codec_encode_message_fetch_request (const
+    WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMessageFetchRequest *request, gpointer user_data,
+    GError **error)
+{
+  g_autoptr (GBytes) out_bytes = NULL;
+
+  (void) user_data;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  if (!encode_message_fetch_request (identity, request, &out_bytes, error))
     return NULL;
 
   return g_steal_pointer (&out_bytes);

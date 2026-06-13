@@ -41,7 +41,7 @@ typedef struct
   FactMutationKind mutation;
   const char *predicate_id;
   const char *scope_id;
-  const char * const *arguments;
+  const char *const *arguments;
 } FactBatchImportEntryFixture;
 
 static void
@@ -70,7 +70,7 @@ build_mailbox_list_request_bytes (const char *namespace_prefix,
     const char *request_id)
 {
   capnp::MallocMessageBuilder request_builder;
-  auto request_frame = request_builder.initRoot<RequestFrame> ();
+  auto request_frame = request_builder.initRoot < RequestFrame > ();
 
   auto identity = request_frame.initIdentity ();
   identity.setRequestId (request_id);
@@ -91,11 +91,10 @@ build_mailbox_list_request_bytes (const char *namespace_prefix,
 
 static GBytes *
 build_mailbox_select_request_bytes (const char *mailbox_id,
-    const char *mailbox_name,
-    const char *request_id)
+    const char *mailbox_name, const char *request_id)
 {
   capnp::MallocMessageBuilder request_builder;
-  auto request_frame = request_builder.initRoot<RequestFrame> ();
+  auto request_frame = request_builder.initRoot < RequestFrame > ();
 
   auto identity = request_frame.initIdentity ();
   identity.setRequestId (request_id);
@@ -121,12 +120,11 @@ build_fact_mutation_request_bytes (FactMutationKind mutation,
     const char *caller_identity,
     const char *account_identity,
     const char *predicate_id,
-    const char *scope_id,
-    const char * const *arguments)
+    const char *scope_id, const char *const *arguments)
 {
   guint argument_count = 0;
   capnp::MallocMessageBuilder request_builder;
-  auto request_frame = request_builder.initRoot<RequestFrame> ();
+  auto request_frame = request_builder.initRoot < RequestFrame > ();
 
   auto identity = request_frame.initIdentity ();
   identity.setRequestId (request_id);
@@ -175,11 +173,10 @@ static GBytes *
 build_fact_batch_import_request_bytes (const char *request_id,
     const char *caller_identity,
     const char *account_identity,
-    const FactBatchImportEntryFixture *entries,
-    guint n_entries)
+    const FactBatchImportEntryFixture *entries, guint n_entries)
 {
   capnp::MallocMessageBuilder request_builder;
-  auto request_frame = request_builder.initRoot<RequestFrame> ();
+  auto request_frame = request_builder.initRoot < RequestFrame > ();
 
   auto identity = request_frame.initIdentity ();
   identity.setRequestId (request_id);
@@ -203,12 +200,10 @@ static GBytes *
 build_message_fetch_request_bytes (const char *request_id,
     const char *identity_account,
     const char *message_fetch_account,
-    const char *mailbox_id,
-    guint64 uid_validity,
-    guint64 mailbox_uid)
+    const char *mailbox_id, guint64 uid_validity, guint64 mailbox_uid)
 {
   capnp::MallocMessageBuilder request_builder;
-  auto request_frame = request_builder.initRoot<RequestFrame> ();
+  auto request_frame = request_builder.initRoot < RequestFrame > ();
 
   auto identity = request_frame.initIdentity ();
   identity.setRequestId (request_id);
@@ -233,12 +228,10 @@ static GBytes *
 build_message_search_request_bytes (const char *request_id,
     const char *identity_account,
     const char *message_search_account,
-    const char *mailbox_id,
-    guint64 uid_validity,
-    const char *criteria_token)
+    const char *mailbox_id, guint64 uid_validity, const char *criteria_token)
 {
   capnp::MallocMessageBuilder request_builder;
-  auto request_frame = request_builder.initRoot<RequestFrame> ();
+  auto request_frame = request_builder.initRoot < RequestFrame > ();
 
   auto identity = request_frame.initIdentity ();
   identity.setRequestId (request_id);
@@ -260,18 +253,15 @@ build_message_search_request_bytes (const char *request_id,
 }
 
 static GBytes *
-build_wirelog_predicate_query_request_bytes (
-    const char *request_id,
+build_wirelog_predicate_query_request_bytes (const char *request_id,
     const char *caller_identity,
     const char *identity_account,
     const char *query_id,
-    const char *predicate_id,
-    const char *scope_id,
-    const char * const *bindings)
+    const char *predicate_id, const char *scope_id, const char *const *bindings)
 {
   gsize binding_count = 0;
   capnp::MallocMessageBuilder request_builder;
-  auto request_frame = request_builder.initRoot<RequestFrame> ();
+  auto request_frame = request_builder.initRoot < RequestFrame > ();
 
   auto identity = request_frame.initIdentity ();
   identity.setRequestId (request_id);
@@ -299,18 +289,16 @@ build_wirelog_predicate_query_request_bytes (
 }
 
 static GBytes *
-build_duckdb_query_template_request_bytes (
-    const char *request_id,
+build_duckdb_query_template_request_bytes (const char *request_id,
     const char *caller_identity,
     const char *identity_account,
     const char *query_id,
     const char *template_id,
-    const char *scope_id,
-    const char * const *parameters)
+    const char *scope_id, const char *const *parameters)
 {
   gsize parameter_count = 0;
   capnp::MallocMessageBuilder request_builder;
-  auto request_frame = request_builder.initRoot<RequestFrame> ();
+  auto request_frame = request_builder.initRoot < RequestFrame > ();
 
   auto identity = request_frame.initIdentity ();
   identity.setRequestId (request_id);
@@ -339,21 +327,19 @@ build_duckdb_query_template_request_bytes (
 }
 
 static GBytes *
-build_flag_keyword_update_request_bytes (
-    const char *request_id,
+build_flag_keyword_update_request_bytes (const char *request_id,
     const char *request_account,
     const char *flag_account,
     const char *mailbox_id,
     guint64 uid_validity,
     guint64 mailbox_uid,
     FlagKeywordUpdateMode mode,
-    const char * const *system_flags,
-    const char * const *user_keywords)
+    const char *const *system_flags, const char *const *user_keywords)
 {
   gsize system_flag_count = 0;
   gsize user_keyword_count = 0;
   capnp::MallocMessageBuilder request_builder;
-  auto request_frame = request_builder.initRoot<RequestFrame> ();
+  auto request_frame = request_builder.initRoot < RequestFrame > ();
 
   auto identity = request_frame.initIdentity ();
   identity.setRequestId (request_id);
@@ -372,8 +358,8 @@ build_flag_keyword_update_request_bytes (
   if (system_flags != NULL) {
     while (system_flags[system_flag_count] != NULL)
       system_flag_count++;
-    auto encoded_system_flags = flag_keyword_update_request.initSystemFlags (
-        system_flag_count);
+    auto encoded_system_flags =
+        flag_keyword_update_request.initSystemFlags (system_flag_count);
     for (guint i = 0; i < system_flag_count; i++)
       encoded_system_flags.set (i, system_flags[i]);
   }
@@ -381,8 +367,8 @@ build_flag_keyword_update_request_bytes (
   if (user_keywords != NULL) {
     while (user_keywords[user_keyword_count] != NULL)
       user_keyword_count++;
-    auto encoded_user_keywords = flag_keyword_update_request.initUserKeywords (
-        user_keyword_count);
+    auto encoded_user_keywords =
+        flag_keyword_update_request.initUserKeywords (user_keyword_count);
     for (guint i = 0; i < user_keyword_count; i++)
       encoded_user_keywords.set (i, user_keywords[i]);
   }
@@ -400,14 +386,12 @@ build_delivery_ingestion_request_bytes (const char *request_id,
     const char *delivery_id,
     const char *queue_id,
     const char *envelope_sender,
-    const char * const *recipients,
-    const guint8 *message_bytes,
-    gsize message_size,
-    const char *correlation_id)
+    const char *const *recipients,
+    const guint8 *message_bytes, gsize message_size, const char *correlation_id)
 {
   gsize recipient_count = 0;
   capnp::MallocMessageBuilder request_builder;
-  auto request_frame = request_builder.initRoot<RequestFrame> ();
+  auto request_frame = request_builder.initRoot < RequestFrame > ();
   auto delivery_ingestion_request = request_frame.initDeliveryIngestion ();
 
   auto identity = request_frame.initIdentity ();
@@ -419,10 +403,9 @@ build_delivery_ingestion_request_bytes (const char *request_id,
 
   if (delivery_id != NULL)
     delivery_ingestion_request.setDeliveryId (delivery_id);
-  delivery_ingestion_request.setQueueId (
-      queue_id != NULL ? queue_id : "");
-  delivery_ingestion_request.setEnvelopeSender (
-      envelope_sender != NULL ? envelope_sender : "");
+  delivery_ingestion_request.setQueueId (queue_id != NULL ? queue_id : "");
+  delivery_ingestion_request.setEnvelopeSender (envelope_sender !=
+      NULL ? envelope_sender : "");
 
   while (recipients != NULL && recipients[recipient_count] != NULL)
     recipient_count++;
@@ -435,9 +418,8 @@ build_delivery_ingestion_request_bytes (const char *request_id,
   }
 
   if (message_bytes != NULL || message_size > 0) {
-    delivery_ingestion_request.setMessageBytes (
-        kj::arrayPtr (reinterpret_cast<const capnp::byte *> (message_bytes),
-            message_size));
+    delivery_ingestion_request.setMessageBytes (kj::arrayPtr (reinterpret_cast <
+            const capnp::byte * >(message_bytes), message_size));
   }
 
   auto words = capnp::messageToFlatArray (request_builder);
@@ -450,10 +432,9 @@ static gboolean
 select_mailbox_fixture (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonMailboxSelectRequest *request,
     WyreboxDaemonMailboxSelectResult *out_result,
-    gpointer user_data,
-    GError **error)
+    gpointer user_data, GError **error)
 {
-  FixtureState *state = static_cast<FixtureState *> (user_data);
+  FixtureState *state = static_cast < FixtureState * >(user_data);
 
   g_assert_nonnull (identity);
   g_assert_nonnull (request);
@@ -467,22 +448,16 @@ select_mailbox_fixture (const WyreboxDaemonRequestIdentity *identity,
 
   return wyrebox_daemon_mailbox_select_result_init (out_result,
       WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
-      "mailbox-inbox",
-      "INBOX",
-      77,
-      42,
-      123,
-      error);
+      "mailbox-inbox", "INBOX", 77, 42, 123, error);
 }
 
 static gboolean
 append_mailbox_fixture (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonMailboxListRequest *request,
     WyreboxDaemonMailboxListResult *out_result,
-    gpointer user_data,
-    GError **error)
+    gpointer user_data, GError **error)
 {
-  FixtureState *state = static_cast<FixtureState *> (user_data);
+  FixtureState *state = static_cast < FixtureState * >(user_data);
 
   g_assert_nonnull (identity);
   g_assert_nonnull (request);
@@ -493,16 +468,12 @@ append_mailbox_fixture (const WyreboxDaemonRequestIdentity *identity,
   state->was_called = TRUE;
 
   wyrebox_daemon_mailbox_list_result_init_empty (out_result);
-  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (
-      out_result,
-      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
-      "mailbox-inbox",
-      "INBOX",
-      "/",
-      NULL,
-      TRUE,
-      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN,
-      error));
+  g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (out_result,
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "mailbox-inbox",
+          "INBOX",
+          "/",
+          NULL, TRUE, WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN, error));
 
   return TRUE;
 }
@@ -511,12 +482,11 @@ static gboolean
 fetch_message_fixture (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonMessageFetchRequest *request,
     WyreboxDaemonStreamChunkFrame *out_chunk,
-    gpointer user_data,
-    GError **error)
+    gpointer user_data, GError **error)
 {
   const char *payload = "message-1-body";
   g_autoptr (GBytes) bytes = NULL;
-  FixtureState *state = static_cast<FixtureState *> (user_data);
+  FixtureState *state = static_cast < FixtureState * >(user_data);
 
   g_assert_cmpstr (identity->request_id, ==, "request-fetch-route");
   g_assert_cmpstr (identity->caller_identity, ==, "dovecot");
@@ -533,25 +503,18 @@ fetch_message_fixture (const WyreboxDaemonRequestIdentity *identity,
 
   return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
       identity->request_id,
-      "message-1",
-      NULL,
-      identity->correlation_id,
-      0,
-      bytes,
-      TRUE,
-      error);
+      "message-1", NULL, identity->correlation_id, 0, bytes, TRUE, error);
 }
 
 static gboolean
 search_message_fixture (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonMessageSearchRequest *request,
     WyreboxDaemonStreamChunkFrame *out_chunk,
-    gpointer user_data,
-    GError **error)
+    gpointer user_data, GError **error)
 {
   const char *payload = "search-result-ids";
   g_autoptr (GBytes) bytes = NULL;
-  FixtureState *state = static_cast<FixtureState *> (user_data);
+  FixtureState *state = static_cast < FixtureState * >(user_data);
 
   g_assert_cmpstr (identity->request_id, ==, "request-search-route");
   g_assert_cmpstr (identity->caller_identity, ==, "dovecot");
@@ -568,25 +531,18 @@ search_message_fixture (const WyreboxDaemonRequestIdentity *identity,
 
   return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
       identity->request_id,
-      NULL,
-      "query-search",
-      identity->correlation_id,
-      0,
-      bytes,
-      TRUE,
-      error);
+      NULL, "query-search", identity->correlation_id, 0, bytes, TRUE, error);
 }
 
 static gboolean
 query_wirelog_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonWirelogPredicateQueryRequest *request,
     WyreboxDaemonStreamChunkFrame *out_chunk,
-    gpointer user_data,
-    GError **error)
+    gpointer user_data, GError **error)
 {
   const char *payload = "wirelog-result-rows";
   g_autoptr (GBytes) bytes = NULL;
-  FixtureState *state = static_cast<FixtureState *> (user_data);
+  FixtureState *state = static_cast < FixtureState * >(user_data);
 
   g_assert_cmpstr (identity->request_id, ==, "request-wirelog-route");
   g_assert_cmpstr (identity->caller_identity, ==, "trusted-tool");
@@ -603,25 +559,18 @@ query_wirelog_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
 
   return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
       identity->request_id,
-      NULL,
-      request->query_id,
-      identity->correlation_id,
-      0,
-      bytes,
-      TRUE,
-      error);
+      NULL, request->query_id, identity->correlation_id, 0, bytes, TRUE, error);
 }
 
 static gboolean
 query_duckdb_template_fixture (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonDuckDBQueryTemplateRequest *request,
     WyreboxDaemonStreamChunkFrame *out_chunk,
-    gpointer user_data,
-    GError **error)
+    gpointer user_data, GError **error)
 {
   const char *payload = "duckdb-result-rows";
   g_autoptr (GBytes) bytes = NULL;
-  FixtureState *state = static_cast<FixtureState *> (user_data);
+  FixtureState *state = static_cast < FixtureState * >(user_data);
 
   g_assert_cmpstr (identity->request_id, ==, "request-duckdb-route");
   g_assert_cmpstr (identity->caller_identity, ==, "admin-cli");
@@ -639,22 +588,15 @@ query_duckdb_template_fixture (const WyreboxDaemonRequestIdentity *identity,
 
   return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
       identity->request_id,
-      NULL,
-      request->query_id,
-      identity->correlation_id,
-      0,
-      bytes,
-      TRUE,
-      error);
+      NULL, request->query_id, identity->correlation_id, 0, bytes, TRUE, error);
 }
 
 static gboolean
 ingest_delivery_fixture (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonDeliveryIngestionRequest *request,
-    WyreboxEmlIngestResult *out_result, gpointer user_data,
-    GError **error)
+    WyreboxEmlIngestResult *out_result, gpointer user_data, GError **error)
 {
-  gboolean *was_called = static_cast<gboolean *> (user_data);
+  gboolean *was_called = static_cast < gboolean * >(user_data);
   const char *payload = "message-bytes";
   gsize payload_size = 0;
   const guint8 *payload_data = NULL;
@@ -667,7 +609,7 @@ ingest_delivery_fixture (const WyreboxDaemonRequestIdentity *identity,
   g_assert_cmpstr (request->delivery_id, ==, "delivery-123");
   g_assert_cmpstr (request->recipients[0], ==, "alice@example.com");
   payload_data =
-      static_cast<const guint8 *> (g_bytes_get_data (request->message_bytes,
+      static_cast < const guint8 *>(g_bytes_get_data (request->message_bytes,
           &payload_size));
   g_assert_cmpuint (payload_size, ==, strlen (payload));
   g_assert_cmpmem (payload_data, payload_size, payload, strlen (payload));
@@ -675,8 +617,8 @@ ingest_delivery_fixture (const WyreboxDaemonRequestIdentity *identity,
   *was_called = TRUE;
 
   out_result->object_key =
-      g_strdup (
-          "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+      g_strdup
+      ("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
   out_result->size_bytes = 12;
   out_result->journal_offset = 4096;
   out_result->journal_sequence = 7;
@@ -690,7 +632,7 @@ update_flag_keyword_fixture (const WyreboxDaemonRequestIdentity *identity,
     WyreboxDaemonSuccessReceipt *out_receipt, gpointer user_data,
     GError **error)
 {
-  gboolean *was_called = static_cast<gboolean *> (user_data);
+  gboolean *was_called = static_cast < gboolean * >(user_data);
 
   g_assert_cmpstr (identity->request_id, ==, "request-flag-keyword");
   g_assert_cmpstr (identity->caller_identity, ==, "dovecot");
@@ -722,9 +664,8 @@ update_flag_keyword_fixture (const WyreboxDaemonRequestIdentity *identity,
 static void
 assert_request_bytes_decode_mailbox_select_by_id (void)
 {
-  g_autoptr (GBytes) request = build_mailbox_select_request_bytes (
-      "mailbox-inbox",
-      "",
+  g_autoptr (GBytes) request =
+      build_mailbox_select_request_bytes ("mailbox-inbox", "",
       "request-select-id");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
@@ -732,12 +673,8 @@ assert_request_bytes_decode_mailbox_select_by_id (void)
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.request_id, ==, "request-select-id");
   g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
@@ -761,22 +698,16 @@ assert_request_bytes_decode_mailbox_select_by_id (void)
 static void
 assert_request_bytes_decode_mailbox_select_by_name (void)
 {
-  g_autoptr (GBytes) request = build_mailbox_select_request_bytes (
-      "",
-      "Projects/Project A",
-      "request-select-name");
+  g_autoptr (GBytes) request = build_mailbox_select_request_bytes ("",
+      "Projects/Project A", "request-select-name");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.request_id, ==, "request-select-name");
   g_assert_cmpint (decoded.operation, ==,
@@ -796,20 +727,15 @@ static void
 assert_mailbox_select_decode_rejects_missing_selector (void)
 {
   g_autoptr (GBytes) request = build_mailbox_select_request_bytes ("",
-      "",
-      "request-select-invalid");
+      "", "request-select-invalid");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -818,9 +744,8 @@ assert_mailbox_select_decode_rejects_missing_selector (void)
 static void
 assert_mailbox_select_decode_rejects_both_selectors (void)
 {
-  g_autoptr (GBytes) request = build_mailbox_select_request_bytes (
-      "mailbox-inbox",
-      "INBOX",
+  g_autoptr (GBytes) request =
+      build_mailbox_select_request_bytes ("mailbox-inbox", "INBOX",
       "request-select-invalid");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
@@ -828,12 +753,8 @@ assert_mailbox_select_decode_rejects_both_selectors (void)
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -851,34 +772,22 @@ assert_mailbox_select_request_encoder_round_trip_by_id (void)
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_request_identity_init (&identity,
-      "request-encode-mailbox-select-id",
-      "dovecot",
-      "account-1",
-      "dovecot-storage",
-      "corr-select-encode",
-      &error));
+          "request-encode-mailbox-select-id",
+          "dovecot",
+          "account-1", "dovecot-storage", "corr-select-encode", &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_mailbox_select_request_init (&request,
-      "account-1",
-      "mailbox-inbox",
-      NULL,
-      &error));
+          "account-1", "mailbox-inbox", NULL, &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_mailbox_select_request (&identity,
-      &request,
-      NULL,
-      &error);
+      &request, NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      encoded,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          encoded,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.request_id, ==, "request-encode-mailbox-select-id");
   g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
@@ -886,8 +795,7 @@ assert_mailbox_select_request_encoder_round_trip_by_id (void)
   g_assert_cmpstr (decoded.tool_identity, ==, "dovecot-storage");
   g_assert_cmpstr (decoded.correlation_id, ==, "corr-select-encode");
   g_assert_cmpint (decoded.operation,
-      ==,
-      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_SELECT);
+      ==, WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_SELECT);
   g_assert_nonnull (decoded.mailbox_select);
   g_assert_cmpstr (decoded.mailbox_select->account_identity, ==, "account-1");
   g_assert_cmpstr (decoded.mailbox_select->mailbox_id, ==, "mailbox-inbox");
@@ -910,40 +818,27 @@ assert_mailbox_select_request_encoder_round_trip_by_name (void)
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_request_identity_init (&identity,
-      "request-encode-mailbox-select-name",
-      "dovecot",
-      "account-1",
-      "dovecot-storage",
-      NULL,
-      &error));
+          "request-encode-mailbox-select-name",
+          "dovecot", "account-1", "dovecot-storage", NULL, &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_mailbox_select_request_init (&request,
-      "account-1",
-      NULL,
-      "Projects/Project A",
-      &error));
+          "account-1", NULL, "Projects/Project A", &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_mailbox_select_request (&identity,
-      &request,
-      NULL,
-      &error);
+      &request, NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      encoded,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          encoded,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
-  g_assert_cmpstr (decoded.request_id, ==, "request-encode-mailbox-select-name");
+  g_assert_cmpstr (decoded.request_id, ==,
+      "request-encode-mailbox-select-name");
   g_assert_cmpstr (decoded.correlation_id, ==, "");
   g_assert_cmpint (decoded.operation,
-      ==,
-      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_SELECT);
+      ==, WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_SELECT);
   g_assert_nonnull (decoded.mailbox_select);
   g_assert_cmpstr (decoded.mailbox_select->account_identity, ==, "account-1");
   g_assert_null (decoded.mailbox_select->mailbox_id);
@@ -966,40 +861,28 @@ assert_mailbox_select_request_encoder_rejects_invalid_input (void)
   g_autoptr (GError) error = NULL;
 
   g_assert_true (wyrebox_daemon_request_identity_init (&identity,
-      "request-encode-mailbox-select-valid",
-      "dovecot",
-      "account-1",
-      "dovecot-storage",
-      NULL,
-      &error));
+          "request-encode-mailbox-select-valid",
+          "dovecot", "account-1", "dovecot-storage", NULL, &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_mailbox_select_request_init (&request,
-      "account-1",
-      "mailbox-inbox",
-      NULL,
-      &error));
+          "account-1", "mailbox-inbox", NULL, &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_mailbox_select_request (NULL,
-      &request,
-      NULL,
-      &error);
+      &request, NULL, &error);
   g_assert_null (encoded);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_clear_error (&error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_mailbox_select_request (&identity,
-      NULL,
-      NULL,
-      &error);
+      NULL, NULL, &error);
   g_assert_null (encoded);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_clear_error (&error);
 
-  encoded = wyrebox_daemon_capnp_codec_encode_mailbox_select_request (&invalid_identity,
-      &request,
-      NULL,
-      &error);
+  encoded =
+      wyrebox_daemon_capnp_codec_encode_mailbox_select_request
+      (&invalid_identity, &request, NULL, &error);
   g_assert_null (encoded);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_clear_error (&error);
@@ -1009,9 +892,7 @@ assert_mailbox_select_request_encoder_rejects_invalid_input (void)
   invalid_request.mailbox_name = NULL;
 
   encoded = wyrebox_daemon_capnp_codec_encode_mailbox_select_request (&identity,
-      &invalid_request,
-      NULL,
-      &error);
+      &invalid_request, NULL, &error);
   g_assert_null (encoded);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_clear_error (&error);
@@ -1022,9 +903,100 @@ assert_mailbox_select_request_encoder_rejects_invalid_input (void)
   invalid_request.mailbox_name = g_strdup ("INBOX");
 
   encoded = wyrebox_daemon_capnp_codec_encode_mailbox_select_request (&identity,
-      &invalid_request,
-      NULL,
-      &error);
+      &invalid_request, NULL, &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
+assert_message_fetch_request_encoder_round_trip (void)
+{
+  g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+  g_auto (WyreboxDaemonMessageFetchRequest) request = { 0 };
+  g_autoptr (GBytes) encoded = NULL;
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+          "request-encode-message-fetch",
+          "dovecot",
+          "account-1", "dovecot-storage", "corr-message-fetch", &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
+          "account-1", "mailbox-inbox", 77, 42, &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_message_fetch_request (&identity,
+      &request, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+          encoded,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (decoded.request_id, ==, "request-encode-message-fetch");
+  g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
+  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.tool_identity, ==, "dovecot-storage");
+  g_assert_cmpstr (decoded.correlation_id, ==, "corr-message-fetch");
+  g_assert_cmpint (decoded.operation,
+      ==, WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_FETCH);
+  g_assert_nonnull (decoded.message_fetch);
+  g_assert_cmpstr (decoded.message_fetch->account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.message_fetch->mailbox_id, ==, "mailbox-inbox");
+  g_assert_cmpuint (decoded.message_fetch->uid_validity, ==, 77);
+  g_assert_cmpuint (decoded.message_fetch->mailbox_uid, ==, 42);
+
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  decoded_state_clear (decoded_state);
+}
+
+static void
+assert_message_fetch_request_encoder_rejects_invalid_input (void)
+{
+  g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+  g_auto (WyreboxDaemonRequestIdentity) invalid_identity = { 0 };
+  g_auto (WyreboxDaemonMessageFetchRequest) request = { 0 };
+  g_auto (WyreboxDaemonMessageFetchRequest) invalid_request = { 0 };
+  g_autoptr (GBytes) encoded = NULL;
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+          "request-encode-message-fetch-valid",
+          "dovecot", "account-1", "dovecot-storage", NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
+          "account-1", "mailbox-inbox", 77, 42, &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_message_fetch_request (NULL,
+      &request, NULL, &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_message_fetch_request (&identity,
+      NULL, NULL, &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_message_fetch_request
+      (&invalid_identity, &request, NULL, &error);
+  g_assert_null (encoded);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  invalid_request.account_identity = g_strdup ("");
+  invalid_request.mailbox_id = g_strdup ("mailbox-inbox");
+  invalid_request.uid_validity = 77;
+  invalid_request.mailbox_uid = 42;
+  encoded = wyrebox_daemon_capnp_codec_encode_message_fetch_request (&identity,
+      &invalid_request, NULL, &error);
   g_assert_null (encoded);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 }
@@ -1032,19 +1004,16 @@ assert_mailbox_select_request_encoder_rejects_invalid_input (void)
 static void
 assert_request_bytes_decode_mailbox_list (void)
 {
-  g_autoptr (GBytes) request = build_mailbox_list_request_bytes ("INBOX", "request-1");
+  g_autoptr (GBytes) request =
+      build_mailbox_list_request_bytes ("INBOX", "request-1");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.request_id, ==, "request-1");
   g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
@@ -1065,25 +1034,17 @@ assert_request_bytes_decode_mailbox_list (void)
 static void
 assert_request_bytes_decode_message_fetch (void)
 {
-  g_autoptr (GBytes) request = build_message_fetch_request_bytes (
-      "request-fetch",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      42);
+  g_autoptr (GBytes) request =
+      build_message_fetch_request_bytes ("request-fetch", "account-1",
+      "account-1", "mailbox-inbox", 77, 42);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.request_id, ==, "request-fetch");
   g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
@@ -1109,25 +1070,17 @@ assert_request_bytes_decode_message_fetch (void)
 static void
 assert_request_bytes_decode_message_search (void)
 {
-  g_autoptr (GBytes) request = build_message_search_request_bytes (
-      "request-search",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      "unseen");
+  g_autoptr (GBytes) request =
+      build_message_search_request_bytes ("request-search", "account-1",
+      "account-1", "mailbox-inbox", 77, "unseen");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.request_id, ==, "request-search");
   g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
@@ -1155,25 +1108,17 @@ assert_request_bytes_decode_message_search (void)
 static void
 assert_request_bytes_rejects_message_search_missing_account (void)
 {
-  g_autoptr (GBytes) request = build_message_search_request_bytes (
-      "request-search-missing-account",
-      "account-1",
-      "",
-      "mailbox-inbox",
-      77,
-      "unseen");
+  g_autoptr (GBytes) request =
+      build_message_search_request_bytes ("request-search-missing-account",
+      "account-1", "", "mailbox-inbox", 77, "unseen");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -1182,25 +1127,17 @@ assert_request_bytes_rejects_message_search_missing_account (void)
 static void
 assert_request_bytes_rejects_message_search_missing_mailbox (void)
 {
-  g_autoptr (GBytes) request = build_message_search_request_bytes (
-      "request-search-missing-mailbox",
-      "account-1",
-      "account-1",
-      "",
-      77,
-      "unseen");
+  g_autoptr (GBytes) request =
+      build_message_search_request_bytes ("request-search-missing-mailbox",
+      "account-1", "account-1", "", 77, "unseen");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -1209,25 +1146,17 @@ assert_request_bytes_rejects_message_search_missing_mailbox (void)
 static void
 assert_request_bytes_rejects_message_search_zero_uid_validity (void)
 {
-  g_autoptr (GBytes) request = build_message_search_request_bytes (
-      "request-search-zero-validity",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      0,
-      "unseen");
+  g_autoptr (GBytes) request =
+      build_message_search_request_bytes ("request-search-zero-validity",
+      "account-1", "account-1", "mailbox-inbox", 0, "unseen");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -1236,25 +1165,17 @@ assert_request_bytes_rejects_message_search_zero_uid_validity (void)
 static void
 assert_request_bytes_rejects_message_search_empty_criteria (void)
 {
-  g_autoptr (GBytes) request = build_message_search_request_bytes (
-      "request-search-empty-criteria",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      "");
+  g_autoptr (GBytes) request =
+      build_message_search_request_bytes ("request-search-empty-criteria",
+      "account-1", "account-1", "mailbox-inbox", 77, "");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -1263,25 +1184,18 @@ assert_request_bytes_rejects_message_search_empty_criteria (void)
 static void
 assert_request_bytes_rejects_message_search_invalid_criteria_backslash (void)
 {
-  g_autoptr (GBytes) request = build_message_search_request_bytes (
-      "request-search-invalid-criteria-backslash",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      "flag\\unseen");
+  g_autoptr (GBytes) request =
+      build_message_search_request_bytes
+      ("request-search-invalid-criteria-backslash", "account-1", "account-1",
+      "mailbox-inbox", 77, "flag\\unseen");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -1290,25 +1204,17 @@ assert_request_bytes_rejects_message_search_invalid_criteria_backslash (void)
 static void
 assert_request_bytes_rejects_message_search_invalid_criteria_sql_like (void)
 {
-  g_autoptr (GBytes) request = build_message_search_request_bytes (
-      "request-search-invalid-criteria-sql",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      "select*from");
+  g_autoptr (GBytes) request =
+      build_message_search_request_bytes ("request-search-invalid-criteria-sql",
+      "account-1", "account-1", "mailbox-inbox", 77, "select*from");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -1319,26 +1225,17 @@ assert_request_bytes_decode_wirelog_predicate_query_with_bindings (void)
 {
   const char *bindings[] = { "?message", "project-a", NULL };
   g_autoptr (GBytes) request =
-      build_wirelog_predicate_query_request_bytes (
-          "request-wirelog",
-          "dovecot",
-          "account-1",
-          "query-wirelog",
-          "has_label",
-          "account-1",
-          bindings);
+      build_wirelog_predicate_query_request_bytes ("request-wirelog",
+      "dovecot",
+      "account-1", "query-wirelog", "has_label", "account-1", bindings);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.request_id, ==, "request-wirelog");
   g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
@@ -1352,8 +1249,7 @@ assert_request_bytes_decode_wirelog_predicate_query_with_bindings (void)
       "query-wirelog");
   g_assert_cmpstr (decoded.wirelog_predicate_query->predicate_id, ==,
       "has_label");
-  g_assert_cmpstr (decoded.wirelog_predicate_query->scope_id, ==,
-      "account-1");
+  g_assert_cmpstr (decoded.wirelog_predicate_query->scope_id, ==, "account-1");
   g_assert_cmpstr (decoded.wirelog_predicate_query->bindings[0], ==,
       "?message");
   g_assert_cmpstr (decoded.wirelog_predicate_query->bindings[1], ==,
@@ -1376,26 +1272,17 @@ assert_request_bytes_decode_wirelog_predicate_query_empty_bindings (void)
 {
   const char *bindings[] = { NULL };
   g_autoptr (GBytes) request =
-      build_wirelog_predicate_query_request_bytes (
-          "request-wirelog-empty-bindings",
-          "dovecot",
-          "account-1",
-          "query-wirelog-empty",
-          "has_label",
-          "account-1",
-          bindings);
+      build_wirelog_predicate_query_request_bytes
+      ("request-wirelog-empty-bindings", "dovecot", "account-1",
+      "query-wirelog-empty", "has_label", "account-1", bindings);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpint (decoded.operation, ==,
       WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY);
@@ -1415,26 +1302,17 @@ assert_request_bytes_rejects_wirelog_predicate_query_invalid_query_id (void)
 {
   const char *bindings[] = { "?message", NULL };
   g_autoptr (GBytes) request =
-      build_wirelog_predicate_query_request_bytes (
-          "request-wirelog-invalid-query",
-          "dovecot",
-          "account-1",
-          "query wirelog",
-          "has_label",
-          "account-1",
-          bindings);
+      build_wirelog_predicate_query_request_bytes
+      ("request-wirelog-invalid-query", "dovecot", "account-1", "query wirelog",
+      "has_label", "account-1", bindings);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -1445,26 +1323,17 @@ assert_request_bytes_rejects_wirelog_predicate_query_invalid_predicate_id (void)
 {
   const char *bindings[] = { "?message", NULL };
   g_autoptr (GBytes) request =
-      build_wirelog_predicate_query_request_bytes (
-          "request-wirelog-invalid-predicate",
-          "dovecot",
-          "account-1",
-          "query-wirelog",
-          "has label",
-          "account-1",
-          bindings);
+      build_wirelog_predicate_query_request_bytes
+      ("request-wirelog-invalid-predicate", "dovecot", "account-1",
+      "query-wirelog", "has label", "account-1", bindings);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -1475,26 +1344,17 @@ assert_request_bytes_rejects_wirelog_predicate_query_invalid_scope_id (void)
 {
   const char *bindings[] = { "?message", NULL };
   g_autoptr (GBytes) request =
-      build_wirelog_predicate_query_request_bytes (
-          "request-wirelog-invalid-scope",
-          "dovecot",
-          "account-1",
-          "query-wirelog",
-          "has_label",
-          "account\n1",
-          bindings);
+      build_wirelog_predicate_query_request_bytes
+      ("request-wirelog-invalid-scope", "dovecot", "account-1", "query-wirelog",
+      "has_label", "account\n1", bindings);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -1505,26 +1365,17 @@ assert_request_bytes_rejects_wirelog_predicate_query_invalid_binding (void)
 {
   const char *bindings[] = { "?message\n", NULL };
   g_autoptr (GBytes) request =
-      build_wirelog_predicate_query_request_bytes (
-          "request-wirelog-invalid-binding",
-          "dovecot",
-          "account-1",
-          "query-wirelog",
-          "has_label",
-          "account-1",
-          bindings);
+      build_wirelog_predicate_query_request_bytes
+      ("request-wirelog-invalid-binding", "dovecot", "account-1",
+      "query-wirelog", "has_label", "account-1", bindings);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -1535,26 +1386,17 @@ assert_request_bytes_decode_duckdb_query_template_with_parameters (void)
 {
   const char *parameters[] = { "mail-1", "project-a", NULL };
   g_autoptr (GBytes) request =
-      build_duckdb_query_template_request_bytes (
-          "request-duckdb",
-          "skill",
-          "account-1",
-          "query-duckdb",
-          "template.summary",
-          "account-1",
-          parameters);
+      build_duckdb_query_template_request_bytes ("request-duckdb",
+      "skill",
+      "account-1", "query-duckdb", "template.summary", "account-1", parameters);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.request_id, ==, "request-duckdb");
   g_assert_cmpstr (decoded.caller_identity, ==, "skill");
@@ -1564,14 +1406,11 @@ assert_request_bytes_decode_duckdb_query_template_with_parameters (void)
   g_assert_cmpint (decoded.operation, ==,
       WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE);
   g_assert_nonnull (decoded.duckdb_query_template);
-  g_assert_cmpstr (decoded.duckdb_query_template->query_id, ==,
-      "query-duckdb");
+  g_assert_cmpstr (decoded.duckdb_query_template->query_id, ==, "query-duckdb");
   g_assert_cmpstr (decoded.duckdb_query_template->template_id, ==,
       "template.summary");
-  g_assert_cmpstr (decoded.duckdb_query_template->scope_id, ==,
-      "account-1");
-  g_assert_cmpstr (decoded.duckdb_query_template->parameters[0], ==,
-      "mail-1");
+  g_assert_cmpstr (decoded.duckdb_query_template->scope_id, ==, "account-1");
+  g_assert_cmpstr (decoded.duckdb_query_template->parameters[0], ==, "mail-1");
   g_assert_cmpstr (decoded.duckdb_query_template->parameters[1], ==,
       "project-a");
   g_assert_null (decoded.duckdb_query_template->parameters[2]);
@@ -1593,26 +1432,17 @@ assert_request_bytes_decode_duckdb_query_template_empty_parameters (void)
 {
   const char *parameters[] = { NULL };
   g_autoptr (GBytes) request =
-      build_duckdb_query_template_request_bytes (
-          "request-duckdb-empty-parameters",
-          "skill",
-          "account-1",
-          "query-duckdb-empty",
-          "template.summary",
-          "account-1",
-          parameters);
+      build_duckdb_query_template_request_bytes
+      ("request-duckdb-empty-parameters", "skill", "account-1",
+      "query-duckdb-empty", "template.summary", "account-1", parameters);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpint (decoded.operation, ==,
       WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE);
@@ -1632,26 +1462,17 @@ assert_request_bytes_rejects_duckdb_query_template_invalid_query_id (void)
 {
   const char *parameters[] = { "mail-1", NULL };
   g_autoptr (GBytes) request =
-      build_duckdb_query_template_request_bytes (
-          "request-duckdb-invalid-query",
-          "skill",
-          "account-1",
-          "query duckdb",
-          "template.summary",
-          "account-1",
-          parameters);
+      build_duckdb_query_template_request_bytes ("request-duckdb-invalid-query",
+      "skill",
+      "account-1", "query duckdb", "template.summary", "account-1", parameters);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -1662,26 +1483,17 @@ assert_request_bytes_rejects_duckdb_query_template_invalid_template_id (void)
 {
   const char *parameters[] = { "mail-1", NULL };
   g_autoptr (GBytes) request =
-      build_duckdb_query_template_request_bytes (
-          "request-duckdb-invalid-template",
-          "skill",
-          "account-1",
-          "query-duckdb",
-          "template summary",
-          "account-1",
-          parameters);
+      build_duckdb_query_template_request_bytes
+      ("request-duckdb-invalid-template", "skill", "account-1", "query-duckdb",
+      "template summary", "account-1", parameters);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -1692,26 +1504,18 @@ assert_request_bytes_rejects_duckdb_query_template_invalid_scope_id (void)
 {
   const char *parameters[] = { "mail-1", NULL };
   g_autoptr (GBytes) request =
-      build_duckdb_query_template_request_bytes (
-          "request-duckdb-invalid-scope",
-          "skill",
-          "account-1",
-          "query-duckdb",
-          "template.summary",
-          "account\n1",
-          parameters);
+      build_duckdb_query_template_request_bytes ("request-duckdb-invalid-scope",
+      "skill",
+      "account-1",
+      "query-duckdb", "template.summary", "account\n1", parameters);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -1722,26 +1526,17 @@ assert_request_bytes_rejects_duckdb_query_template_invalid_parameter (void)
 {
   const char *parameters[] = { "mail\n1", NULL };
   g_autoptr (GBytes) request =
-      build_duckdb_query_template_request_bytes (
-          "request-duckdb-invalid-parameter",
-          "skill",
-          "account-1",
-          "query-duckdb",
-          "template.summary",
-          "account-1",
-          parameters);
+      build_duckdb_query_template_request_bytes
+      ("request-duckdb-invalid-parameter", "skill", "account-1", "query-duckdb",
+      "template.summary", "account-1", parameters);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -1752,16 +1547,10 @@ assert_request_bytes_decode_delivery_ingestion (void)
 {
   const char *recipients[] = { "alice@example.com", "bob@example.com", NULL };
   const char *payload = "message-bytes";
-  g_autoptr (GBytes) request = build_delivery_ingestion_request_bytes (
-      "request-delivery-valid",
-      "account-1",
-      "postfix",
-      "delivery-123",
-      "QID",
-      NULL,
-      recipients,
-      reinterpret_cast<const guint8 *> (payload),
-      strlen (payload),
+  g_autoptr (GBytes) request =
+      build_delivery_ingestion_request_bytes ("request-delivery-valid",
+      "account-1", "postfix", "delivery-123", "QID", NULL, recipients,
+      reinterpret_cast < const guint8 * >(payload), strlen (payload),
       "corr-delivery");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
@@ -1769,12 +1558,8 @@ assert_request_bytes_decode_delivery_ingestion (void)
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.request_id, ==, "request-delivery-valid");
   g_assert_cmpstr (decoded.caller_identity, ==, "postfix");
@@ -1792,8 +1577,8 @@ assert_request_bytes_decode_delivery_ingestion (void)
   g_assert_cmpstr (decoded.delivery_ingestion->recipients[1], ==,
       "bob@example.com");
   g_assert_null (decoded.delivery_ingestion->recipients[2]);
-  g_assert_cmpuint (g_bytes_get_size (decoded.delivery_ingestion->message_bytes),
-      ==, strlen (payload));
+  g_assert_cmpuint (g_bytes_get_size (decoded.
+          delivery_ingestion->message_bytes), ==, strlen (payload));
   g_assert_null (decoded.mailbox_list);
   g_assert_null (decoded.mailbox_select);
   g_assert_null (decoded.fact_mutation);
@@ -1825,37 +1610,23 @@ assert_delivery_ingestion_request_encoder_decodes_valid_request (void)
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_request_identity_init (&identity,
-      "request-encode-delivery",
-      "postfix",
-      "account-1",
-      "pipe-helper",
-      "corr-encode",
-      &error));
+          "request-encode-delivery",
+          "postfix", "account-1", "pipe-helper", "corr-encode", &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_delivery_ingestion_request_init (&request,
-      "delivery-encode-1",
-      "QID-123",
-      "sender@example.com",
-      recipients,
-      message,
-      &error));
+          "delivery-encode-1",
+          "QID-123", "sender@example.com", recipients, message, &error));
   g_assert_no_error (error);
 
-  encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
-      &identity,
-      &request,
-      NULL,
-      &error);
+  encoded =
+      wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (&identity,
+      &request, NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      encoded,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          encoded,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.request_id, ==, "request-encode-delivery");
   g_assert_cmpstr (decoded.caller_identity, ==, "postfix");
@@ -1877,8 +1648,10 @@ assert_delivery_ingestion_request_encoder_decodes_valid_request (void)
   g_assert_null (decoded.delivery_ingestion->recipients[2]);
 
   gsize decoded_size = 0;
-  const guint8 *decoded_bytes = static_cast<const guint8 *> (
-      g_bytes_get_data (decoded.delivery_ingestion->message_bytes,
+  const guint8 *decoded_bytes =
+      static_cast <
+      const guint8 *
+      >(g_bytes_get_data (decoded.delivery_ingestion->message_bytes,
           &decoded_size));
   g_assert_cmpuint (decoded_size, ==, sizeof (message_bytes));
   g_assert_cmpmem (decoded_bytes, decoded_size, message_bytes,
@@ -1904,37 +1677,23 @@ assert_delivery_ingestion_request_encoder_decodes_missing_optionals (void)
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_request_identity_init (&identity,
-      "request-encode-delivery-optionals",
-      "postfix",
-      "account-1",
-      "pipe-helper",
-      NULL,
-      &error));
+          "request-encode-delivery-optionals",
+          "postfix", "account-1", "pipe-helper", NULL, &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_delivery_ingestion_request_init (&request,
-      "delivery-encode-optionals",
-      NULL,
-      NULL,
-      recipients,
-      message,
-      &error));
+          "delivery-encode-optionals",
+          NULL, NULL, recipients, message, &error));
   g_assert_no_error (error);
 
-  encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
-      &identity,
-      &request,
-      NULL,
-      &error);
+  encoded =
+      wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (&identity,
+      &request, NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      encoded,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          encoded,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.correlation_id, ==, "");
   g_assert_cmpstr (decoded.delivery_ingestion->queue_id, ==, "");
@@ -1944,8 +1703,10 @@ assert_delivery_ingestion_request_encoder_decodes_missing_optionals (void)
   g_assert_null (decoded.delivery_ingestion->recipients[1]);
 
   gsize decoded_size = 0;
-  const guint8 *decoded_bytes = static_cast<const guint8 *> (
-      g_bytes_get_data (decoded.delivery_ingestion->message_bytes,
+  const guint8 *decoded_bytes =
+      static_cast <
+      const guint8 *
+      >(g_bytes_get_data (decoded.delivery_ingestion->message_bytes,
           &decoded_size));
   g_assert_cmpuint (decoded_size, ==, strlen (payload));
   g_assert_cmpmem (decoded_bytes, decoded_size, payload, strlen (payload));
@@ -1968,76 +1729,58 @@ assert_delivery_ingestion_request_encoder_rejects_invalid_input (void)
   WyreboxDaemonRequestIdentity invalid_identity = { 0 };
   WyreboxDaemonDeliveryIngestionRequest invalid_request = { 0 };
   gchar *invalid_recipients[] = {
-    const_cast<gchar *> ("rcpt@example.com"),
+    const_cast < gchar * >("rcpt@example.com"),
     NULL
   };
 
   g_assert_true (wyrebox_daemon_request_identity_init (&identity,
-      "request-encode-invalid",
-      "postfix",
-      "account-1",
-      "pipe-helper",
-      "corr-invalid",
-      &error));
+          "request-encode-invalid",
+          "postfix", "account-1", "pipe-helper", "corr-invalid", &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_delivery_ingestion_request_init (&request,
-      "delivery-invalid",
-      "QID-123",
-      "sender@example.com",
-      recipients,
-      message,
-      &error));
+          "delivery-invalid",
+          "QID-123", "sender@example.com", recipients, message, &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (NULL,
-      &request,
-      NULL,
-      &error);
+      &request, NULL, &error);
   g_assert_null (encoded);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_clear_error (&error);
 
-  encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
-      &identity,
-      NULL,
-      NULL,
-      &error);
+  encoded =
+      wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (&identity,
+      NULL, NULL, &error);
   g_assert_null (encoded);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_clear_error (&error);
 
-  encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
-      &invalid_identity,
-      &request,
-      NULL,
-      &error);
+  encoded =
+      wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request
+      (&invalid_identity, &request, NULL, &error);
   g_assert_null (encoded);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_clear_error (&error);
 
-  invalid_request.delivery_id = const_cast<char *> ("");
-  invalid_request.queue_id = const_cast<char *> ("QID-123");
-  invalid_request.envelope_sender = const_cast<char *> ("sender@example.com");
+  invalid_request.delivery_id = const_cast < char *>("");
+  invalid_request.queue_id = const_cast < char *>("QID-123");
+  invalid_request.envelope_sender = const_cast < char *>("sender@example.com");
   invalid_request.recipients = invalid_recipients;
   invalid_request.message_bytes = message;
 
-  encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
-      &identity,
-      &invalid_request,
-      NULL,
-      &error);
+  encoded =
+      wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (&identity,
+      &invalid_request, NULL, &error);
   g_assert_null (encoded);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_clear_error (&error);
 
-  invalid_request.delivery_id = const_cast<char *> ("delivery-invalid");
+  invalid_request.delivery_id = const_cast < char *>("delivery-invalid");
   invalid_request.recipients = NULL;
 
-  encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
-      &identity,
-      &invalid_request,
-      NULL,
-      &error);
+  encoded =
+      wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (&identity,
+      &invalid_request, NULL, &error);
   g_assert_null (encoded);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_clear_error (&error);
@@ -2045,11 +1788,9 @@ assert_delivery_ingestion_request_encoder_rejects_invalid_input (void)
   invalid_request.recipients = invalid_recipients;
   invalid_request.message_bytes = NULL;
 
-  encoded = wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
-      &identity,
-      &invalid_request,
-      NULL,
-      &error);
+  encoded =
+      wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (&identity,
+      &invalid_request, NULL, &error);
   g_assert_null (encoded);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 }
@@ -2058,16 +1799,11 @@ static void
 assert_request_bytes_rejects_delivery_ingestion_missing_delivery_id (void)
 {
   const char *recipients[] = { "alice@example.com", NULL };
-  g_autoptr (GBytes) request = build_delivery_ingestion_request_bytes (
-      "request-delivery-missing-delivery-id",
-      "account-1",
-      "postfix",
-      NULL,
-      "QID",
-      NULL,
-      recipients,
-      reinterpret_cast<const guint8 *> ("message-bytes"),
-      12,
+  g_autoptr (GBytes) request =
+      build_delivery_ingestion_request_bytes
+      ("request-delivery-missing-delivery-id", "account-1", "postfix", NULL,
+      "QID", NULL, recipients,
+      reinterpret_cast < const guint8 * >("message-bytes"), 12,
       "corr-delivery");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
@@ -2075,12 +1811,8 @@ assert_request_bytes_rejects_delivery_ingestion_missing_delivery_id (void)
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2090,16 +1822,11 @@ static void
 assert_request_bytes_rejects_delivery_ingestion_control_character (void)
 {
   const char *recipients[] = { "alice\nexample.com", NULL };
-  g_autoptr (GBytes) request = build_delivery_ingestion_request_bytes (
-      "request-delivery-invalid-control",
-      "account-1",
-      "postfix",
-      "delivery-123",
-      "QID",
-      NULL,
-      recipients,
-      reinterpret_cast<const guint8 *> ("message-bytes"),
-      12,
+  g_autoptr (GBytes) request =
+      build_delivery_ingestion_request_bytes
+      ("request-delivery-invalid-control", "account-1", "postfix",
+      "delivery-123", "QID", NULL, recipients,
+      reinterpret_cast < const guint8 * >("message-bytes"), 12,
       "corr-delivery");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
@@ -2107,12 +1834,8 @@ assert_request_bytes_rejects_delivery_ingestion_control_character (void)
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2121,16 +1844,11 @@ assert_request_bytes_rejects_delivery_ingestion_control_character (void)
 static void
 assert_request_bytes_rejects_delivery_ingestion_missing_recipients (void)
 {
-  g_autoptr (GBytes) request = build_delivery_ingestion_request_bytes (
-      "request-delivery-missing-recipients",
-      "account-1",
-      "postfix",
-      "delivery-123",
-      "QID",
-      NULL,
-      NULL,
-      reinterpret_cast<const guint8 *> ("message-bytes"),
-      12,
+  g_autoptr (GBytes) request =
+      build_delivery_ingestion_request_bytes
+      ("request-delivery-missing-recipients", "account-1", "postfix",
+      "delivery-123", "QID", NULL, NULL,
+      reinterpret_cast < const guint8 * >("message-bytes"), 12,
       "corr-delivery");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
@@ -2138,12 +1856,8 @@ assert_request_bytes_rejects_delivery_ingestion_missing_recipients (void)
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2153,29 +1867,18 @@ static void
 assert_request_bytes_rejects_delivery_ingestion_empty_message_bytes (void)
 {
   const char *recipients[] = { "alice@example.com", NULL };
-  g_autoptr (GBytes) request = build_delivery_ingestion_request_bytes (
-      "request-delivery-empty-message-bytes",
-      "account-1",
-      "postfix",
-      "delivery-123",
-      "QID",
-      NULL,
-      recipients,
-      NULL,
-      0,
-      "corr-delivery");
+  g_autoptr (GBytes) request =
+      build_delivery_ingestion_request_bytes
+      ("request-delivery-empty-message-bytes", "account-1", "postfix",
+      "delivery-123", "QID", NULL, recipients, NULL, 0, "corr-delivery");
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2186,28 +1889,18 @@ assert_request_bytes_decode_flag_keyword_update_set (void)
 {
   const char *system_flags[] = { "\\Seen", "\\Flagged", NULL };
   const char *user_keywords[] = { "project", "todo", NULL };
-  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      42,
-      FlagKeywordUpdateMode::SET,
-      system_flags,
-      user_keywords);
+  g_autoptr (GBytes) request =
+      build_flag_keyword_update_request_bytes ("request-flag-keyword",
+      "account-1", "account-1", "mailbox-inbox", 77, 42,
+      FlagKeywordUpdateMode::SET, system_flags, user_keywords);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.request_id, ==, "request-flag-keyword");
   g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
@@ -2220,8 +1913,10 @@ assert_request_bytes_decode_flag_keyword_update_set (void)
   g_assert_cmpint (decoded.flag_keyword_update->mode, ==,
       WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET);
   g_assert_cmpstr (decoded.flag_keyword_update->system_flags[0], ==, "\\Seen");
-  g_assert_cmpstr (decoded.flag_keyword_update->system_flags[1], ==, "\\Flagged");
-  g_assert_cmpstr (decoded.flag_keyword_update->user_keywords[0], ==, "project");
+  g_assert_cmpstr (decoded.flag_keyword_update->system_flags[1], ==,
+      "\\Flagged");
+  g_assert_cmpstr (decoded.flag_keyword_update->user_keywords[0], ==,
+      "project");
   g_assert_cmpstr (decoded.flag_keyword_update->user_keywords[1], ==, "todo");
 
   g_assert_nonnull (decoded_state_clear);
@@ -2234,48 +1929,26 @@ assert_request_bytes_decode_flag_keyword_update_mode_mapping (void)
 {
   const char *system_flags[] = { "\\Seen", NULL };
   const char *user_keywords[] = { "project", NULL };
-  g_autoptr (GBytes) clear_request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword-clear",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      42,
-      FlagKeywordUpdateMode::CLEAR,
-      system_flags,
-      user_keywords);
-  g_autoptr (GBytes) replace_request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword-replace",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      42,
-      FlagKeywordUpdateMode::REPLACE,
-      NULL,
-      NULL);
-  g_autoptr (GBytes) set_request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword-set",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      42,
-      FlagKeywordUpdateMode::SET,
-      system_flags,
-      NULL);
+  g_autoptr (GBytes) clear_request =
+      build_flag_keyword_update_request_bytes ("request-flag-keyword-clear",
+      "account-1", "account-1", "mailbox-inbox", 77, 42,
+      FlagKeywordUpdateMode::CLEAR, system_flags, user_keywords);
+  g_autoptr (GBytes) replace_request =
+      build_flag_keyword_update_request_bytes ("request-flag-keyword-replace",
+      "account-1", "account-1", "mailbox-inbox", 77, 42,
+      FlagKeywordUpdateMode::REPLACE, NULL, NULL);
+  g_autoptr (GBytes) set_request =
+      build_flag_keyword_update_request_bytes ("request-flag-keyword-set",
+      "account-1", "account-1", "mailbox-inbox", 77, 42,
+      FlagKeywordUpdateMode::SET, system_flags, NULL);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      set_request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          set_request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpint (decoded.flag_keyword_update->mode, ==,
       WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET);
@@ -2283,12 +1956,8 @@ assert_request_bytes_decode_flag_keyword_update_mode_mapping (void)
   decoded_state_clear (decoded_state);
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      clear_request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          clear_request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpint (decoded.flag_keyword_update->mode, ==,
       WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_CLEAR);
@@ -2296,12 +1965,8 @@ assert_request_bytes_decode_flag_keyword_update_mode_mapping (void)
   decoded_state_clear (decoded_state);
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      replace_request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          replace_request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpint (decoded.flag_keyword_update->mode, ==,
       WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_REPLACE);
@@ -2312,28 +1977,18 @@ assert_request_bytes_decode_flag_keyword_update_mode_mapping (void)
 static void
 assert_request_bytes_decode_flag_keyword_update_replace_empty_payload (void)
 {
-  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword-replace-empty",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      42,
-      FlagKeywordUpdateMode::REPLACE,
-      NULL,
-      NULL);
+  g_autoptr (GBytes) request =
+      build_flag_keyword_update_request_bytes
+      ("request-flag-keyword-replace-empty", "account-1", "account-1",
+      "mailbox-inbox", 77, 42, FlagKeywordUpdateMode::REPLACE, NULL, NULL);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpint (decoded.flag_keyword_update->mode, ==,
       WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_REPLACE);
@@ -2355,7 +2010,7 @@ assert_request_bytes_rejects_flag_keyword_update_invalid_mode (void)
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
   capnp::MallocMessageBuilder request_builder;
-  auto request_frame = request_builder.initRoot<RequestFrame> ();
+  auto request_frame = request_builder.initRoot < RequestFrame > ();
   auto identity = request_frame.initIdentity ();
 
   identity.setRequestId ("request-flag-keyword-invalid-mode");
@@ -2369,7 +2024,8 @@ assert_request_bytes_rejects_flag_keyword_update_invalid_mode (void)
   flag_keyword_update_request.setMailboxId ("mailbox-inbox");
   flag_keyword_update_request.setUidValidity (77);
   flag_keyword_update_request.setMailboxUid (42);
-  flag_keyword_update_request.setMode (static_cast<FlagKeywordUpdateMode> (99));
+  flag_keyword_update_request.setMode (static_cast < FlagKeywordUpdateMode >
+      (99));
   auto encoded_system_flags = flag_keyword_update_request.initSystemFlags (1);
   encoded_system_flags.set (0, system_flags[0]);
 
@@ -2378,12 +2034,8 @@ assert_request_bytes_rejects_flag_keyword_update_invalid_mode (void)
   request = g_bytes_new (bytes.begin (), bytes.size ());
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2392,28 +2044,18 @@ assert_request_bytes_rejects_flag_keyword_update_invalid_mode (void)
 static void
 assert_request_bytes_rejects_flag_keyword_update_missing_payload_for_set (void)
 {
-  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword-missing-payload",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      42,
-      FlagKeywordUpdateMode::SET,
-      NULL,
-      NULL);
+  g_autoptr (GBytes) request =
+      build_flag_keyword_update_request_bytes
+      ("request-flag-keyword-missing-payload", "account-1", "account-1",
+      "mailbox-inbox", 77, 42, FlagKeywordUpdateMode::SET, NULL, NULL);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2423,28 +2065,18 @@ static void
 assert_request_bytes_rejects_flag_keyword_update_missing_account (void)
 {
   const char *system_flags[] = { "\\Seen", NULL };
-  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword-missing-account",
-      "account-1",
-      "",
-      "mailbox-inbox",
-      77,
-      42,
-      FlagKeywordUpdateMode::SET,
-      system_flags,
-      NULL);
+  g_autoptr (GBytes) request =
+      build_flag_keyword_update_request_bytes
+      ("request-flag-keyword-missing-account", "account-1", "", "mailbox-inbox",
+      77, 42, FlagKeywordUpdateMode::SET, system_flags, NULL);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2454,28 +2086,18 @@ static void
 assert_request_bytes_rejects_flag_keyword_update_missing_mailbox (void)
 {
   const char *system_flags[] = { "\\Seen", NULL };
-  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword-missing-mailbox",
-      "account-1",
-      "account-1",
-      "",
-      77,
-      42,
-      FlagKeywordUpdateMode::SET,
-      system_flags,
-      NULL);
+  g_autoptr (GBytes) request =
+      build_flag_keyword_update_request_bytes
+      ("request-flag-keyword-missing-mailbox", "account-1", "account-1", "", 77,
+      42, FlagKeywordUpdateMode::SET, system_flags, NULL);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2485,28 +2107,18 @@ static void
 assert_request_bytes_rejects_flag_keyword_update_zero_uid_validity (void)
 {
   const char *system_flags[] = { "\\Seen", NULL };
-  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword-zero-uid-validity",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      0,
-      42,
-      FlagKeywordUpdateMode::SET,
-      system_flags,
-      NULL);
+  g_autoptr (GBytes) request =
+      build_flag_keyword_update_request_bytes
+      ("request-flag-keyword-zero-uid-validity", "account-1", "account-1",
+      "mailbox-inbox", 0, 42, FlagKeywordUpdateMode::SET, system_flags, NULL);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2516,28 +2128,18 @@ static void
 assert_request_bytes_rejects_flag_keyword_update_zero_mailbox_uid (void)
 {
   const char *system_flags[] = { "\\Seen", NULL };
-  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword-zero-mailbox-uid",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      0,
-      FlagKeywordUpdateMode::SET,
-      system_flags,
-      NULL);
+  g_autoptr (GBytes) request =
+      build_flag_keyword_update_request_bytes
+      ("request-flag-keyword-zero-mailbox-uid", "account-1", "account-1",
+      "mailbox-inbox", 77, 0, FlagKeywordUpdateMode::SET, system_flags, NULL);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2547,28 +2149,18 @@ static void
 assert_request_bytes_rejects_flag_keyword_update_unknown_system_flag (void)
 {
   const char *system_flags[] = { "not-a-system-flag", NULL };
-  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword-unknown-system-flag",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      42,
-      FlagKeywordUpdateMode::SET,
-      system_flags,
-      NULL);
+  g_autoptr (GBytes) request =
+      build_flag_keyword_update_request_bytes
+      ("request-flag-keyword-unknown-system-flag", "account-1", "account-1",
+      "mailbox-inbox", 77, 42, FlagKeywordUpdateMode::SET, system_flags, NULL);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2578,28 +2170,18 @@ static void
 assert_request_bytes_rejects_flag_keyword_update_recent_system_flag (void)
 {
   const char *system_flags[] = { "\\Recent", NULL };
-  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword-recent-system-flag",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      42,
-      FlagKeywordUpdateMode::SET,
-      system_flags,
-      NULL);
+  g_autoptr (GBytes) request =
+      build_flag_keyword_update_request_bytes
+      ("request-flag-keyword-recent-system-flag", "account-1", "account-1",
+      "mailbox-inbox", 77, 42, FlagKeywordUpdateMode::SET, system_flags, NULL);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2609,28 +2191,18 @@ static void
 assert_request_bytes_rejects_flag_keyword_update_system_flag_keyword (void)
 {
   const char *user_keywords[] = { "\\Seen", NULL };
-  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword-system-flag-keyword",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      42,
-      FlagKeywordUpdateMode::SET,
-      NULL,
-      user_keywords);
+  g_autoptr (GBytes) request =
+      build_flag_keyword_update_request_bytes
+      ("request-flag-keyword-system-flag-keyword", "account-1", "account-1",
+      "mailbox-inbox", 77, 42, FlagKeywordUpdateMode::SET, NULL, user_keywords);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2640,28 +2212,18 @@ static void
 assert_request_bytes_rejects_flag_keyword_update_invalid_keyword (void)
 {
   const char *user_keywords[] = { "needs review", NULL };
-  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword-invalid-keyword",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      42,
-      FlagKeywordUpdateMode::SET,
-      NULL,
-      user_keywords);
+  g_autoptr (GBytes) request =
+      build_flag_keyword_update_request_bytes
+      ("request-flag-keyword-invalid-keyword", "account-1", "account-1",
+      "mailbox-inbox", 77, 42, FlagKeywordUpdateMode::SET, NULL, user_keywords);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2671,28 +2233,18 @@ static void
 assert_request_bytes_rejects_flag_keyword_update_duplicate_flag (void)
 {
   const char *system_flags[] = { "\\Seen", "\\Seen", NULL };
-  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword-duplicate-flag",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      42,
-      FlagKeywordUpdateMode::SET,
-      system_flags,
-      NULL);
+  g_autoptr (GBytes) request =
+      build_flag_keyword_update_request_bytes
+      ("request-flag-keyword-duplicate-flag", "account-1", "account-1",
+      "mailbox-inbox", 77, 42, FlagKeywordUpdateMode::SET, system_flags, NULL);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2702,28 +2254,18 @@ static void
 assert_request_bytes_rejects_flag_keyword_update_duplicate_keyword (void)
 {
   const char *user_keywords[] = { "project", "project", NULL };
-  g_autoptr (GBytes) request = build_flag_keyword_update_request_bytes (
-      "request-flag-keyword-duplicate-keyword",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      42,
-      FlagKeywordUpdateMode::SET,
-      NULL,
-      user_keywords);
+  g_autoptr (GBytes) request =
+      build_flag_keyword_update_request_bytes
+      ("request-flag-keyword-duplicate-keyword", "account-1", "account-1",
+      "mailbox-inbox", 77, 42, FlagKeywordUpdateMode::SET, NULL, user_keywords);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2732,25 +2274,17 @@ assert_request_bytes_rejects_flag_keyword_update_duplicate_keyword (void)
 static void
 assert_request_bytes_rejects_message_fetch_missing_account_identity (void)
 {
-  g_autoptr (GBytes) request = build_message_fetch_request_bytes (
-      "request-fetch-missing-account",
-      "account-1",
-      "",
-      "mailbox-inbox",
-      77,
-      42);
+  g_autoptr (GBytes) request =
+      build_message_fetch_request_bytes ("request-fetch-missing-account",
+      "account-1", "", "mailbox-inbox", 77, 42);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2759,25 +2293,17 @@ assert_request_bytes_rejects_message_fetch_missing_account_identity (void)
 static void
 assert_request_bytes_rejects_message_fetch_missing_mailbox_id (void)
 {
-  g_autoptr (GBytes) request = build_message_fetch_request_bytes (
-      "request-fetch-missing-mailbox",
-      "account-1",
-      "account-1",
-      "",
-      77,
-      42);
+  g_autoptr (GBytes) request =
+      build_message_fetch_request_bytes ("request-fetch-missing-mailbox",
+      "account-1", "account-1", "", 77, 42);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2786,25 +2312,17 @@ assert_request_bytes_rejects_message_fetch_missing_mailbox_id (void)
 static void
 assert_request_bytes_rejects_message_fetch_zero_uid_validity (void)
 {
-  g_autoptr (GBytes) request = build_message_fetch_request_bytes (
-      "request-fetch-zero-uid-validity",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      0,
-      42);
+  g_autoptr (GBytes) request =
+      build_message_fetch_request_bytes ("request-fetch-zero-uid-validity",
+      "account-1", "account-1", "mailbox-inbox", 0, 42);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2813,25 +2331,17 @@ assert_request_bytes_rejects_message_fetch_zero_uid_validity (void)
 static void
 assert_request_bytes_rejects_message_fetch_zero_mailbox_uid (void)
 {
-  g_autoptr (GBytes) request = build_message_fetch_request_bytes (
-      "request-fetch-zero-mailbox-uid",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      0);
+  g_autoptr (GBytes) request =
+      build_message_fetch_request_bytes ("request-fetch-zero-mailbox-uid",
+      "account-1", "account-1", "mailbox-inbox", 77, 0);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2841,26 +2351,18 @@ static void
 assert_request_bytes_decode_fact_mutation_insert (void)
 {
   const char *arguments[] = { "mail-1", "project-a", NULL };
-  g_autoptr (GBytes) request = build_fact_mutation_request_bytes (
-      FactMutationKind::INSERT,
-      "request-fact-insert",
-      "skill",
-      "account-1",
-      "project_mention",
-      "account-1",
-      arguments);
+  g_autoptr (GBytes) request =
+      build_fact_mutation_request_bytes (FactMutationKind::INSERT,
+      "request-fact-insert", "skill", "account-1", "project_mention",
+      "account-1", arguments);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.request_id, ==, "request-fact-insert");
   g_assert_cmpstr (decoded.caller_identity, ==, "skill");
@@ -2872,8 +2374,7 @@ assert_request_bytes_decode_fact_mutation_insert (void)
   g_assert_nonnull (decoded.fact_mutation);
   g_assert_cmpint (decoded.fact_mutation->mutation, ==,
       WYREBOX_DAEMON_FACT_MUTATION_INSERT);
-  g_assert_cmpstr (decoded.fact_mutation->predicate_id, ==,
-      "project_mention");
+  g_assert_cmpstr (decoded.fact_mutation->predicate_id, ==, "project_mention");
   g_assert_cmpstr (decoded.fact_mutation->scope_id, ==, "account-1");
   g_assert_cmpstr (decoded.fact_mutation->arguments[0], ==, "mail-1");
   g_assert_cmpstr (decoded.fact_mutation->arguments[1], ==, "project-a");
@@ -2889,26 +2390,18 @@ static void
 assert_request_bytes_decode_fact_mutation_retract (void)
 {
   const char *arguments[] = { "mail-1", NULL };
-  g_autoptr (GBytes) request = build_fact_mutation_request_bytes (
-      FactMutationKind::RETRACT,
-      "request-fact-retract",
-      "skill",
-      "account-1",
-      "project_mention",
-      "account-1",
-      arguments);
+  g_autoptr (GBytes) request =
+      build_fact_mutation_request_bytes (FactMutationKind::RETRACT,
+      "request-fact-retract", "skill", "account-1", "project_mention",
+      "account-1", arguments);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpint (decoded.operation, ==,
       WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_MUTATION);
@@ -2927,26 +2420,17 @@ static void
 assert_fact_mutation_decode_rejects_missing_predicate (void)
 {
   const char *arguments[] = { "mail-1", NULL };
-  g_autoptr (GBytes) request = build_fact_mutation_request_bytes (
-      FactMutationKind::INSERT,
-      "request-fact-invalid",
-      "skill",
-      "account-1",
-      "",
-      "account-1",
-      arguments);
+  g_autoptr (GBytes) request =
+      build_fact_mutation_request_bytes (FactMutationKind::INSERT,
+      "request-fact-invalid", "skill", "account-1", "", "account-1", arguments);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2956,13 +2440,9 @@ static void
 assert_fact_mutation_decode_rejects_missing_scope (void)
 {
   const char *arguments[] = { "mail-1", NULL };
-  g_autoptr (GBytes) request = build_fact_mutation_request_bytes (
-      FactMutationKind::INSERT,
-      "request-fact-invalid",
-      "skill",
-      "account-1",
-      "project_mention",
-      "",
+  g_autoptr (GBytes) request =
+      build_fact_mutation_request_bytes (FactMutationKind::INSERT,
+      "request-fact-invalid", "skill", "account-1", "project_mention", "",
       arguments);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
@@ -2970,12 +2450,8 @@ assert_fact_mutation_decode_rejects_missing_scope (void)
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -2985,26 +2461,18 @@ static void
 assert_fact_mutation_decode_rejects_empty_argument (void)
 {
   const char *arguments[] = { "", NULL };
-  g_autoptr (GBytes) request = build_fact_mutation_request_bytes (
-      FactMutationKind::INSERT,
-      "request-fact-invalid",
-      "skill",
-      "account-1",
-      "project_mention",
-      "account-1",
-      arguments);
+  g_autoptr (GBytes) request =
+      build_fact_mutation_request_bytes (FactMutationKind::INSERT,
+      "request-fact-invalid", "skill", "account-1", "project_mention",
+      "account-1", arguments);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -3017,36 +2485,29 @@ assert_request_bytes_decode_fact_batch_import (void)
   const char *retract_arguments[] = { "mail-2", NULL };
   const FactBatchImportEntryFixture entries[] = {
     {
-      FactMutationKind::INSERT,
-      "project_mention",
-      "account-1",
-      insert_arguments,
-    },
+          FactMutationKind::INSERT,
+          "project_mention",
+          "account-1",
+          insert_arguments,
+        },
     {
-      FactMutationKind::RETRACT,
-      "reference_candidate",
-      "account-1",
-      retract_arguments,
-    },
+          FactMutationKind::RETRACT,
+          "reference_candidate",
+          "account-1",
+          retract_arguments,
+        },
   };
-  g_autoptr (GBytes) request = build_fact_batch_import_request_bytes (
-      "request-fact-batch",
-      "trusted-tool",
-      "account-1",
-      entries,
-      G_N_ELEMENTS (entries));
+  g_autoptr (GBytes) request =
+      build_fact_batch_import_request_bytes ("request-fact-batch",
+      "trusted-tool", "account-1", entries, G_N_ELEMENTS (entries));
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpstr (decoded.request_id, ==, "request-fact-batch");
   g_assert_cmpstr (decoded.caller_identity, ==, "trusted-tool");
@@ -3084,24 +2545,17 @@ assert_request_bytes_decode_fact_batch_import (void)
 static void
 assert_fact_batch_import_decode_rejects_empty_batch (void)
 {
-  g_autoptr (GBytes) request = build_fact_batch_import_request_bytes (
-      "request-fact-batch-invalid",
-      "trusted-tool",
-      "account-1",
-      NULL,
-      0);
+  g_autoptr (GBytes) request =
+      build_fact_batch_import_request_bytes ("request-fact-batch-invalid",
+      "trusted-tool", "account-1", NULL, 0);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -3128,20 +2582,12 @@ assert_fact_batch_import_decode_rejects_over_limit_batch (void)
     entries[i].arguments = arguments;
   }
 
-  request = build_fact_batch_import_request_bytes (
-      "request-fact-batch-invalid",
-      "trusted-tool",
-      "account-1",
-      entries,
-      n_entries);
+  request = build_fact_batch_import_request_bytes ("request-fact-batch-invalid",
+      "trusted-tool", "account-1", entries, n_entries);
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -3154,36 +2600,29 @@ assert_fact_batch_import_decode_rejects_invalid_nested_mutation (void)
   const char *invalid_arguments[] = { "", NULL };
   const FactBatchImportEntryFixture entries[] = {
     {
-      FactMutationKind::INSERT,
-      "project_mention",
-      "account-1",
-      valid_arguments,
-    },
+          FactMutationKind::INSERT,
+          "project_mention",
+          "account-1",
+          valid_arguments,
+        },
     {
-      FactMutationKind::RETRACT,
-      "project_mention",
-      "account-1",
-      invalid_arguments,
-    },
+          FactMutationKind::RETRACT,
+          "project_mention",
+          "account-1",
+          invalid_arguments,
+        },
   };
-  g_autoptr (GBytes) request = build_fact_batch_import_request_bytes (
-      "request-fact-batch-invalid",
-      "trusted-tool",
-      "account-1",
-      entries,
-      G_N_ELEMENTS (entries));
+  g_autoptr (GBytes) request =
+      build_fact_batch_import_request_bytes ("request-fact-batch-invalid",
+      "trusted-tool", "account-1", entries, G_N_ELEMENTS (entries));
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -3195,36 +2634,29 @@ assert_fact_batch_import_decode_rejects_mixed_scope (void)
   const char *arguments[] = { "mail-1", NULL };
   const FactBatchImportEntryFixture entries[] = {
     {
-      FactMutationKind::INSERT,
-      "project_mention",
-      "account-1",
-      arguments,
-    },
+          FactMutationKind::INSERT,
+          "project_mention",
+          "account-1",
+          arguments,
+        },
     {
-      FactMutationKind::RETRACT,
-      "project_mention",
-      "account-2",
-      arguments,
-    },
+          FactMutationKind::RETRACT,
+          "project_mention",
+          "account-2",
+          arguments,
+        },
   };
-  g_autoptr (GBytes) request = build_fact_batch_import_request_bytes (
-      "request-fact-batch-invalid",
-      "trusted-tool",
-      "account-1",
-      entries,
-      G_N_ELEMENTS (entries));
+  g_autoptr (GBytes) request =
+      build_fact_batch_import_request_bytes ("request-fact-batch-invalid",
+      "trusted-tool", "account-1", entries, G_N_ELEMENTS (entries));
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
   GDestroyNotify decoded_state_clear = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-      request,
-      &decoded,
-      &decoded_state,
-      &decoded_state_clear,
-      NULL,
-      &error));
+          request,
+          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (decoded_state);
   g_assert_null (decoded_state_clear);
@@ -3240,109 +2672,89 @@ assert_response_bytes_encode_mailbox_list (void)
 
   wyrebox_daemon_mailbox_list_result_init_empty (&result);
   g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
-      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
-      "mailbox-inbox",
-      "INBOX",
-      "/",
-      "\\Inbox",
-      TRUE,
-      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN,
-      &error));
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "mailbox-inbox",
+          "INBOX",
+          "/",
+          "\\Inbox",
+          TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, &error));
   g_assert_no_error (error);
 
   g_assert_true (wyrebox_daemon_response_frame_init_mailbox_list (&response,
-      "request-1",
-      "corr-1",
-      &result,
-      &error));
+          "request-1", "corr-1", &result, &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
-      NULL,
-      &error);
+      NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (encoded, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (encoded, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader reader (words);
 
-  auto response_frame = reader.getRoot<ResponseFrame> ();
+  auto response_frame = reader.getRoot < ResponseFrame > ();
   g_assert_true (response_frame.which () == ResponseFrame::MAILBOX_LIST);
   g_assert_cmpstr (response_frame.getMailboxList ().getRequestId ().cStr (), ==,
       "request-1");
-  g_assert_cmpuint (response_frame.getMailboxList ().getEntries ().size (), ==, 1);
-  g_assert_cmpstr (response_frame.getMailboxList ().getEntries ()[0].getMailboxId ().cStr (),
-      ==,
-      "mailbox-inbox");
-  g_assert_cmpstr (
-      response_frame.getMailboxList ().getEntries ()[0].getHierarchyDelimiter ().cStr (),
-      ==,
-      "/");
+  g_assert_cmpuint (response_frame.getMailboxList ().getEntries ().size (), ==,
+      1);
+  g_assert_cmpstr (response_frame.getMailboxList ().
+      getEntries ()[0].getMailboxId ().cStr (), ==, "mailbox-inbox");
+  g_assert_cmpstr (response_frame.getMailboxList ().
+      getEntries ()[0].getHierarchyDelimiter ().cStr (), ==, "/");
 }
 
 static void
 assert_response_bytes_encode_mailbox_select (void)
 {
-  g_auto (WyreboxDaemonMailboxSelectResult) result = {};
+  g_auto (WyreboxDaemonMailboxSelectResult) result = { };
   g_auto (WyreboxDaemonResponseFrame) response = { 0 };
   g_autoptr (GError) error = NULL;
   g_autoptr (GBytes) encoded = NULL;
 
   g_assert_true (wyrebox_daemon_mailbox_select_result_init (&result,
-      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
-      "view-project-a",
-      "Projects/Project A",
-      99,
-      1234,
-      56,
-      &error));
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
+          "view-project-a", "Projects/Project A", 99, 1234, 56, &error));
   g_assert_no_error (error);
 
   g_assert_true (wyrebox_daemon_response_frame_init_mailbox_select (&response,
-      "request-select-response",
-      "corr-select-response",
-      &result,
-      &error));
+          "request-select-response", "corr-select-response", &result, &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
-      NULL,
-      &error);
+      NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (encoded, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (encoded, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader reader (words);
 
-  auto response_frame = reader.getRoot<ResponseFrame> ();
+  auto response_frame = reader.getRoot < ResponseFrame > ();
   g_assert_true (response_frame.which () == ResponseFrame::MAILBOX_SELECT);
   g_assert_cmpstr (response_frame.getRequestId ().cStr (), ==,
       "request-select-response");
   g_assert_cmpstr (response_frame.getCorrelationId ().cStr (), ==,
       "corr-select-response");
   g_assert_cmpstr (response_frame.getMailboxSelect ().getRequestId ().cStr (),
-      ==,
-      "request-select-response");
+      ==, "request-select-response");
   g_assert_true (response_frame.getMailboxSelect ().getKind () ==
       MailboxListEntryKind::VIRTUAL);
   g_assert_cmpstr (response_frame.getMailboxSelect ().getMailboxId ().cStr (),
-      ==,
-      "view-project-a");
+      ==, "view-project-a");
   g_assert_cmpstr (response_frame.getMailboxSelect ().getMailboxName ().cStr (),
-      ==,
-      "Projects/Project A");
+      ==, "Projects/Project A");
   g_assert_cmpuint (response_frame.getMailboxSelect ().getUidValidity (), ==,
       99);
-  g_assert_cmpuint (response_frame.getMailboxSelect ().getUidNext (), ==,
-      1234);
+  g_assert_cmpuint (response_frame.getMailboxSelect ().getUidNext (), ==, 1234);
   g_assert_cmpuint (response_frame.getMailboxSelect ().getMessageCount (), ==,
       56);
 }
@@ -3350,40 +2762,31 @@ assert_response_bytes_encode_mailbox_select (void)
 static void
 assert_response_bytes_decode_mailbox_select_roundtrip (void)
 {
-  g_auto (WyreboxDaemonMailboxSelectResult) result = {};
+  g_auto (WyreboxDaemonMailboxSelectResult) result = { };
   g_auto (WyreboxDaemonResponseFrame) response = { 0 };
   g_auto (WyreboxDaemonResponseFrame) decoded = { 0 };
   g_autoptr (GError) error = NULL;
   g_autoptr (GBytes) encoded = NULL;
 
   g_assert_true (wyrebox_daemon_mailbox_select_result_init (&result,
-      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
-      "view-project-a",
-      "Projects/Project A",
-      99,
-      1234,
-      56,
-      &error));
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
+          "view-project-a", "Projects/Project A", 99, 1234, 56, &error));
   g_assert_no_error (error);
 
   g_assert_true (wyrebox_daemon_response_frame_init_mailbox_select (&response,
-      "request-select-decode",
-      "corr-select-decode",
-      &result,
-      &error));
+          "request-select-decode", "corr-select-decode", &result, &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
-      NULL,
-      &error);
+      NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (encoded,
-      &decoded,
-      &error));
+          &decoded, &error));
   g_assert_no_error (error);
-  g_assert_cmpint (decoded.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_SELECT);
+  g_assert_cmpint (decoded.kind, ==,
+      WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_SELECT);
   g_assert_cmpstr (decoded.request_id, ==, "request-select-decode");
   g_assert_cmpstr (decoded.correlation_id, ==, "corr-select-decode");
   g_assert_cmpint (decoded.mailbox_select.kind, ==,
@@ -3403,7 +2806,7 @@ assert_response_bytes_rejects_mailbox_select_missing_payload_request_id (void)
   g_autoptr (GBytes) encoded = NULL;
   g_autoptr (GError) error = NULL;
   capnp::MallocMessageBuilder response_builder;
-  auto response_frame = response_builder.initRoot<ResponseFrame> ();
+  auto response_frame = response_builder.initRoot < ResponseFrame > ();
   auto response_select = response_frame.initMailboxSelect ();
 
   response_frame.setRequestId ("request-mailbox-select-invalid");
@@ -3420,19 +2823,19 @@ assert_response_bytes_rejects_mailbox_select_missing_payload_request_id (void)
   encoded = g_bytes_new (bytes.begin (), bytes.size ());
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_response_frame (encoded,
-      &decoded,
-      &error));
+          &decoded, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 }
 
 static void
-assert_response_bytes_rejects_mailbox_select_mismatched_payload_request_id (void)
+    assert_response_bytes_rejects_mailbox_select_mismatched_payload_request_id
+    (void)
 {
   g_auto (WyreboxDaemonResponseFrame) decoded = { 0 };
   g_autoptr (GBytes) encoded = NULL;
   g_autoptr (GError) error = NULL;
   capnp::MallocMessageBuilder response_builder;
-  auto response_frame = response_builder.initRoot<ResponseFrame> ();
+  auto response_frame = response_builder.initRoot < ResponseFrame > ();
   auto response_select = response_frame.initMailboxSelect ();
 
   response_frame.setRequestId ("request-envelope");
@@ -3449,8 +2852,7 @@ assert_response_bytes_rejects_mailbox_select_mismatched_payload_request_id (void
   encoded = g_bytes_new (bytes.begin (), bytes.size ());
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_response_frame (encoded,
-      &decoded,
-      &error));
+          &decoded, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 }
 
@@ -3461,7 +2863,7 @@ assert_response_bytes_rejects_mailbox_select_invalid_fields (void)
   g_autoptr (GBytes) encoded = NULL;
   g_autoptr (GError) error = NULL;
   capnp::MallocMessageBuilder response_builder;
-  auto response_frame = response_builder.initRoot<ResponseFrame> ();
+  auto response_frame = response_builder.initRoot < ResponseFrame > ();
   auto response_select = response_frame.initMailboxSelect ();
 
   response_frame.setRequestId ("request-mailbox-select-invalid");
@@ -3478,8 +2880,7 @@ assert_response_bytes_rejects_mailbox_select_invalid_fields (void)
   encoded = g_bytes_new (bytes.begin (), bytes.size ());
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_response_frame (encoded,
-      &decoded,
-      &error));
+          &decoded, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 }
 
@@ -3495,35 +2896,27 @@ assert_response_bytes_encode_stream_chunk (void)
   g_autoptr (GBytes) encoded = NULL;
 
   g_assert_true (wyrebox_daemon_stream_chunk_frame_init (&chunk,
-      "request-stream",
-      "message-1",
-      NULL,
-      "corr-stream",
-      42,
-      chunk_bytes,
-      FALSE,
-      &error));
+          "request-stream",
+          "message-1", NULL, "corr-stream", 42, chunk_bytes, FALSE, &error));
   g_assert_no_error (error);
 
   g_assert_true (wyrebox_daemon_response_frame_init_stream_chunk (&response,
-      &chunk,
-      &error));
+          &chunk, &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
-      NULL,
-      &error);
+      NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (encoded, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (encoded, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader reader (words);
 
-  auto response_frame = reader.getRoot<ResponseFrame> ();
+  auto response_frame = reader.getRoot < ResponseFrame > ();
   g_assert_true (response_frame.which () == ResponseFrame::STREAM_CHUNK);
   g_assert_cmpstr (response_frame.getRequestId ().cStr (), ==,
       "request-stream");
@@ -3536,8 +2929,7 @@ assert_response_bytes_encode_stream_chunk (void)
   g_assert_cmpstr (response_frame.getStreamChunk ().getQueryId ().cStr (), ==,
       "");
   g_assert_cmpstr (response_frame.getStreamChunk ().getCorrelationId ().cStr (),
-      ==,
-      "corr-stream");
+      ==, "corr-stream");
   g_assert_cmpuint (response_frame.getStreamChunk ().getChunkIndex (), ==, 42);
   g_assert_false (response_frame.getStreamChunk ().getEndOfStream ());
   g_assert_cmpuint (response_frame.getStreamChunk ().getBytes ().size (), ==,
@@ -3567,8 +2959,7 @@ assert_response_bytes_reject_ambiguous_stream_chunk (void)
   response.stream_chunk.bytes = g_bytes_ref (chunk_bytes);
 
   encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
-      NULL,
-      &error);
+      NULL, &error);
   g_assert_null (encoded);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 }
@@ -3591,8 +2982,7 @@ assert_response_bytes_reject_mismatched_stream_chunk_request (void)
   response.stream_chunk.bytes = g_bytes_ref (chunk_bytes);
 
   encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
-      NULL,
-      &error);
+      NULL, &error);
   g_assert_null (encoded);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 }
@@ -3606,35 +2996,27 @@ assert_response_bytes_encode_final_empty_stream_chunk (void)
   g_autoptr (GBytes) encoded = NULL;
 
   g_assert_true (wyrebox_daemon_stream_chunk_frame_init (&chunk,
-      "request-stream-final",
-      NULL,
-      "query-1",
-      NULL,
-      43,
-      NULL,
-      TRUE,
-      &error));
+          "request-stream-final",
+          NULL, "query-1", NULL, 43, NULL, TRUE, &error));
   g_assert_no_error (error);
 
   g_assert_true (wyrebox_daemon_response_frame_init_stream_chunk (&response,
-      &chunk,
-      &error));
+          &chunk, &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
-      NULL,
-      &error);
+      NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (encoded, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (encoded, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader reader (words);
 
-  auto response_frame = reader.getRoot<ResponseFrame> ();
+  auto response_frame = reader.getRoot < ResponseFrame > ();
   g_assert_true (response_frame.which () == ResponseFrame::STREAM_CHUNK);
   g_assert_cmpstr (response_frame.getStreamChunk ().getRequestId ().cStr (), ==,
       "request-stream-final");
@@ -3644,7 +3026,8 @@ assert_response_bytes_encode_final_empty_stream_chunk (void)
       "query-1");
   g_assert_cmpuint (response_frame.getStreamChunk ().getChunkIndex (), ==, 43);
   g_assert_true (response_frame.getStreamChunk ().getEndOfStream ());
-  g_assert_cmpuint (response_frame.getStreamChunk ().getBytes ().size (), ==, 0);
+  g_assert_cmpuint (response_frame.getStreamChunk ().getBytes ().size (), ==,
+      0);
 }
 
 static void
@@ -3656,95 +3039,78 @@ assert_response_bytes_encode_error (void)
   g_autoptr (GBytes) encoded = NULL;
 
   g_assert_true (wyrebox_daemon_error_frame_init (&error_frame,
-      "request-2",
-      WYREBOX_DAEMON_ERROR_PERMISSION_DENIED,
-      "denied",
-      "retry",
-      &error));
+          "request-2",
+          WYREBOX_DAEMON_ERROR_PERMISSION_DENIED, "denied", "retry", &error));
   g_assert_no_error (error);
 
   g_assert_true (wyrebox_daemon_response_frame_init_error (&response,
-      &error_frame,
-      "corr-2",
-      &error));
+          &error_frame, "corr-2", &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
-      NULL,
-      &error);
+      NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (encoded, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (encoded, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader reader (words);
 
-  auto response_frame = reader.getRoot<ResponseFrame> ();
+  auto response_frame = reader.getRoot < ResponseFrame > ();
   g_assert_true (response_frame.which () == ResponseFrame::ERROR);
   g_assert_cmpstr (response_frame.getError ().getRequestId ().cStr (), ==,
       "request-2");
-  g_assert_true (
-      response_frame.getError ().getErrorClass () == ErrorClass::PERMISSION_DENIED);
-  g_assert_cmpstr (response_frame.getError ().getMessage ().cStr (), ==, "denied");
+  g_assert_true (response_frame.getError ().getErrorClass () ==
+      ErrorClass::PERMISSION_DENIED);
+  g_assert_cmpstr (response_frame.getError ().getMessage ().cStr (), ==,
+      "denied");
 }
 
 static void
 assert_response_bytes_encode_success (void)
 {
   const char *arguments[] = { "mail-1", NULL };
-  g_auto (WyreboxDaemonFactMutationRequest) request = {};
+  g_auto (WyreboxDaemonFactMutationRequest) request = { };
   g_auto (WyreboxDaemonResponseFrame) response = { 0 };
   g_autoptr (GError) error = NULL;
   g_autoptr (GBytes) encoded = NULL;
 
   g_assert_true (wyrebox_daemon_fact_mutation_request_init (&request,
-      WYREBOX_DAEMON_FACT_MUTATION_INSERT,
-      "project_mention",
-      "account-1",
-      arguments,
-      &error));
+          WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+          "project_mention", "account-1", arguments, &error));
   g_assert_no_error (error);
 
-  g_assert_true (wyrebox_daemon_response_frame_init_fact_mutation_success (
-      &response,
-      "request-fact-success",
-      "corr-fact",
-      &request,
-      4096,
-      7,
-      &error));
+  g_assert_true (wyrebox_daemon_response_frame_init_fact_mutation_success
+      (&response, "request-fact-success", "corr-fact", &request, 4096, 7,
+          &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
-      NULL,
-      &error);
+      NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (encoded, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (encoded, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader reader (words);
 
-  auto response_frame = reader.getRoot<ResponseFrame> ();
+  auto response_frame = reader.getRoot < ResponseFrame > ();
   g_assert_true (response_frame.which () == ResponseFrame::SUCCESS);
   g_assert_cmpstr (response_frame.getRequestId ().cStr (), ==,
       "request-fact-success");
-  g_assert_cmpstr (response_frame.getCorrelationId ().cStr (), ==,
-      "corr-fact");
+  g_assert_cmpstr (response_frame.getCorrelationId ().cStr (), ==, "corr-fact");
   g_assert_cmpstr (response_frame.getSuccess ().getRequestId ().cStr (), ==,
       "request-fact-success");
   g_assert_cmpstr (response_frame.getSuccess ().getDurableMarker ().cStr (), ==,
       "journal:4096:7");
-  g_assert_cmpuint (response_frame.getSuccess ().getJournalOffset (), ==,
-      4096);
-  g_assert_cmpuint (response_frame.getSuccess ().getJournalSequence (), ==,
-      7);
+  g_assert_cmpuint (response_frame.getSuccess ().getJournalOffset (), ==, 4096);
+  g_assert_cmpuint (response_frame.getSuccess ().getJournalSequence (), ==, 7);
   g_assert_cmpstr (response_frame.getSuccess ().getSummary ().cStr (), ==,
       "fact_mutation mutation=insert predicate_id=project_mention "
       "scope_id=account-1 argument_count=1");
@@ -3754,39 +3120,29 @@ static void
 assert_response_bytes_decode_success_roundtrip (void)
 {
   const char *arguments[] = { "mail-1", NULL };
-  g_auto (WyreboxDaemonFactMutationRequest) request = {};
+  g_auto (WyreboxDaemonFactMutationRequest) request = { };
   g_auto (WyreboxDaemonResponseFrame) response = { 0 };
   g_auto (WyreboxDaemonResponseFrame) decoded = { 0 };
   g_autoptr (GError) error = NULL;
   g_autoptr (GBytes) encoded = NULL;
 
   g_assert_true (wyrebox_daemon_fact_mutation_request_init (&request,
-      WYREBOX_DAEMON_FACT_MUTATION_INSERT,
-      "project_mention",
-      "account-1",
-      arguments,
-      &error));
+          WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+          "project_mention", "account-1", arguments, &error));
   g_assert_no_error (error);
 
-  g_assert_true (wyrebox_daemon_response_frame_init_fact_mutation_success (
-      &response,
-      "request-fact-success-decode",
-      "corr-fact-decode",
-      &request,
-      8192,
-      11,
-      &error));
+  g_assert_true (wyrebox_daemon_response_frame_init_fact_mutation_success
+      (&response, "request-fact-success-decode", "corr-fact-decode", &request,
+          8192, 11, &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
-      NULL,
-      &error);
+      NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (encoded,
-      &decoded,
-      &error));
+          &decoded, &error));
   g_assert_no_error (error);
   g_assert_cmpint (decoded.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
   g_assert_cmpstr (decoded.request_id, ==, "request-fact-success-decode");
@@ -3811,28 +3167,21 @@ assert_response_bytes_decode_error_roundtrip (void)
   g_autoptr (GBytes) encoded = NULL;
 
   g_assert_true (wyrebox_daemon_error_frame_init (&error_frame,
-      "request-error-decode",
-      WYREBOX_DAEMON_ERROR_PERMISSION_DENIED,
-      "denied",
-      "retry",
-      &error));
+          "request-error-decode",
+          WYREBOX_DAEMON_ERROR_PERMISSION_DENIED, "denied", "retry", &error));
   g_assert_no_error (error);
 
   g_assert_true (wyrebox_daemon_response_frame_init_error (&response,
-      &error_frame,
-      "corr-error-decode",
-      &error));
+          &error_frame, "corr-error-decode", &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
-      NULL,
-      &error);
+      NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
   g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (encoded,
-      &decoded,
-      &error));
+          &decoded, &error));
   g_assert_no_error (error);
   g_assert_cmpint (decoded.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
   g_assert_cmpstr (decoded.request_id, ==, "request-error-decode");
@@ -3848,14 +3197,12 @@ static void
 assert_response_bytes_decode_rejects_malformed (void)
 {
   const guint8 payload[] = { 0xff, 0xff, 0xff };
-  g_autoptr (GBytes) encoded = g_bytes_new_static (payload,
-      sizeof (payload));
+  g_autoptr (GBytes) encoded = g_bytes_new_static (payload, sizeof (payload));
   g_auto (WyreboxDaemonResponseFrame) decoded = { 0 };
   g_autoptr (GError) error = NULL;
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_response_frame (encoded,
-      &decoded,
-      &error));
+          &decoded, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_cmpint (decoded.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_NONE);
 }
@@ -3871,32 +3218,27 @@ assert_response_bytes_decode_rejects_unsupported_arm (void)
 
   wyrebox_daemon_mailbox_list_result_init_empty (&result);
   g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
-      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
-      "mailbox-inbox",
-      "INBOX",
-      "/",
-      "\\Inbox",
-      TRUE,
-      WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN,
-      &error));
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+          "mailbox-inbox",
+          "INBOX",
+          "/",
+          "\\Inbox",
+          TRUE,
+          WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, &error));
   g_assert_no_error (error);
 
   g_assert_true (wyrebox_daemon_response_frame_init_mailbox_list (&response,
-      "request-mailbox-list-decode",
-      "corr-mailbox-list-decode",
-      &result,
-      &error));
+          "request-mailbox-list-decode",
+          "corr-mailbox-list-decode", &result, &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_response_frame (&response,
-      NULL,
-      &error);
+      NULL, &error);
   g_assert_no_error (error);
   g_assert_nonnull (encoded);
 
   g_assert_false (wyrebox_daemon_capnp_codec_decode_response_frame (encoded,
-      &decoded,
-      &error));
+          &decoded, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
   g_assert_cmpint (decoded.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_NONE);
 }
@@ -3912,8 +3254,7 @@ assert_request_adapter_callbacks_are_usable (void)
   g_autofree FixtureState *service_state = g_new0 (FixtureState, 1);
 
   service = wyrebox_daemon_mailbox_list_service_new (append_mailbox_fixture,
-      service_state,
-      NULL);
+      service_state, NULL);
   g_assert_nonnull (service);
 
   adapter = wyrebox_daemon_request_adapter_new (NULL, NULL,
@@ -3924,11 +3265,7 @@ assert_request_adapter_callbacks_are_usable (void)
       NULL,
       NULL,
       wyrebox_daemon_capnp_codec_decode_request_frame,
-      NULL,
-      NULL,
-      wyrebox_daemon_capnp_codec_encode_response_frame,
-      NULL,
-      NULL);
+      NULL, NULL, wyrebox_daemon_capnp_codec_encode_response_frame, NULL, NULL);
   g_assert_nonnull (adapter);
 
   request = build_mailbox_list_request_bytes ("", "request-1");
@@ -3938,21 +3275,20 @@ assert_request_adapter_callbacks_are_usable (void)
     .pid = 102,
   };
 
-  response_bytes = wyrebox_daemon_request_adapter_handle_payload (&peer_credentials,
-      request,
-      adapter,
-      &error);
+  response_bytes =
+      wyrebox_daemon_request_adapter_handle_payload (&peer_credentials, request,
+      adapter, &error);
   g_assert_no_error (error);
   g_assert_nonnull (response_bytes);
   g_assert_true (service_state->was_called);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (response_bytes, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader reader (words);
-  auto response_frame = reader.getRoot<ResponseFrame> ();
+  auto response_frame = reader.getRoot < ResponseFrame > ();
   g_assert_true (response_frame.which () == ResponseFrame::MAILBOX_LIST);
   g_assert_cmpstr (response_frame.getMailboxList ().getRequestId ().cStr (), ==,
       "request-1");
@@ -3969,59 +3305,49 @@ assert_request_adapter_routes_mailbox_select (void)
   g_autofree FixtureState *service_state = g_new0 (FixtureState, 1);
 
   service = wyrebox_daemon_mailbox_select_service_new (select_mailbox_fixture,
-      service_state,
-      NULL);
+      service_state, NULL);
   g_assert_nonnull (service);
 
   adapter = wyrebox_daemon_request_adapter_new (NULL, NULL,
-          NULL,
-          service,
-          NULL,
-          NULL,
-          NULL,
-          NULL,
-          wyrebox_daemon_capnp_codec_decode_request_frame,
-          NULL,
-          NULL,
-          wyrebox_daemon_capnp_codec_encode_response_frame,
       NULL,
-      NULL);
+      service,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_decode_request_frame,
+      NULL, NULL, wyrebox_daemon_capnp_codec_encode_response_frame, NULL, NULL);
   g_assert_nonnull (adapter);
 
   request = build_mailbox_select_request_bytes ("mailbox-inbox",
-      "",
-      "request-select-route");
+      "", "request-select-route");
   const WyreboxDaemonPeerCredentials peer_credentials = {
     .uid = 100,
     .gid = 101,
     .pid = 102,
   };
 
-  response_bytes = wyrebox_daemon_request_adapter_handle_payload (&peer_credentials,
-      request,
-      adapter,
-      &error);
+  response_bytes =
+      wyrebox_daemon_request_adapter_handle_payload (&peer_credentials, request,
+      adapter, &error);
   g_assert_no_error (error);
   g_assert_nonnull (response_bytes);
   g_assert_true (service_state->was_called);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (response_bytes, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader reader (words);
-  auto response_frame = reader.getRoot<ResponseFrame> ();
+  auto response_frame = reader.getRoot < ResponseFrame > ();
   g_assert_true (response_frame.which () == ResponseFrame::MAILBOX_SELECT);
   g_assert_cmpstr (response_frame.getMailboxSelect ().getRequestId ().cStr (),
-      ==,
-      "request-select-route");
+      ==, "request-select-route");
   g_assert_cmpstr (response_frame.getMailboxSelect ().getMailboxId ().cStr (),
-      ==,
-      "mailbox-inbox");
+      ==, "mailbox-inbox");
   g_assert_cmpstr (response_frame.getMailboxSelect ().getMailboxName ().cStr (),
-      ==,
-      "INBOX");
+      ==, "INBOX");
   g_assert_cmpuint (response_frame.getMailboxSelect ().getUidValidity (), ==,
       77);
   g_assert_cmpuint (response_frame.getMailboxSelect ().getUidNext (), ==, 42);
@@ -4059,40 +3385,31 @@ assert_request_adapter_routes_fact_mutation (void)
       NULL,
       NULL,
       wyrebox_daemon_capnp_codec_decode_request_frame,
-      NULL,
-      NULL,
-      wyrebox_daemon_capnp_codec_encode_response_frame,
-      NULL,
-      NULL);
+      NULL, NULL, wyrebox_daemon_capnp_codec_encode_response_frame, NULL, NULL);
   g_assert_nonnull (adapter);
 
   request = build_fact_mutation_request_bytes (FactMutationKind::INSERT,
       "request-fact-route",
-      "trusted-tool",
-      "account-1",
-      "project_mention",
-      "account-1",
-      arguments);
+      "trusted-tool", "account-1", "project_mention", "account-1", arguments);
   const WyreboxDaemonPeerCredentials peer_credentials = {
     .uid = 100,
     .gid = 101,
     .pid = 102,
   };
 
-  response_bytes = wyrebox_daemon_request_adapter_handle_payload (&peer_credentials,
-      request,
-      adapter,
-      &error);
+  response_bytes =
+      wyrebox_daemon_request_adapter_handle_payload (&peer_credentials, request,
+      adapter, &error);
   g_assert_no_error (error);
   g_assert_nonnull (response_bytes);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (response_bytes, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader reader (words);
-  auto response_frame = reader.getRoot<ResponseFrame> ();
+  auto response_frame = reader.getRoot < ResponseFrame > ();
   g_assert_true (response_frame.which () == ResponseFrame::SUCCESS);
   g_assert_cmpstr (response_frame.getSuccess ().getRequestId ().cStr (), ==,
       "request-fact-route");
@@ -4106,21 +3423,17 @@ assert_request_adapter_routes_fact_mutation (void)
 static void
 read_next_journal_fact_mutation (WyreboxJournalReader *reader,
     WyreboxJournalEventType expected_event_type,
-    WyreboxDaemonFactMutationRequest *out_request,
-    GError **error)
+    WyreboxDaemonFactMutationRequest *out_request, GError **error)
 {
   g_auto (WyreboxJournalRecord) record = { 0 };
   gboolean eof = FALSE;
 
   g_assert_true (wyrebox_journal_reader_read_next (reader,
-      &record,
-      &eof,
-      error));
+          &record, &eof, error));
   g_assert_false (eof);
   g_assert_cmpint (record.event_type, ==, expected_event_type);
   g_assert_true (wyrebox_daemon_fact_mutation_request_decode (record.payload,
-      out_request,
-      error));
+          out_request, error));
 }
 
 static void
@@ -4130,17 +3443,17 @@ assert_request_adapter_routes_fact_batch_import (void)
   const char *retract_arguments[] = { "mail-2", NULL };
   const FactBatchImportEntryFixture entries[] = {
     {
-      FactMutationKind::INSERT,
-      "project_mention",
-      "account-1",
-      insert_arguments,
-    },
+          FactMutationKind::INSERT,
+          "project_mention",
+          "account-1",
+          insert_arguments,
+        },
     {
-      FactMutationKind::RETRACT,
-      "reference_candidate",
-      "account-1",
-      retract_arguments,
-    },
+          FactMutationKind::RETRACT,
+          "reference_candidate",
+          "account-1",
+          retract_arguments,
+        },
   };
   g_autofree char *root =
       g_dir_make_tmp ("wyrebox-capnp-fact-batch-XXXXXX", NULL);
@@ -4151,10 +3464,10 @@ assert_request_adapter_routes_fact_batch_import (void)
   g_autoptr (WyreboxJournalReader) reader = NULL;
   g_autoptr (WyreboxDaemonFactMutationService) service = NULL;
   g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
-  g_auto (WyreboxDaemonFactMutationRequest) first = {};
-  g_auto (WyreboxDaemonFactMutationRequest) second = {};
+  g_auto (WyreboxDaemonFactMutationRequest) first = { };
+  g_auto (WyreboxDaemonFactMutationRequest) second = { };
   g_auto (WyreboxJournalRecord) extra = { 0 };
-  g_auto (WyreboxDaemonAuditPayload) audit = {};
+  g_auto (WyreboxDaemonAuditPayload) audit = { };
   gboolean eof = FALSE;
 
   g_assert_nonnull (root);
@@ -4174,38 +3487,30 @@ assert_request_adapter_routes_fact_batch_import (void)
       NULL,
       NULL,
       wyrebox_daemon_capnp_codec_decode_request_frame,
-      NULL,
-      NULL,
-      wyrebox_daemon_capnp_codec_encode_response_frame,
-      NULL,
-      NULL);
+      NULL, NULL, wyrebox_daemon_capnp_codec_encode_response_frame, NULL, NULL);
   g_assert_nonnull (adapter);
 
   request = build_fact_batch_import_request_bytes ("request-fact-batch-route",
-      "trusted-tool",
-      "account-1",
-      entries,
-      G_N_ELEMENTS (entries));
+      "trusted-tool", "account-1", entries, G_N_ELEMENTS (entries));
   const WyreboxDaemonPeerCredentials peer_credentials = {
     .uid = 100,
     .gid = 101,
     .pid = 102,
   };
 
-  response_bytes = wyrebox_daemon_request_adapter_handle_payload (&peer_credentials,
-      request,
-      adapter,
-      &error);
+  response_bytes =
+      wyrebox_daemon_request_adapter_handle_payload (&peer_credentials, request,
+      adapter, &error);
   g_assert_no_error (error);
   g_assert_nonnull (response_bytes);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (response_bytes, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader response_reader (words);
-  auto response_frame = response_reader.getRoot<ResponseFrame> ();
+  auto response_frame = response_reader.getRoot < ResponseFrame > ();
   g_assert_true (response_frame.which () == ResponseFrame::SUCCESS);
   g_assert_cmpstr (response_frame.getSuccess ().getRequestId ().cStr (), ==,
       "request-fact-batch-route");
@@ -4218,9 +3523,7 @@ assert_request_adapter_routes_fact_batch_import (void)
   g_assert_nonnull (reader);
 
   read_next_journal_fact_mutation (reader,
-      WYREBOX_JOURNAL_EVENT_FACT_INSERTED,
-      &first,
-      &error);
+      WYREBOX_JOURNAL_EVENT_FACT_INSERTED, &first, &error);
   g_assert_no_error (error);
   g_assert_cmpint (first.mutation, ==, WYREBOX_DAEMON_FACT_MUTATION_INSERT);
   g_assert_cmpstr (first.predicate_id, ==, "project_mention");
@@ -4229,9 +3532,7 @@ assert_request_adapter_routes_fact_batch_import (void)
   g_assert_cmpstr (first.arguments[1], ==, "project-a");
 
   read_next_journal_fact_mutation (reader,
-      WYREBOX_JOURNAL_EVENT_FACT_RETRACTED,
-      &second,
-      &error);
+      WYREBOX_JOURNAL_EVENT_FACT_RETRACTED, &second, &error);
   g_assert_no_error (error);
   g_assert_cmpint (second.mutation, ==, WYREBOX_DAEMON_FACT_MUTATION_RETRACT);
   g_assert_cmpstr (second.predicate_id, ==, "reference_candidate");
@@ -4239,22 +3540,18 @@ assert_request_adapter_routes_fact_batch_import (void)
   g_assert_cmpstr (second.arguments[0], ==, "mail-2");
 
   g_assert_true (wyrebox_journal_reader_read_next (reader,
-      &extra,
-      &eof,
-      &error));
+          &extra, &eof, &error));
   g_assert_no_error (error);
   g_assert_false (eof);
   g_assert_cmpint (extra.event_type, ==,
       WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED);
   g_assert_cmpuint (extra.sequence, ==, 3);
   g_assert_true (wyrebox_daemon_audit_payload_decode (extra.payload,
-      &audit,
-      &error));
+          &audit, &error));
   g_assert_no_error (error);
   g_assert_cmpint (audit.operation, ==,
       WYREBOX_DAEMON_AUDIT_OPERATION_FACT_BATCH_IMPORT);
-  g_assert_cmpint (audit.outcome, ==,
-      WYREBOX_DAEMON_AUDIT_OUTCOME_SUCCESS);
+  g_assert_cmpint (audit.outcome, ==, WYREBOX_DAEMON_AUDIT_OUTCOME_SUCCESS);
   g_assert_cmpstr (audit.request_id, ==, "request-fact-batch-route");
   g_assert_cmpstr (audit.caller_identity, ==, "trusted-tool");
   g_assert_cmpstr (audit.account_identity, ==, "account-1");
@@ -4264,9 +3561,7 @@ assert_request_adapter_routes_fact_batch_import (void)
 
   wyrebox_journal_record_clear (&extra);
   g_assert_false (wyrebox_journal_reader_read_next (reader,
-      &extra,
-      &eof,
-      &error));
+          &extra, &eof, &error));
   g_assert_no_error (error);
   g_assert_true (eof);
 
@@ -4279,11 +3574,11 @@ assert_request_adapter_rejects_unauthorized_fact_batch_import (void)
   const char *arguments[] = { "mail-1", NULL };
   const FactBatchImportEntryFixture entries[] = {
     {
-      FactMutationKind::INSERT,
-      "project_mention",
-      "account-1",
-      arguments,
-    },
+          FactMutationKind::INSERT,
+          "project_mention",
+          "account-1",
+          arguments,
+        },
   };
   g_autofree char *root =
       g_dir_make_tmp ("wyrebox-capnp-fact-batch-denied-XXXXXX", NULL);
@@ -4312,48 +3607,38 @@ assert_request_adapter_rejects_unauthorized_fact_batch_import (void)
       NULL,
       NULL,
       wyrebox_daemon_capnp_codec_decode_request_frame,
-      NULL,
-      NULL,
-      wyrebox_daemon_capnp_codec_encode_response_frame,
-      NULL,
-      NULL);
+      NULL, NULL, wyrebox_daemon_capnp_codec_encode_response_frame, NULL, NULL);
   g_assert_nonnull (adapter);
 
   request = build_fact_batch_import_request_bytes ("request-fact-batch-denied",
-      "admin-cli",
-      "account-1",
-      entries,
-      G_N_ELEMENTS (entries));
+      "admin-cli", "account-1", entries, G_N_ELEMENTS (entries));
   const WyreboxDaemonPeerCredentials peer_credentials = {
     .uid = 100,
     .gid = 101,
     .pid = 102,
   };
 
-  response_bytes = wyrebox_daemon_request_adapter_handle_payload (&peer_credentials,
-      request,
-      adapter,
-      &error);
+  response_bytes =
+      wyrebox_daemon_request_adapter_handle_payload (&peer_credentials, request,
+      adapter, &error);
   g_assert_no_error (error);
   g_assert_nonnull (response_bytes);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (response_bytes, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader response_reader (words);
-  auto response_frame = response_reader.getRoot<ResponseFrame> ();
+  auto response_frame = response_reader.getRoot < ResponseFrame > ();
   g_assert_true (response_frame.which () == ResponseFrame::ERROR);
-  g_assert_true (
-      response_frame.getError ().getErrorClass () == ErrorClass::PERMISSION_DENIED);
+  g_assert_true (response_frame.getError ().getErrorClass () ==
+      ErrorClass::PERMISSION_DENIED);
 
   reader = wyrebox_journal_reader_new (root, &error);
   g_assert_no_error (error);
   g_assert_false (wyrebox_journal_reader_read_next (reader,
-      &record,
-      &eof,
-      &error));
+          &record, &eof, &error));
   g_assert_no_error (error);
   g_assert_true (eof);
 
@@ -4371,63 +3656,53 @@ assert_request_adapter_routes_message_fetch (void)
   g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
 
   service = wyrebox_daemon_message_fetch_service_new (fetch_message_fixture,
-      service_state,
-      NULL);
+      service_state, NULL);
   g_assert_nonnull (service);
 
   adapter =
       wyrebox_daemon_request_adapter_new (NULL, NULL,
-          NULL,
-          NULL,
-          service,
-          NULL,
-          NULL,
-          NULL,
-          wyrebox_daemon_capnp_codec_decode_request_frame,
-          NULL,
-          NULL,
-          wyrebox_daemon_capnp_codec_encode_response_frame,
-          NULL,
-          NULL);
+      NULL,
+      NULL,
+      service,
+      NULL,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_decode_request_frame,
+      NULL, NULL, wyrebox_daemon_capnp_codec_encode_response_frame, NULL, NULL);
   g_assert_nonnull (adapter);
 
   request = build_message_fetch_request_bytes ("request-fetch-route",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      42);
+      "account-1", "account-1", "mailbox-inbox", 77, 42);
   const WyreboxDaemonPeerCredentials peer_credentials = {
     .uid = 100,
     .gid = 101,
     .pid = 102,
   };
 
-  response_bytes = wyrebox_daemon_request_adapter_handle_payload (&peer_credentials,
-      request,
-      adapter,
-      &error);
+  response_bytes =
+      wyrebox_daemon_request_adapter_handle_payload (&peer_credentials, request,
+      adapter, &error);
   g_assert_no_error (error);
   g_assert_nonnull (response_bytes);
   g_assert_true (service_state->was_called);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (response_bytes, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader reader (words);
-  auto response_frame = reader.getRoot<ResponseFrame> ();
+  auto response_frame = reader.getRoot < ResponseFrame > ();
 
   g_assert_true (response_frame.which () == ResponseFrame::STREAM_CHUNK);
   g_assert_cmpstr (response_frame.getStreamChunk ().getRequestId ().cStr (), ==,
       "request-fetch-route");
   g_assert_cmpstr (response_frame.getStreamChunk ().getMessageId ().cStr (), ==,
       "message-1");
-  g_assert_cmpstr (response_frame.getStreamChunk ().getQueryId ().cStr (), ==, "");
+  g_assert_cmpstr (response_frame.getStreamChunk ().getQueryId ().cStr (), ==,
+      "");
   g_assert_cmpstr (response_frame.getStreamChunk ().getCorrelationId ().cStr (),
-      ==,
-      "corr-fetch");
+      ==, "corr-fetch");
   g_assert_cmpuint (response_frame.getStreamChunk ().getChunkIndex (), ==, 0);
   g_assert_true (response_frame.getStreamChunk ().getEndOfStream ());
 }
@@ -4448,8 +3723,7 @@ assert_request_adapter_routes_message_search (void)
   };
 
   service = wyrebox_daemon_message_search_service_new (search_message_fixture,
-      service_state,
-      NULL);
+      service_state, NULL);
   g_assert_nonnull (service);
 
   adapter = wyrebox_daemon_request_adapter_new (NULL, NULL,
@@ -4460,35 +3734,26 @@ assert_request_adapter_routes_message_search (void)
       NULL,
       NULL,
       wyrebox_daemon_capnp_codec_decode_request_frame,
-      NULL,
-      NULL,
-      wyrebox_daemon_capnp_codec_encode_response_frame,
-      NULL,
-      NULL);
+      NULL, NULL, wyrebox_daemon_capnp_codec_encode_response_frame, NULL, NULL);
   g_assert_nonnull (adapter);
 
   request = build_message_search_request_bytes ("request-search-route",
-      "account-1",
-      "account-1",
-      "mailbox-inbox",
-      77,
-      "unseen");
+      "account-1", "account-1", "mailbox-inbox", 77, "unseen");
 
-  response_bytes = wyrebox_daemon_request_adapter_handle_payload (&peer_credentials,
-      request,
-      adapter,
-      &error);
+  response_bytes =
+      wyrebox_daemon_request_adapter_handle_payload (&peer_credentials, request,
+      adapter, &error);
   g_assert_no_error (error);
   g_assert_nonnull (response_bytes);
   g_assert_true (service_state->was_called);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (response_bytes, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader reader (words);
-  auto response_frame = reader.getRoot<ResponseFrame> ();
+  auto response_frame = reader.getRoot < ResponseFrame > ();
 
   g_assert_true (response_frame.which () == ResponseFrame::STREAM_CHUNK);
   g_assert_cmpstr (response_frame.getStreamChunk ().getRequestId ().cStr (), ==,
@@ -4497,8 +3762,8 @@ assert_request_adapter_routes_message_search (void)
       "");
   g_assert_cmpstr (response_frame.getStreamChunk ().getQueryId ().cStr (), ==,
       "query-search");
-  g_assert_cmpstr (response_frame.getStreamChunk ().getCorrelationId ().cStr (), ==,
-      "corr-search");
+  g_assert_cmpstr (response_frame.getStreamChunk ().getCorrelationId ().cStr (),
+      ==, "corr-search");
   g_assert_cmpuint (response_frame.getStreamChunk ().getChunkIndex (), ==, 0);
   g_assert_true (response_frame.getStreamChunk ().getEndOfStream ());
 }
@@ -4519,10 +3784,9 @@ assert_request_adapter_routes_wirelog_predicate_query (void)
     .pid = 102,
   };
 
-  service = wyrebox_daemon_wirelog_predicate_query_service_new (
-      query_wirelog_predicate_fixture,
-      service_state,
-      NULL);
+  service =
+      wyrebox_daemon_wirelog_predicate_query_service_new
+      (query_wirelog_predicate_fixture, service_state, NULL);
   g_assert_nonnull (service);
 
   adapter = wyrebox_daemon_request_adapter_new (NULL, NULL,
@@ -4533,38 +3797,28 @@ assert_request_adapter_routes_wirelog_predicate_query (void)
       service,
       NULL,
       wyrebox_daemon_capnp_codec_decode_request_frame,
-      NULL,
-      NULL,
-      wyrebox_daemon_capnp_codec_encode_response_frame,
-      NULL,
-      NULL);
+      NULL, NULL, wyrebox_daemon_capnp_codec_encode_response_frame, NULL, NULL);
   g_assert_nonnull (adapter);
 
-  request = build_wirelog_predicate_query_request_bytes (
-      "request-wirelog-route",
-      "trusted-tool",
-      "account-1",
-      "query-wirelog",
-      "show_in_virtual_folder.v1",
-      "account-1",
-      bindings);
+  request =
+      build_wirelog_predicate_query_request_bytes ("request-wirelog-route",
+      "trusted-tool", "account-1", "query-wirelog", "show_in_virtual_folder.v1",
+      "account-1", bindings);
 
-  response_bytes = wyrebox_daemon_request_adapter_handle_payload (
-      &peer_credentials,
-      request,
-      adapter,
-      &error);
+  response_bytes =
+      wyrebox_daemon_request_adapter_handle_payload (&peer_credentials, request,
+      adapter, &error);
   g_assert_no_error (error);
   g_assert_nonnull (response_bytes);
   g_assert_true (service_state->was_called);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (response_bytes, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader reader (words);
-  auto response_frame = reader.getRoot<ResponseFrame> ();
+  auto response_frame = reader.getRoot < ResponseFrame > ();
 
   g_assert_true (response_frame.which () == ResponseFrame::STREAM_CHUNK);
   g_assert_cmpstr (response_frame.getStreamChunk ().getRequestId ().cStr (), ==,
@@ -4574,8 +3828,7 @@ assert_request_adapter_routes_wirelog_predicate_query (void)
   g_assert_cmpstr (response_frame.getStreamChunk ().getQueryId ().cStr (), ==,
       "query-wirelog");
   g_assert_cmpstr (response_frame.getStreamChunk ().getCorrelationId ().cStr (),
-      ==,
-      "corr-wirelog");
+      ==, "corr-wirelog");
   g_assert_cmpuint (response_frame.getStreamChunk ().getChunkIndex (), ==, 0);
   g_assert_true (response_frame.getStreamChunk ().getEndOfStream ());
 }
@@ -4596,10 +3849,9 @@ assert_request_adapter_routes_duckdb_query_template (void)
     .pid = 102,
   };
 
-  service = wyrebox_daemon_duckdb_query_template_service_new (
-      query_duckdb_template_fixture,
-      service_state,
-      NULL);
+  service =
+      wyrebox_daemon_duckdb_query_template_service_new
+      (query_duckdb_template_fixture, service_state, NULL);
   g_assert_nonnull (service);
 
   adapter = wyrebox_daemon_request_adapter_new (NULL, NULL,
@@ -4610,40 +3862,30 @@ assert_request_adapter_routes_duckdb_query_template (void)
       NULL,
       NULL,
       wyrebox_daemon_capnp_codec_decode_request_frame,
-      NULL,
-      NULL,
-      wyrebox_daemon_capnp_codec_encode_response_frame,
-      NULL,
-      NULL);
+      NULL, NULL, wyrebox_daemon_capnp_codec_encode_response_frame, NULL, NULL);
   g_assert_nonnull (adapter);
   wyrebox_daemon_request_adapter_set_duckdb_query_template_service (adapter,
       service);
 
-  request = build_duckdb_query_template_request_bytes (
-      "request-duckdb-route",
+  request = build_duckdb_query_template_request_bytes ("request-duckdb-route",
       "admin-cli",
       "account-1",
-      "query-duckdb",
-      "mailbox.uid_map.v1",
-      "account-1",
-      parameters);
+      "query-duckdb", "mailbox.uid_map.v1", "account-1", parameters);
 
-  response_bytes = wyrebox_daemon_request_adapter_handle_payload (
-      &peer_credentials,
-      request,
-      adapter,
-      &error);
+  response_bytes =
+      wyrebox_daemon_request_adapter_handle_payload (&peer_credentials, request,
+      adapter, &error);
   g_assert_no_error (error);
   g_assert_nonnull (response_bytes);
   g_assert_true (service_state->was_called);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (response_bytes, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader reader (words);
-  auto response_frame = reader.getRoot<ResponseFrame> ();
+  auto response_frame = reader.getRoot < ResponseFrame > ();
 
   g_assert_true (response_frame.which () == ResponseFrame::STREAM_CHUNK);
   g_assert_cmpstr (response_frame.getStreamChunk ().getRequestId ().cStr (), ==,
@@ -4653,8 +3895,7 @@ assert_request_adapter_routes_duckdb_query_template (void)
   g_assert_cmpstr (response_frame.getStreamChunk ().getQueryId ().cStr (), ==,
       "query-duckdb");
   g_assert_cmpstr (response_frame.getStreamChunk ().getCorrelationId ().cStr (),
-      ==,
-      "corr-duckdb");
+      ==, "corr-duckdb");
   g_assert_cmpuint (response_frame.getStreamChunk ().getChunkIndex (), ==, 0);
   g_assert_true (response_frame.getStreamChunk ().getEndOfStream ());
 }
@@ -4676,8 +3917,9 @@ assert_request_adapter_routes_flag_keyword_update (void)
     .pid = 102,
   };
 
-  service = wyrebox_daemon_flag_keyword_update_service_new (
-      update_flag_keyword_fixture, &was_called, NULL);
+  service =
+      wyrebox_daemon_flag_keyword_update_service_new
+      (update_flag_keyword_fixture, &was_called, NULL);
   g_assert_nonnull (service);
 
   adapter = wyrebox_daemon_request_adapter_new (NULL, NULL,
@@ -4688,44 +3930,36 @@ assert_request_adapter_routes_flag_keyword_update (void)
       NULL,
       service,
       wyrebox_daemon_capnp_codec_decode_request_frame,
-      NULL,
-      NULL,
-      wyrebox_daemon_capnp_codec_encode_response_frame,
-      NULL,
-      NULL);
+      NULL, NULL, wyrebox_daemon_capnp_codec_encode_response_frame, NULL, NULL);
   g_assert_nonnull (adapter);
 
   request = build_flag_keyword_update_request_bytes ("request-flag-keyword",
       "account-1",
       "account-1",
       "mailbox-inbox",
-      77,
-      42,
-      FlagKeywordUpdateMode::SET,
-      system_flags,
-      user_keywords);
+      77, 42, FlagKeywordUpdateMode::SET, system_flags, user_keywords);
 
-  response_bytes = wyrebox_daemon_request_adapter_handle_payload (&peer_credentials,
-      request,
-      adapter,
-      &error);
+  response_bytes =
+      wyrebox_daemon_request_adapter_handle_payload (&peer_credentials, request,
+      adapter, &error);
   g_assert_no_error (error);
   g_assert_nonnull (response_bytes);
   g_assert_true (was_called);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (response_bytes, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader reader (words);
-  auto response_frame = reader.getRoot<ResponseFrame> ();
+  auto response_frame = reader.getRoot < ResponseFrame > ();
   g_assert_true (response_frame.which () == ResponseFrame::SUCCESS);
   g_assert_cmpstr (response_frame.getSuccess ().getRequestId ().cStr (), ==,
       "request-flag-keyword");
   g_assert_cmpstr (response_frame.getSuccess ().getDurableMarker ().cStr (), ==,
       "journal:123:456");
-  g_assert_cmpuint (response_frame.getSuccess ().getJournalSequence (), ==, 456);
+  g_assert_cmpuint (response_frame.getSuccess ().getJournalSequence (), ==,
+      456);
 }
 
 static void
@@ -4745,54 +3979,47 @@ assert_request_adapter_routes_delivery_ingestion (void)
     .pid = 30,
   };
 
-  service = wyrebox_daemon_delivery_ingestion_service_new (ingest_delivery_fixture,
-      &was_called,
-      NULL);
+  service =
+      wyrebox_daemon_delivery_ingestion_service_new (ingest_delivery_fixture,
+      &was_called, NULL);
   g_assert_nonnull (service);
 
   adapter =
       wyrebox_daemon_request_adapter_new (service, NULL,
-          NULL,
-          NULL,
-          NULL,
-          NULL,
-          NULL,
-          NULL,
-          wyrebox_daemon_capnp_codec_decode_request_frame,
-          NULL,
-          NULL,
-          wyrebox_daemon_capnp_codec_encode_response_frame,
-          NULL,
-          NULL);
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_decode_request_frame,
+      NULL, NULL, wyrebox_daemon_capnp_codec_encode_response_frame, NULL, NULL);
   g_assert_nonnull (adapter);
 
-  request = build_delivery_ingestion_request_bytes (
-      "request-delivery-route",
+  request = build_delivery_ingestion_request_bytes ("request-delivery-route",
       "account-1",
       "postfix",
       "delivery-123",
       "QID",
       NULL,
       recipients,
-      reinterpret_cast<const guint8 *> (payload),
-      strlen (payload),
-      "corr-delivery");
+      reinterpret_cast < const guint8 * >(payload),
+      strlen (payload), "corr-delivery");
 
-  response_bytes = wyrebox_daemon_request_adapter_handle_payload (&peer_credentials,
-      request,
-      adapter,
-      &error);
+  response_bytes =
+      wyrebox_daemon_request_adapter_handle_payload (&peer_credentials, request,
+      adapter, &error);
   g_assert_no_error (error);
   g_assert_nonnull (response_bytes);
   g_assert_true (was_called);
 
   gsize size = 0;
-  const guint8 *data = static_cast<const guint8 *> (
-      g_bytes_get_data (response_bytes, &size));
-  auto words = kj::arrayPtr (
-      reinterpret_cast<const capnp::word *> (data), size / sizeof (capnp::word));
+  const guint8 *data =
+      static_cast < const guint8 * >(g_bytes_get_data (response_bytes, &size));
+  auto words = kj::arrayPtr (reinterpret_cast < const capnp::word * >(data),
+      size / sizeof (capnp::word));
   capnp::FlatArrayMessageReader reader (words);
-  auto response_frame = reader.getRoot<ResponseFrame> ();
+  auto response_frame = reader.getRoot < ResponseFrame > ();
 
   g_assert_true (response_frame.which () == ResponseFrame::SUCCESS);
   g_assert_cmpstr (response_frame.getSuccess ().getRequestId ().cStr (), ==,
@@ -4815,9 +4042,11 @@ main (int argc, char **argv)
       assert_request_bytes_decode_mailbox_select_by_id);
   g_test_add_func ("/daemon-api/capnp/codec/decode-mailbox-select-name",
       assert_request_bytes_decode_mailbox_select_by_name);
-  g_test_add_func ("/daemon-api/capnp/codec/reject-mailbox-select-missing-selector",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-mailbox-select-missing-selector",
       assert_mailbox_select_decode_rejects_missing_selector);
-  g_test_add_func ("/daemon-api/capnp/codec/reject-mailbox-select-both-selectors",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-mailbox-select-both-selectors",
       assert_mailbox_select_decode_rejects_both_selectors);
   g_test_add_func ("/daemon-api/capnp/codec/decode-fact-mutation-insert",
       assert_request_bytes_decode_fact_mutation_insert);
@@ -4829,144 +4058,147 @@ main (int argc, char **argv)
       assert_request_bytes_decode_message_fetch);
   g_test_add_func ("/daemon-api/capnp/codec/decode-message-search-valid",
       assert_request_bytes_decode_message_search);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-message-search-missing-account",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-message-search-missing-account",
       assert_request_bytes_rejects_message_search_missing_account);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-message-search-missing-mailbox",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-message-search-missing-mailbox",
       assert_request_bytes_rejects_message_search_missing_mailbox);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-message-search-zero-uid-validity",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-message-search-zero-uid-validity",
       assert_request_bytes_rejects_message_search_zero_uid_validity);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-message-search-empty-criteria",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-message-search-empty-criteria",
       assert_request_bytes_rejects_message_search_empty_criteria);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-message-search-invalid-criteria-backslash",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-message-search-invalid-criteria-backslash",
       assert_request_bytes_rejects_message_search_invalid_criteria_backslash);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-message-search-invalid-criteria-sql",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-message-search-invalid-criteria-sql",
       assert_request_bytes_rejects_message_search_invalid_criteria_sql_like);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/decode-wirelog-predicate-query-bindings",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/decode-wirelog-predicate-query-bindings",
       assert_request_bytes_decode_wirelog_predicate_query_with_bindings);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/decode-wirelog-predicate-query-empty-bindings",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/decode-wirelog-predicate-query-empty-bindings",
       assert_request_bytes_decode_wirelog_predicate_query_empty_bindings);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-wirelog-predicate-query-invalid-query",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-wirelog-predicate-query-invalid-query",
       assert_request_bytes_rejects_wirelog_predicate_query_invalid_query_id);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-wirelog-predicate-query-invalid-predicate",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-wirelog-predicate-query-invalid-predicate",
       assert_request_bytes_rejects_wirelog_predicate_query_invalid_predicate_id);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-wirelog-predicate-query-invalid-scope",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-wirelog-predicate-query-invalid-scope",
       assert_request_bytes_rejects_wirelog_predicate_query_invalid_scope_id);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-wirelog-predicate-query-invalid-binding",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-wirelog-predicate-query-invalid-binding",
       assert_request_bytes_rejects_wirelog_predicate_query_invalid_binding);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/decode-duckdb-query-template-parameters",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/decode-duckdb-query-template-parameters",
       assert_request_bytes_decode_duckdb_query_template_with_parameters);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/decode-duckdb-query-template-empty-parameters",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/decode-duckdb-query-template-empty-parameters",
       assert_request_bytes_decode_duckdb_query_template_empty_parameters);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-duckdb-query-template-invalid-query",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-duckdb-query-template-invalid-query",
       assert_request_bytes_rejects_duckdb_query_template_invalid_query_id);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-duckdb-query-template-invalid-template",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-duckdb-query-template-invalid-template",
       assert_request_bytes_rejects_duckdb_query_template_invalid_template_id);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-duckdb-query-template-invalid-scope",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-duckdb-query-template-invalid-scope",
       assert_request_bytes_rejects_duckdb_query_template_invalid_scope_id);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-duckdb-query-template-invalid-parameter",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-duckdb-query-template-invalid-parameter",
       assert_request_bytes_rejects_duckdb_query_template_invalid_parameter);
   g_test_add_func ("/daemon-api/capnp/codec/decode-delivery-ingestion-valid",
       assert_request_bytes_decode_delivery_ingestion);
   g_test_add_func ("/daemon-api/capnp/codec/encode-delivery-ingestion-valid",
       assert_delivery_ingestion_request_encoder_decodes_valid_request);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/encode-delivery-ingestion-missing-optionals",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/encode-delivery-ingestion-missing-optionals",
       assert_delivery_ingestion_request_encoder_decodes_missing_optionals);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-delivery-ingestion-encode-invalid-input",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-delivery-ingestion-encode-invalid-input",
       assert_delivery_ingestion_request_encoder_rejects_invalid_input);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-delivery-ingestion-missing-delivery-id",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-delivery-ingestion-missing-delivery-id",
       assert_request_bytes_rejects_delivery_ingestion_missing_delivery_id);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-delivery-ingestion-control-character",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-delivery-ingestion-control-character",
       assert_request_bytes_rejects_delivery_ingestion_control_character);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-delivery-ingestion-missing-recipients",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-delivery-ingestion-missing-recipients",
       assert_request_bytes_rejects_delivery_ingestion_missing_recipients);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-delivery-ingestion-empty-message-bytes",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-delivery-ingestion-empty-message-bytes",
       assert_request_bytes_rejects_delivery_ingestion_empty_message_bytes);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/encode-mailbox-select-valid-id",
+  g_test_add_func ("/daemon-api/capnp/codec/encode-mailbox-select-valid-id",
       assert_mailbox_select_request_encoder_round_trip_by_id);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/encode-mailbox-select-valid-name",
+  g_test_add_func ("/daemon-api/capnp/codec/encode-mailbox-select-valid-name",
       assert_mailbox_select_request_encoder_round_trip_by_name);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-mailbox-select-encode-invalid-input",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-mailbox-select-encode-invalid-input",
       assert_mailbox_select_request_encoder_rejects_invalid_input);
+  g_test_add_func ("/daemon-api/capnp/codec/encode-message-fetch-valid",
+      assert_message_fetch_request_encoder_round_trip);
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-message-fetch-encode-invalid-input",
+      assert_message_fetch_request_encoder_rejects_invalid_input);
   g_test_add_func ("/daemon-api/capnp/codec/decode-flag-keyword-update-set",
       assert_request_bytes_decode_flag_keyword_update_set);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/decode-flag-keyword-update-mode-mapping",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/decode-flag-keyword-update-mode-mapping",
       assert_request_bytes_decode_flag_keyword_update_mode_mapping);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/decode-flag-keyword-update-replace-empty",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/decode-flag-keyword-update-replace-empty",
       assert_request_bytes_decode_flag_keyword_update_replace_empty_payload);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-flag-keyword-update-invalid-mode",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-flag-keyword-update-invalid-mode",
       assert_request_bytes_rejects_flag_keyword_update_invalid_mode);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-flag-keyword-update-missing-payload",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-flag-keyword-update-missing-payload",
       assert_request_bytes_rejects_flag_keyword_update_missing_payload_for_set);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-flag-keyword-update-missing-account",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-flag-keyword-update-missing-account",
       assert_request_bytes_rejects_flag_keyword_update_missing_account);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-flag-keyword-update-missing-mailbox",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-flag-keyword-update-missing-mailbox",
       assert_request_bytes_rejects_flag_keyword_update_missing_mailbox);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-flag-keyword-update-zero-uid-validity",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-flag-keyword-update-zero-uid-validity",
       assert_request_bytes_rejects_flag_keyword_update_zero_uid_validity);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-flag-keyword-update-zero-mailbox-uid",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-flag-keyword-update-zero-mailbox-uid",
       assert_request_bytes_rejects_flag_keyword_update_zero_mailbox_uid);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-flag-keyword-update-unknown-system-flag",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-flag-keyword-update-unknown-system-flag",
       assert_request_bytes_rejects_flag_keyword_update_unknown_system_flag);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-flag-keyword-update-recent-system-flag",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-flag-keyword-update-recent-system-flag",
       assert_request_bytes_rejects_flag_keyword_update_recent_system_flag);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-flag-keyword-update-system-flag-keyword",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-flag-keyword-update-system-flag-keyword",
       assert_request_bytes_rejects_flag_keyword_update_system_flag_keyword);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-flag-keyword-update-invalid-keyword",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-flag-keyword-update-invalid-keyword",
       assert_request_bytes_rejects_flag_keyword_update_invalid_keyword);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-flag-keyword-update-duplicate-flag",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-flag-keyword-update-duplicate-flag",
       assert_request_bytes_rejects_flag_keyword_update_duplicate_flag);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-flag-keyword-update-duplicate-keyword",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-flag-keyword-update-duplicate-keyword",
       assert_request_bytes_rejects_flag_keyword_update_duplicate_keyword);
   g_test_add_func ("/daemon-api/capnp/codec/reject-message-fetch-empty-account",
       assert_request_bytes_rejects_message_fetch_missing_account_identity);
   g_test_add_func ("/daemon-api/capnp/codec/reject-message-fetch-empty-mailbox",
       assert_request_bytes_rejects_message_fetch_missing_mailbox_id);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-message-fetch-zero-uid-validity",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-message-fetch-zero-uid-validity",
       assert_request_bytes_rejects_message_fetch_zero_uid_validity);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-message-fetch-zero-mailbox-uid",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-message-fetch-zero-mailbox-uid",
       assert_request_bytes_rejects_message_fetch_zero_mailbox_uid);
   g_test_add_func ("/daemon-api/capnp/codec/reject-fact-mutation-predicate",
       assert_fact_mutation_decode_rejects_missing_predicate);
@@ -4976,13 +4208,14 @@ main (int argc, char **argv)
       assert_fact_mutation_decode_rejects_empty_argument);
   g_test_add_func ("/daemon-api/capnp/codec/reject-fact-batch-import-empty",
       assert_fact_batch_import_decode_rejects_empty_batch);
-  g_test_add_func ("/daemon-api/capnp/codec/reject-fact-batch-import-over-limit",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-fact-batch-import-over-limit",
       assert_fact_batch_import_decode_rejects_over_limit_batch);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-fact-batch-import-invalid-nested",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-fact-batch-import-invalid-nested",
       assert_fact_batch_import_decode_rejects_invalid_nested_mutation);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-fact-batch-import-mixed-scope",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-fact-batch-import-mixed-scope",
       assert_fact_batch_import_decode_rejects_mixed_scope);
   g_test_add_func ("/daemon-api/capnp/codec/encode-mailbox-list",
       assert_response_bytes_encode_mailbox_list);
@@ -4990,21 +4223,21 @@ main (int argc, char **argv)
       assert_response_bytes_encode_mailbox_select);
   g_test_add_func ("/daemon-api/capnp/codec/decode-mailbox-select-response",
       assert_response_bytes_decode_mailbox_select_roundtrip);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-mailbox-select-response-missing-payload-request-id",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-mailbox-select-response-missing-payload-request-id",
       assert_response_bytes_rejects_mailbox_select_missing_payload_request_id);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-mailbox-select-response-mismatched-request-id",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-mailbox-select-response-mismatched-request-id",
       assert_response_bytes_rejects_mailbox_select_mismatched_payload_request_id);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-mailbox-select-response-invalid-fields",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-mailbox-select-response-invalid-fields",
       assert_response_bytes_rejects_mailbox_select_invalid_fields);
   g_test_add_func ("/daemon-api/capnp/codec/encode-stream-chunk",
       assert_response_bytes_encode_stream_chunk);
   g_test_add_func ("/daemon-api/capnp/codec/reject-ambiguous-stream-chunk",
       assert_response_bytes_reject_ambiguous_stream_chunk);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/reject-mismatched-stream-chunk-request",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/reject-mismatched-stream-chunk-request",
       assert_response_bytes_reject_mismatched_stream_chunk_request);
   g_test_add_func ("/daemon-api/capnp/codec/encode-final-empty-stream-chunk",
       assert_response_bytes_encode_final_empty_stream_chunk);
@@ -5028,22 +4261,23 @@ main (int argc, char **argv)
       assert_request_adapter_routes_fact_mutation);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-fact-batch-import",
       assert_request_adapter_routes_fact_batch_import);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/request-adapter-fact-batch-import-unauthorized",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/request-adapter-fact-batch-import-unauthorized",
       assert_request_adapter_rejects_unauthorized_fact_batch_import);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-message-fetch",
       assert_request_adapter_routes_message_fetch);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-message-search",
       assert_request_adapter_routes_message_search);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/request-adapter-wirelog-predicate-query",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/request-adapter-wirelog-predicate-query",
       assert_request_adapter_routes_wirelog_predicate_query);
-  g_test_add_func (
-      "/daemon-api/capnp/codec/request-adapter-duckdb-query-template",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/request-adapter-duckdb-query-template",
       assert_request_adapter_routes_duckdb_query_template);
   g_test_add_func ("/daemon-api/capnp/codec/request-adapter-delivery-ingestion",
       assert_request_adapter_routes_delivery_ingestion);
-  g_test_add_func ("/daemon-api/capnp/codec/request-adapter-flag-keyword-update",
+  g_test_add_func
+      ("/daemon-api/capnp/codec/request-adapter-flag-keyword-update",
       assert_request_adapter_routes_flag_keyword_update);
 
   return g_test_run ();

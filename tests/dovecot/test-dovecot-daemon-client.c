@@ -19,6 +19,7 @@ typedef enum
 {
   FAKE_SERVER_RESPONSE_BYTES,
   FAKE_SERVER_MAILBOX_SELECT_RESPONSE,
+  FAKE_SERVER_MESSAGE_FETCH_RESPONSE,
   FAKE_SERVER_DAEMON_ERROR_RESPONSE,
   FAKE_SERVER_UNEXPECTED_SUCCESS_RESPONSE,
   FAKE_SERVER_UID_MAP_UNEXPECTED_SUCCESS_RESPONSE,
@@ -39,6 +40,17 @@ typedef struct
   const char *uid_map_csv;
   const char *expected_uid_map_mailbox_id;
   WyreboxDaemonMailboxListEntryKind expected_uid_map_kind;
+  const char *expected_fetch_account_id;
+  const char *expected_fetch_mailbox_id;
+  guint64 expected_fetch_uid_validity;
+  guint64 expected_fetch_mailbox_uid;
+  const char *message_fetch_response_message_id;
+  const char *message_fetch_response_query_id;
+  const guint8 *message_fetch_response_payload;
+  gsize message_fetch_response_payload_size;
+  guint64 message_fetch_response_chunk_index;
+  gboolean message_fetch_response_end_of_stream;
+  gboolean expect_message_fetch_request;
 } FakeServer;
 
 static void
@@ -161,6 +173,11 @@ write_truncated_response_frame (GOutputStream *output)
 }
 
 static GBytes *encode_mailbox_select_response (const char *request_id);
+static GBytes *encode_message_fetch_response (const char *request_id,
+    const char *message_id,
+    const char *query_id,
+    guint64 chunk_index,
+    const guint8 * payload, gsize payload_size, gboolean end_of_stream);
 static GBytes *encode_daemon_error_response (const char *request_id);
 static GBytes *encode_unexpected_success_response (const char *request_id);
 
@@ -188,6 +205,45 @@ assert_decoded_select_request (GBytes *request)
   g_assert_cmpstr (decoded.mailbox_select->account_identity, ==, "account-1");
   g_assert_cmpstr (decoded.mailbox_select->mailbox_id, ==, NULL);
   g_assert_cmpstr (decoded.mailbox_select->mailbox_name, ==, "Projects");
+
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  request_id = g_strdup (decoded.request_id);
+  decoded_state_clear (decoded_state);
+
+  return request_id;
+}
+
+static char *
+assert_decoded_message_fetch_request (GBytes *request,
+    const char *expected_mailbox_id,
+    guint64 expected_uid_validity,
+    guint64 expected_mailbox_uid, const char *expected_account_id)
+{
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+  char *request_id = NULL;
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+          request, &decoded, &decoded_state, &decoded_state_clear, NULL,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.operation, ==,
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_FETCH);
+  g_assert_nonnull (decoded.message_fetch);
+  g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
+  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.tool_identity, ==, "dovecot-storage");
+  g_assert_cmpstr (decoded.correlation_id, ==, "");
+  g_assert_cmpstr (decoded.message_fetch->account_identity,
+      ==, expected_account_id);
+  g_assert_cmpstr (decoded.message_fetch->mailbox_id, ==, expected_mailbox_id);
+  g_assert_cmpuint (decoded.message_fetch->uid_validity, ==,
+      expected_uid_validity);
+  g_assert_cmpuint (decoded.message_fetch->mailbox_uid, ==,
+      expected_mailbox_uid);
 
   g_assert_nonnull (decoded_state_clear);
   g_assert_nonnull (decoded_state);
@@ -257,6 +313,18 @@ fake_server_thread_main (gpointer user_data)
   GOutputStream *output = NULL;
   const char *expected_mailbox_id = server->expected_uid_map_mailbox_id != NULL
       ? server->expected_uid_map_mailbox_id : "mailbox-inbox";
+  const char *fetch_message_id =
+      server->message_fetch_response_message_id != NULL
+      ? server->message_fetch_response_message_id : "message-1";
+  const char *fetch_payload_string = "RFC5322 test body";
+  gsize fetch_payload_size = strlen (fetch_payload_string);
+  const guint8 *fetch_payload =
+      server->message_fetch_response_payload != NULL
+      ? server->message_fetch_response_payload
+      : (const guint8 *) fetch_payload_string;
+
+  if (server->message_fetch_response_payload != NULL)
+    fetch_payload_size = server->message_fetch_response_payload_size;
 
   connection = g_socket_listener_accept (server->listener, NULL, NULL, &error);
   g_assert_no_error (error);
@@ -274,6 +342,19 @@ fake_server_thread_main (gpointer user_data)
     request_id =
         assert_decoded_uid_map_request (request, expected_mailbox_id,
         server->expected_uid_map_kind, &query_id);
+  } else if (server->behavior == FAKE_SERVER_MESSAGE_FETCH_RESPONSE
+      || (server->behavior == FAKE_SERVER_RESPONSE_BYTES
+          && server->expect_message_fetch_request)) {
+    request_id =
+        assert_decoded_message_fetch_request (request,
+        server->expected_fetch_mailbox_id != NULL
+        ? server->expected_fetch_mailbox_id : "mailbox-inbox",
+        server->expected_fetch_uid_validity != 0
+        ? server->expected_fetch_uid_validity : 77,
+        server->expected_fetch_mailbox_uid != 0
+        ? server->expected_fetch_mailbox_uid : 42,
+        server->expected_fetch_account_id != NULL
+        ? server->expected_fetch_account_id : "account-1");
   } else {
     request_id = assert_decoded_select_request (request);
   }
@@ -288,6 +369,19 @@ fake_server_thread_main (gpointer user_data)
       response =
           encode_mailbox_select_response (server->response_request_id_override
           != NULL ? server->response_request_id_override : request_id);
+      g_assert_nonnull (response);
+      server->response = g_bytes_get_data (response, &server->response_size);
+      g_assert_true (wyrebox_daemon_frame_io_write_payload (output,
+              server->response, server->response_size, &error));
+      g_assert_no_error (error);
+      break;
+    case FAKE_SERVER_MESSAGE_FETCH_RESPONSE:
+      response =
+          encode_message_fetch_response (server->response_request_id_override !=
+          NULL ? server->response_request_id_override : request_id,
+          fetch_message_id, server->message_fetch_response_query_id,
+          server->message_fetch_response_chunk_index, fetch_payload,
+          fetch_payload_size, server->message_fetch_response_end_of_stream);
       g_assert_nonnull (response);
       server->response = g_bytes_get_data (response, &server->response_size);
       g_assert_true (wyrebox_daemon_frame_io_write_payload (output,
@@ -369,6 +463,17 @@ fake_server_start (FakeServer *server,
   server->response_request_id_override = response_request_id_override;
   server->uid_map_response_query_id_override = uid_map_query_id_override;
   server->expected_uid_map_kind = expected_uid_map_kind;
+  server->expected_fetch_account_id = "account-1";
+  server->expected_fetch_mailbox_id = "mailbox-inbox";
+  server->expected_fetch_uid_validity = 77;
+  server->expected_fetch_mailbox_uid = 42;
+  server->message_fetch_response_message_id = "message-1";
+  server->message_fetch_response_query_id = NULL;
+  server->message_fetch_response_payload = NULL;
+  server->message_fetch_response_payload_size = 0;
+  server->message_fetch_response_chunk_index = 0;
+  server->message_fetch_response_end_of_stream = TRUE;
+  server->expect_message_fetch_request = FALSE;
   if (response_payload != NULL)
     server->response = g_bytes_get_data (response_payload,
         &server->response_size);
@@ -410,6 +515,39 @@ encode_mailbox_select_response (const char *request_id)
 
   return wyrebox_daemon_capnp_codec_encode_response_frame (&frame, NULL,
       &error);
+}
+
+static GBytes *
+encode_message_fetch_response (const char *request_id,
+    const char *message_id,
+    const char *query_id,
+    guint64 chunk_index,
+    const guint8 *payload, gsize payload_size, gboolean end_of_stream)
+{
+  g_auto (WyreboxDaemonStreamChunkFrame) chunk = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (GBytes) payload_bytes = NULL;
+  g_autoptr (GBytes) response_payload = NULL;
+  g_autoptr (GError) error = NULL;
+
+  payload_bytes = g_bytes_new (payload, payload_size);
+  g_assert_nonnull (payload_bytes);
+  g_assert_true (wyrebox_daemon_stream_chunk_frame_init (&chunk,
+          request_id,
+          message_id,
+          query_id, NULL, chunk_index, payload_bytes, end_of_stream, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_response_frame_init_stream_chunk (&frame,
+          &chunk, &error));
+  g_assert_no_error (error);
+
+  response_payload =
+      wyrebox_daemon_capnp_codec_encode_response_frame (&frame, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (response_payload);
+
+  return g_steal_pointer (&response_payload);
 }
 
 static GBytes *
@@ -533,6 +671,205 @@ test_dovecot_daemon_client_sends_select_and_returns_copy (void)
   g_assert_cmpuint (result.uid_next, ==, 42);
   g_assert_cmpuint (result.message_count, ==, 7);
 
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_fetch_message_bytes_succeeds (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  FakeServer server = { 0 };
+  g_autofree char *payload_text = g_strdup ("RFC5322 test body\n");
+  gsize payload_size = 0;
+  const guint8 *payload_data = NULL;
+
+  fake_server_start (&server, socket_path, FAKE_SERVER_MESSAGE_FETCH_RESPONSE,
+      NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  server.expect_message_fetch_request = TRUE;
+  server.message_fetch_response_payload = (const guint8 *) payload_text;
+  server.message_fetch_response_payload_size = strlen (payload_text);
+
+  payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
+      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+
+  g_assert_nonnull (payload);
+  g_assert_no_error (error);
+  payload_data = g_bytes_get_data (payload, &payload_size);
+  g_assert_cmpuint (payload_size, ==, strlen (payload_text));
+  g_assert_cmpmem (payload_data, payload_size, payload_text, payload_size);
+
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_fetch_message_bytes_rejects_bad_request_id (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  FakeServer server = { 0 };
+
+  fake_server_start (&server, socket_path, FAKE_SERVER_MESSAGE_FETCH_RESPONSE,
+      NULL, "mismatched-request-id", NULL,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  server.message_fetch_response_message_id = "message-1";
+  server.expect_message_fetch_request = TRUE;
+
+  payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
+      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+  g_assert_null (payload);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+    test_dovecot_daemon_client_fetch_message_bytes_rejects_mismatched_message_id
+    (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  FakeServer server = { 0 };
+
+  fake_server_start (&server, socket_path, FAKE_SERVER_MESSAGE_FETCH_RESPONSE,
+      NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  server.message_fetch_response_message_id = "different-message";
+  server.expect_message_fetch_request = TRUE;
+
+  payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
+      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+  g_assert_null (payload);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_fetch_message_bytes_rejects_query_id (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  FakeServer server = { 0 };
+
+  fake_server_start (&server, socket_path, FAKE_SERVER_MESSAGE_FETCH_RESPONSE,
+      NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  server.message_fetch_response_query_id = "query-1";
+  server.message_fetch_response_message_id = "";
+  server.expect_message_fetch_request = TRUE;
+
+  payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
+      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+  g_assert_null (payload);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+    test_dovecot_daemon_client_fetch_message_bytes_rejects_nonzero_chunk_index
+    (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  FakeServer server = { 0 };
+
+  fake_server_start (&server, socket_path, FAKE_SERVER_MESSAGE_FETCH_RESPONSE,
+      NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  server.message_fetch_response_chunk_index = 2;
+  server.expect_message_fetch_request = TRUE;
+
+  payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
+      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+  g_assert_null (payload);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_fetch_message_bytes_rejects_partial_chunk (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  FakeServer server = { 0 };
+
+  fake_server_start (&server, socket_path, FAKE_SERVER_MESSAGE_FETCH_RESPONSE,
+      NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  server.message_fetch_response_end_of_stream = FALSE;
+  server.expect_message_fetch_request = TRUE;
+
+  payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
+      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+  g_assert_null (payload);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_fetch_message_bytes_rejects_empty_payload (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  FakeServer server = { 0 };
+  g_autofree char *empty_payload = g_strdup ("");
+
+  fake_server_start (&server, socket_path, FAKE_SERVER_MESSAGE_FETCH_RESPONSE,
+      NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  server.message_fetch_response_payload = (const guint8 *) empty_payload;
+  server.message_fetch_response_payload_size = 0;
+  server.expect_message_fetch_request = TRUE;
+
+  payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
+      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+  g_assert_null (payload);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+    test_dovecot_daemon_client_fetch_message_bytes_rejects_malformed_response_kind
+    (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  g_autoptr (GBytes) response_payload = NULL;
+  FakeServer server = { 0 };
+  response_payload = encode_daemon_error_response ("request-fetch-error");
+
+  fake_server_start (&server, socket_path, FAKE_SERVER_RESPONSE_BYTES,
+      response_payload, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  server.expect_message_fetch_request = TRUE;
+
+  payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
+      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+  g_assert_null (payload);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
   fake_server_join (&server);
   remove_tree (root);
 }
@@ -930,6 +1267,12 @@ test_dovecot_daemon_client_capnp_disabled_is_not_supported (void)
 
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
   assert_result_is_cleared (&result);
+
+  g_clear_error (&error);
+  g_assert_false (wyrebox_dovecot_daemon_client_fetch_message_bytes
+      ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox", 77, 42,
+          "message-1", &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
 }
 
 #endif
@@ -1009,6 +1352,33 @@ test_dovecot_daemon_client_invalid_inputs_fail_cleanly (void)
           77, &uid_map_snapshot, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   assert_uid_map_snapshot_is_cleared (&uid_map_snapshot);
+
+  g_clear_error (&error);
+  g_assert_null (wyrebox_dovecot_daemon_client_fetch_message_bytes
+      ("/tmp/wyrebox.sock", "", "mailbox-inbox", 77, 42, "message-1", &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  g_clear_error (&error);
+  g_assert_null (wyrebox_dovecot_daemon_client_fetch_message_bytes
+      ("/tmp/wyrebox.sock", "account-1", "", 77, 42, "message-1", &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  g_clear_error (&error);
+  g_assert_null (wyrebox_dovecot_daemon_client_fetch_message_bytes
+      ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox", 0, 42, "message-1",
+          &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  g_clear_error (&error);
+  g_assert_null (wyrebox_dovecot_daemon_client_fetch_message_bytes
+      ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox", 77, 0, "message-1",
+          &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  g_clear_error (&error);
+  g_assert_null (wyrebox_dovecot_daemon_client_fetch_message_bytes
+      ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox", 77, 42, "", &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 #endif
 }
 
@@ -1022,6 +1392,29 @@ main (int argc, char **argv)
       test_dovecot_daemon_client_sends_select_and_returns_copy);
   g_test_add_func ("/dovecot/daemon-client/daemon-error",
       test_dovecot_daemon_client_daemon_error_fails_cleanly);
+  g_test_add_func ("/dovecot/daemon-client/fetch-message-bytes-succeeds",
+      test_dovecot_daemon_client_fetch_message_bytes_succeeds);
+  g_test_add_func
+      ("/dovecot/daemon-client/fetch-message-bytes-rejects-bad-request-id",
+      test_dovecot_daemon_client_fetch_message_bytes_rejects_bad_request_id);
+  g_test_add_func
+      ("/dovecot/daemon-client/fetch-message-bytes-rejects-mismatched-message-id",
+      test_dovecot_daemon_client_fetch_message_bytes_rejects_mismatched_message_id);
+  g_test_add_func
+      ("/dovecot/daemon-client/fetch-message-bytes-rejects-query-id",
+      test_dovecot_daemon_client_fetch_message_bytes_rejects_query_id);
+  g_test_add_func
+      ("/dovecot/daemon-client/fetch-message-bytes-rejects-nonzero-chunk-index",
+      test_dovecot_daemon_client_fetch_message_bytes_rejects_nonzero_chunk_index);
+  g_test_add_func
+      ("/dovecot/daemon-client/fetch-message-bytes-rejects-partial-chunk",
+      test_dovecot_daemon_client_fetch_message_bytes_rejects_partial_chunk);
+  g_test_add_func
+      ("/dovecot/daemon-client/fetch-message-bytes-rejects-empty-payload",
+      test_dovecot_daemon_client_fetch_message_bytes_rejects_empty_payload);
+  g_test_add_func
+      ("/dovecot/daemon-client/fetch-message-bytes-rejects-unexpected-response-kind",
+      test_dovecot_daemon_client_fetch_message_bytes_rejects_malformed_response_kind);
   g_test_add_func ("/dovecot/daemon-client/mismatched-select-request-id",
       test_dovecot_daemon_client_mismatched_select_request_id_fails_cleanly);
   g_test_add_func ("/dovecot/daemon-client/mismatched-error-request-id",
@@ -1043,8 +1436,7 @@ main (int argc, char **argv)
   g_test_add_func
       ("/dovecot/daemon-client/load-uid-map-succeeds-with-derived-view-schema",
       test_dovecot_daemon_client_load_uid_map_succeeds_with_derived_view_schema);
-  g_test_add_func
-      ("/dovecot/daemon-client/"
+  g_test_add_func ("/dovecot/daemon-client/"
       "load-uid-map-rejects-derived-headers-in-mailbox-mode",
       test_dovecot_daemon_client_load_uid_map_rejects_derived_headers_in_mailbox_mode);
   g_test_add_func
