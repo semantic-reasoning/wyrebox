@@ -26,7 +26,7 @@ def forbid(pattern: str, text: str, what: str) -> None:
 
 
 def function_body(name: str, text: str) -> str:
-    header = rf"\b{name}\s*\(\s*void\s*\)\s*\{{"
+    header = rf"\b{name}\s*\([^)]*\)\s*\{{"
     match = re.search(header, text, re.MULTILINE)
     if match is None:
         raise AssertionError(
@@ -66,9 +66,19 @@ def main() -> None:
         "module-dir include",
     )
     require(
-        r"struct\s+wyrebox_dovecot_storage\s*\{\s*[\s\S]*?struct\s+mail_storage\s+storage;\s*}\s*;",
+        r"struct\s+wyrebox_dovecot_storage\s*\{\s*"
+        r"struct\s+mail_storage\s+storage;",
         text,
-        "wyrebox storage wrapper struct",
+        "wyrebox storage wrapper embeds mail_storage first",
+    )
+    require(
+        r"struct\s+wyrebox_dovecot_storage\s*\{\s*[\s\S]*?"
+        r"struct\s+mail_storage\s+storage;\s*[\s\S]*?"
+        r"char\s+\*socket_path;\s*[\s\S]*?"
+        r"char\s+\*account_identity;\s*[\s\S]*?"
+        r"}\s*;",
+        text,
+        "plugin-owned daemon config state fields",
     )
     require(
         r"struct\s+wyrebox_dovecot_mailbox\s*\{\s*[\s\S]*?"
@@ -114,6 +124,18 @@ def main() -> None:
         text,
         "mailbox open sets controlled failure error",
     )
+    mailbox_open_body = function_body("wyrebox_dovecot_mailbox_open", text)
+    for forbidden_call in [
+        r"\bconnect\s*\(",
+        r"\bsocket\s*\(",
+        r"\bwyrebox_daemon_client_",
+        r"\bwyrebox_dovecot_storage_get_daemon_",
+    ]:
+        if re.search(forbidden_call, mailbox_open_body) is not None:
+            raise AssertionError(
+                "plugin source contract failed: mailbox open must not do "
+                f"daemon I/O yet: {forbidden_call}"
+            )
     require(
         r"wyrebox_dovecot_mailbox_get_status\s*\(\s*struct\s+mailbox\s+\*box\s*,"
         r"[\s\S]*?struct\s+mailbox_status\s+\*status_r\)",
@@ -227,9 +249,43 @@ def main() -> None:
         "wired storage lifecycle vfuncs",
     )
     require(
-        r"static\s+void\s+wyrebox_dovecot_storage_destroy\s*\(\s*struct\s+mail_storage\s*\*storage\s*\)\s*\{\s*\(void\)\s*storage;\s*\}",
+        r"wyrebox_dovecot_storage_create\s*\(\s*struct\s+mail_storage\s+\*storage\s*,"
+        r"[\s\S]*?struct\s+mail_namespace\s+\*ns,"
+        r"[\s\S]*?const\s+char\s+\*\*error_r\s*\)\s*\{[\s\S]*?"
+        r"struct\s+wyrebox_dovecot_storage\s+\*wstorage\s*="
+        r"\s*\(struct\s+wyrebox_dovecot_storage\s+\*\)\s*storage;\s*"
+        r"[\s\S]*?\(void\)\s*ns;\s*[\s\S]*?"
+        r"wstorage->socket_path\s*=\s*[\s\S]*?"
+        r"\(\s*\"/run/wyrebox/wyrebox\.sock\"\s*\);[\s\S]*?"
+        r"wstorage->account_identity\s*=\s*[\s\S]*?"
+        r"\(\s*\"dovecot-account-identity-unavailable\"\s*\);[\s\S]*?"
+        r"if\s*\(\s*wstorage->socket_path\s*==\s*NULL\s*\|\|\s*"
+        r"wstorage->account_identity\s*==\s*NULL\s*\)\s*\{[\s\S]*?"
+        r"if\s*\(\s*error_r\s*!=\s*NULL\s*\)[\s\S]*?"
+        r"\*error_r\s*=\s*\"Failed to allocate WyreBox Dovecot storage state\";"
+        r"[\s\S]*?return\s+-1;\s*[\s\S]*?"
+        r"return\s+0;\s*\}",
         text,
-        "destroy is no-op",
+        "create initializes plugin-owned daemon config state",
+    )
+    require(
+        r"wyrebox_dovecot_strdup\s*\(\s*const\s+char\s+\*str\s*\)\s*\{[\s\S]*?"
+        r"malloc\s*\(\s*size\s*\)[\s\S]*?"
+        r"memcpy\s*\(\s*copy\s*,\s*str\s*,\s*size\s*\)",
+        text,
+        "create copies daemon config state into plugin-owned memory",
+    )
+    require(
+        r"static\s+void\s+wyrebox_dovecot_storage_destroy\s*\(\s*struct\s+mail_storage\s*\*storage\s*\)\s*\{[\s\S]*?"
+        r"struct\s+wyrebox_dovecot_storage\s+\*wstorage\s*="
+        r"\s*\(struct\s+wyrebox_dovecot_storage\s+\*\)\s*storage;\s*"
+        r"[\s\S]*?free\s*\(\s*wstorage->socket_path\s*\);\s*"
+        r"[\s\S]*?free\s*\(\s*wstorage->account_identity\s*\);"
+        r"[\s\S]*?wstorage->socket_path\s*=\s*NULL;"
+        r"[\s\S]*?wstorage->account_identity\s*=\s*NULL;"
+        r"[\s\S]*?\}",
+        text,
+        "destroy releases only plugin-owned daemon config state",
     )
     if re.search(
         r"return\s+NULL;\s*",
