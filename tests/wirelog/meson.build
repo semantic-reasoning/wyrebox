@@ -7,4 +7,11 @@ wirelog_link_smoke_test = executable(
   ],
 )
 
+wirelog_program_test = executable(
+  'test-wirelog-program',
+  'test-wirelog-program.c',
+  dependencies: [wyrebox_dep],
+)
+
 test('wirelog link smoke', wirelog_link_smoke_test)
+test('wirelog program', wirelog_program_test)
