@@ -1,4 +1,6 @@
 #include "wyrebox-derived-view-materializer-wirelog.h"
+#include "wyrebox-daemon-fact-mutation-request.h"
+#include "wyrebox-journal-writer.h"
 #include "wyrebox-schema-metadata-store.h"
 #include "wyrebox-schema-migration.h"
 #include "wyrebox-wirelog-rule-version.h"
@@ -123,6 +125,24 @@ remove_catalog (const gchar *path)
   remove_tree (dir);
 }
 
+static gchar *
+create_journal_root (void)
+{
+  g_autoptr (GError) error = NULL;
+  gchar *root = NULL;
+
+  root = g_dir_make_tmp ("wyrebox-derived-view-wirelog-journal-XXXXXX", &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (root);
+  return root;
+}
+
+static void
+remove_journal_root (const gchar *path)
+{
+  remove_tree (path);
+}
+
 static void
 seed_messages (const gchar *path)
 {
@@ -137,6 +157,44 @@ seed_messages (const gchar *path)
       "('msg-2', 'account-1', 'object-2', 2, 1),"
       "('msg-3', 'account-1', 'object-3', 3, 1);");
   close_duckdb_fixture (&fixture);
+}
+
+static void
+append_project_fact_mutation (WyreboxJournalWriter *writer,
+    WyreboxDaemonFactMutationKind mutation,
+    const gchar *message_id, const gchar *view_id)
+{
+  const gchar *args[] = {
+    message_id,
+    view_id,
+    NULL,
+  };
+  g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
+  g_autoptr (GError) error = NULL;
+  guint64 offset = 0;
+  guint64 sequence = 0;
+
+  g_assert_true (wyrebox_daemon_fact_mutation_request_init (&request,
+          mutation, "project_keyword", "account-1", args, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_fact_mutation_request_append_journal (&request,
+          writer, &offset, &sequence, &error));
+  g_assert_no_error (error);
+}
+
+static void
+append_malformed_fact_mutation (WyreboxJournalWriter *writer)
+{
+  const guint8 payload[] = { 0xff };
+  g_autoptr (GBytes) bytes = g_bytes_new_static (payload, sizeof (payload));
+  g_autoptr (GError) error = NULL;
+  guint64 offset = 0;
+  guint64 sequence = 0;
+
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_FACT_INSERTED, bytes, &offset, &sequence,
+          &error));
+  g_assert_no_error (error);
 }
 
 static void
@@ -190,6 +248,23 @@ refresh_from_facts (const gchar *path,
       wyrebox_derived_view_materializer_refresh_from_rules_and_facts_with_changes
       (materializer, "account-1", "view-project-alpha", "Project Alpha",
       "wirelog:project-alpha", 1000, membership_rules, facts,
+      "show_in_virtual_folder", out_changes, error);
+}
+
+static gboolean
+refresh_from_fact_journal (const gchar *path,
+    const gchar *journal_root, GPtrArray **out_changes, GError **error)
+{
+  g_autoptr (WyreboxDerivedViewMaterializer) materializer = NULL;
+
+  materializer = wyrebox_derived_view_materializer_new_duckdb (path, error);
+  if (materializer == NULL)
+    return FALSE;
+
+  return
+      wyrebox_derived_view_materializer_refresh_from_rules_and_fact_journal_with_changes
+      (materializer, "account-1", "view-project-alpha", "Project Alpha",
+      "wirelog:project-alpha", 1000, membership_rules, journal_root,
       "show_in_virtual_folder", out_changes, error);
 }
 
@@ -521,6 +596,141 @@ test_bridge_empty_rules_fail_before_materialization (void)
   remove_catalog (path);
 }
 
+static void
+test_bridge_fact_journal_inserted_facts_create_memberships (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autofree gchar *journal_root = create_journal_root ();
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GPtrArray) changes = NULL;
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  append_project_fact_mutation (writer, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+      "msg-2", "view-project-alpha");
+  append_project_fact_mutation (writer, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+      "msg-1", "view-project-alpha");
+  g_clear_object (&writer);
+
+  g_assert_true (refresh_from_fact_journal (path, journal_root, &changes,
+          &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (changes);
+  g_assert_cmpuint (changes->len, ==, 2);
+  g_assert_cmpstr (change_at (changes, 0)->message_id, ==, "msg-1");
+  g_assert_cmpuint (change_at (changes, 0)->uid, ==, 1);
+  g_assert_cmpstr (change_at (changes, 1)->message_id, ==, "msg-2");
+  g_assert_cmpuint (change_at (changes, 1)->uid, ==, 2);
+  g_assert_cmpuint (query_membership_count (path,
+          "view_id = 'view-project-alpha' AND is_visible = TRUE"), ==, 2);
+
+  remove_journal_root (journal_root);
+  remove_catalog (path);
+}
+
+static void
+test_bridge_fact_journal_retract_hides_and_rebuild_is_idempotent (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autofree gchar *journal_root = create_journal_root ();
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GPtrArray) changes = NULL;
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  append_project_fact_mutation (writer, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+      "msg-1", "view-project-alpha");
+  append_project_fact_mutation (writer, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+      "msg-2", "view-project-alpha");
+
+  g_assert_true (refresh_from_fact_journal (path, journal_root, &changes,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (changes->len, ==, 2);
+  g_clear_pointer (&changes, g_ptr_array_unref);
+
+  append_project_fact_mutation (writer, WYREBOX_DAEMON_FACT_MUTATION_RETRACT,
+      "msg-2", "view-project-alpha");
+
+  g_assert_true (refresh_from_fact_journal (path, journal_root, &changes,
+          &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (changes);
+  g_assert_cmpuint (changes->len, ==, 1);
+  g_assert_cmpstr (change_at (changes, 0)->message_id, ==, "msg-2");
+  g_assert_cmpuint (change_at (changes, 0)->uid, ==, 2);
+  g_assert_false (change_at (changes, 0)->is_visible);
+  g_assert_cmpuint (query_membership_count (path,
+          "message_id = 'msg-1' AND is_visible = TRUE"), ==, 1);
+  g_assert_cmpuint (query_membership_count (path,
+          "message_id = 'msg-2' AND is_visible = FALSE"), ==, 1);
+  g_assert_cmpuint (query_uidnext (path), ==, 3);
+  g_clear_pointer (&changes, g_ptr_array_unref);
+
+  g_assert_true (refresh_from_fact_journal (path, journal_root, &changes,
+          &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (changes);
+  g_assert_cmpuint (changes->len, ==, 0);
+  g_assert_cmpuint (query_membership_count (path,
+          "view_id = 'view-project-alpha' AND is_visible = TRUE"), ==, 1);
+  g_assert_cmpuint (query_uidnext (path), ==, 3);
+
+  remove_journal_root (journal_root);
+  remove_catalog (path);
+}
+
+static void
+test_bridge_fact_journal_malformed_payload_leaves_state_unchanged (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autofree gchar *initial_root = create_journal_root ();
+  g_autofree gchar *malformed_root = create_journal_root ();
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GPtrArray) changes = NULL;
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  writer = wyrebox_journal_writer_new (initial_root, &error);
+  g_assert_no_error (error);
+  append_project_fact_mutation (writer, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+      "msg-1", "view-project-alpha");
+  append_project_fact_mutation (writer, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+      "msg-2", "view-project-alpha");
+  g_clear_object (&writer);
+
+  g_assert_true (refresh_from_fact_journal (path, initial_root, &changes,
+          &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (changes);
+  g_assert_cmpuint (changes->len, ==, 2);
+
+  writer = wyrebox_journal_writer_new (malformed_root, &error);
+  g_assert_no_error (error);
+  append_malformed_fact_mutation (writer);
+  g_clear_object (&writer);
+
+  g_assert_false (refresh_from_fact_journal (path, malformed_root, &changes,
+          &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_null (changes);
+  g_clear_error (&error);
+
+  g_assert_cmpuint (query_membership_count (path,
+          "view_id = 'view-project-alpha' AND is_visible = TRUE"), ==, 2);
+  g_assert_cmpuint (query_membership_count (path,
+          "message_id = 'msg-3'"), ==, 0);
+  g_assert_cmpuint (query_uidnext (path), ==, 3);
+
+  remove_journal_root (malformed_root);
+  remove_journal_root (initial_root);
+  remove_catalog (path);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -537,6 +747,15 @@ main (int argc, char **argv)
       test_bridge_changed_rules_use_distinct_hashes);
   g_test_add_func ("/wirelog/derived-view-materializer-bridge/empty-rules",
       test_bridge_empty_rules_fail_before_materialization);
+  g_test_add_func
+      ("/wirelog/derived-view-materializer-bridge/fact-journal-inserted",
+      test_bridge_fact_journal_inserted_facts_create_memberships);
+  g_test_add_func
+      ("/wirelog/derived-view-materializer-bridge/fact-journal-retract",
+      test_bridge_fact_journal_retract_hides_and_rebuild_is_idempotent);
+  g_test_add_func
+      ("/wirelog/derived-view-materializer-bridge/fact-journal-malformed",
+      test_bridge_fact_journal_malformed_payload_leaves_state_unchanged);
 
   return g_test_run ();
 }
