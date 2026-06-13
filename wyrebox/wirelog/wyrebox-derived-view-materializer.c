@@ -1,5 +1,7 @@
 #include "wyrebox-derived-view-materializer.h"
 
+#include "wyrebox-derived-view-membership-changed-payload.h"
+
 #include <duckdb.h>
 #include <gio/gio.h>
 #include <string.h>
@@ -1057,6 +1059,67 @@ void wyrebox_derived_view_membership_change_free
 
   wyrebox_derived_view_membership_change_clear (change);
   g_free (change);
+}
+
+gboolean
+wyrebox_derived_view_membership_changes_append_journal (GPtrArray *changes,
+    WyreboxJournalWriter *writer, GError **error)
+{
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (changes == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "derived view membership changes are required");
+    return FALSE;
+  }
+
+  if (!WYREBOX_IS_JOURNAL_WRITER (writer)) {
+    g_set_error (error,
+        G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "journal writer is required");
+    return FALSE;
+  }
+
+  for (guint i = 0; i < changes->len; i++) {
+    const WyreboxDerivedViewMembershipChange *change =
+        g_ptr_array_index (changes, i);
+    WyreboxDerivedViewMembershipChangedPayload payload = { 0 };
+    g_autoptr (GBytes) encoded = NULL;
+    guint64 journal_offset = 0;
+    guint64 journal_sequence = 0;
+
+    if (change == NULL) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "derived view membership change at index %u is required", i);
+      return FALSE;
+    }
+
+    payload.account_id = change->account_id;
+    payload.view_id = change->view_id;
+    payload.message_id = change->message_id;
+    payload.membership_id = change->membership_id;
+    payload.rule_version_hash = change->rule_version_hash;
+    payload.uid = change->uid;
+    payload.uidvalidity = change->uidvalidity;
+    payload.is_visible = change->is_visible;
+    payload.materialized_at_unix_us = change->materialized_at_unix_us;
+
+    encoded =
+        wyrebox_derived_view_membership_changed_payload_encode (&payload,
+        error);
+    if (encoded == NULL)
+      return FALSE;
+
+    if (!wyrebox_journal_writer_append (writer,
+            WYREBOX_JOURNAL_EVENT_DERIVED_VIEW_MEMBERSHIP_CHANGED,
+            encoded, &journal_offset, &journal_sequence, error))
+      return FALSE;
+  }
+
+  return TRUE;
 }
 
 gboolean
