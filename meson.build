@@ -112,11 +112,17 @@ duckdb_api_probe = '''
   }
 '''
 
-duckdb_pkg_dep = dependency(
-  'duckdb',
-  method: 'pkg-config',
-  required: false,
-)
+duckdb_force_fallback = get_option('wrap_mode') == 'forcefallback'
+if duckdb_force_fallback
+  duckdb_pkg_dep = disabler()
+else
+  duckdb_pkg_dep = dependency(
+    'duckdb',
+    method: 'pkg-config',
+    required: false,
+    allow_fallback: false,
+  )
+endif
 if duckdb_pkg_dep.found()
   duckdb_api_usable = cc.links(
     duckdb_api_probe,
@@ -132,47 +138,30 @@ if duckdb_pkg_dep.found()
       'compile/link usable C API.')
   endif
 else
-  duckdb_lib_dep = cc.find_library('duckdb', required: false)
-  duckdb_api_usable = false
-
-  if duckdb_lib_dep.found()
-    duckdb_api_usable = cc.links(
-      duckdb_api_probe,
-      name: 'DuckDB C API via library/header detection',
-      dependencies: duckdb_lib_dep,
-    )
+  if host_machine.cpu_family() != 'x86_64'
+    error('DuckDB is required, but the bundled DuckDB prebuilt ' +
+      'subproject supports Linux x86_64 only.')
   endif
 
-  if duckdb_api_usable
-    duckdb_found = true
-    duckdb_deps = [duckdb_lib_dep]
-    duckdb_summary = 'enabled via library/header detection'
-  else
-    if host_machine.cpu_family() != 'x86_64'
-      error('DuckDB is required, but the bundled DuckDB prebuilt ' +
-        'subproject supports Linux x86_64 only.')
-    endif
+  duckdb_subproject_dep = dependency(
+    'duckdb-prebuilt-linux',
+    fallback: ['duckdb-prebuilt-linux', 'duckdb_dep'],
+    required: true,
+  )
+  duckdb_api_usable = cc.links(
+    duckdb_api_probe,
+    name: 'DuckDB C API via linux prebuilt subproject',
+    dependencies: duckdb_subproject_dep,
+  )
 
-    duckdb_subproject_dep = dependency(
-      'duckdb-prebuilt-linux',
-      fallback: ['duckdb-prebuilt-linux', 'duckdb_dep'],
-      required: true,
-    )
-    duckdb_api_usable = cc.links(
-      duckdb_api_probe,
-      name: 'DuckDB C API via linux prebuilt subproject',
-      dependencies: duckdb_subproject_dep,
-    )
-
-    if not duckdb_api_usable
-      error('DuckDB is required, but the DuckDB linux prebuilt ' +
-        'subproject did not provide a compile/link usable C API.')
-    endif
-
-    duckdb_found = true
-    duckdb_deps = [duckdb_subproject_dep]
-    duckdb_summary = 'enabled via linux prebuilt subproject'
+  if not duckdb_api_usable
+    error('DuckDB is required, but the DuckDB linux prebuilt ' +
+      'subproject did not provide a compile/link usable C API.')
   endif
+
+  duckdb_found = true
+  duckdb_deps = [duckdb_subproject_dep]
+  duckdb_summary = 'enabled via linux prebuilt subproject'
 endif
 
 summary('duckdb', duckdb_summary, section: 'Dependencies')
