@@ -2,6 +2,9 @@
 
 #include "wyrebox-daemon-client-identity.h"
 #include "wyrebox-daemon-wirelog-predicate-query-catalog.h"
+#include "wyrebox-daemon-audit-payload.h"
+#include "wyrebox-daemon-error.h"
+#include "wyrebox-journal-writer.h"
 
 #include <gio/gio.h>
 
@@ -12,6 +15,7 @@ struct _WyreboxDaemonWirelogPredicateQueryService
   WyreboxDaemonWirelogPredicateQueryServiceFunc func;
   gpointer user_data;
   GDestroyNotify user_data_destroy;
+  WyreboxJournalWriter *audit_writer;
 };
 
 G_DEFINE_TYPE (WyreboxDaemonWirelogPredicateQueryService,
@@ -85,6 +89,8 @@ wyrebox_daemon_wirelog_predicate_query_service_finalize (GObject *object)
   if (self->user_data_destroy != NULL && self->user_data != NULL)
     self->user_data_destroy (self->user_data);
 
+  g_clear_object (&self->audit_writer);
+
   G_OBJECT_CLASS
       (wyrebox_daemon_wirelog_predicate_query_service_parent_class)->finalize
       (object);
@@ -123,6 +129,83 @@ WyreboxDaemonWirelogPredicateQueryService
   return self;
 }
 
+static const gchar *
+audit_required_value (const gchar *value, const gchar *fallback)
+{
+  if (value != NULL && *value != '\0')
+    return value;
+
+  return fallback;
+}
+
+static void
+append_wirelog_query_failure_audit (WyreboxDaemonWirelogPredicateQueryService
+    *self, const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonWirelogPredicateQueryRequest *request,
+    const GError *cause)
+{
+  g_autoptr (GError) ignored_error = NULL;
+  g_autoptr (GBytes) payload_bytes = NULL;
+  g_autofree gchar *error_domain = NULL;
+  WyreboxDaemonErrorClass error_class = WYREBOX_DAEMON_ERROR_INTERNAL_ERROR;
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  WyreboxDaemonAuditPayload payload = {
+    .operation = WYREBOX_DAEMON_AUDIT_OPERATION_WIRELOG_PREDICATE_QUERY,
+    .outcome = WYREBOX_DAEMON_AUDIT_OUTCOME_FAILURE,
+    .request_id = (gchar *) audit_required_value (identity->request_id,
+        "unknown-request"),
+    .correlation_id = identity->correlation_id,
+    .caller_identity = (gchar *) audit_required_value
+        (identity->caller_identity, "unknown"),
+    .account_identity = (gchar *) audit_required_value
+        (identity->account_identity, "unknown"),
+    .tool_identity = identity->tool_identity,
+    .scope_id = (gchar *) audit_required_value (request->scope_id,
+        identity->account_identity != NULL ? identity->account_identity :
+        "unknown"),
+    .query_id = (gchar *) audit_required_value (request->query_id,
+        "unknown-query"),
+    .template_id = (gchar *) audit_required_value
+        (request->predicate_id, "unknown-predicate"),
+    .error_code = cause != NULL ? cause->code : G_IO_ERROR_FAILED,
+    .error_message = (gchar *) audit_required_value
+        (cause != NULL ? cause->message : NULL, "unknown wirelog query error"),
+  };
+
+  if (self->audit_writer == NULL)
+    return;
+
+  if (cause != NULL && cause->domain == G_IO_ERROR)
+    error_class = wyrebox_daemon_error_class_from_g_error_code (cause->code);
+
+  error_domain = g_strdup (cause != NULL ?
+      g_quark_to_string (cause->domain) : g_quark_to_string (G_IO_ERROR));
+  payload.error_domain = error_domain;
+  payload.error_class = (gchar *) audit_required_value
+      (wyrebox_daemon_error_class_to_string (error_class), "internalError");
+
+  payload_bytes = wyrebox_daemon_audit_payload_encode (&payload,
+      &ignored_error);
+  if (payload_bytes == NULL)
+    return;
+
+  (void) wyrebox_journal_writer_append (self->audit_writer,
+      WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED, payload_bytes, &offset,
+      &sequence, &ignored_error);
+}
+
+void wyrebox_daemon_wirelog_predicate_query_service_set_audit_writer
+    (WyreboxDaemonWirelogPredicateQueryService * self,
+    WyreboxJournalWriter * audit_writer)
+{
+  g_return_if_fail (WYREBOX_IS_DAEMON_WIRELOG_PREDICATE_QUERY_SERVICE (self));
+  g_return_if_fail (audit_writer == NULL || WYREBOX_IS_JOURNAL_WRITER
+      (audit_writer));
+
+  g_set_object (&self->audit_writer, audit_writer);
+}
+
 gboolean
     wyrebox_daemon_wirelog_predicate_query_service_handle_identity
     (WyreboxDaemonWirelogPredicateQueryService * self,
@@ -144,8 +227,11 @@ gboolean
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
   if (!wyrebox_daemon_wirelog_predicate_query_catalog_validate (client_class,
-          identity->account_identity, request, NULL, error))
+          identity->account_identity, request, NULL, &local_error)) {
+    append_wirelog_query_failure_audit (self, identity, request, local_error);
+    g_propagate_error (error, g_steal_pointer (&local_error));
     return FALSE;
+  }
 
   if (!self->func (identity, request, &chunk, self->user_data, &local_error)) {
     if (local_error == NULL) {
@@ -154,13 +240,17 @@ gboolean
           G_IO_ERROR_FAILED,
           "wirelog predicate query service failed without error detail");
     }
+    append_wirelog_query_failure_audit (self, identity, request, local_error);
     g_propagate_error (error, g_steal_pointer (&local_error));
     return FALSE;
   }
 
   if (!validate_wirelog_predicate_query_chunk (identity, request, &chunk,
-          error))
+          &local_error)) {
+    append_wirelog_query_failure_audit (self, identity, request, local_error);
+    g_propagate_error (error, g_steal_pointer (&local_error));
     return FALSE;
+  }
 
   if (!wyrebox_daemon_stream_chunk_frame_init (&response_chunk,
           identity->request_id,

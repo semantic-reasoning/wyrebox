@@ -4,6 +4,7 @@
 #include "wyrebox-daemon-response-frame.h"
 #include "wyrebox-daemon-stream-chunk-frame.h"
 #include "wyrebox-daemon-wirelog-predicate-query-request.h"
+#include "wyrebox-journal-writer.h"
 
 #include <glib-object.h>
 
@@ -37,6 +38,10 @@ wyrebox_daemon_wirelog_predicate_query_service_new_wirelog (
     const char *rules_source,
     const char *journal_root_dir,
     GError **error);
+
+void wyrebox_daemon_wirelog_predicate_query_service_set_audit_writer (
+    WyreboxDaemonWirelogPredicateQueryService *self,
+    WyreboxJournalWriter *audit_writer);
 
 gboolean wyrebox_daemon_wirelog_predicate_query_service_handle_identity (
     WyreboxDaemonWirelogPredicateQueryService *self,

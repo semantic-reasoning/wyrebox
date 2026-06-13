@@ -210,6 +210,63 @@ test_daemon_audit_payload_roundtrips_duckdb_failure (void)
 }
 
 static void
+test_daemon_audit_payload_roundtrips_wirelog_failure (void)
+{
+  g_auto (WyreboxDaemonAuditPayload) decoded = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+  WyreboxDaemonAuditPayload payload = {
+    .operation = WYREBOX_DAEMON_AUDIT_OPERATION_WIRELOG_PREDICATE_QUERY,
+    .outcome = WYREBOX_DAEMON_AUDIT_OUTCOME_FAILURE,
+    .request_id = "request-wirelog",
+    .correlation_id = "correlation-wirelog",
+    .caller_identity = "trusted-tool",
+    .account_identity = "account-1",
+    .tool_identity = "wirelog-tool",
+    .scope_id = "account-1",
+    .query_id = "query-1",
+    .template_id = "show_in_virtual_folder.v1",
+    .error_domain = "g-io-error-quark",
+    .error_code = G_IO_ERROR_INVALID_ARGUMENT,
+    .error_class = "permanentFailure",
+    .error_message =
+        "wirelog predicate query stream chunk must not contain message_id",
+  };
+
+  encoded = wyrebox_daemon_audit_payload_encode (&payload, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+  {
+    gsize size = 0;
+    const guint8 *data = g_bytes_get_data (encoded, &size);
+
+    g_assert_cmpuint (size, >, 8);
+    g_assert_cmpmem (data, 8, "WYREDAU2", 8);
+  }
+
+  g_assert_true (wyrebox_daemon_audit_payload_decode (encoded, &decoded,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.operation, ==,
+      WYREBOX_DAEMON_AUDIT_OPERATION_WIRELOG_PREDICATE_QUERY);
+  g_assert_cmpint (decoded.outcome, ==, WYREBOX_DAEMON_AUDIT_OUTCOME_FAILURE);
+  g_assert_cmpstr (decoded.request_id, ==, "request-wirelog");
+  g_assert_cmpstr (decoded.correlation_id, ==, "correlation-wirelog");
+  g_assert_cmpstr (decoded.caller_identity, ==, "trusted-tool");
+  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.tool_identity, ==, "wirelog-tool");
+  g_assert_cmpstr (decoded.scope_id, ==, "account-1");
+  g_assert_cmpuint (decoded.final_journal_sequence, ==, 0);
+  g_assert_cmpstr (decoded.query_id, ==, "query-1");
+  g_assert_cmpstr (decoded.template_id, ==, "show_in_virtual_folder.v1");
+  g_assert_cmpstr (decoded.error_domain, ==, "g-io-error-quark");
+  g_assert_cmpint (decoded.error_code, ==, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpstr (decoded.error_class, ==, "permanentFailure");
+  g_assert_cmpstr (decoded.error_message, ==,
+      "wirelog predicate query stream chunk must not contain message_id");
+}
+
+static void
 test_daemon_audit_payload_rejects_invalid_encode (void)
 {
   g_autoptr (GError) error = NULL;
@@ -316,6 +373,8 @@ main (int argc, char **argv)
       test_daemon_audit_payload_decodes_legacy_single_success);
   g_test_add_func ("/journal/daemon-audit-payload/roundtrip-duckdb-failure",
       test_daemon_audit_payload_roundtrips_duckdb_failure);
+  g_test_add_func ("/journal/daemon-audit-payload/roundtrip-wirelog-failure",
+      test_daemon_audit_payload_roundtrips_wirelog_failure);
   g_test_add_func ("/journal/daemon-audit-payload/reject-invalid-encode",
       test_daemon_audit_payload_rejects_invalid_encode);
   g_test_add_func ("/journal/daemon-audit-payload/reject-duckdb-success-encode",
