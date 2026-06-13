@@ -45,6 +45,9 @@ test_catalog_resolves_allowlisted_templates (void)
   assert_template_resolves ("mailbox.uid_map.v1", "mailbox-inbox",
       "mailbox uid map", "mailbox_id",
       "stream-chunk.duckdb-template.uid-map.v1");
+  assert_template_resolves ("derived_view.uid_map.v1", "view-important",
+      "derived view uid map", "view_id",
+      "stream-chunk.duckdb-template.derived-view-uid-map.v1");
   assert_template_resolves ("message.by_id.v1", "message-1",
       "message by id", "message_id",
       "stream-chunk.duckdb-template.message-by-id.v1");
