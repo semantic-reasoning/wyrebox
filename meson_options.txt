@@ -18,3 +18,17 @@ option(
   value: 'enabled',
   description: 'Required Wirelog runtime dependency',
 )
+
+option(
+  'dovecot_backend',
+  type: 'feature',
+  value: 'disabled',
+  description: 'Enable WyreBox Dovecot backend integration option',
+)
+
+option(
+  'dovecot_source_dir',
+  type: 'string',
+  value: '',
+  description: 'Path to a Dovecot source tree for contract validation',
+)

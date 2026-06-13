@@ -78,6 +78,8 @@ wyrebox_build_config.set10('WYREBOX_DUCKDB_FROM_SUBPROJECT',
   duckdb_from_subproject)
 wyrebox_build_config.set10('WYREBOX_HAVE_CAPNP_SERIALIZATION',
   capnp_serialization_found)
+wyrebox_build_config.set10('WYREBOX_HAVE_DOVECOT_BACKEND',
+  have_dovecot_backend)
 
 configure_file(
   input: 'wyrebox-build-config.h.in',
