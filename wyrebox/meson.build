@@ -58,6 +58,7 @@ wyrebox_sources = files(
   'journal/wyrebox-journal-writer.c',
   'journal/wyrebox-journal-reader.c',
   'schema/wyrebox-schema-migration.c',
+  'wirelog/wyrebox-wirelog-rule-version.c',
 )
 
 wyrebox_build_config = configuration_data()

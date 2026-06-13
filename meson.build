@@ -320,6 +320,4 @@ subdir('tests/build-config')
 subdir('tests/daemon-api')
 subdir('tests/facts')
 subdir('tests/duckdb')
-if wirelog_runtime_found
-  subdir('tests/wirelog')
-endif
+subdir('tests/wirelog')
