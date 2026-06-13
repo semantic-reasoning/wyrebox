@@ -47,6 +47,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-response-frame.c',
   'daemon/wyrebox-daemon-stream-chunk-frame.c',
   'daemon/wyrebox-daemon-success-receipt.c',
+  'postfix/wyrebox-postfix-pipe-input.c',
   'ingestion/wyrebox-delivery-materializer.c',
   'ingestion/wyrebox-delivery-fetcher.c',
   'ingestion/wyrebox-delivery-catchup.c',
@@ -88,6 +89,7 @@ wyrebox_inc = include_directories(
   'ingestion',
   'facts',
   'daemon',
+  'postfix',
   'wirelog',
 )
 
