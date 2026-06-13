@@ -14,6 +14,46 @@
 #define WYREBOX_DOVECOT_TOOL_IDENTITY "dovecot-storage"
 #define WYREBOX_DOVECOT_UID_MAP_TEMPLATE_ID "mailbox.uid_map.v1"
 
+void
+wyrebox_dovecot_mailbox_uid_map_row_clear (WyreboxDovecotMailboxUidMapRow *row)
+{
+  if (row == NULL)
+    return;
+
+  g_clear_pointer (&row->account_id, g_free);
+  g_clear_pointer (&row->mailbox_id, g_free);
+  row->uid_validity = 0;
+  row->uid = 0;
+  g_clear_pointer (&row->message_id, g_free);
+  g_clear_pointer (&row->object_id, g_free);
+}
+
+void
+wyrebox_dovecot_mailbox_uid_map_row_free (WyreboxDovecotMailboxUidMapRow *row)
+{
+  if (row == NULL)
+    return;
+
+  wyrebox_dovecot_mailbox_uid_map_row_clear (row);
+  g_free (row);
+}
+
+static void
+wyrebox_dovecot_mailbox_uid_map_row_array_clear (gpointer data)
+{
+  g_ptr_array_unref (data);
+}
+
+void wyrebox_dovecot_mailbox_uid_map_snapshot_clear
+    (WyreboxDovecotMailboxUidMapSnapshot * snapshot)
+{
+  if (snapshot == NULL)
+    return;
+
+  g_clear_pointer (&snapshot->rows,
+      wyrebox_dovecot_mailbox_uid_map_row_array_clear);
+}
+
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
 
 static gboolean
@@ -116,46 +156,6 @@ copy_mailbox_select_response (const WyreboxDaemonResponseFrame *response,
       response->mailbox_select.uid_validity,
       response->mailbox_select.uid_next,
       response->mailbox_select.message_count, error);
-}
-
-void
-wyrebox_dovecot_mailbox_uid_map_row_clear (WyreboxDovecotMailboxUidMapRow *row)
-{
-  if (row == NULL)
-    return;
-
-  g_clear_pointer (&row->account_id, g_free);
-  g_clear_pointer (&row->mailbox_id, g_free);
-  row->uid_validity = 0;
-  row->uid = 0;
-  g_clear_pointer (&row->message_id, g_free);
-  g_clear_pointer (&row->object_id, g_free);
-}
-
-void
-wyrebox_dovecot_mailbox_uid_map_row_free (WyreboxDovecotMailboxUidMapRow *row)
-{
-  if (row == NULL)
-    return;
-
-  wyrebox_dovecot_mailbox_uid_map_row_clear (row);
-  g_free (row);
-}
-
-static void
-wyrebox_dovecot_mailbox_uid_map_row_array_clear (gpointer data)
-{
-  g_ptr_array_unref (data);
-}
-
-void wyrebox_dovecot_mailbox_uid_map_snapshot_clear
-    (WyreboxDovecotMailboxUidMapSnapshot * snapshot)
-{
-  if (snapshot == NULL)
-    return;
-
-  g_clear_pointer (&snapshot->rows,
-      wyrebox_dovecot_mailbox_uid_map_row_array_clear);
 }
 
 static gboolean
@@ -473,6 +473,7 @@ parse_uid_map_csv_rows (const char *csv,
 
 static gboolean
 decode_uid_map_response (const char *request_id,
+    const char *query_id,
     const char *account_id,
     const char *mailbox_id,
     guint64 uid_validity,
@@ -504,6 +505,14 @@ decode_uid_map_response (const char *request_id,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_DATA,
         "daemon UID map stream response must include query_id");
+    return FALSE;
+  }
+
+  if (g_strcmp0 (response->stream_chunk.query_id, query_id) != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon UID map response query_id does not match request");
     return FALSE;
   }
 
@@ -686,6 +695,7 @@ wyrebox_dovecot_daemon_client_load_uid_map (const char *socket_path,
       (GDestroyNotify) wyrebox_dovecot_mailbox_uid_map_row_free);
 
   if (!decode_uid_map_response (request_id,
+          query_id,
           account_identity,
           mailbox_id, uid_validity, &response, &parsed_snapshot, error)) {
     wyrebox_dovecot_mailbox_uid_map_snapshot_clear (&parsed_snapshot);
