@@ -32,3 +32,10 @@ option(
   value: '',
   description: 'Path to a Dovecot source tree for contract validation',
 )
+
+option(
+  'dovecot_build_dir',
+  type: 'string',
+  value: '',
+  description: 'Path to a configured Dovecot build tree containing config.h',
+)

@@ -32,6 +32,10 @@ The following files must exist in a validated source tree:
 - `src/lib-storage/mail-storage-hooks.h`
 - `src/lib/module-dir.h`
 
+For module compilation the source tree is not enough; when backend code
+generation is enabled, WyreBox additionally validates a configured build
+directory via the `dovecot_build_contract` checks.
+
 ## Required Types And Symbols
 
 Checker validation requires these ABI/storage names to be present:
