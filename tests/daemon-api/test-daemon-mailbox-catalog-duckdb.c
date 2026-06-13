@@ -94,6 +94,9 @@ seed_catalog (const gchar *path)
       "INSERT INTO mailboxes (mailbox_id, account_id, imap_name, "
       "is_selectable, is_visible) VALUES "
       "('mb-inbox', 'account-1', 'INBOX', TRUE, TRUE),"
+      "('mb-projects', 'account-1', 'Projects', FALSE, TRUE),"
+      "('mb-project-alpha', 'account-1', 'Projects/Alpha', TRUE, TRUE),"
+      "('mb-projectsx', 'account-1', 'ProjectsX', TRUE, TRUE),"
       "('mb-hidden', 'account-1', 'Hidden', TRUE, FALSE),"
       "('mb-other', 'account-2', 'Other Account', TRUE, TRUE),"
       "('mb-conflict', 'account-1', 'Shared', TRUE, TRUE),"
@@ -103,6 +106,8 @@ seed_catalog (const gchar *path)
       "INSERT INTO derived_views (view_id, account_id, imap_name, "
       "definition_ref, is_selectable, is_visible) VALUES "
       "('view-important', 'account-1', 'Important', 'rule:important', TRUE, "
+      "TRUE),"
+      "('view-containers', 'account-1', 'Views', 'rule:containers', FALSE, "
       "TRUE),"
       "('view-hidden', 'account-1', 'Hidden View', 'rule:hidden', TRUE, "
       "FALSE),"
@@ -114,11 +119,15 @@ seed_catalog (const gchar *path)
       "INSERT INTO mailbox_uid_state (account_id, namespace_kind, "
       "namespace_id, uidnext, uidvalidity) VALUES "
       "('account-1', 'mailbox', 'mb-inbox', 4, 11),"
+      "('account-1', 'mailbox', 'mb-projects', 1, 16),"
+      "('account-1', 'mailbox', 'mb-project-alpha', 2, 17),"
+      "('account-1', 'mailbox', 'mb-projectsx', 2, 18),"
       "('account-1', 'mailbox', 'mb-hidden', 2, 12),"
       "('account-2', 'mailbox', 'mb-other', 2, 13),"
       "('account-1', 'mailbox', 'mb-conflict', 2, 14),"
       "('account-1', 'mailbox', 'mb''; DROP TABLE mailboxes; --', 2, 15),"
       "('account-1', 'derived_view', 'view-important', 3, 21),"
+      "('account-1', 'derived_view', 'view-containers', 1, 26),"
       "('account-1', 'derived_view', 'view-hidden', 2, 22),"
       "('account-2', 'derived_view', 'view-other', 2, 23),"
       "('account-1', 'derived_view', 'view-conflict', 2, 24),"
@@ -132,6 +141,10 @@ seed_catalog (const gchar *path)
       "('mm-2', 'account-1', 'mb-inbox', 'msg-2', 2, 2, 2, 2, TRUE),"
       "('mm-hidden', 'account-1', 'mb-inbox', 'msg-hidden', 3, 3, 3, 3, "
       "FALSE),"
+      "('mm-project-alpha', 'account-1', 'mb-project-alpha', 'msg-view', 1, "
+      "4, 4, 4, TRUE),"
+      "('mm-projectsx', 'account-1', 'mb-projectsx', 'msg-view', 1, "
+      "4, 4, 4, TRUE),"
       "('mm-other', 'account-2', 'mb-other', 'msg-other', 1, 4, 4, 4, TRUE),"
       "('mm-sql', 'account-1', 'mb''; DROP TABLE mailboxes; --', "
       "'msg-sql', 1, 5, 5, 5, TRUE);");
@@ -211,6 +224,23 @@ assert_select_not_found (WyreboxDaemonMailboxCatalogDuckDB *catalog,
 }
 
 static void
+assert_select_conflict (WyreboxDaemonMailboxCatalogDuckDB *catalog,
+    const gchar *account_id, const gchar *mailbox_id, const gchar *mailbox_name)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonMailboxSelectRequest) request = { 0 };
+  g_auto (WyreboxDaemonMailboxSelectResult) result = { 0 };
+
+  g_assert_true (wyrebox_daemon_mailbox_select_request_init (&request,
+          account_id, mailbox_id, mailbox_name, &error));
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_daemon_mailbox_catalog_duckdb_select (NULL, &request,
+          &result, catalog, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_EXISTS);
+}
+
+static void
 test_list_and_select_from_duckdb_catalog (void)
 {
   g_autoptr (GError) error = NULL;
@@ -218,6 +248,8 @@ test_list_and_select_from_duckdb_catalog (void)
   g_autoptr (WyreboxDaemonMailboxCatalogDuckDB) catalog = NULL;
   g_auto (WyreboxDaemonMailboxListRequest) list_request = { 0 };
   g_auto (WyreboxDaemonMailboxListResult) list_result = { 0 };
+  g_auto (WyreboxDaemonMailboxListRequest) prefixed_list_request = { 0 };
+  g_auto (WyreboxDaemonMailboxListResult) prefixed_list_result = { 0 };
   const WyreboxDaemonMailboxListEntry *entry = NULL;
 
   path = create_temp_catalog_path ();
@@ -236,7 +268,7 @@ test_list_and_select_from_duckdb_catalog (void)
   g_assert_no_error (error);
 
   g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
-      (&list_result), ==, 6);
+      (&list_result), ==, 10);
 
   entry = find_entry (&list_result, "INBOX");
   g_assert_nonnull (entry);
@@ -248,15 +280,52 @@ test_list_and_select_from_duckdb_catalog (void)
   g_assert_cmpint (entry->child_state, ==,
       WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN);
 
+  entry = find_entry (&list_result, "Projects");
+  g_assert_nonnull (entry);
+  g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  g_assert_cmpstr (entry->mailbox_id, ==, "mb-projects");
+  g_assert_false (entry->is_selectable);
+
+  entry = find_entry (&list_result, "Projects/Alpha");
+  g_assert_nonnull (entry);
+  g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  g_assert_cmpstr (entry->mailbox_id, ==, "mb-project-alpha");
+  g_assert_true (entry->is_selectable);
+
+  entry = find_entry (&list_result, "ProjectsX");
+  g_assert_nonnull (entry);
+  g_assert_cmpstr (entry->mailbox_id, ==, "mb-projectsx");
+
   entry = find_entry (&list_result, "Important");
   g_assert_nonnull (entry);
   g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
   g_assert_cmpstr (entry->mailbox_id, ==, "view-important");
+  g_assert_true (entry->is_selectable);
+
+  entry = find_entry (&list_result, "Views");
+  g_assert_nonnull (entry);
+  g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
+  g_assert_cmpstr (entry->mailbox_id, ==, "view-containers");
+  g_assert_false (entry->is_selectable);
 
   g_assert_null (find_entry (&list_result, "Hidden"));
   g_assert_null (find_entry (&list_result, "Hidden View"));
   g_assert_null (find_entry (&list_result, "Other Account"));
   g_assert_null (find_entry (&list_result, "Other View"));
+
+  g_assert_true (wyrebox_daemon_mailbox_list_request_init
+      (&prefixed_list_request, "account-1", "Projects", &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_mailbox_catalog_duckdb_list (NULL,
+          &prefixed_list_request, &prefixed_list_result, catalog, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
+      (&prefixed_list_result), ==, 2);
+  g_assert_nonnull (find_entry (&prefixed_list_result, "Projects"));
+  g_assert_nonnull (find_entry (&prefixed_list_result, "Projects/Alpha"));
+  g_assert_null (find_entry (&prefixed_list_result, "ProjectsX"));
+  g_assert_null (find_entry (&prefixed_list_result, "INBOX"));
+  g_assert_null (find_entry (&prefixed_list_result, "Important"));
 
   assert_select (catalog, NULL, "INBOX",
       WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, "mb-inbox", "INBOX", 11, 4,
@@ -281,6 +350,10 @@ test_list_and_select_from_duckdb_catalog (void)
 
   assert_select_not_found (catalog, "account-1", "mb-hidden", NULL);
   assert_select_not_found (catalog, "account-1", NULL, "Hidden");
+  assert_select_conflict (catalog, "account-1", "mb-projects", NULL);
+  assert_select_conflict (catalog, "account-1", NULL, "Projects");
+  assert_select_conflict (catalog, "account-1", "view-containers", NULL);
+  assert_select_conflict (catalog, "account-1", NULL, "Views");
   assert_select_not_found (catalog, "account-1", "view-hidden", NULL);
   assert_select_not_found (catalog, "account-1", NULL, "Hidden View");
   assert_select_not_found (catalog, "account-1", "mb-other", NULL);
