@@ -30,6 +30,9 @@ struct mail_vfuncs;
 
 const char *mailbox_list_get_storage_name (struct mailbox_list *list,
                                           const char *vname);
+void mail_storage_set_error (struct mail_storage *storage,
+                             enum mail_error error,
+                             const char *string);
 
 struct mail_storage_vfuncs {
   struct mail_storage *(*alloc)(void);
