@@ -87,7 +87,8 @@ validate_operation (WyreboxDaemonAuditOperation operation,
 {
   if (operation == WYREBOX_DAEMON_AUDIT_OPERATION_SINGLE_FACT_MUTATION ||
       operation == WYREBOX_DAEMON_AUDIT_OPERATION_FACT_BATCH_IMPORT ||
-      operation == WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE)
+      operation == WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE ||
+      operation == WYREBOX_DAEMON_AUDIT_OPERATION_WIRELOG_PREDICATE_QUERY)
     return TRUE;
 
   g_set_error (error,
@@ -136,11 +137,13 @@ validate_payload (const WyreboxDaemonAuditPayload *payload,
     return FALSE;
 
   if (payload->operation ==
-      WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE) {
+      WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE ||
+      payload->operation ==
+      WYREBOX_DAEMON_AUDIT_OPERATION_WIRELOG_PREDICATE_QUERY) {
     if (payload->outcome != WYREBOX_DAEMON_AUDIT_OUTCOME_FAILURE) {
       g_set_error (error,
           G_IO_ERROR,
-          code, "DaemonAuditRecorded duckdb query outcome must be failure");
+          code, "DaemonAuditRecorded query audit outcome must be failure");
       return FALSE;
     }
 
@@ -159,6 +162,8 @@ validate_payload (const WyreboxDaemonAuditPayload *payload,
 
   if (payload->operation !=
       WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE &&
+      payload->operation !=
+      WYREBOX_DAEMON_AUDIT_OPERATION_WIRELOG_PREDICATE_QUERY &&
       payload->mutation_count == 0) {
     g_set_error (error,
         G_IO_ERROR, code, "DaemonAuditRecorded mutation_count is required");
@@ -176,6 +181,8 @@ validate_payload (const WyreboxDaemonAuditPayload *payload,
 
   if (payload->operation !=
       WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE &&
+      payload->operation !=
+      WYREBOX_DAEMON_AUDIT_OPERATION_WIRELOG_PREDICATE_QUERY &&
       payload->final_journal_sequence == 0) {
     g_set_error (error,
         G_IO_ERROR,
@@ -281,7 +288,9 @@ static gboolean
 payload_uses_v2 (const WyreboxDaemonAuditPayload *payload)
 {
   return payload->operation ==
-      WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE;
+      WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE ||
+      payload->operation ==
+      WYREBOX_DAEMON_AUDIT_OPERATION_WIRELOG_PREDICATE_QUERY;
 }
 
 void
