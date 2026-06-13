@@ -7,8 +7,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import argparse
+import os
+import shlex
+import shutil
+import subprocess
+import tempfile
 import re
 import sys
+import textwrap
 
 
 REQUIRED_CONFIG_MACROS = (
@@ -31,6 +37,90 @@ UOFF_T_SELECTOR_MACROS = (
     "UOFF_T_INT",
     "UOFF_T_LONG",
     "UOFF_T_LONG_LONG",
+)
+
+
+MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
+    """\
+    #include <stddef.h>
+    #include "config.h"
+    #include "lib.h"
+    #include "mail-storage.h"
+    #include "mail-storage-private.h"
+
+    typedef struct mailbox *(*wyrebox_mailbox_alloc_fn)(
+        struct mail_storage *storage,
+        struct mailbox_list *list,
+        const char *vname,
+        enum mailbox_flags flags);
+
+    typedef int (*wyrebox_mailbox_open_fn)(struct mailbox *box);
+
+    typedef int (*wyrebox_mailbox_get_status_fn)(
+        struct mailbox *box,
+        enum mailbox_status_items items,
+        struct mailbox_status *status_r);
+
+    static struct mail_storage wyrebox_mail_storage_probe;
+    static struct mailbox wyrebox_mailbox_probe;
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mail_storage_probe.v.mailbox_alloc),
+            wyrebox_mailbox_alloc_fn),
+        "mail_storage_vfuncs::mailbox_alloc signature mismatch");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_probe.v.open),
+            wyrebox_mailbox_open_fn),
+        "mailbox_vfuncs::open signature mismatch");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_probe.v.get_status),
+            wyrebox_mailbox_get_status_fn),
+        "mailbox_vfuncs::get_status signature mismatch");
+
+    static struct mailbox *wyrebox_probe_mailbox_alloc(
+        struct mail_storage *storage,
+        struct mailbox_list *list,
+        const char *vname,
+        enum mailbox_flags flags) {
+      (void)storage;
+      (void)list;
+      (void)vname;
+      (void)flags;
+      return NULL;
+    }
+
+    static int wyrebox_probe_mailbox_open(struct mailbox *box) {
+      (void)box;
+      return 0;
+    }
+
+    static int wyrebox_probe_mailbox_get_status(
+        struct mailbox *box,
+        enum mailbox_status_items items,
+        struct mailbox_status *status_r) {
+      (void)box;
+      (void)items;
+      (void)status_r;
+      return 0;
+    }
+
+    int
+    main(void)
+    {
+      wyrebox_mail_storage_probe.v.mailbox_alloc = wyrebox_probe_mailbox_alloc;
+      wyrebox_mailbox_probe.v.open = wyrebox_probe_mailbox_open;
+      wyrebox_mailbox_probe.v.get_status = wyrebox_probe_mailbox_get_status;
+
+      return wyrebox_mail_storage_probe.v.mailbox_alloc(
+          NULL, NULL, NULL, (enum mailbox_flags)0) == NULL
+        ? 0 : 1;
+    }
+    """
 )
 
 
@@ -102,6 +192,60 @@ def find_issues_for_abi_version(config_h: str) -> list[ContractIssue]:
     ]
 
 
+def validate_mailbox_vfunc_probe(
+    source_dir: Path,
+    build_dir: Path,
+) -> list[ContractIssue]:
+    cc_spec = os.environ.get("CC", "cc")
+    try:
+        cc_argv = shlex.split(cc_spec)
+    except ValueError as error:
+        return [ContractIssue(
+            f"failed to parse CC value for compiler probe: {error}",
+        )]
+    if not cc_argv:
+        return [ContractIssue("no C compiler available for configured-header probe")]
+
+    compiler = shutil.which(cc_argv[0])
+    if compiler is None:
+        return [ContractIssue(
+            f"no C compiler available for configured-header probe: {cc_argv[0]}",
+        )]
+
+    with tempfile.TemporaryDirectory() as build_tmp_dir:
+        probe_path = Path(build_tmp_dir) / "mailbox-vfunc-probe.c"
+        probe_path.write_text(MAILBOX_VFUNC_PROBE_SOURCE, encoding="utf-8")
+
+        command = [
+            compiler,
+            *cc_argv[1:],
+            "-std=gnu11",
+            "-fsyntax-only",
+            f"-I{build_dir}",
+            f"-I{source_dir / 'src' / 'lib-index'}",
+            f"-I{source_dir / 'src' / 'lib'}",
+            f"-I{source_dir / 'src' / 'lib-mail'}",
+            f"-I{source_dir / 'src' / 'lib-storage'}",
+        ]
+        source = str(probe_path)
+        process = subprocess.run(
+            command + [source],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    if process.returncode == 0:
+        return []
+
+    return [
+        ContractIssue(
+            "configured-header mailbox vfunc probe failed:\n"
+            f"{process.stderr or process.stdout}".strip() or "unknown failure",
+        ),
+    ]
+
+
 def validate_build_config(source_dir: Path, build_dir: Path) -> list[ContractIssue]:
     issues: list[ContractIssue] = []
     if (source_dir / "src" / "lib" / "module-dir.h").is_file() is False:
@@ -120,6 +264,7 @@ def validate_build_config(source_dir: Path, build_dir: Path) -> list[ContractIss
     issues.extend(find_issues_for_required_macros(config_h_text, REQUIRED_CONFIG_MACROS))
     issues.extend(find_issues_for_abi_version(config_h_text))
     issues.extend(find_issues_for_uoff_t_selector(config_h_text))
+    issues.extend(validate_mailbox_vfunc_probe(source_dir, build_dir))
     return issues
 
 

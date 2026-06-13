@@ -37,6 +37,7 @@ REQUIRED_TYPES = {
 REQUIRED_VFUNC_SYMBOLS = {
     "mail_storage_vfuncs": [
         "add_list",
+        "mailbox_alloc",
     ],
     "mailbox_vfuncs": [
         "open",
@@ -47,6 +48,15 @@ REQUIRED_VFUNC_SYMBOLS = {
         "get_stream",
         "update_flags",
         "update_keywords",
+    ],
+}
+
+REQUIRED_PRIVATE_STRUCT_FIELDS = {
+    "mail_storage": [
+        "v",
+    ],
+    "mailbox": [
+        "v",
     ],
 }
 
@@ -283,6 +293,11 @@ def validate_source(source_dir: Path) -> list[ContractIssue]:
             continue
 
         issues.extend(find_issues_for_patterns(storage, expressions, symbol))
+
+    for struct_name, fields in REQUIRED_PRIVATE_STRUCT_FIELDS.items():
+        issues.extend(
+            find_issues_for_struct_fields(storage_private, struct_name, fields),
+        )
 
     issues.extend(
         find_issues_for_patterns(
