@@ -22,6 +22,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-duckdb-query-template-request.c',
   'daemon/wyrebox-daemon-duckdb-query-template-service.c',
   'daemon/wyrebox-daemon-wirelog-predicate-query-dispatcher.c',
+  'daemon/wyrebox-daemon-wirelog-predicate-query-catalog.c',
   'daemon/wyrebox-daemon-wirelog-predicate-query-request.c',
   'daemon/wyrebox-daemon-wirelog-predicate-query-service.c',
   'daemon/wyrebox-daemon-delivery-ingestion-dispatcher.c',

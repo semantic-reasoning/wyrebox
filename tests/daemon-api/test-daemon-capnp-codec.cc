@@ -537,11 +537,9 @@ query_wirelog_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
   g_assert_cmpstr (identity->tool_identity, ==, "dovecot-storage");
   g_assert_cmpstr (identity->correlation_id, ==, "corr-wirelog");
   g_assert_cmpstr (request->query_id, ==, "query-wirelog");
-  g_assert_cmpstr (request->predicate_id, ==, "has_label");
+  g_assert_cmpstr (request->predicate_id, ==, "show_in_virtual_folder.v1");
   g_assert_cmpstr (request->scope_id, ==, "account-1");
-  g_assert_cmpstr (request->bindings[0], ==, "?message");
-  g_assert_cmpstr (request->bindings[1], ==, "project-a");
-  g_assert_null (request->bindings[2]);
+  g_assert_null (request->bindings[0]);
 
   state->was_called = TRUE;
   bytes = g_bytes_new_static (payload, strlen (payload));
@@ -3244,7 +3242,7 @@ assert_request_adapter_routes_message_search (void)
 static void
 assert_request_adapter_routes_wirelog_predicate_query (void)
 {
-  const char *bindings[] = { "?message", "project-a", NULL };
+  const char *bindings[] = { NULL };
   g_autoptr (GError) error = NULL;
   g_autofree FixtureState *service_state = g_new0 (FixtureState, 1);
   g_autoptr (GBytes) request = NULL;
@@ -3283,7 +3281,7 @@ assert_request_adapter_routes_wirelog_predicate_query (void)
       "trusted-tool",
       "account-1",
       "query-wirelog",
-      "has_label",
+      "show_in_virtual_folder.v1",
       "account-1",
       bindings);
 

@@ -1,6 +1,7 @@
 #include "wyrebox-daemon-wirelog-predicate-query-service.h"
 
 #include "wyrebox-daemon-client-identity.h"
+#include "wyrebox-daemon-wirelog-predicate-query-catalog.h"
 
 #include <gio/gio.h>
 
@@ -15,41 +16,6 @@ struct _WyreboxDaemonWirelogPredicateQueryService
 
 G_DEFINE_TYPE (WyreboxDaemonWirelogPredicateQueryService,
     wyrebox_daemon_wirelog_predicate_query_service, G_TYPE_OBJECT);
-
-static gboolean
-authorize_wirelog_predicate_query_identity (const WyreboxDaemonRequestIdentity
-    *identity, const WyreboxDaemonWirelogPredicateQueryRequest *request,
-    GError **error)
-{
-  WyreboxDaemonClientIdentityClass client_class =
-      wyrebox_daemon_client_identity_classify_request (identity);
-
-  if (!wyrebox_daemon_client_identity_can_query_controlled_views (client_class)) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_PERMISSION_DENIED,
-        "caller is not authorized to query wirelog predicates");
-    return FALSE;
-  }
-
-  if (identity->account_identity == NULL || *identity->account_identity == '\0') {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_PERMISSION_DENIED,
-        "caller account scope is required for wirelog predicate query");
-    return FALSE;
-  }
-
-  if (g_strcmp0 (identity->account_identity, request->scope_id) != 0) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_PERMISSION_DENIED,
-        "caller is not authorized for wirelog predicate query account scope");
-    return FALSE;
-  }
-
-  return TRUE;
-}
 
 static gboolean
 validate_wirelog_predicate_query_chunk (const WyreboxDaemonRequestIdentity
@@ -166,6 +132,8 @@ gboolean
 {
   g_auto (WyreboxDaemonStreamChunkFrame) chunk = { 0 };
   g_auto (WyreboxDaemonStreamChunkFrame) response_chunk = { 0 };
+  WyreboxDaemonClientIdentityClass client_class =
+      wyrebox_daemon_client_identity_classify_request (identity);
   g_autoptr (GError) local_error = NULL;
 
   g_return_val_if_fail (WYREBOX_IS_DAEMON_WIRELOG_PREDICATE_QUERY_SERVICE
@@ -175,7 +143,8 @@ gboolean
   g_return_val_if_fail (out_frame != NULL, FALSE);
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  if (!authorize_wirelog_predicate_query_identity (identity, request, error))
+  if (!wyrebox_daemon_wirelog_predicate_query_catalog_validate (client_class,
+          identity->account_identity, request, NULL, error))
     return FALSE;
 
   if (!self->func (identity, request, &chunk, self->user_data, &local_error)) {

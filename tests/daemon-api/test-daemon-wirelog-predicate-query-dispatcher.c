@@ -24,8 +24,9 @@ query_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
   g_assert_true (g_strcmp0 (identity->caller_identity, "admin-cli") == 0
       || g_strcmp0 (identity->caller_identity, "trusted-tool") == 0);
   g_assert_cmpstr (request->query_id, ==, "query-1");
-  g_assert_cmpstr (request->predicate_id, ==, "project_mention");
+  g_assert_cmpstr (request->predicate_id, ==, "show_in_virtual_folder.v1");
   g_assert_cmpstr (request->scope_id, ==, "account-1");
+  g_assert_null (request->bindings[0]);
 
   if (fixture != NULL && fixture->fail_without_error)
     return FALSE;
@@ -44,11 +45,23 @@ query_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
 static void
 init_request (WyreboxDaemonWirelogPredicateQueryRequest *request)
 {
-  const char *bindings[] = { "mail-1", NULL };
+  const char *bindings[] = { NULL };
   g_autoptr (GError) error = NULL;
 
   g_assert_true (wyrebox_daemon_wirelog_predicate_query_request_init (request,
-          "query-1", "project_mention", "account-1", bindings, &error));
+          "query-1", "show_in_virtual_folder.v1", "account-1", bindings,
+          &error));
+  g_assert_no_error (error);
+}
+
+static void
+init_custom_request (WyreboxDaemonWirelogPredicateQueryRequest *request,
+    const char *predicate_id, const char *const *bindings)
+{
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_wirelog_predicate_query_request_init (request,
+          "query-1", predicate_id, "account-1", bindings, &error));
   g_assert_no_error (error);
 }
 
@@ -158,6 +171,52 @@ test_wirelog_predicate_query_dispatcher_rejects_empty_identity_scope (void)
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
   g_assert_cmpint (frame.error.error_class, ==,
       WYREBOX_DAEMON_ERROR_PERMISSION_DENIED);
+}
+
+static void
+test_wirelog_predicate_query_dispatcher_rejects_unknown_predicate (void)
+{
+  const char *bindings[] = { NULL };
+  WirelogPredicateQueryFixture fixture = { 0 };
+  g_auto (WyreboxDaemonWirelogPredicateQueryRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (WyreboxDaemonWirelogPredicateQueryService) service = NULL;
+  g_autoptr (GError) error = NULL;
+
+  init_custom_request (&request, "project_mention", bindings);
+  service = wyrebox_daemon_wirelog_predicate_query_service_new
+      (query_predicate_fixture, &fixture, NULL);
+
+  g_assert_true (wyrebox_daemon_wirelog_predicate_query_dispatch (service,
+          "request-1", "admin-cli", "account-1", "fact-skill",
+          "correlation-1", &request, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+}
+
+static void
+test_wirelog_predicate_query_dispatcher_rejects_wrong_binding_count (void)
+{
+  const char *bindings[] = { "mail-1", NULL };
+  WirelogPredicateQueryFixture fixture = { 0 };
+  g_auto (WyreboxDaemonWirelogPredicateQueryRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (WyreboxDaemonWirelogPredicateQueryService) service = NULL;
+  g_autoptr (GError) error = NULL;
+
+  init_custom_request (&request, "show_in_virtual_folder.v1", bindings);
+  service = wyrebox_daemon_wirelog_predicate_query_service_new
+      (query_predicate_fixture, &fixture, NULL);
+
+  g_assert_true (wyrebox_daemon_wirelog_predicate_query_dispatch (service,
+          "request-1", "admin-cli", "account-1", "fact-skill",
+          "correlation-1", &request, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
 }
 
 static void
@@ -279,6 +338,12 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/wirelog-predicate-query/dispatcher/rejects-empty-identity-scope",
       test_wirelog_predicate_query_dispatcher_rejects_empty_identity_scope);
+  g_test_add_func
+      ("/daemon-api/wirelog-predicate-query/dispatcher/rejects-unknown-predicate",
+      test_wirelog_predicate_query_dispatcher_rejects_unknown_predicate);
+  g_test_add_func
+      ("/daemon-api/wirelog-predicate-query/dispatcher/rejects-wrong-binding-count",
+      test_wirelog_predicate_query_dispatcher_rejects_wrong_binding_count);
   g_test_add_func
       ("/daemon-api/wirelog-predicate-query/dispatcher/converts-silent-failure",
       test_wirelog_predicate_query_dispatcher_converts_silent_failure);
