@@ -130,6 +130,7 @@ if not duckdb_api_usable
 endif
 
 duckdb_deps = [duckdb_subproject_dep]
+duckdb_from_subproject = true
 duckdb_summary = 'enabled via linux prebuilt subproject wrap'
 summary('duckdb', duckdb_summary, section: 'Dependencies')
 
