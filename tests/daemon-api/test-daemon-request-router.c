@@ -162,8 +162,9 @@ query_wirelog_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
   g_assert_cmpstr (identity->caller_identity, ==, "trusted-tool");
   g_assert_cmpstr (identity->account_identity, ==, "account-1");
   g_assert_cmpstr (request->query_id, ==, "query-1");
-  g_assert_cmpstr (request->predicate_id, ==, "project_mention");
+  g_assert_cmpstr (request->predicate_id, ==, "show_in_virtual_folder.v1");
   g_assert_cmpstr (request->scope_id, ==, "account-1");
+  g_assert_null (request->bindings[0]);
 
   *was_called = TRUE;
   return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
@@ -1173,7 +1174,7 @@ static void
 test_request_router_routes_wirelog_predicate_query (void)
 {
   gboolean was_called = FALSE;
-  const char *bindings[] = { "mail-1", NULL };
+  const char *bindings[] = { NULL };
   g_autoptr (GError) error = NULL;
   g_autoptr (WyreboxDaemonWirelogPredicateQueryService) service = NULL;
   g_auto (WyreboxDaemonWirelogPredicateQueryRequest) request = { 0 };
@@ -1181,7 +1182,8 @@ test_request_router_routes_wirelog_predicate_query (void)
   WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
 
   g_assert_true (wyrebox_daemon_wirelog_predicate_query_request_init (&request,
-          "query-1", "project_mention", "account-1", bindings, &error));
+          "query-1", "show_in_virtual_folder.v1", "account-1", bindings,
+          &error));
   g_assert_no_error (error);
 
   request_frame.request_id = "request-wirelog-query";
@@ -1250,7 +1252,8 @@ test_request_router_rejects_missing_wirelog_predicate_query_service (void)
   WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
 
   g_assert_true (wyrebox_daemon_wirelog_predicate_query_request_init (&request,
-          "query-1", "project_mention", "account-1", bindings, &error));
+          "query-1", "show_in_virtual_folder.v1", "account-1", bindings,
+          &error));
   g_assert_no_error (error);
 
   request_frame.request_id = "request-wirelog-query";

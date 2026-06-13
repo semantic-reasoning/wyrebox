@@ -343,7 +343,7 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
     }
 
     case TEST_REQUEST_ADAPTER_SCENARIO_WIRELOG_PREDICATE_QUERY_SUCCESS:{
-      const char *bindings[] = { "mail-1", NULL };
+      const char *bindings[] = { NULL };
 
       out_request->request_id = "request-wirelog-query";
       out_request->caller_identity = "trusted-tool";
@@ -352,7 +352,8 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
       out_request->correlation_id = "corr-wirelog";
       if (!wyrebox_daemon_wirelog_predicate_query_request_init
           (&decoded_state->wirelog_predicate_query_request,
-              "query-1", "project_mention", "account-1", bindings, error))
+              "query-1", "show_in_virtual_folder.v1", "account-1", bindings,
+              error))
         return FALSE;
       out_request->operation =
           WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY;
@@ -558,9 +559,9 @@ query_wirelog_predicate_fixture (const WyreboxDaemonRequestIdentity *identity,
   g_assert_cmpstr (identity->account_identity, ==, "account-1");
   g_assert_cmpstr (identity->tool_identity, ==, "fact-tool");
   g_assert_cmpstr (request->query_id, ==, "query-1");
-  g_assert_cmpstr (request->predicate_id, ==, "project_mention");
+  g_assert_cmpstr (request->predicate_id, ==, "show_in_virtual_folder.v1");
   g_assert_cmpstr (request->scope_id, ==, "account-1");
-  g_assert_cmpstr (request->bindings[0], ==, "mail-1");
+  g_assert_null (request->bindings[0]);
 
   *was_called = TRUE;
   bytes = g_bytes_new_static (payload, strlen (payload));
