@@ -67,7 +67,7 @@ test_fact_mutation_dispatcher_handles_valid_envelope (void)
 
   g_assert_true (wyrebox_daemon_fact_mutation_dispatch (service,
           "request-1",
-          "skill",
+          "trusted-tool",
           "account-1",
           "fact-importer", "correlation-1", &request, &frame, &error));
   g_assert_no_error (error);
@@ -147,7 +147,7 @@ static void
 
   g_assert_true (wyrebox_daemon_fact_mutation_dispatch (service,
           "request-1",
-          "skill",
+          "trusted-tool",
           "account-2",
           "fact-importer", "correlation-1", &request, &frame, &error));
   g_assert_no_error (error);
@@ -186,7 +186,7 @@ test_fact_mutation_dispatcher_rejects_missing_request_id_before_service (void)
 
   g_assert_false (wyrebox_daemon_fact_mutation_dispatch (service,
           "",
-          "skill",
+          "trusted-tool",
           "account-1",
           "fact-importer", "correlation-1", &request, &frame, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);

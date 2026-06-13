@@ -1,5 +1,7 @@
 #include "wyrebox-daemon-fact-mutation-service.h"
 
+#include "wyrebox-daemon-client-identity.h"
+
 #include <gio/gio.h>
 
 struct _WyreboxDaemonFactMutationService
@@ -26,16 +28,13 @@ validate_request_id (const char *request_id, GError **error)
 }
 
 static gboolean
-caller_can_mutate_facts (const char *caller_identity)
-{
-  return g_strcmp0 (caller_identity, "skill") == 0;
-}
-
-static gboolean
 authorize_fact_mutation_identity (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonFactMutationRequest *request, GError **error)
 {
-  if (!caller_can_mutate_facts (identity->caller_identity)) {
+  WyreboxDaemonClientIdentityClass identity_class =
+      wyrebox_daemon_client_identity_classify_request (identity);
+
+  if (!wyrebox_daemon_client_identity_can_mutate_facts (identity_class)) {
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_PERMISSION_DENIED,
