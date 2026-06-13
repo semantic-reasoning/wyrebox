@@ -116,8 +116,11 @@ if host_machine.cpu_family() != 'x86_64'
     'subproject supports Linux x86_64 only.')
 endif
 
-duckdb_project = subproject('duckdb-prebuilt-linux')
-duckdb_subproject_dep = duckdb_project.get_variable('duckdb_dep')
+# Use the wrapped DuckDB subproject directly: dependency fallback can resolve a
+# system provider, which this build intentionally avoids.
+duckdb_subproject = subproject('duckdb-prebuilt-linux')
+duckdb_subproject_dep = duckdb_subproject.get_variable('duckdb_dep')
+
 duckdb_api_usable = cc.links(
   duckdb_api_probe,
   name: 'DuckDB C API via linux prebuilt subproject',
