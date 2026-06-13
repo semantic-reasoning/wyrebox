@@ -51,6 +51,9 @@ test_catalog_resolves_allowlisted_templates (void)
   assert_template_resolves ("message.by_id.v1", "message-1",
       "message by id", "message_id",
       "stream-chunk.duckdb-template.message-by-id.v1");
+  assert_template_resolves ("messages.by_from_addr.v1",
+      "Alice <alice@example.test>", "messages by from address", "from_addr",
+      "stream-chunk.duckdb-template.messages-by-from-addr.v1");
 }
 
 static void
