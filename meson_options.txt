@@ -11,3 +11,10 @@ option(
   value: 'auto',
   description: 'Cap\'n Proto compiler and runtime for generated API serialization',
 )
+
+option(
+  'wirelog_runtime',
+  type: 'feature',
+  value: 'auto',
+  description: 'Wirelog runtime dependency for optional integration smoke tests',
+)
