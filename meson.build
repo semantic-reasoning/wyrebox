@@ -177,6 +177,19 @@ endif
 
 summary('duckdb', duckdb_summary, section: 'Dependencies')
 
+wirelog_runtime_option = get_option('wirelog_runtime')
+wirelog_dep = dependency('wirelog', required: wirelog_runtime_option)
+wirelog_runtime_found = wirelog_dep.found()
+if wirelog_runtime_found
+  wirelog_runtime_summary = 'enabled via pkg-config'
+elif wirelog_runtime_option.disabled()
+  wirelog_runtime_summary = 'disabled'
+else
+  wirelog_runtime_summary = 'not found; optional smoke test skipped'
+endif
+
+summary('wirelog runtime', wirelog_runtime_summary, section: 'Dependencies')
+
 glib_dep = dependency('glib-2.0', version: '>=2.74')
 gobject_dep = dependency('gobject-2.0', version: '>=2.74')
 gio_dep = dependency('gio-2.0', version: '>=2.74')
@@ -270,3 +283,6 @@ subdir('tests/build-config')
 subdir('tests/daemon-api')
 subdir('tests/facts')
 subdir('tests/duckdb')
+if wirelog_runtime_found
+  subdir('tests/wirelog')
+endif
