@@ -10,6 +10,12 @@ daemon_request_identity_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_client_identity_test = executable(
+  'test-daemon-client-identity',
+  'test-daemon-client-identity.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_peer_credentials_test = executable(
   'test-daemon-peer-credentials',
   'test-daemon-peer-credentials.c',
@@ -236,6 +242,7 @@ endif
 
 test('daemon success receipt', daemon_success_receipt_test)
 test('daemon request identity', daemon_request_identity_test)
+test('daemon client identity', daemon_client_identity_test)
 test('daemon peer credentials', daemon_peer_credentials_test)
 test('daemon mailbox list request', daemon_mailbox_list_request_test)
 test('daemon mailbox list result', daemon_mailbox_list_result_test)
