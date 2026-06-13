@@ -55,6 +55,7 @@ wyrebox_sources = files(
   'ingestion/wyrebox-eml-ingestor.c',
   'ingestion/wyrebox-eml-metadata.c',
   'journal/wyrebox-message-delivered-payload.c',
+  'journal/wyrebox-derived-view-membership-changed-payload.c',
   'journal/wyrebox-journal-writer.c',
   'journal/wyrebox-journal-reader.c',
   'schema/wyrebox-schema-migration.c',
