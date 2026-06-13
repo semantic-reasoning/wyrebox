@@ -183,7 +183,36 @@ if wirelog_runtime_option.disabled()
     '-Dwirelog_runtime=disabled is not supported')
 endif
 
-wirelog_dep = dependency('wirelog', required: true)
+wirelog_force_fallback = get_option('wrap_mode') == 'forcefallback'
+if wirelog_force_fallback
+  wirelog_dep = disabler()
+else
+  wirelog_dep = dependency('wirelog', required: false, allow_fallback: false)
+endif
+wirelog_runtime_summary = 'required via pkg-config'
+wirelog_from_subproject = false
+if not wirelog_dep.found()
+  wirelog_project = subproject(
+    'wirelog',
+    default_options: [
+      'tests=false',
+      'documentation=false',
+      'ipc=disabled',
+      'mbedTLS=disabled',
+      'io_plugin_dlopen=disabled',
+      'wirelog_log_max_level=error',
+    ],
+  )
+  wirelog_dep = declare_dependency(
+    link_with: wirelog_project.get_variable('wirelog_lib'),
+    include_directories: [
+      wirelog_project.get_variable('wirelog_inc'),
+      wirelog_project.get_variable('wirelog_src_inc'),
+    ],
+  )
+  wirelog_runtime_summary = 'required via subproject fallback'
+  wirelog_from_subproject = true
+endif
 wirelog_runtime_found = true
 wirelog_required_symbols = [
   'wirelog_parse_string',
@@ -200,23 +229,23 @@ wirelog_required_symbols = [
   'wirelog_easy_snapshot',
 ]
 wirelog_missing_symbols = []
-foreach wirelog_symbol : wirelog_required_symbols
-  if not cc.has_function(
-    wirelog_symbol,
-    prefix: '#include <wirelog/wirelog.h>',
-    dependencies: wirelog_dep,
-  )
-    wirelog_missing_symbols += [wirelog_symbol]
+if not wirelog_from_subproject
+  foreach wirelog_symbol : wirelog_required_symbols
+    if not cc.has_function(
+      wirelog_symbol,
+      prefix: '#include <wirelog/wirelog.h>',
+      dependencies: wirelog_dep,
+    )
+      wirelog_missing_symbols += [wirelog_symbol]
+    endif
+  endforeach
+
+  if wirelog_missing_symbols.length() > 0
+    wirelog_missing_symbols_text = ', '.join(wirelog_missing_symbols)
+    error('Wirelog runtime dependency is missing required public API symbols: ' +
+      wirelog_missing_symbols_text)
   endif
-endforeach
-
-if wirelog_missing_symbols.length() > 0
-  wirelog_missing_symbols_text = ', '.join(wirelog_missing_symbols)
-  error('Wirelog runtime dependency is missing required public API symbols: ' +
-    wirelog_missing_symbols_text)
 endif
-
-wirelog_runtime_summary = 'required via pkg-config'
 
 summary('wirelog runtime', wirelog_runtime_summary, section: 'Dependencies')
 
