@@ -767,6 +767,7 @@ test_dovecot_daemon_client_fetch_message_bytes_rejects_query_id (void)
 
   fake_server_start (&server, socket_path, FAKE_SERVER_MESSAGE_FETCH_RESPONSE,
       NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  server.message_fetch_response_message_id = "";
   server.message_fetch_response_query_id = "query-1";
   server.expect_message_fetch_request = TRUE;
 

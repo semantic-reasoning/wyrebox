@@ -692,6 +692,15 @@ validate_fetch_response (const char *request_id,
     return FALSE;
   }
 
+  if (response->stream_chunk.query_id != NULL
+      && response->stream_chunk.query_id[0] != '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon FETCH stream response must not include query_id");
+    return FALSE;
+  }
+
   if (response->stream_chunk.message_id == NULL
       || response->stream_chunk.message_id[0] == '\0') {
     g_set_error (error,
@@ -706,15 +715,6 @@ validate_fetch_response (const char *request_id,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_DATA,
         "daemon FETCH stream response message_id does not match request");
-    return FALSE;
-  }
-
-  if (response->stream_chunk.query_id != NULL
-      && response->stream_chunk.query_id[0] != '\0') {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "daemon FETCH stream response must not include query_id");
     return FALSE;
   }
 
