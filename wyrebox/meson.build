@@ -103,6 +103,7 @@ endif
 if wirelog_runtime_found
   wyrebox_sources += [
     'wirelog/wyrebox-wirelog-program.c',
+    'wirelog/wyrebox-wirelog-source.c',
   ]
   wyrebox_link_deps += [wirelog_dep]
 endif
