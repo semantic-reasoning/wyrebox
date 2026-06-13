@@ -97,6 +97,7 @@ def main() -> None:
         r"struct\s+mailbox\s+mailbox;\s*[\s\S]*?"
         r"WyreboxDaemonMailboxSelectResult\s+select_result;\s*[\s\S]*?"
         r"int\s+select_result_valid;\s*[\s\S]*?"
+        r"WyreboxDovecotMailboxUidMapSnapshot\s+uid_map_snapshot;\s*[\s\S]*?"
         r"}\s*;",
         text,
         "wyrebox mailbox wrapper embeds SELECT result state",
@@ -136,18 +137,22 @@ def main() -> None:
     )
     require(
         r"wyrebox_dovecot_mailbox_refresh_select_result\s*\(\s*struct\s+mailbox\s+\*box,\s*GError\s+\*\*\s*\*?error\)\s*\{[\s\S]*?"
-        r"wyrebox_daemon_mailbox_select_result_clear\s*\(\s*&wbox->select_result\s*\);\s*"
-        r"[\s\S]*?wbox->select_result_valid\s*=\s*0;\s*"
+        r"wyrebox_dovecot_mailbox_clear_cache\s*\(\s*wbox\s*\);\s*"
         r"[\s\S]*?wyrebox_dovecot_daemon_client_select_mailbox\s*\(\s*"
         r"storage->socket_path,\s*storage->account_identity,\s*box->vname,\s*"
-        r"&select_result,\s*error\)\s*\)\s*\{[\s\S]*?"
+        r"&select_result,\s*error\)[\s\S]*?"
         r"wyrebox_daemon_mailbox_select_result_init\s*\(\s*&wbox->select_result,\s*"
         r"select_result\.kind,\s*select_result\.mailbox_id,\s*"
         r"select_result\.mailbox_name,\s*select_result\.uid_validity,\s*"
-        r"select_result\.uid_next,\s*select_result\.message_count,\s*error\)\s*\)\s*\{[\s\S]*?"
+        r"select_result\.uid_next,\s*select_result\.message_count,\s*error\)[\s\S]*?"
+        r"[\s\S]*?wyrebox_dovecot_daemon_client_load_uid_map\s*\(\s*"
+        r"storage->socket_path,\s*storage->account_identity,\s*"
+        r"select_result\.mailbox_id,\s*"
+        r"select_result\.uid_validity,\s*&uid_map_snapshot,\s*error\)[\s\S]*?"
+        r"wbox->uid_map_snapshot\.rows\s*=\s*g_steal_pointer\s*\(\s*&uid_map_snapshot\.rows\s*\);\s*"
         r"wbox->select_result_valid\s*=\s*1;",
         text,
-        "mailbox SELECT refresh helper clears stale state and caches result",
+        "mailbox SELECT refresh helper clears stale state and loads UID map",
     )
     require(
         r"wyrebox_dovecot_mailbox_open\s*\(\s*struct\s+mailbox\s+\*box\s*\)\s*\{[\s\S]*?"
@@ -182,15 +187,16 @@ def main() -> None:
     )
     require(
         r"wyrebox_dovecot_mailbox_close\s*\(\s*struct\s+mailbox\s+\*box\s*\)\s*\{[\s\S]*?"
-        r"wyrebox_daemon_mailbox_select_result_clear\s*\(\s*&wbox->select_result\s*\);\s*"
+        r"wyrebox_dovecot_mailbox_set_opened\s*\(\s*box,\s*FALSE\);\s*"
+        r"[\s\S]*?wyrebox_dovecot_mailbox_clear_cache\s*\(\s*wbox\s*\);\s*"
         r"[\s\S]*?wbox->select_result_valid\s*=\s*0;",
         text,
-        "mailbox close clears cached SELECT state",
+        "mailbox close clears cached SELECT state and UID map",
     )
     require(
         r"wyrebox_dovecot_mailbox_close\s*\(\s*struct\s+mailbox\s+\*box\s*\)\s*\{[\s\S]*?"
         r"wyrebox_dovecot_mailbox_set_opened\s*\(\s*box,\s*FALSE\);\s*"
-        r"[\s\S]*?wyrebox_daemon_mailbox_select_result_clear\s*\(\s*&wbox->select_result\s*\);\s*"
+        r"[\s\S]*?wyrebox_dovecot_mailbox_clear_cache\s*\(\s*wbox\s*\);\s*"
         r"[\s\S]*?wbox->select_result_valid\s*=\s*0;",
         text,
         "mailbox close resets opened state",
@@ -329,11 +335,11 @@ def main() -> None:
         r"struct\s+wyrebox_dovecot_mailbox\s+\*wbox\s*="
         r"\s*\(struct\s+wyrebox_dovecot_mailbox\s+\*\)\s*box;\s*"
         r"[\s\S]*?"
-        r"wyrebox_daemon_mailbox_select_result_clear\s*\(\s*&wbox->select_result\s*\);"
+        r"wyrebox_dovecot_mailbox_clear_cache\s*\(\s*wbox\s*\);"
         r"[\s\S]*?"
         r"wbox->select_result_valid\s*=\s*0;",
         text,
-        "mailbox free clears SELECT result state",
+        "mailbox free clears cached state",
     )
     require(
         r"->mailbox\.v\.open\s*=\s*wyrebox_dovecot_mailbox_open;",

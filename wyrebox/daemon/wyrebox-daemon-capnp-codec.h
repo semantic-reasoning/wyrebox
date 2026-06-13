@@ -2,6 +2,7 @@
 
 #include "wyrebox-build-config.h"
 #include "wyrebox-daemon-delivery-ingestion-request.h"
+#include "wyrebox-daemon-duckdb-query-template-request.h"
 #include "wyrebox-daemon-mailbox-select-request.h"
 #include "wyrebox-daemon-peer-credentials.h"
 #include "wyrebox-daemon-request-identity.h"
@@ -38,6 +39,12 @@ gboolean wyrebox_daemon_capnp_codec_decode_response_frame (
 GBytes *wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
     const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonDeliveryIngestionRequest *request,
+    gpointer user_data,
+    GError **error);
+
+GBytes *wyrebox_daemon_capnp_codec_encode_duckdb_query_template_request (
+    const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDuckDBQueryTemplateRequest *request,
     gpointer user_data,
     GError **error);
 
