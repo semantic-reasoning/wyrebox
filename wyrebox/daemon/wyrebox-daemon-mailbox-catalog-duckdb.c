@@ -54,6 +54,7 @@ typedef struct
   guint32 uid_validity;
   guint32 uid_next;
   guint32 message_count;
+  gboolean is_selectable;
 } MailboxCatalogSelectRow;
 
 static void
@@ -68,6 +69,7 @@ mailbox_catalog_select_row_clear (MailboxCatalogSelectRow *row)
   row->uid_validity = 0;
   row->uid_next = 0;
   row->message_count = 0;
+  row->is_selectable = FALSE;
 }
 
 /* *INDENT-OFF* */
@@ -172,20 +174,41 @@ read_required_uint32 (duckdb_result *result, idx_t column, idx_t row,
 }
 
 static gboolean
+read_required_boolean (duckdb_result *result, idx_t column, idx_t row,
+    gboolean *out_value, GError **error)
+{
+  if (duckdb_value_is_null (result, column, row)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "DuckDB mailbox catalog returned NULL boolean at column %"
+        G_GUINT64_FORMAT, (guint64) column);
+    return FALSE;
+  }
+
+  *out_value = duckdb_value_boolean (result, column, row) ? TRUE : FALSE;
+  return TRUE;
+}
+
+static gboolean
 append_list_rows (WyreboxDaemonMailboxCatalogDuckDB *catalog,
-    const gchar *account_id, WyreboxDaemonMailboxListResult *result,
-    GError **error)
+    const gchar *account_id, const gchar *namespace_prefix,
+    WyreboxDaemonMailboxListResult *result, GError **error)
 {
   static const gchar *sql =
-      "SELECT kind, stable_id, imap_name "
+      "SELECT kind, stable_id, imap_name, is_selectable "
       "FROM ("
       "SELECT 0 AS sort_kind, 'ordinary' AS kind, mailbox_id AS stable_id, "
-      "imap_name FROM mailboxes "
+      "imap_name, is_selectable FROM mailboxes "
       "WHERE account_id = ? AND is_visible = TRUE "
+      "AND (? = '' OR imap_name = ? OR "
+      "substr(imap_name, 1, length(?) + 1) = ? || '/') "
       "UNION ALL "
       "SELECT 1 AS sort_kind, 'virtual' AS kind, view_id AS stable_id, "
-      "imap_name FROM derived_views "
-      "WHERE account_id = ? AND is_visible = TRUE"
+      "imap_name, is_selectable FROM derived_views "
+      "WHERE account_id = ? AND is_visible = TRUE "
+      "AND (? = '' OR imap_name = ? OR "
+      "substr(imap_name, 1, length(?) + 1) = ? || '/') "
       ") visible_mailboxes "
       "ORDER BY imap_name ASC, sort_kind ASC, stable_id ASC;";
   g_auto (duckdb_prepared_statement) statement = NULL;
@@ -193,7 +216,15 @@ append_list_rows (WyreboxDaemonMailboxCatalogDuckDB *catalog,
 
   if (!prepare_statement (catalog, sql, &statement, error) ||
       !bind_varchar (statement, 1, account_id, error) ||
-      !bind_varchar (statement, 2, account_id, error) ||
+      !bind_varchar (statement, 2, namespace_prefix, error) ||
+      !bind_varchar (statement, 3, namespace_prefix, error) ||
+      !bind_varchar (statement, 4, namespace_prefix, error) ||
+      !bind_varchar (statement, 5, namespace_prefix, error) ||
+      !bind_varchar (statement, 6, account_id, error) ||
+      !bind_varchar (statement, 7, namespace_prefix, error) ||
+      !bind_varchar (statement, 8, namespace_prefix, error) ||
+      !bind_varchar (statement, 9, namespace_prefix, error) ||
+      !bind_varchar (statement, 10, namespace_prefix, error) ||
       !execute_statement (statement, &query_result, error))
     return FALSE;
 
@@ -201,19 +232,21 @@ append_list_rows (WyreboxDaemonMailboxCatalogDuckDB *catalog,
     g_autofree gchar *kind_text = NULL;
     g_autofree gchar *mailbox_id = NULL;
     g_autofree gchar *mailbox_name = NULL;
+    gboolean is_selectable = FALSE;
     WyreboxDaemonMailboxListEntryKind kind =
         WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
 
     if (!read_required_varchar (&query_result, 0, row, &kind_text, error) ||
         !read_required_varchar (&query_result, 1, row, &mailbox_id, error) ||
-        !read_required_varchar (&query_result, 2, row, &mailbox_name, error))
+        !read_required_varchar (&query_result, 2, row, &mailbox_name, error) ||
+        !read_required_boolean (&query_result, 3, row, &is_selectable, error))
       return FALSE;
 
     if (g_strcmp0 (kind_text, "virtual") == 0)
       kind = WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL;
 
     if (!wyrebox_daemon_mailbox_list_result_append_entry (result,
-            kind, mailbox_id, mailbox_name, "/", NULL, TRUE,
+            kind, mailbox_id, mailbox_name, "/", NULL, is_selectable,
             WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, error))
       return FALSE;
   }
@@ -228,10 +261,11 @@ select_rows_by_selector (WyreboxDaemonMailboxCatalogDuckDB *catalog,
 {
   static const gchar *by_id_sql =
       "SELECT kind, stable_id, imap_name, uidvalidity, uidnext, "
-      "message_count "
+      "message_count, is_selectable "
       "FROM ("
       "SELECT 'ordinary' AS kind, m.mailbox_id AS stable_id, m.imap_name, "
-      "mus.uidvalidity, mus.uidnext, COUNT(mm.membership_id) AS message_count "
+      "mus.uidvalidity, mus.uidnext, COUNT(mm.membership_id) AS message_count, "
+      "m.is_selectable AS is_selectable "
       "FROM mailboxes m "
       "JOIN mailbox_uid_state mus ON mus.account_id = m.account_id "
       "AND mus.namespace_kind = 'mailbox' "
@@ -240,11 +274,12 @@ select_rows_by_selector (WyreboxDaemonMailboxCatalogDuckDB *catalog,
       "AND mm.mailbox_id = m.mailbox_id AND mm.is_visible = TRUE "
       "WHERE m.account_id = ? AND m.is_visible = TRUE "
       "AND m.mailbox_id = ? "
-      "GROUP BY m.mailbox_id, m.imap_name, mus.uidvalidity, mus.uidnext "
+      "GROUP BY m.mailbox_id, m.imap_name, mus.uidvalidity, mus.uidnext, "
+      "m.is_selectable "
       "UNION ALL "
       "SELECT 'virtual' AS kind, dv.view_id AS stable_id, dv.imap_name, "
       "mus.uidvalidity, mus.uidnext, COUNT(dvm.membership_id) AS "
-      "message_count "
+      "message_count, dv.is_selectable AS is_selectable "
       "FROM derived_views dv "
       "JOIN mailbox_uid_state mus ON mus.account_id = dv.account_id "
       "AND mus.namespace_kind = 'derived_view' "
@@ -254,14 +289,15 @@ select_rows_by_selector (WyreboxDaemonMailboxCatalogDuckDB *catalog,
       "AND dvm.view_id = dv.view_id AND dvm.is_visible = TRUE "
       "WHERE dv.account_id = ? AND dv.is_visible = TRUE "
       "AND dv.view_id = ? "
-      "GROUP BY dv.view_id, dv.imap_name, mus.uidvalidity, mus.uidnext"
-      ") matches;";
+      "GROUP BY dv.view_id, dv.imap_name, mus.uidvalidity, mus.uidnext, "
+      "dv.is_selectable" ") matches;";
   static const gchar *by_name_sql =
       "SELECT kind, stable_id, imap_name, uidvalidity, uidnext, "
-      "message_count "
+      "message_count, is_selectable "
       "FROM ("
       "SELECT 'ordinary' AS kind, m.mailbox_id AS stable_id, m.imap_name, "
-      "mus.uidvalidity, mus.uidnext, COUNT(mm.membership_id) AS message_count "
+      "mus.uidvalidity, mus.uidnext, COUNT(mm.membership_id) AS message_count, "
+      "m.is_selectable AS is_selectable "
       "FROM mailboxes m "
       "JOIN mailbox_uid_state mus ON mus.account_id = m.account_id "
       "AND mus.namespace_kind = 'mailbox' "
@@ -270,11 +306,12 @@ select_rows_by_selector (WyreboxDaemonMailboxCatalogDuckDB *catalog,
       "AND mm.mailbox_id = m.mailbox_id AND mm.is_visible = TRUE "
       "WHERE m.account_id = ? AND m.is_visible = TRUE "
       "AND m.imap_name = ? "
-      "GROUP BY m.mailbox_id, m.imap_name, mus.uidvalidity, mus.uidnext "
+      "GROUP BY m.mailbox_id, m.imap_name, mus.uidvalidity, mus.uidnext, "
+      "m.is_selectable "
       "UNION ALL "
       "SELECT 'virtual' AS kind, dv.view_id AS stable_id, dv.imap_name, "
       "mus.uidvalidity, mus.uidnext, COUNT(dvm.membership_id) AS "
-      "message_count "
+      "message_count, dv.is_selectable AS is_selectable "
       "FROM derived_views dv "
       "JOIN mailbox_uid_state mus ON mus.account_id = dv.account_id "
       "AND mus.namespace_kind = 'derived_view' "
@@ -284,8 +321,8 @@ select_rows_by_selector (WyreboxDaemonMailboxCatalogDuckDB *catalog,
       "AND dvm.view_id = dv.view_id AND dvm.is_visible = TRUE "
       "WHERE dv.account_id = ? AND dv.is_visible = TRUE "
       "AND dv.imap_name = ? "
-      "GROUP BY dv.view_id, dv.imap_name, mus.uidvalidity, mus.uidnext"
-      ") matches;";
+      "GROUP BY dv.view_id, dv.imap_name, mus.uidvalidity, mus.uidnext, "
+      "dv.is_selectable" ") matches;";
   g_auto (duckdb_prepared_statement) statement = NULL;
   g_auto (duckdb_result) result = { 0 };
   const gchar *sql = by_name ? by_name_sql : by_id_sql;
@@ -311,6 +348,8 @@ select_rows_by_selector (WyreboxDaemonMailboxCatalogDuckDB *catalog,
             error) ||
         !read_required_uint32 (&result, 4, row, &select_row->uid_next, error) ||
         !read_required_uint32 (&result, 5, row, &select_row->message_count,
+            error) ||
+        !read_required_boolean (&result, 6, row, &select_row->is_selectable,
             error)) {
       mailbox_catalog_select_row_clear (select_row);
       g_free (select_row);
@@ -409,7 +448,10 @@ wyrebox_daemon_mailbox_catalog_duckdb_list (const
   wyrebox_daemon_mailbox_list_result_init_empty (&result);
 
   g_mutex_lock (&catalog->mutex);
-  ok = append_list_rows (catalog, request->account_identity, &result, error);
+  ok = append_list_rows (catalog,
+      request->account_identity,
+      request->namespace_prefix != NULL ? request->namespace_prefix : "",
+      &result, error);
   g_mutex_unlock (&catalog->mutex);
 
   if (!ok)
@@ -430,10 +472,8 @@ wyrebox_daemon_mailbox_catalog_duckdb_select (const
 {
   WyreboxDaemonMailboxCatalogDuckDB *catalog = user_data;
   g_autoptr (GPtrArray) rows = NULL;
-  const gboolean by_name =
-      request != NULL && request->mailbox_name != NULL &&
-      request->mailbox_name[0] != '\0';
-  const gchar *selector = by_name ? request->mailbox_name : request->mailbox_id;
+  gboolean by_name = FALSE;
+  const gchar *selector = NULL;
   gboolean ok = FALSE;
   const MailboxCatalogSelectRow *row = NULL;
 
@@ -443,6 +483,8 @@ wyrebox_daemon_mailbox_catalog_duckdb_select (const
   g_return_val_if_fail (out_result != NULL, FALSE);
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
+  by_name = request->mailbox_name != NULL && request->mailbox_name[0] != '\0';
+  selector = by_name ? request->mailbox_name : request->mailbox_id;
   rows = g_ptr_array_new_with_free_func (select_row_pointer_free);
 
   g_mutex_lock (&catalog->mutex);
@@ -472,6 +514,15 @@ wyrebox_daemon_mailbox_catalog_duckdb_select (const
   }
 
   row = g_ptr_array_index (rows, 0);
+  if (!row->is_selectable) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_EXISTS,
+        "mailbox catalog entry is not selectable for account '%s'",
+        request->account_identity);
+    return FALSE;
+  }
+
   return wyrebox_daemon_mailbox_select_result_init (out_result,
       row->kind,
       row->mailbox_id,
