@@ -181,6 +181,22 @@ map_mailbox_list_entry_kind (WyreboxDaemonMailboxListEntryKind in,
 }
 
 static gboolean
+decode_mailbox_list_entry_kind (MailboxListEntryKind in,
+    WyreboxDaemonMailboxListEntryKind *out)
+{
+  switch (in) {
+    case MailboxListEntryKind::ORDINARY:
+      *out = WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
+      return TRUE;
+    case MailboxListEntryKind::VIRTUAL:
+      *out = WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL;
+      return TRUE;
+    default:
+      return FALSE;
+  }
+}
+
+static gboolean
 map_error_class (WyreboxDaemonErrorClass in, ErrorClass *out)
 {
   switch (in) {
@@ -918,6 +934,50 @@ decode_error_response (const ResponseFrame::Reader &response_frame,
 }
 
 static gboolean
+decode_mailbox_select_response (const ResponseFrame::Reader &response_frame,
+    WyreboxDaemonResponseFrame *out_response_frame,
+    GError **error)
+{
+  auto response_select = response_frame.getMailboxSelect ();
+  g_auto (WyreboxDaemonMailboxSelectResult) result = {};
+  WyreboxDaemonMailboxListEntryKind kind =
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
+  const char *request_id = response_frame.getRequestId ().cStr ();
+  const char *payload_request_id = response_select.getRequestId ().cStr ();
+  const char *correlation_id = response_frame.getCorrelationId ().cStr ();
+
+  if (request_id == NULL || *request_id == '\0')
+    return set_invalid_argument (error,
+        "response frame request_id is required");
+
+  if (payload_request_id == NULL || *payload_request_id == '\0')
+    return set_invalid_argument (error,
+        "mailbox SELECT response request_id is required");
+
+  if (g_strcmp0 (request_id, payload_request_id) != 0)
+    return set_invalid_argument (error,
+        "mailbox SELECT response request_id does not match frame envelope");
+
+  if (!decode_mailbox_list_entry_kind (response_select.getKind (), &kind))
+    return set_invalid_argument (error, "unsupported mailbox select result kind");
+
+  if (!wyrebox_daemon_mailbox_select_result_init (&result,
+          kind,
+          response_select.getMailboxId ().cStr (),
+          response_select.getMailboxName ().cStr (),
+          response_select.getUidValidity (),
+          response_select.getUidNext (),
+          error))
+    return FALSE;
+
+  return wyrebox_daemon_response_frame_init_mailbox_select (out_response_frame,
+      request_id,
+      correlation_id,
+      &result,
+      error);
+}
+
+static gboolean
 decode_response_frame (const capnp::word *words,
     gsize word_count,
     WyreboxDaemonResponseFrame *out_response_frame,
@@ -937,9 +997,12 @@ decode_response_frame (const capnp::word *words,
         return decode_error_response (response_frame,
             out_response_frame,
             error);
+      case ResponseFrame::MAILBOX_SELECT:
+        return decode_mailbox_select_response (response_frame,
+            out_response_frame,
+            error);
       case ResponseFrame::STREAM_CHUNK:
       case ResponseFrame::MAILBOX_LIST:
-      case ResponseFrame::MAILBOX_SELECT:
       default:
         return set_not_supported (error,
             "unsupported response frame union arm");
@@ -990,6 +1053,94 @@ validate_delivery_ingestion_encode_input (
     return FALSE;
 
   return TRUE;
+}
+
+static gboolean
+validate_mailbox_select_encode_input (
+    const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMailboxSelectRequest *request,
+    GError **error)
+{
+  g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
+  g_auto (WyreboxDaemonMailboxSelectRequest) validated_request = { 0 };
+
+  if (identity == NULL)
+    return set_invalid_argument (error, "request identity is null");
+
+  if (request == NULL)
+    return set_invalid_argument (error, "mailbox select request is null");
+
+  if (!wyrebox_daemon_request_identity_init (&validated_identity,
+          identity->request_id,
+          identity->caller_identity,
+          identity->account_identity,
+          identity->tool_identity,
+          identity->correlation_id,
+          error))
+    return FALSE;
+
+  if (!wyrebox_daemon_mailbox_select_request_init (&validated_request,
+          request->account_identity,
+          request->mailbox_id,
+          request->mailbox_name,
+          error))
+    return FALSE;
+
+  return TRUE;
+}
+
+static gboolean
+encode_mailbox_select_request (
+    const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMailboxSelectRequest *request,
+    GBytes **out_bytes,
+    GError **error)
+{
+  try {
+    if (!validate_mailbox_select_encode_input (identity, request, error))
+      return FALSE;
+
+    capnp::MallocMessageBuilder request_builder;
+    auto request_frame = request_builder.initRoot<RequestFrame> ();
+
+    auto request_identity = request_frame.initIdentity ();
+    request_identity.setRequestId (identity->request_id);
+    request_identity.setCallerIdentity (identity->caller_identity != NULL
+        ? identity->caller_identity
+        : "");
+    request_identity.setAccountIdentity (identity->account_identity != NULL
+        ? identity->account_identity
+        : "");
+    request_identity.setToolIdentity (identity->tool_identity != NULL
+        ? identity->tool_identity
+        : "");
+    request_identity.setCorrelationId (identity->correlation_id != NULL
+        ? identity->correlation_id
+        : "");
+
+    auto mailbox_select = request_frame.initMailboxSelect ();
+    mailbox_select.setAccountIdentity (request->account_identity);
+    mailbox_select.setMailboxId (request->mailbox_id != NULL
+        ? request->mailbox_id
+        : "");
+    mailbox_select.setMailboxName (request->mailbox_name != NULL
+        ? request->mailbox_name
+        : "");
+
+    auto words = capnp::messageToFlatArray (request_builder);
+    auto bytes = words.asBytes ();
+    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+
+    return TRUE;
+  } catch (const std::exception &e) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "mailbox SELECT request encode failed: %s",
+        e.what ());
+  }
+
+  return FALSE;
 }
 
 static gboolean
@@ -1523,6 +1674,25 @@ wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (
   g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
   if (!encode_delivery_ingestion_request (identity, request, &out_bytes, error))
+    return NULL;
+
+  return g_steal_pointer (&out_bytes);
+}
+
+GBytes *
+wyrebox_daemon_capnp_codec_encode_mailbox_select_request (
+    const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMailboxSelectRequest *request,
+    gpointer user_data,
+    GError **error)
+{
+  g_autoptr (GBytes) out_bytes = NULL;
+
+  (void) user_data;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  if (!encode_mailbox_select_request (identity, request, &out_bytes, error))
     return NULL;
 
   return g_steal_pointer (&out_bytes);
