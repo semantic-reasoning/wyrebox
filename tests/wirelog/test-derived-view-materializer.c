@@ -1,4 +1,7 @@
 #include "wyrebox-derived-view-materializer.h"
+#include "wyrebox-derived-view-membership-changed-payload.h"
+#include "wyrebox-journal-reader.h"
+#include "wyrebox-journal-writer.h"
 #include "wyrebox-schema-metadata-store.h"
 #include "wyrebox-schema-migration.h"
 
@@ -300,6 +303,95 @@ assert_change (const WyreboxDerivedViewMembershipChange *change,
   g_assert_cmpuint (change->materialized_at_unix_us, ==, 1000);
 }
 
+static gchar *
+create_journal_root (void)
+{
+  g_autoptr (GError) error = NULL;
+  gchar *root = NULL;
+
+  root = g_dir_make_tmp ("wyrebox-derived-view-change-journal-XXXXXX", &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (root);
+
+  return root;
+}
+
+static void
+assert_decoded_payload_matches_change (const
+    WyreboxDerivedViewMembershipChangedPayload *payload,
+    const WyreboxDerivedViewMembershipChange *change)
+{
+  g_assert_cmpstr (payload->account_id, ==, change->account_id);
+  g_assert_cmpstr (payload->view_id, ==, change->view_id);
+  g_assert_cmpstr (payload->message_id, ==, change->message_id);
+  g_assert_cmpstr (payload->membership_id, ==, change->membership_id);
+  g_assert_cmpstr (payload->rule_version_hash, ==, change->rule_version_hash);
+  g_assert_cmpuint (payload->uid, ==, change->uid);
+  g_assert_cmpuint (payload->uidvalidity, ==, change->uidvalidity);
+  g_assert_cmpint (payload->is_visible, ==, change->is_visible);
+  g_assert_cmpuint (payload->materialized_at_unix_us, ==,
+      change->materialized_at_unix_us);
+}
+
+static void
+assert_journal_matches_changes (const gchar *journal_root, GPtrArray *changes)
+{
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_autoptr (GError) error = NULL;
+  gboolean eof = FALSE;
+
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  for (guint i = 0; i < changes->len; i++) {
+    const WyreboxDerivedViewMembershipChange *change = change_at (changes, i);
+    g_auto (WyreboxJournalRecord) record = { 0 };
+    g_auto (WyreboxDerivedViewMembershipChangedPayload) payload = { 0 };
+
+    g_assert_true (wyrebox_journal_reader_read_next (reader, &record, &eof,
+            &error));
+    g_assert_no_error (error);
+    g_assert_false (eof);
+    g_assert_cmpuint (record.sequence, ==, i + 1);
+    g_assert_cmpint (record.event_type, ==,
+        WYREBOX_JOURNAL_EVENT_DERIVED_VIEW_MEMBERSHIP_CHANGED);
+    g_assert_true (wyrebox_derived_view_membership_changed_payload_decode
+        (record.payload, &payload, &error));
+    g_assert_no_error (error);
+    assert_decoded_payload_matches_change (&payload, change);
+  }
+
+  {
+    g_auto (WyreboxJournalRecord) record = { 0 };
+
+    g_assert_false (wyrebox_journal_reader_read_next (reader, &record, &eof,
+            &error));
+    g_assert_no_error (error);
+    g_assert_true (eof);
+  }
+}
+
+static void
+assert_journal_empty (const gchar *journal_root)
+{
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_autoptr (GError) error = NULL;
+  gboolean eof = FALSE;
+
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+  {
+    g_auto (WyreboxJournalRecord) record = { 0 };
+
+    g_assert_false (wyrebox_journal_reader_read_next (reader, &record, &eof,
+            &error));
+    g_assert_no_error (error);
+    g_assert_true (eof);
+  }
+}
+
 static void
 assert_materialized_state (const gchar *path, guint64 expected_memberships,
     guint64 expected_uidnext)
@@ -477,6 +569,39 @@ test_idempotent_apply_with_changes_reports_no_changes (void)
 }
 
 static void
+test_apply_changes_append_journal_round_trip (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autofree gchar *journal_root = create_journal_root ();
+  g_autoptr (GPtrArray) memberships = new_memberships ();
+  g_autoptr (GPtrArray) changes = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  add_membership (memberships, "view-project-alpha", "msg-1");
+  add_membership (memberships, "view-project-alpha", "msg-2");
+
+  g_assert_true (apply_memberships_with_changes (path, memberships, &changes,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (changes->len, ==, 2);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+  g_assert_true (wyrebox_derived_view_membership_changes_append_journal
+      (changes, writer, &error));
+  g_assert_no_error (error);
+  g_clear_object (&writer);
+
+  assert_journal_matches_changes (journal_root, changes);
+
+  remove_catalog (path);
+  remove_tree (journal_root);
+}
+
+static void
 test_refresh_removes_stale_and_preserves_retained_uid (void)
 {
   g_autofree gchar *path = create_catalog ();
@@ -539,6 +664,42 @@ test_refresh_with_changes_reports_hidden_stale_row (void)
 }
 
 static void
+test_idempotent_changes_append_journal_writes_no_records (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autofree gchar *journal_root = create_journal_root ();
+  g_autoptr (GPtrArray) memberships = new_memberships ();
+  g_autoptr (GPtrArray) changes = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  add_membership (memberships, "view-project-alpha", "msg-1");
+
+  g_assert_true (apply_memberships_with_changes (path, memberships, &changes,
+          &error));
+  g_assert_no_error (error);
+  g_clear_pointer (&changes, g_ptr_array_unref);
+  g_assert_true (apply_memberships_with_changes (path, memberships, &changes,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (changes->len, ==, 0);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+  g_assert_true (wyrebox_derived_view_membership_changes_append_journal
+      (changes, writer, &error));
+  g_assert_no_error (error);
+  g_clear_object (&writer);
+
+  assert_journal_empty (journal_root);
+
+  remove_catalog (path);
+  remove_tree (journal_root);
+}
+
+static void
 test_refresh_readding_hidden_row_restores_original_uid (void)
 {
   g_autofree gchar *path = create_catalog ();
@@ -569,6 +730,46 @@ test_refresh_readding_hidden_row_restores_original_uid (void)
           "view_id = 'view-project-alpha' AND is_visible = TRUE"), ==, 2);
 
   remove_catalog (path);
+}
+
+static void
+test_refresh_hidden_change_append_journal_round_trip (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autofree gchar *journal_root = create_journal_root ();
+  g_autoptr (GPtrArray) initial = new_memberships ();
+  g_autoptr (GPtrArray) refreshed = new_memberships ();
+  g_autoptr (GPtrArray) changes = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  add_membership (initial, "view-project-alpha", "msg-1");
+  add_membership (initial, "view-project-alpha", "msg-2");
+  add_membership (refreshed, "view-project-alpha", "msg-1");
+
+  g_assert_true (refresh_memberships_with_changes (path, initial, &changes,
+          &error));
+  g_assert_no_error (error);
+  g_clear_pointer (&changes, g_ptr_array_unref);
+  g_assert_true (refresh_memberships_with_changes (path, refreshed, &changes,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (changes->len, ==, 1);
+  assert_change (change_at (changes, 0), "msg-2", 2, FALSE);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+  g_assert_true (wyrebox_derived_view_membership_changes_append_journal
+      (changes, writer, &error));
+  g_assert_no_error (error);
+  g_clear_object (&writer);
+
+  assert_journal_matches_changes (journal_root, changes);
+
+  remove_catalog (path);
+  remove_tree (journal_root);
 }
 
 static void
@@ -1126,6 +1327,80 @@ test_invalid_arguments (void)
   remove_catalog (path);
 }
 
+static void
+test_empty_changes_append_journal_writes_no_records (void)
+{
+  g_autofree gchar *journal_root = create_journal_root ();
+  g_autoptr (GPtrArray) changes =
+      g_ptr_array_new_with_free_func ((GDestroyNotify)
+      wyrebox_derived_view_membership_change_free);
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GError) error = NULL;
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+  g_assert_true (wyrebox_derived_view_membership_changes_append_journal
+      (changes, writer, &error));
+  g_assert_no_error (error);
+  g_clear_object (&writer);
+
+  assert_journal_empty (journal_root);
+
+  remove_tree (journal_root);
+}
+
+static void
+test_append_journal_invalid_arguments (void)
+{
+  g_autofree gchar *journal_root = create_journal_root ();
+  g_autoptr (GPtrArray) changes = g_ptr_array_new ();
+  g_autoptr (GPtrArray) invalid_change_array =
+      g_ptr_array_new_with_free_func ((GDestroyNotify)
+      wyrebox_derived_view_membership_change_free);
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GError) error = NULL;
+  WyreboxDerivedViewMembershipChange *invalid_change = NULL;
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+
+  g_assert_false (wyrebox_derived_view_membership_changes_append_journal
+      (NULL, writer, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  g_assert_false (wyrebox_derived_view_membership_changes_append_journal
+      (changes, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  g_ptr_array_add (changes, NULL);
+  g_assert_false (wyrebox_derived_view_membership_changes_append_journal
+      (changes, writer, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  invalid_change = g_new0 (WyreboxDerivedViewMembershipChange, 1);
+  invalid_change->account_id = g_strdup ("");
+  invalid_change->view_id = g_strdup ("view-project-alpha");
+  invalid_change->message_id = g_strdup ("msg-1");
+  invalid_change->membership_id = g_strdup ("derived-view:sha256:bad");
+  invalid_change->rule_version_hash = g_strdup ("sha256:bad");
+  invalid_change->uid = 1;
+  invalid_change->uidvalidity = 1;
+  invalid_change->is_visible = TRUE;
+  invalid_change->materialized_at_unix_us = 1000;
+  g_ptr_array_add (invalid_change_array, invalid_change);
+
+  g_assert_false (wyrebox_derived_view_membership_changes_append_journal
+      (invalid_change_array, writer, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  remove_tree (journal_root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1135,10 +1410,15 @@ main (int argc, char **argv)
       test_applies_two_memberships);
   g_test_add_func ("/wirelog/derived-view-materializer/apply-changes",
       test_apply_with_changes_reports_visible_inserts);
+  g_test_add_func ("/wirelog/derived-view-materializer/apply-changes-journal",
+      test_apply_changes_append_journal_round_trip);
   g_test_add_func ("/wirelog/derived-view-materializer/reapply",
       test_reapply_preserves_uids_and_uidnext);
   g_test_add_func ("/wirelog/derived-view-materializer/reapply-changes",
       test_idempotent_apply_with_changes_reports_no_changes);
+  g_test_add_func
+      ("/wirelog/derived-view-materializer/reapply-changes-journal",
+      test_idempotent_changes_append_journal_writes_no_records);
   g_test_add_func ("/wirelog/derived-view-materializer/append",
       test_later_append_allocates_next_uid);
   g_test_add_func ("/wirelog/derived-view-materializer/colon-collision",
@@ -1150,6 +1430,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/wirelog/derived-view-materializer/refresh-removes-stale-changes",
       test_refresh_with_changes_reports_hidden_stale_row);
+  g_test_add_func
+      ("/wirelog/derived-view-materializer/refresh-stale-changes-journal",
+      test_refresh_hidden_change_append_journal_round_trip);
   g_test_add_func ("/wirelog/derived-view-materializer/refresh-restores",
       test_refresh_readding_hidden_row_restores_original_uid);
   g_test_add_func ("/wirelog/derived-view-materializer/refresh-restore-changes",
@@ -1179,6 +1462,10 @@ main (int argc, char **argv)
       test_rejects_conflicting_derived_view_metadata_and_rolls_back);
   g_test_add_func ("/wirelog/derived-view-materializer/invalid-arguments",
       test_invalid_arguments);
+  g_test_add_func ("/wirelog/derived-view-materializer/empty-changes-journal",
+      test_empty_changes_append_journal_writes_no_records);
+  g_test_add_func ("/wirelog/derived-view-materializer/invalid-journal-args",
+      test_append_journal_invalid_arguments);
 
   return g_test_run ();
 }
