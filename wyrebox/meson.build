@@ -79,6 +79,7 @@ wyrebox_inc = include_directories(
   'ingestion',
   'facts',
   'daemon',
+  'wirelog',
 )
 
 wyrebox_inc_paths = [wyrebox_inc]
@@ -97,6 +98,13 @@ if capnp_serialization_found
   ]
   wyrebox_inc_paths += [daemon_api_capnp_schema_include]
   wyrebox_link_deps += [capnp_dep, kj_dep]
+endif
+
+if wirelog_runtime_found
+  wyrebox_sources += [
+    'wirelog/wyrebox-wirelog-program.c',
+  ]
+  wyrebox_link_deps += [wirelog_dep]
 endif
 
 wyrebox_lib = static_library(
