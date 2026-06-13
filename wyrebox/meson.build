@@ -140,3 +140,12 @@ wyrebox_dep = declare_dependency(
   link_with: wyrebox_lib,
   dependencies: wyrebox_link_deps,
 )
+
+if capnp_serialization_found
+  wyrebox_postfix_pipe = executable(
+    'wyrebox-postfix-pipe',
+    'postfix/wyrebox-postfix-pipe-main.c',
+    dependencies: [wyrebox_dep],
+    install: true,
+  )
+endif
