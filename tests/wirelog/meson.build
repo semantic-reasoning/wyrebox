@@ -47,9 +47,17 @@ if wirelog_runtime_found
     dependencies: [wyrebox_dep],
   )
 
+  derived_view_materializer_wirelog_test = executable(
+    'test-derived-view-materializer-wirelog',
+    'test-derived-view-materializer-wirelog.c',
+    dependencies: [wyrebox_dep],
+  )
+
   test('wirelog link smoke', wirelog_link_smoke_test)
   test('wirelog program', wirelog_program_test)
   test('wirelog source', wirelog_source_test)
   test('wirelog evaluation', wirelog_evaluation_test)
   test('wirelog derived membership', wirelog_derived_membership_test)
+  test('derived view materializer wirelog',
+    derived_view_materializer_wirelog_test)
 endif
