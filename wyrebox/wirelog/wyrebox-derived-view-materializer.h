@@ -30,5 +30,16 @@ gboolean wyrebox_derived_view_materializer_apply_memberships (
     GPtrArray *memberships,
     GError **error);
 
+gboolean wyrebox_derived_view_materializer_refresh_memberships (
+    WyreboxDerivedViewMaterializer *self,
+    const gchar *account_id,
+    const gchar *view_id,
+    const gchar *imap_name,
+    const gchar *definition_ref,
+    const gchar *rule_version_hash,
+    guint64 materialized_at_unix_us,
+    GPtrArray *memberships,
+    GError **error);
+
 G_END_DECLS
 /* *INDENT-ON* */
