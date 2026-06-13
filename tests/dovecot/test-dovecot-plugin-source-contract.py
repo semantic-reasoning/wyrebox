@@ -40,6 +40,28 @@ def main() -> None:
         "module-dir include",
     )
     require(
+        r"struct\s+wyrebox_dovecot_storage\s*\{\s*[\s\S]*?struct\s+mail_storage\s+storage;\s*}\s*;",
+        text,
+        "wyrebox storage wrapper struct",
+    )
+    require(
+        r"wyrebox_dovecot_storage_alloc\s*\(\s*void\s*\)\s*\{[\s\S]*?"
+        r"pool_alloconly_create\s*\(\s*\"wyrebox storage\"[\s\S]*?\)",
+        text,
+        "allocator uses pool_alloconly_create",
+    )
+    require(
+        r"storage->storage\s*=\s*wyrebox_mail_storage_class;\s*[\s\S]*?"
+        r"storage->storage\.pool\s*=\s*pool;",
+        text,
+        "allocator copies storage class template before pool assignment",
+    )
+    require(
+        r"return\s+&storage->storage;",
+        text,
+        "allocator returns wrapped storage",
+    )
+    require(
         r"static\s+struct\s+mail_storage\s+wyrebox_mail_storage_class\s*=\s*\{",
         text,
         "wyrebox storage class definition",
@@ -50,6 +72,33 @@ def main() -> None:
         r"\.v\s*=\s*\{[\s\S]*?\.add_list\s*=\s*NULL,[\s\S]*?\.mailbox_alloc\s*=\s*NULL",
         text,
         "inert storage vfuncs",
+    )
+    require(
+        r"\.v\s*=\s*\{[\s\S]*?\.alloc\s*=\s*wyrebox_dovecot_storage_alloc,[\s\S]*?"
+        r"\.create\s*=\s*wyrebox_dovecot_storage_create,[\s\S]*?"
+        r"\.destroy\s*=\s*wyrebox_dovecot_storage_destroy",
+        text,
+        "wired storage lifecycle vfuncs",
+    )
+    require(
+        r"static\s+void\s+wyrebox_dovecot_storage_destroy\s*\(\s*struct\s+mail_storage\s*\*storage\s*\)\s*\{\s*\(void\)\s*storage;\s*\}",
+        text,
+        "destroy is no-op",
+    )
+    forbid(
+        r"wyrebox_dovecot_storage_alloc\s*\(\s*void\s*\)\s*\{[\s\S]*?return\s+NULL;",
+        text,
+        "storage allocator null fallback",
+    )
+    forbid(
+        r"return\s+NULL;\s*",
+        text,
+        "any allocator null return",
+    )
+    forbid(
+        r"pool_unref\s*\(\s*&storage->pool\s*\)",
+        text,
+        "storage destroy releases pool",
     )
     require(
         r"wyrebox_plugin_init\s*\(\s*struct\s+module\s+\*\s*module\s*\)\s*\{[\s\S]*?mail_storage_class_register\s*\(\s*&wyrebox_mail_storage_class\s*\)",

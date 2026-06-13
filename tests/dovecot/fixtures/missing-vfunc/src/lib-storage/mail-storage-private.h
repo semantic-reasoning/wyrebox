@@ -8,6 +8,7 @@ struct file_lock;
 
 struct mailbox;
 struct mailbox_list;
+struct mail_namespace;
 struct mail_storage;
 struct mail;
 struct mailbox_transaction_context;
@@ -28,6 +29,10 @@ struct mail_vfuncs;
 struct mail_storage_vfuncs {
   void (*add_list)(struct mail_storage *storage,
                    struct mailbox_list *list);
+  struct mailbox *(*mailbox_alloc)(struct mail_storage *storage,
+                                  struct mailbox_list *list,
+                                  const char *vname,
+                                  enum mailbox_flags flags);
 };
 
 struct mailbox_vfuncs {

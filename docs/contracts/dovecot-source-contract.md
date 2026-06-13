@@ -63,6 +63,10 @@ checked in the corresponding vfunc structs:
 
 - LIST-related:
   - `mail_storage_vfuncs::add_list`
+- Storage lifecycle-related:
+  - `mail_storage_vfuncs::alloc`
+  - `mail_storage_vfuncs::create`
+  - `mail_storage_vfuncs::destroy`
 - SELECT/status-related:
   - `mailbox_vfuncs::open`
   - `mailbox_vfuncs::get_status`
