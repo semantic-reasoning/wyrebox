@@ -9,12 +9,13 @@ static const char *const derived_view_uid_map_parameters[] =
     { "view_id", NULL };
 static const char *const message_by_id_parameters[] = { "message_id", NULL };
 static const char *const messages_by_from_addr_parameters[] =
-    { "from_addr", NULL };
+    { "from_addr", "limit", "offset", NULL };
 static const char *const messages_by_sender_domain_parameters[] =
-    { "sender_domain", NULL };
-static const char *const messages_by_subject_parameters[] = { "subject", NULL };
+    { "sender_domain", "limit", "offset", NULL };
+static const char *const messages_by_subject_parameters[] =
+    { "subject", "limit", "offset", NULL };
 static const char *const messages_by_date_range_parameters[] =
-    { "start_unix_us", "end_unix_us", NULL };
+    { "start_unix_us", "end_unix_us", "limit", "offset", NULL };
 
 static const WyreboxDaemonDuckDBQueryTemplateDescriptor catalog[] = {
   {
@@ -43,28 +44,28 @@ static const WyreboxDaemonDuckDBQueryTemplateDescriptor catalog[] = {
         "messages by from address",
         "account_id",
         "stream-chunk.duckdb-template.messages-by-from-addr.v1",
-        1,
+        3,
       messages_by_from_addr_parameters},
   {
         "messages.by_sender_domain.v1",
         "messages by sender domain",
         "account_id",
         "stream-chunk.duckdb-template.messages-by-sender-domain.v1",
-        1,
+        3,
       messages_by_sender_domain_parameters},
   {
         "messages.by_subject.v1",
         "messages by subject",
         "account_id",
         "stream-chunk.duckdb-template.messages-by-subject.v1",
-        1,
+        3,
       messages_by_subject_parameters},
   {
         "messages.by_date_range.v1",
         "messages by date range",
         "account_id",
         "stream-chunk.duckdb-template.messages-by-date-range.v1",
-        2,
+        4,
       messages_by_date_range_parameters},
 };
 
@@ -166,13 +167,90 @@ validate_signed_integer_text (const char *value,
 }
 
 static gboolean
+validate_unsigned_integer_text (const char *value,
+    const char *parameter_name, guint64 *out_value, GError **error)
+{
+  gchar *end = NULL;
+  guint64 parsed = 0;
+
+  if (*value == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "duckdb query template parameter '%s' must be an unsigned integer",
+        parameter_name);
+    return FALSE;
+  }
+
+  for (const char *cursor = value; *cursor != '\0'; cursor++) {
+    if (!g_ascii_isdigit (*cursor)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "duckdb query template parameter '%s' must be an unsigned integer",
+          parameter_name);
+      return FALSE;
+    }
+  }
+
+  errno = 0;
+  parsed = g_ascii_strtoull (value, &end, 10);
+  if (errno == ERANGE || end == NULL || *end != '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "duckdb query template parameter '%s' is outside the unsigned "
+        "integer range", parameter_name);
+    return FALSE;
+  }
+
+  if (out_value != NULL)
+    *out_value = parsed;
+
+  return TRUE;
+}
+
+static gboolean
+validate_limit_offset_parameters (const char *limit_text,
+    const char *offset_text, GError **error)
+{
+  guint64 limit = 0;
+  guint64 offset = 0;
+
+  if (!validate_unsigned_integer_text (limit_text, "limit", &limit, error) ||
+      !validate_unsigned_integer_text (offset_text, "offset", &offset, error))
+    return FALSE;
+
+  if (limit == 0 || limit > 100) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "duckdb query template parameter 'limit' must be between 1 and 100");
+    return FALSE;
+  }
+
+  if (offset > G_MAXINT64) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "duckdb query template parameter 'offset' must be within the signed "
+        "integer range");
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
     validate_messages_by_date_range_parameters
     (const WyreboxDaemonDuckDBQueryTemplateRequest * request, GError ** error)
 {
   return validate_signed_integer_text (request->parameters[0],
       "start_unix_us", error)
       && validate_signed_integer_text (request->parameters[1], "end_unix_us",
-      error);
+      error)
+      && validate_limit_offset_parameters (request->parameters[2],
+      request->parameters[3], error);
 }
 
 static gboolean
@@ -180,6 +258,12 @@ static gboolean
     (const WyreboxDaemonDuckDBQueryTemplateDescriptor * descriptor,
     const WyreboxDaemonDuckDBQueryTemplateRequest * request, GError ** error)
 {
+  if (g_strcmp0 (descriptor->template_id, "messages.by_from_addr.v1") == 0 ||
+      g_strcmp0 (descriptor->template_id, "messages.by_sender_domain.v1") ==
+      0 || g_strcmp0 (descriptor->template_id, "messages.by_subject.v1") == 0)
+    return validate_limit_offset_parameters (request->parameters[1],
+        request->parameters[2], error);
+
   if (g_strcmp0 (descriptor->template_id, "messages.by_date_range.v1") == 0)
     return validate_messages_by_date_range_parameters (request, error);
 

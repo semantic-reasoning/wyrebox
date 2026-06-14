@@ -264,6 +264,43 @@ seed_messages_by_subject_headers (const gchar *path)
 }
 
 static void
+seed_high_cardinality_subject_headers (const gchar *path)
+{
+  g_auto (duckdb_database) database = NULL;
+  g_auto (duckdb_connection) connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  for (guint i = 0; i < 105; i++) {
+    g_autoptr (GString) sql = NULL;
+
+    sql = g_string_new (NULL);
+    g_string_append_printf (sql,
+        "INSERT INTO messages (message_id, account_id, object_id, "
+        "journal_offset, journal_sequence) VALUES "
+        "('message-volume-%03u', 'account-1', 'object-volume-%03u', "
+        "%" G_GUINT64_FORMAT ", %" G_GUINT64_FORMAT ");",
+        i, i, (guint64) 1000 + i, (guint64) 1000 + i);
+    exec_sql (connection, sql->str);
+
+    g_string_truncate (sql, 0);
+    g_string_append_printf (sql,
+        "INSERT INTO message_headers ("
+        "message_id, rfc_message_id, duplicate_message_id_count, subject, "
+        "from_addr, to_addr, cc_addr, bcc_addr, date_raw, journal_offset, "
+        "journal_sequence) VALUES "
+        "('message-volume-%03u', '<message-volume-%03u@example.test>', 0, "
+        "'High Volume Subject', 'Sender %03u <sender%03u@example.test>', "
+        "'Bob <bob@example.test>', NULL, NULL, "
+        "'Mon, 01 Jan 2024 00:00:00 +0000', "
+        "%" G_GUINT64_FORMAT ", %" G_GUINT64_FORMAT ");",
+        i, i, i, i, (guint64) 2000 + i, (guint64) 2000 + i);
+    exec_sql (connection, sql->str);
+  }
+}
+
+static void
 seed_messages_by_date_range_headers (const gchar *path)
 {
   g_auto (duckdb_database) database = NULL;
@@ -488,24 +525,51 @@ static void
 init_messages_by_from_addr_request (WyreboxDaemonDuckDBQueryTemplateRequest
     *request, const gchar *account_id, const gchar *from_addr)
 {
-  init_request_with_template (request, "messages.by_from_addr.v1", account_id,
-      from_addr);
+  const gchar *parameters[] = { from_addr, "100", "0", NULL };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (request,
+          "query-1", "messages.by_from_addr.v1", account_id, parameters,
+          &error));
+  g_assert_no_error (error);
 }
 
 static void
 init_messages_by_sender_domain_request (WyreboxDaemonDuckDBQueryTemplateRequest
     *request, const gchar *account_id, const gchar *sender_domain)
 {
-  init_request_with_template (request, "messages.by_sender_domain.v1",
-      account_id, sender_domain);
+  const gchar *parameters[] = { sender_domain, "100", "0", NULL };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (request,
+          "query-1", "messages.by_sender_domain.v1", account_id, parameters,
+          &error));
+  g_assert_no_error (error);
 }
 
 static void
 init_messages_by_subject_request (WyreboxDaemonDuckDBQueryTemplateRequest
     *request, const gchar *account_id, const gchar *subject)
 {
-  init_request_with_template (request, "messages.by_subject.v1", account_id,
-      subject);
+  const gchar *parameters[] = { subject, "100", "0", NULL };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (request,
+          "query-1", "messages.by_subject.v1", account_id, parameters, &error));
+  g_assert_no_error (error);
+}
+
+static void
+init_messages_by_subject_page_request (WyreboxDaemonDuckDBQueryTemplateRequest
+    *request, const gchar *account_id, const gchar *subject,
+    const gchar *limit, const gchar *offset)
+{
+  const gchar *parameters[] = { subject, limit, offset, NULL };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (request,
+          "query-1", "messages.by_subject.v1", account_id, parameters, &error));
+  g_assert_no_error (error);
 }
 
 static void
@@ -513,7 +577,9 @@ init_messages_by_date_range_request (WyreboxDaemonDuckDBQueryTemplateRequest
     *request, const gchar *account_id, const gchar *start_unix_us,
     const gchar *end_unix_us)
 {
-  const gchar *parameters[] = { start_unix_us, end_unix_us, NULL };
+  const gchar *parameters[] = { start_unix_us, end_unix_us, "100", "0",
+    NULL
+  };
   g_autoptr (GError) error = NULL;
 
   g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (request,
@@ -704,6 +770,38 @@ dispatch_messages_by_subject_csv (const gchar *path, const gchar *account_id,
 }
 
 static gchar *
+dispatch_messages_by_subject_page_csv (const gchar *path,
+    const gchar *account_id, const gchar *subject, const gchar *limit,
+    const gchar *offset)
+{
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  gconstpointer data = NULL;
+  gsize size = 0;
+
+  service = wyrebox_daemon_duckdb_query_template_service_new_duckdb (path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (service);
+
+  init_messages_by_subject_page_request (&request, account_id, subject, limit,
+      offset);
+  g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
+          "request-1", "admin-cli", account_id, "duckdb-tool",
+          "correlation-1", &request, &frame, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpuint (frame.stream_chunk.chunk_index, ==, 0);
+  g_assert_true (frame.stream_chunk.end_of_stream);
+
+  data = g_bytes_get_data (frame.stream_chunk.bytes, &size);
+  return g_strndup (data, size);
+}
+
+static gchar *
 dispatch_messages_by_date_range_csv (const gchar *path,
     const gchar *account_id, const gchar *start_unix_us,
     const gchar *end_unix_us)
@@ -733,6 +831,20 @@ dispatch_messages_by_date_range_csv (const gchar *path,
 
   data = g_bytes_get_data (frame.stream_chunk.bytes, &size);
   return g_strndup (data, size);
+}
+
+static gsize
+count_substring (const gchar *text, const gchar *needle)
+{
+  gsize count = 0;
+  const gchar *cursor = text;
+
+  while ((cursor = g_strstr_len (cursor, -1, needle)) != NULL) {
+    count++;
+    cursor += strlen (needle);
+  }
+
+  return count;
 }
 
 static void
@@ -1369,6 +1481,34 @@ test_duckdb_service_messages_by_subject_orders_multiple_rows (void)
 }
 
 static void
+test_duckdb_service_messages_by_subject_limits_high_cardinality_results (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+  seed_high_cardinality_subject_headers (path);
+
+  csv = dispatch_messages_by_subject_csv (path, "account-1",
+      "High Volume Subject");
+  g_assert_cmpuint (count_substring (csv, "object-volume-"), ==, 100);
+  g_assert_true (g_strstr_len (csv, -1, "message-volume-000") != NULL);
+  g_assert_true (g_strstr_len (csv, -1, "message-volume-099") != NULL);
+  g_assert_false (g_strstr_len (csv, -1, "message-volume-100") != NULL);
+  g_assert_false (g_strstr_len (csv, -1, "message-volume-104") != NULL);
+
+  g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_by_subject_page_csv (path, "account-1",
+      "High Volume Subject", "5", "100");
+  g_assert_cmpuint (count_substring (csv, "object-volume-"), ==, 5);
+  g_assert_false (g_strstr_len (csv, -1, "message-volume-099") != NULL);
+  g_assert_true (g_strstr_len (csv, -1, "message-volume-100") != NULL);
+  g_assert_true (g_strstr_len (csv, -1, "message-volume-104") != NULL);
+  (void) g_remove (path);
+}
+
+static void
 test_duckdb_service_treats_sql_looking_subject_as_value (void)
 {
   g_autofree gchar *path = create_temp_catalog_path ();
@@ -1668,6 +1808,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/messages-by-subject-ordering",
       test_duckdb_service_messages_by_subject_orders_multiple_rows);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/messages-by-subject-high-cardinality-limit",
+      test_duckdb_service_messages_by_subject_limits_high_cardinality_results);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/sql-looking-subject-value",
       test_duckdb_service_treats_sql_looking_subject_as_value);
