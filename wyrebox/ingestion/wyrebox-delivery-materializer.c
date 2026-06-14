@@ -2,6 +2,7 @@
 
 #include <duckdb.h>
 #include <gio/gio.h>
+#include <string.h>
 
 struct _WyreboxDeliveryMaterializer
 {
@@ -174,6 +175,34 @@ bind_uint64 (duckdb_prepared_statement statement, idx_t index,
       "DuckDB delivery materializer uint64 bind failed at index %"
       G_GUINT64_FORMAT, (guint64) index);
   return FALSE;
+}
+
+static char *
+extract_sender_domain_from_from_addr (const char *value)
+{
+  const char *at = NULL;
+  const char *domain_start = NULL;
+  const char *domain_end = NULL;
+
+  if (value == NULL)
+    return NULL;
+
+  at = strrchr (value, '@');
+  if (at == NULL || at[1] == '\0')
+    return NULL;
+
+  domain_start = at + 1;
+  domain_end = domain_start;
+  while (*domain_end != '\0' &&
+      *domain_end != '>' &&
+      *domain_end != ',' && !g_ascii_isspace (*domain_end)) {
+    domain_end++;
+  }
+
+  if (domain_end == domain_start)
+    return NULL;
+
+  return g_ascii_strdown (domain_start, domain_end - domain_start);
 }
 
 static gboolean
@@ -431,26 +460,31 @@ materializer_ensure_message_headers (WyreboxDeliveryMaterializer *self,
     GError **error)
 {
   g_auto (duckdb_prepared_statement) statement = NULL;
+  g_autofree gchar *sender_domain = NULL;
   guint64 count = 0;
+
+  sender_domain = extract_sender_domain_from_from_addr (record->from);
 
   if (!materializer_prepare (self,
           "INSERT OR IGNORE INTO message_headers ("
           "message_id, rfc_message_id, duplicate_message_id_count, "
-          "subject, from_addr, to_addr, cc_addr, bcc_addr, date_raw, "
+          "subject, from_addr, sender_domain, to_addr, cc_addr, bcc_addr, "
+          "date_raw, "
           "journal_offset, journal_sequence"
-          ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+          ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
           &statement, error) ||
       !bind_varchar (statement, 1, message_id, error) ||
       !bind_nullable_varchar (statement, 2, record->rfc_message_id, error) ||
       !bind_uint64 (statement, 3, record->duplicate_message_id_count, error) ||
       !bind_nullable_varchar (statement, 4, record->subject, error) ||
       !bind_nullable_varchar (statement, 5, record->from, error) ||
-      !bind_nullable_varchar (statement, 6, record->to, error) ||
-      !bind_nullable_varchar (statement, 7, record->cc, error) ||
-      !bind_nullable_varchar (statement, 8, record->bcc, error) ||
-      !bind_nullable_varchar (statement, 9, record->date_raw, error) ||
-      !bind_uint64 (statement, 10, record->journal_offset, error) ||
-      !bind_uint64 (statement, 11, record->journal_sequence, error) ||
+      !bind_nullable_varchar (statement, 6, sender_domain, error) ||
+      !bind_nullable_varchar (statement, 7, record->to, error) ||
+      !bind_nullable_varchar (statement, 8, record->cc, error) ||
+      !bind_nullable_varchar (statement, 9, record->bcc, error) ||
+      !bind_nullable_varchar (statement, 10, record->date_raw, error) ||
+      !bind_uint64 (statement, 11, record->journal_offset, error) ||
+      !bind_uint64 (statement, 12, record->journal_sequence, error) ||
       !materializer_execute_prepared (statement, error))
     return FALSE;
 
@@ -461,6 +495,7 @@ materializer_ensure_message_headers (WyreboxDeliveryMaterializer *self,
           "AND duplicate_message_id_count = ? "
           "AND subject IS NOT DISTINCT FROM ? "
           "AND from_addr IS NOT DISTINCT FROM ? "
+          "AND sender_domain IS NOT DISTINCT FROM ? "
           "AND to_addr IS NOT DISTINCT FROM ? "
           "AND cc_addr IS NOT DISTINCT FROM ? "
           "AND bcc_addr IS NOT DISTINCT FROM ? "
@@ -472,12 +507,13 @@ materializer_ensure_message_headers (WyreboxDeliveryMaterializer *self,
       !bind_uint64 (statement, 3, record->duplicate_message_id_count, error) ||
       !bind_nullable_varchar (statement, 4, record->subject, error) ||
       !bind_nullable_varchar (statement, 5, record->from, error) ||
-      !bind_nullable_varchar (statement, 6, record->to, error) ||
-      !bind_nullable_varchar (statement, 7, record->cc, error) ||
-      !bind_nullable_varchar (statement, 8, record->bcc, error) ||
-      !bind_nullable_varchar (statement, 9, record->date_raw, error) ||
-      !bind_uint64 (statement, 10, record->journal_offset, error) ||
-      !bind_uint64 (statement, 11, record->journal_sequence, error) ||
+      !bind_nullable_varchar (statement, 6, sender_domain, error) ||
+      !bind_nullable_varchar (statement, 7, record->to, error) ||
+      !bind_nullable_varchar (statement, 8, record->cc, error) ||
+      !bind_nullable_varchar (statement, 9, record->bcc, error) ||
+      !bind_nullable_varchar (statement, 10, record->date_raw, error) ||
+      !bind_uint64 (statement, 11, record->journal_offset, error) ||
+      !bind_uint64 (statement, 12, record->journal_sequence, error) ||
       !materializer_count_prepared (statement, &count, error))
     return FALSE;
 

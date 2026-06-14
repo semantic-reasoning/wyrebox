@@ -142,7 +142,11 @@ create_bootstrap_catalog (void)
   g_assert_no_error (error);
   g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE,
-          2, wyrebox_schema_migration_get_current_schema_version (), &error));
+          2, 3, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN,
+          5, wyrebox_schema_migration_get_current_schema_version (), &error));
   g_assert_no_error (error);
 
   return g_steal_pointer (&path);
@@ -704,6 +708,40 @@ test_happy_path_materializes_inbox (void)
 }
 
 static void
+test_sender_domain_is_materialized_from_from_addr (void)
+{
+  g_autofree gchar *path = create_bootstrap_catalog ();
+  g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+  TestDuckdbFixture duckdb = { 0 };
+
+  append_projection_record_with_headers (&projection, "sha256:first",
+      101, 1001, 11, 1, "<first@example.test>", 0, "First subject",
+      "Sender <SENDER@Example.TEST>", "to@example.test", NULL, NULL,
+      "Fri, 12 Jun 2026 10:00:00 +0000");
+  append_projection_record_with_headers (&projection, "sha256:second",
+      202, 1002, 22, 2, "<second@example.test>", 0, "Malformed sender",
+      "no-domain-address", "to@example.test", NULL, NULL,
+      "Fri, 12 Jun 2026 10:01:00 +0000");
+  append_projection_record (&projection, "sha256:third", 303, 1003, 33, 3);
+
+  apply_projection_to_inbox (path, &projection);
+
+  open_duckdb_fixture (path, &duckdb);
+  g_assert_cmpstr (query_string (duckdb.connection,
+          "SELECT sender_domain FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"), ==, "example.test");
+  g_assert_true (query_is_null (duckdb.connection,
+          "SELECT sender_domain FROM message_headers WHERE "
+          "message_id = 'journal:22:2';"));
+  g_assert_true (query_is_null (duckdb.connection,
+          "SELECT sender_domain FROM message_headers WHERE "
+          "message_id = 'journal:33:3';"));
+  close_duckdb_fixture (&duckdb);
+
+  remove_catalog (path);
+}
+
+static void
 test_duplicate_object_materializes_distinct_messages (void)
 {
   g_autofree gchar *path = create_bootstrap_catalog ();
@@ -972,6 +1010,8 @@ main (int argc, char **argv)
 
   g_test_add_func ("/ingestion/delivery-materializer/happy-path-inbox",
       test_happy_path_materializes_inbox);
+  g_test_add_func ("/ingestion/delivery-materializer/sender-domain",
+      test_sender_domain_is_materialized_from_from_addr);
   g_test_add_func ("/ingestion/delivery-materializer/duplicate-object",
       test_duplicate_object_materializes_distinct_messages);
   g_test_add_func ("/ingestion/delivery-materializer/idempotent-reapply",
