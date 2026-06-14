@@ -551,6 +551,32 @@ operation may read daemon-owned DuckDB materialized state and indexes needed to
 evaluate the selected template, but it is not a caller-controlled database
 execution surface.
 
+The first metadata search template set is explicitly bounded and account
+scoped:
+
+- `messages.by_from_addr.v1(from_addr, limit, offset)` performs an exact match
+  against decoded sender address metadata.
+- `messages.by_sender_domain.v1(sender_domain, limit, offset)` performs an
+  exact match against normalized sender-domain metadata. The search parameter
+  is normalized to lowercase ASCII before evaluation.
+- `messages.by_subject.v1(subject, limit, offset)` performs an exact,
+  case-sensitive match against decoded subject metadata.
+- `messages.subject_contains.v1(subject_term, limit, offset)` performs an
+  ASCII case-insensitive substring match against decoded subject metadata.
+  Search wildcard characters `%`, `_`, and `\` are treated as literal input,
+  not as pattern controls.
+- `messages.by_date_range.v1(start_unix_us, end_unix_us, limit, offset)`
+  returns messages whose decoded date timestamp is in the half-open range
+  `[start_unix_us, end_unix_us)`.
+
+Metadata search parameters must be non-empty and must not contain control
+characters. `limit` is required and must be between `1` and `100`, inclusive.
+`offset` is required, non-negative, and within signed 64-bit range. Metadata
+templates exclude rows where the searched metadata field is `NULL`; the date
+range template excludes rows where the decoded timestamp is `NULL`. Metadata
+template results are ordered by `journal_sequence ASC, message_id ASC` unless a
+later versioned template states a different order.
+
 Successful query results return structured rows and columns with typed values.
 Result schemas are associated with the query-template/catalog identity selected
 for the request. Results may be bounded, pageable, or streamed by later

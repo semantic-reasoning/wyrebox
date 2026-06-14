@@ -363,6 +363,35 @@ test_catalog_validates_metadata_limit_offset_bounds (void)
 }
 
 static void
+assert_metadata_template_rejects_empty_term (const gchar *template_id)
+{
+  char *parameters[] = { "", "100", "0", NULL };
+  const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
+  WyreboxDaemonDuckDBQueryTemplateRequest request = {
+    (char *) "query-1",
+    (char *) template_id,
+    (char *) "account-1",
+    parameters,
+  };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_false (wyrebox_daemon_duckdb_query_template_catalog_validate
+      (WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI, "account-1", &request,
+          &descriptor, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (descriptor);
+}
+
+static void
+test_catalog_rejects_empty_metadata_search_terms (void)
+{
+  assert_metadata_template_rejects_empty_term ("messages.by_from_addr.v1");
+  assert_metadata_template_rejects_empty_term ("messages.by_sender_domain.v1");
+  assert_metadata_template_rejects_empty_term ("messages.by_subject.v1");
+  assert_metadata_template_rejects_empty_term ("messages.subject_contains.v1");
+}
+
+static void
 test_catalog_rejects_missing_or_mismatched_scope (void)
 {
   const char *parameters[] = { "mailbox-inbox", NULL };
@@ -417,6 +446,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/catalog/validates-metadata-limit-offset-bounds",
       test_catalog_validates_metadata_limit_offset_bounds);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/catalog/rejects-empty-metadata-search-terms",
+      test_catalog_rejects_empty_metadata_search_terms);
   g_test_add_func ("/daemon-api/duckdb-query-template/catalog/rejects-scope",
       test_catalog_rejects_missing_or_mismatched_scope);
 
