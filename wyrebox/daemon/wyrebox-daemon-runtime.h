@@ -22,5 +22,13 @@ const char *wyrebox_daemon_runtime_get_default_fact_dump_dir (void);
  */
 GFile *wyrebox_daemon_runtime_get_default_fact_dump_file (void);
 
+typedef struct _WyreboxDaemonFactMutationService
+    WyreboxDaemonFactMutationService;
+
+gboolean wyrebox_daemon_runtime_catch_up_configured_wirelog_derived_views (
+    WyreboxDaemonFactMutationService *fact_mutation_service,
+    const char *catalog_path,
+    GError **error);
+
 G_END_DECLS
 /* *INDENT-ON* */

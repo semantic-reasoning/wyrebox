@@ -630,8 +630,8 @@ duckdb_store_create_derived_view_memberships (WyreboxSchemaMetadataStoreDuckdb
       "is_visible BOOLEAN NOT NULL,"
       "rule_version_hash VARCHAR NOT NULL,"
       "materialized_at_unix_us UBIGINT NOT NULL,"
-      "UNIQUE(view_id, uid),"
-      "UNIQUE(view_id, message_id, rule_version_hash)" ");", error);
+      "UNIQUE(account_id, view_id, uid),"
+      "UNIQUE(account_id, view_id, message_id, rule_version_hash)" ");", error);
 }
 
 static gboolean
@@ -675,12 +675,13 @@ duckdb_store_create_bootstrap_catalog (WyreboxSchemaMetadataStoreDuckdb *self,
       "UNIQUE(journal_offset, journal_sequence, mailbox_id)" ");", error)
       && duckdb_store_query (self,
       "CREATE TABLE IF NOT EXISTS derived_views ("
-      "view_id VARCHAR PRIMARY KEY,"
+      "view_id VARCHAR NOT NULL,"
       "account_id VARCHAR NOT NULL,"
       "imap_name VARCHAR NOT NULL,"
       "definition_ref VARCHAR NOT NULL,"
       "is_selectable BOOLEAN NOT NULL,"
       "is_visible BOOLEAN NOT NULL,"
+      "PRIMARY KEY(account_id, view_id),"
       "UNIQUE(account_id, imap_name)" ");", error)
       && duckdb_store_create_derived_view_memberships (self, error)
       && duckdb_store_query (self,

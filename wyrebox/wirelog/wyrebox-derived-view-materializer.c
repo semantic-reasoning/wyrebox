@@ -486,11 +486,13 @@ materializer_membership_exists (WyreboxDerivedViewMaterializer *self,
   duckdb_destroy_prepare (&statement);
   if (!materializer_prepare (self,
           "SELECT COUNT(*) FROM derived_view_memberships "
-          "WHERE view_id = ? AND message_id = ? AND rule_version_hash = ?;",
+          "WHERE account_id = ? AND view_id = ? AND message_id = ? "
+          "AND rule_version_hash = ?;",
           &statement, error) ||
-      !bind_varchar (statement, 1, view_id, error) ||
-      !bind_varchar (statement, 2, message_id, error) ||
-      !bind_varchar (statement, 3, rule_version_hash, error) ||
+      !bind_varchar (statement, 1, account_id, error) ||
+      !bind_varchar (statement, 2, view_id, error) ||
+      !bind_varchar (statement, 3, message_id, error) ||
+      !bind_varchar (statement, 4, rule_version_hash, error) ||
       !materializer_count_prepared (statement, &identity_count, error))
     return FALSE;
 
@@ -575,12 +577,14 @@ materializer_select_membership_details (WyreboxDerivedViewMaterializer *self,
 }
 
 static gchar *
-materializer_build_membership_id (const gchar *view_id,
-    const gchar *message_id, const gchar *rule_version_hash)
+materializer_build_membership_id (const gchar *account_id,
+    const gchar *view_id, const gchar *message_id,
+    const gchar *rule_version_hash)
 {
   g_autoptr (GChecksum) checksum = NULL;
   g_autofree gchar *digest = NULL;
   const gchar *components[] = {
+    account_id,
     view_id,
     message_id,
     rule_version_hash,
@@ -617,8 +621,8 @@ materializer_insert_membership (WyreboxDerivedViewMaterializer *self,
   g_auto (duckdb_prepared_statement) statement = NULL;
   g_autofree gchar *membership_id = NULL;
 
-  membership_id = materializer_build_membership_id (view_id, message_id,
-      rule_version_hash);
+  membership_id = materializer_build_membership_id (account_id, view_id,
+      message_id, rule_version_hash);
 
   return materializer_prepare (self,
       "INSERT INTO derived_view_memberships ("
@@ -948,7 +952,7 @@ materializer_apply_membership (WyreboxDerivedViewMaterializer *self,
   if (exists)
     return TRUE;
 
-  membership_id = materializer_build_membership_id (view_id,
+  membership_id = materializer_build_membership_id (account_id, view_id,
       membership->message_id, rule_version_hash);
   if (!materializer_insert_membership (self, account_id, view_id,
           membership->message_id, rule_version_hash, materialized_at_unix_us,
@@ -1020,7 +1024,7 @@ materializer_refresh_membership (WyreboxDerivedViewMaterializer *self,
     return TRUE;
   }
 
-  membership_id = materializer_build_membership_id (view_id,
+  membership_id = materializer_build_membership_id (account_id, view_id,
       membership->message_id, rule_version_hash);
   if (!materializer_insert_membership (self, account_id, view_id,
           membership->message_id, rule_version_hash, materialized_at_unix_us,
