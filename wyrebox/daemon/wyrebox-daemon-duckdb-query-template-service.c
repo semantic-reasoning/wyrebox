@@ -7,6 +7,7 @@
 #include "wyrebox-journal-writer.h"
 
 #include <duckdb.h>
+#include <errno.h>
 #include <gio/gio.h>
 
 typedef struct
@@ -112,6 +113,67 @@ duckdb_query_template_bind_varchar (duckdb_prepared_statement statement,
       "DuckDB query template string bind failed at index %" G_GUINT64_FORMAT,
       (guint64) index);
   return FALSE;
+}
+
+static gboolean
+duckdb_query_template_bind_int64 (duckdb_prepared_statement statement,
+    idx_t index, gint64 value, GError **error)
+{
+  if (duckdb_bind_int64 (statement, index, (int64_t) value) == DuckDBSuccess)
+    return TRUE;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_FAILED,
+      "DuckDB query template BIGINT bind failed at index %" G_GUINT64_FORMAT,
+      (guint64) index);
+  return FALSE;
+}
+
+static gboolean
+duckdb_query_template_parse_int64 (const gchar *value,
+    const gchar *parameter_name, gint64 *out_value, GError **error)
+{
+  const gchar *digits = value;
+  gchar *end = NULL;
+  gint64 parsed = 0;
+
+  if (*digits == '-')
+    digits++;
+
+  if (*digits == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "duckdb query template parameter '%s' must be a signed integer",
+        parameter_name);
+    return FALSE;
+  }
+
+  for (const gchar * cursor = digits; *cursor != '\0'; cursor++) {
+    if (!g_ascii_isdigit (*cursor)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "duckdb query template parameter '%s' must be a signed integer",
+          parameter_name);
+      return FALSE;
+    }
+  }
+
+  errno = 0;
+  parsed = g_ascii_strtoll (value, &end, 10);
+  if (errno == ERANGE || end == NULL || *end != '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "duckdb query template parameter '%s' must be a signed integer",
+        parameter_name);
+    return FALSE;
+  }
+
+  *out_value = parsed;
+  return TRUE;
 }
 
 static void
@@ -707,22 +769,25 @@ static gboolean
       "JOIN message_headers mh ON mh.message_id = m.message_id "
       "WHERE m.account_id = ? "
       "AND mh.date_unix_us IS NOT NULL "
-      "AND mh.date_unix_us >= TRY_CAST(? AS BIGINT) "
-      "AND mh.date_unix_us < TRY_CAST(? AS BIGINT) "
+      "AND mh.date_unix_us >= ? "
+      "AND mh.date_unix_us < ? "
       "ORDER BY m.journal_sequence ASC, m.message_id ASC;";
   g_auto (duckdb_prepared_statement) statement = NULL;
   g_auto (duckdb_result) result = { 0 };
   g_autoptr (GString) csv = NULL;
   g_autoptr (GBytes) bytes = NULL;
-  const gchar *start_unix_us = request->parameters[0];
-  const gchar *end_unix_us = request->parameters[1];
+  gint64 start_unix_us = 0;
+  gint64 end_unix_us = 0;
 
-  if (!duckdb_query_template_prepare (executor, sql, &statement, error) ||
+  if (!duckdb_query_template_parse_int64 (request->parameters[0],
+          "start_unix_us", &start_unix_us, error) ||
+      !duckdb_query_template_parse_int64 (request->parameters[1],
+          "end_unix_us", &end_unix_us, error) ||
+      !duckdb_query_template_prepare (executor, sql, &statement, error) ||
       !duckdb_query_template_bind_varchar (statement, 1, request->scope_id,
           error) ||
-      !duckdb_query_template_bind_varchar (statement, 2, start_unix_us,
-          error) ||
-      !duckdb_query_template_bind_varchar (statement, 3, end_unix_us, error))
+      !duckdb_query_template_bind_int64 (statement, 2, start_unix_us, error) ||
+      !duckdb_query_template_bind_int64 (statement, 3, end_unix_us, error))
     return FALSE;
 
   if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
