@@ -1058,6 +1058,17 @@ static gboolean
 duckdb_store_add_message_header_date_unix_us (WyreboxSchemaMetadataStoreDuckdb
     *self, GError **error)
 {
+  g_autoptr (GError) current_error = NULL;
+  g_autoptr (GError) v6_error = NULL;
+
+  if (duckdb_store_validate_message_header_table (self, &current_error))
+    return TRUE;
+
+  if (!duckdb_store_validate_message_header_table_v6 (self, &v6_error)) {
+    g_propagate_error (error, g_steal_pointer (&v6_error));
+    return FALSE;
+  }
+
   return duckdb_store_query (self,
       "CREATE TABLE message_headers_replacement ("
       "message_id VARCHAR PRIMARY KEY,"
