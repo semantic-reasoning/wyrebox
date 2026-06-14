@@ -710,34 +710,51 @@ close_unload_box_and_plugin (struct mail_storage *storage, struct mailbox *box)
       > 0);
 }
 
-static struct mail *
-alloc_test_mail (struct mailbox *box)
+static struct mailbox_transaction_context *
+alloc_test_transaction (struct mailbox *box)
 {
-  struct mailbox_transaction_context transaction = {
-    .box = box,
-  };
+  struct mailbox_transaction_context *transaction;
+
+  transaction = g_new0 (struct mailbox_transaction_context, 1);
+  transaction->box = box;
+  return transaction;
+}
+
+static struct mail *
+alloc_test_mail (struct mailbox_transaction_context *transaction)
+{
   struct mail *mail;
 
-  g_assert_nonnull (box);
-  g_assert_nonnull (box->mail_vfuncs);
-  g_assert_nonnull (box->v.mail_alloc);
+  g_assert_nonnull (transaction);
+  g_assert_nonnull (transaction->box);
+  g_assert_nonnull (transaction->box->mail_vfuncs);
+  g_assert_nonnull (transaction->box->v.mail_alloc);
+  g_assert_cmpuint (transaction->mail_ref_count, ==, 0);
 
-  mail = box->v.mail_alloc (&transaction, MAIL_FETCH_FIELD_NONE, NULL);
+  mail = transaction->box->v.mail_alloc (transaction, MAIL_FETCH_FIELD_NONE,
+      NULL);
   g_assert_nonnull (mail);
-  mail->box = box;
+  g_assert_true (mail->transaction == transaction);
+  g_assert_cmpuint (transaction->mail_ref_count, ==, 1);
   return mail;
 }
 
 static void
 close_free_test_mail (struct mail **mail)
 {
+  struct mailbox_transaction_context *transaction;
+
   g_assert_nonnull (mail);
 
   if (*mail == NULL) {
     return;
   }
 
+  transaction = (*mail)->transaction;
+  g_assert_nonnull (transaction);
+  g_assert_cmpuint (transaction->mail_ref_count, ==, 1);
   mail_free (mail);
+  g_assert_cmpuint (transaction->mail_ref_count, ==, 0);
 }
 
 static void
@@ -1720,6 +1737,7 @@ assert_virtual_uid_fetch_message_sizes (const guint8 *message_bytes,
   FakeServer server = { 0 };
   struct mailbox *box = NULL;
   struct mail_storage *storage = NULL;
+  g_autofree struct mailbox_transaction_context *transaction = NULL;
   struct mail *mail = NULL;
   struct istream *stream = NULL;
   struct message_size hdr_size = { 0 };
@@ -1747,7 +1765,8 @@ assert_virtual_uid_fetch_message_sizes (const guint8 *message_bytes,
   g_assert_nonnull (box->mail_vfuncs);
   g_assert_nonnull (box->mail_vfuncs->get_stream);
 
-  mail = alloc_test_mail (box);
+  transaction = alloc_test_transaction (box);
+  mail = alloc_test_mail (transaction);
   g_assert_true (mail_set_uid (mail, 42));
   g_assert_cmpuint (mail->uid, ==, 42);
   g_assert_cmpuint (mail->seq, ==, 1);
@@ -1837,6 +1856,7 @@ test_uid_fetch_unknown_uid_fails_without_daemon_fetch (void)
   FakeServer server = { 0 };
   struct mailbox *box = NULL;
   struct mail_storage *storage = NULL;
+  g_autofree struct mailbox_transaction_context *transaction = NULL;
   struct mail *mail = NULL;
   struct istream *stream = NULL;
   const char *uid_map_csv =
@@ -1860,7 +1880,8 @@ test_uid_fetch_unknown_uid_fails_without_daemon_fetch (void)
   g_assert_cmpuint (server.request_count, ==, 2);
   istream_stub_reset_counts ();
 
-  mail = alloc_test_mail (box);
+  transaction = alloc_test_transaction (box);
+  mail = alloc_test_mail (transaction);
   g_assert_true (mail_set_uid (mail, 42));
   g_assert_cmpuint (mail->uid, ==, 42);
   g_assert_cmpuint (mail->seq, ==, 1);
@@ -1891,6 +1912,7 @@ test_seq_fetch_unknown_seq_clears_selected_uid_without_daemon_fetch (void)
   FakeServer server = { 0 };
   struct mailbox *box = NULL;
   struct mail_storage *storage = NULL;
+  g_autofree struct mailbox_transaction_context *transaction = NULL;
   struct mail *mail = NULL;
   struct istream *stream = NULL;
   const char *uid_map_csv =
@@ -1914,7 +1936,8 @@ test_seq_fetch_unknown_seq_clears_selected_uid_without_daemon_fetch (void)
   g_assert_cmpuint (server.request_count, ==, 2);
   istream_stub_reset_counts ();
 
-  mail = alloc_test_mail (box);
+  transaction = alloc_test_transaction (box);
+  mail = alloc_test_mail (transaction);
   g_assert_true (mail_set_uid (mail, 42));
   g_assert_cmpuint (mail->uid, ==, 42);
   g_assert_cmpuint (mail->seq, ==, 1);

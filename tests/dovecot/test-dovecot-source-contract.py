@@ -97,6 +97,20 @@ def run_checker_with_private_header_mutation(
     with tempfile.TemporaryDirectory() as tempdir:
         source_dir = Path(tempdir) / "dovecot-source"
         shutil.copytree(FIXTURES_DIR / "valid-2.3.21.1", source_dir)
+        private_header = source_dir / "src/lib-storage/mail-storage-private.h"
+        text = private_header.read_text(encoding="utf-8")
+        assert old in text, f"mutation target not found: {old!r}"
+        private_header.write_text(text.replace(old, new, 1), encoding="utf-8")
+        return run_checker(source_dir, expect_success=False)
+
+
+def run_checker_with_list_private_header_mutation(
+    old: str,
+    new: str,
+) -> subprocess.CompletedProcess:
+    with tempfile.TemporaryDirectory() as tempdir:
+        source_dir = Path(tempdir) / "dovecot-source"
+        shutil.copytree(FIXTURES_DIR / "valid-2.3.21.1", source_dir)
         private_header = source_dir / "src/lib-storage/mailbox-list-private.h"
         text = private_header.read_text(encoding="utf-8")
         assert old in text, f"mutation target not found: {old!r}"
@@ -173,6 +187,18 @@ def test_dovecot_source_contract_missing_mail_uid_contract() -> None:
     assert "mail-storage.h: struct mail missing uid" in output
 
 
+def test_dovecot_source_contract_missing_mail_transaction_refcount() -> None:
+    result = run_checker_with_private_header_mutation(
+        "unsigned int mail_ref_count;",
+        "unsigned int removed_mail_ref_count;",
+    )
+    output = result.stdout + result.stderr
+    assert (
+        "mail-storage-private.h: struct mailbox_transaction_context "
+        "missing mail_ref_count"
+    ) in output
+
+
 def test_dovecot_source_contract_missing_list_contract() -> None:
     assert_named_fixture_fails_with(
         "missing-list-contract",
@@ -184,7 +210,7 @@ def test_dovecot_source_contract_missing_list_contract() -> None:
 
 
 def test_dovecot_source_contract_list_iterator_iter_init_signature() -> None:
-    result = run_checker_with_private_header_mutation(
+    result = run_checker_with_list_private_header_mutation(
         "const char *const *patterns",
         "const char **patterns",
     )
@@ -195,7 +221,7 @@ def test_dovecot_source_contract_list_iterator_iter_init_signature() -> None:
 
 
 def test_dovecot_source_contract_list_iterator_iter_next_signature() -> None:
-    result = run_checker_with_private_header_mutation(
+    result = run_checker_with_list_private_header_mutation(
         "const struct mailbox_info *(*iter_next)",
         "struct mailbox_info *(*iter_next)",
     )
@@ -206,7 +232,7 @@ def test_dovecot_source_contract_list_iterator_iter_next_signature() -> None:
 
 
 def test_dovecot_source_contract_list_iterator_iter_deinit_signature() -> None:
-    result = run_checker_with_private_header_mutation(
+    result = run_checker_with_list_private_header_mutation(
         "int (*iter_deinit)",
         "bool (*iter_deinit)",
     )
@@ -259,6 +285,7 @@ def main() -> None:
         test_dovecot_source_contract_missing_vfunc_contract,
         test_dovecot_source_contract_missing_mailbox_allocation_contract,
         test_dovecot_source_contract_missing_mail_uid_contract,
+        test_dovecot_source_contract_missing_mail_transaction_refcount,
         test_dovecot_source_contract_missing_list_contract,
         test_dovecot_source_contract_list_iterator_iter_init_signature,
         test_dovecot_source_contract_list_iterator_iter_next_signature,

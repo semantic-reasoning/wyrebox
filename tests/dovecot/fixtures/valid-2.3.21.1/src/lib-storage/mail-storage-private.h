@@ -102,6 +102,7 @@ struct mailbox_sync_context
 struct mailbox_transaction_context
 {
   struct mailbox *box;
+  unsigned int mail_ref_count;
 };
 
 const char *mailbox_list_get_storage_name (struct mailbox_list *list,
