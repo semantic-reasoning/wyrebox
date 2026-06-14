@@ -102,9 +102,29 @@ fetcher_bind_uint64 (duckdb_prepared_statement statement, idx_t index,
 }
 
 static gboolean
+fetcher_namespace_kind_to_string (WyreboxDeliveryFetcherNamespaceKind kind,
+    const gchar **out_kind, GError **error)
+{
+  switch (kind) {
+    case WYREBOX_DELIVERY_FETCHER_NAMESPACE_MAILBOX:
+      *out_kind = "mailbox";
+      return TRUE;
+    case WYREBOX_DELIVERY_FETCHER_NAMESPACE_DERIVED_VIEW:
+      *out_kind = "derived_view";
+      return TRUE;
+    default:
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "delivery fetcher namespace kind is unknown");
+      return FALSE;
+  }
+}
+
+static gboolean
 fetcher_select_uidvalidity (WyreboxDeliveryFetcher *self,
-    const gchar *account_id, const gchar *mailbox_id,
-    guint64 requested_uidvalidity, GError **error)
+    const gchar *account_id, const gchar *namespace_kind,
+    const gchar *namespace_id, guint64 requested_uidvalidity, GError **error)
 {
   g_auto (duckdb_prepared_statement) statement = NULL;
   g_auto (duckdb_result) result = { 0 };
@@ -112,11 +132,12 @@ fetcher_select_uidvalidity (WyreboxDeliveryFetcher *self,
 
   if (!fetcher_prepare (self,
           "SELECT uidvalidity FROM mailbox_uid_state "
-          "WHERE account_id = ? AND namespace_kind = 'mailbox' "
+          "WHERE account_id = ? AND namespace_kind = ? "
           "AND namespace_id = ?;",
           &statement, error) ||
       !fetcher_bind_varchar (statement, 1, account_id, error) ||
-      !fetcher_bind_varchar (statement, 2, mailbox_id, error))
+      !fetcher_bind_varchar (statement, 2, namespace_kind, error) ||
+      !fetcher_bind_varchar (statement, 3, namespace_id, error))
     return FALSE;
 
   if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
@@ -134,7 +155,8 @@ fetcher_select_uidvalidity (WyreboxDeliveryFetcher *self,
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_NOT_FOUND,
-        "mailbox UID state is missing for %s/%s", account_id, mailbox_id);
+        "namespace UID state is missing for %s/%s/%s",
+        account_id, namespace_kind, namespace_id);
     return FALSE;
   }
 
@@ -143,7 +165,8 @@ fetcher_select_uidvalidity (WyreboxDeliveryFetcher *self,
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_DATA,
-        "mailbox UID state is malformed for %s/%s", account_id, mailbox_id);
+        "namespace UID state is malformed for %s/%s/%s",
+        account_id, namespace_kind, namespace_id);
     return FALSE;
   }
 
@@ -152,7 +175,8 @@ fetcher_select_uidvalidity (WyreboxDeliveryFetcher *self,
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_NOT_FOUND,
-        "mailbox UIDVALIDITY mismatch for %s/%s", account_id, mailbox_id);
+        "namespace UIDVALIDITY mismatch for %s/%s/%s",
+        account_id, namespace_kind, namespace_id);
     return FALSE;
   }
 
@@ -160,7 +184,7 @@ fetcher_select_uidvalidity (WyreboxDeliveryFetcher *self,
 }
 
 static gchar *
-fetcher_select_object_id (WyreboxDeliveryFetcher *self,
+fetcher_select_mailbox_object_id (WyreboxDeliveryFetcher *self,
     const gchar *account_id, const gchar *mailbox_id, guint64 uid,
     GError **error)
 {
@@ -219,6 +243,90 @@ fetcher_select_object_id (WyreboxDeliveryFetcher *self,
 
     duckdb_free (value);
     return copy;
+  }
+}
+
+static gchar *
+fetcher_select_derived_view_object_id (WyreboxDeliveryFetcher *self,
+    const gchar *account_id, const gchar *view_id, guint64 uid, GError **error)
+{
+  g_auto (duckdb_prepared_statement) statement = NULL;
+  g_auto (duckdb_result) result = { 0 };
+  const char *query =
+      "SELECT m.object_id "
+      "FROM derived_view_memberships dvm "
+      "JOIN derived_views dv ON dv.account_id = dvm.account_id "
+      "AND dv.view_id = dvm.view_id "
+      "JOIN messages m ON m.account_id = dvm.account_id "
+      "AND m.message_id = dvm.message_id "
+      "JOIN objects o ON o.object_id = m.object_id "
+      "WHERE dvm.account_id = ? AND dvm.view_id = ? AND dvm.uid = ? "
+      "AND dvm.is_visible = TRUE AND dv.is_visible = TRUE "
+      "AND dv.is_selectable = TRUE;";
+
+  if (!fetcher_prepare (self, query, &statement, error) ||
+      !fetcher_bind_varchar (statement, 1, account_id, error) ||
+      !fetcher_bind_varchar (statement, 2, view_id, error) ||
+      !fetcher_bind_uint64 (statement, 3, uid, error))
+    return NULL;
+
+  if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+    const char *detail = duckdb_result_error (&result);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB delivery fetcher derived view object query failed: %s",
+        detail != NULL ? detail : "unknown DuckDB error");
+    return NULL;
+  }
+
+  if (duckdb_row_count (&result) == 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_NOT_FOUND,
+        "visible derived view UID was not found for %s/%s/%" G_GUINT64_FORMAT,
+        account_id, view_id, uid);
+    return NULL;
+  }
+
+  if (duckdb_row_count (&result) != 1 || duckdb_column_count (&result) != 1 ||
+      duckdb_value_is_null (&result, 0, 0)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "visible derived view UID resolved to malformed object state");
+    return NULL;
+  }
+
+  {
+    char *value = duckdb_value_varchar (&result, 0, 0);
+    gchar *copy = g_strdup (value);
+
+    duckdb_free (value);
+    return copy;
+  }
+}
+
+static gchar *
+fetcher_select_object_id (WyreboxDeliveryFetcher *self,
+    WyreboxDeliveryFetcherNamespaceKind namespace_kind,
+    const gchar *account_id, const gchar *namespace_id, guint64 uid,
+    GError **error)
+{
+  switch (namespace_kind) {
+    case WYREBOX_DELIVERY_FETCHER_NAMESPACE_MAILBOX:
+      return fetcher_select_mailbox_object_id (self, account_id, namespace_id,
+          uid, error);
+    case WYREBOX_DELIVERY_FETCHER_NAMESPACE_DERIVED_VIEW:
+      return fetcher_select_derived_view_object_id (self, account_id,
+          namespace_id, uid, error);
+    default:
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "delivery fetcher namespace kind is unknown");
+      return NULL;
   }
 }
 
@@ -306,7 +414,18 @@ wyrebox_delivery_fetcher_fetch_bytes (WyreboxDeliveryFetcher *self,
     const gchar *account_id, const gchar *mailbox_id, guint64 uidvalidity,
     guint64 uid, GError **error)
 {
+  return wyrebox_delivery_fetcher_fetch_namespace_bytes (self,
+      account_id, WYREBOX_DELIVERY_FETCHER_NAMESPACE_MAILBOX, mailbox_id,
+      uidvalidity, uid, error);
+}
+
+GBytes *
+wyrebox_delivery_fetcher_fetch_namespace_bytes (WyreboxDeliveryFetcher *self,
+    const gchar *account_id, WyreboxDeliveryFetcherNamespaceKind namespace_kind,
+    const gchar *namespace_id, guint64 uidvalidity, guint64 uid, GError **error)
+{
   g_autofree gchar *object_id = NULL;
+  const gchar *namespace_kind_string = NULL;
 
   g_return_val_if_fail (WYREBOX_IS_DELIVERY_FETCHER (self), NULL);
   g_return_val_if_fail (error == NULL || *error == NULL, NULL);
@@ -319,12 +438,16 @@ wyrebox_delivery_fetcher_fetch_bytes (WyreboxDeliveryFetcher *self,
     return NULL;
   }
 
-  if (!fetcher_select_uidvalidity (self, account_id, mailbox_id, uidvalidity,
-          error))
+  if (!fetcher_namespace_kind_to_string (namespace_kind,
+          &namespace_kind_string, error))
     return NULL;
 
-  object_id = fetcher_select_object_id (self, account_id, mailbox_id, uid,
-      error);
+  if (!fetcher_select_uidvalidity (self, account_id, namespace_kind_string,
+          namespace_id, uidvalidity, error))
+    return NULL;
+
+  object_id = fetcher_select_object_id (self, namespace_kind, account_id,
+      namespace_id, uid, error);
   if (object_id == NULL)
     return NULL;
 
