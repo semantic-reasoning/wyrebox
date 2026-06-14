@@ -815,6 +815,14 @@ wyrebox_dovecot_mailbox_lookup_uid_map_row (struct wyrebox_dovecot_mailbox
     return NULL;
   }
 
+  if (uid == 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "WyreBox mailbox UID map row has invalid UID zero");
+    return NULL;
+  }
+
   for (guint i = 0; i < wbox->uid_map_snapshot.rows->len; i++) {
     const WyreboxDovecotMailboxUidMapRow *row =
         g_ptr_array_index (wbox->uid_map_snapshot.rows, i);
@@ -847,6 +855,33 @@ wyrebox_dovecot_mailbox_lookup_uid_map_row (struct wyrebox_dovecot_mailbox
   return NULL;
 }
 
+static const WyreboxDovecotMailboxUidMapRow *
+wyrebox_dovecot_mailbox_lookup_seq_uid_map_row (struct wyrebox_dovecot_mailbox
+    *wbox, unsigned int seq, GError **error)
+{
+  const WyreboxDovecotMailboxUidMapRow *row;
+
+  if (seq == 0 || wbox->uid_map_snapshot.rows == NULL
+      || seq > wbox->uid_map_snapshot.rows->len) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_NOT_FOUND, "WyreBox mailbox sequence %u"
+        " is not present in the selected mailbox", seq);
+    return NULL;
+  }
+
+  row = g_ptr_array_index (wbox->uid_map_snapshot.rows, seq - 1);
+  if (row == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA, "WyreBox mailbox sequence %u"
+        " has no UID map row", seq);
+    return NULL;
+  }
+
+  return wyrebox_dovecot_mailbox_lookup_uid_map_row (wbox, row->uid, error);
+}
+
 static void
 wyrebox_dovecot_mail_clear_stream (struct wyrebox_dovecot_mail *wmail)
 {
@@ -876,6 +911,74 @@ wyrebox_dovecot_mail_free (struct mail *mail)
 
   wyrebox_dovecot_mail_clear_stream (wmail);
   free (wmail);
+}
+
+static bool
+wyrebox_dovecot_mail_set_uid (struct mail *mail, unsigned int uid)
+{
+  struct wyrebox_dovecot_mail *wmail;
+  struct wyrebox_dovecot_mailbox *wbox;
+  g_autoptr (GError) error = NULL;
+  const WyreboxDovecotMailboxUidMapRow *row;
+
+  if (mail == NULL || mail->box == NULL) {
+    return false;
+  }
+
+  wmail = wyrebox_dovecot_mail_from_mail (mail);
+  wyrebox_dovecot_mail_clear_stream (wmail);
+  if (uid == 0) {
+    return false;
+  }
+
+  wbox = (struct wyrebox_dovecot_mailbox *) mail->box;
+  row = wyrebox_dovecot_mailbox_lookup_uid_map_row (wbox, uid, &error);
+  if (row == NULL) {
+    return false;
+  }
+
+  for (guint i = 0; i < wbox->uid_map_snapshot.rows->len; i++) {
+    if (g_ptr_array_index (wbox->uid_map_snapshot.rows, i) == row) {
+      mail->uid = uid;
+      mail->seq = i + 1;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static void
+wyrebox_dovecot_mail_set_seq (struct mail *mail, unsigned int seq, bool saving)
+{
+  struct wyrebox_dovecot_mail *wmail;
+  struct wyrebox_dovecot_mailbox *wbox;
+  g_autoptr (GError) error = NULL;
+  const WyreboxDovecotMailboxUidMapRow *row;
+
+  (void) saving;
+
+  if (mail == NULL || mail->box == NULL) {
+    return;
+  }
+
+  wmail = wyrebox_dovecot_mail_from_mail (mail);
+  wyrebox_dovecot_mail_clear_stream (wmail);
+  wbox = (struct wyrebox_dovecot_mailbox *) mail->box;
+  row = wyrebox_dovecot_mailbox_lookup_seq_uid_map_row (wbox, seq, &error);
+  if (row == NULL) {
+    return;
+  }
+
+  mail->seq = seq;
+  mail->uid = row->uid;
+}
+
+static void
+wyrebox_dovecot_mail_set_uid_cache_updates (struct mail *mail, bool set)
+{
+  (void) mail;
+  (void) set;
 }
 
 static int
@@ -1037,6 +1140,9 @@ wyrebox_dovecot_storage_alloc (void)
 static const struct mail_vfuncs wyrebox_dovecot_mail_vfuncs = {
   .close = wyrebox_dovecot_mail_close,
   .free = wyrebox_dovecot_mail_free,
+  .set_seq = wyrebox_dovecot_mail_set_seq,
+  .set_uid = wyrebox_dovecot_mail_set_uid,
+  .set_uid_cache_updates = wyrebox_dovecot_mail_set_uid_cache_updates,
   .get_stream = wyrebox_dovecot_mail_get_stream,
 };
 

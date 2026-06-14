@@ -59,6 +59,9 @@ REQUIRED_VFUNC_SYMBOLS = {
         "search_init",
     ],
     "mail_vfuncs": [
+        "set_seq",
+        "set_uid",
+        "set_uid_cache_updates",
         "get_stream",
         "update_flags",
         "update_keywords",
@@ -81,6 +84,10 @@ REQUIRED_PRIVATE_STRUCT_FIELDS = {
         "vlast",
         "opened",
         "enabled_features",
+    ],
+    "mail": [
+        "seq",
+        "uid",
     ],
 }
 

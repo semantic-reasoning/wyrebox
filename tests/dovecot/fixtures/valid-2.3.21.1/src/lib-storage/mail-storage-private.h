@@ -166,6 +166,9 @@ struct mail_vfuncs
 {
   void (*close) (struct mail * mail);
   void (*free) (struct mail * mail);
+  void (*set_seq) (struct mail * mail, unsigned int seq, bool saving);
+  bool (*set_uid) (struct mail * mail, unsigned int uid);
+  void (*set_uid_cache_updates) (struct mail * mail, bool set);
   int (*get_stream) (struct mail * mail, bool get_body,
       struct message_size * hdr_size,
       struct message_size * body_size, struct istream ** stream);
@@ -220,6 +223,7 @@ struct mail
 {
   struct mailbox *box;
   struct mailbox_transaction_context *transaction;
+  unsigned int seq;
   unsigned int uid;
 };
 
@@ -232,6 +236,8 @@ struct mail_private
 int mail_get_stream (struct mail *mail, bool get_body,
     struct message_size *hdr_size,
     struct message_size *body_size, struct istream **stream);
+bool mail_set_uid (struct mail *mail, unsigned int uid);
+void mail_set_seq (struct mail *mail, unsigned int seq);
 void mail_free (struct mail **mail);
 void i_stream_unref (struct istream **stream);
 

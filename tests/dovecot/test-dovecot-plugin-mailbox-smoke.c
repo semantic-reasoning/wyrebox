@@ -711,7 +711,7 @@ close_unload_box_and_plugin (struct mail_storage *storage, struct mailbox *box)
 }
 
 static struct mail *
-alloc_test_mail (struct mailbox *box, unsigned int uid)
+alloc_test_mail (struct mailbox *box)
 {
   struct mailbox_transaction_context transaction = {
     .box = box,
@@ -725,7 +725,6 @@ alloc_test_mail (struct mailbox *box, unsigned int uid)
   mail = box->v.mail_alloc (&transaction, MAIL_FETCH_FIELD_NONE, NULL);
   g_assert_nonnull (mail);
   mail->box = box;
-  mail->uid = uid;
   return mail;
 }
 
@@ -1748,7 +1747,10 @@ assert_virtual_uid_fetch_message_sizes (const guint8 *message_bytes,
   g_assert_nonnull (box->mail_vfuncs);
   g_assert_nonnull (box->mail_vfuncs->get_stream);
 
-  mail = alloc_test_mail (box, 42);
+  mail = alloc_test_mail (box);
+  g_assert_true (mail_set_uid (mail, 42));
+  g_assert_cmpuint (mail->uid, ==, 42);
+  g_assert_cmpuint (mail->seq, ==, 1);
   g_assert_cmpint (mail_get_stream (mail, true, &hdr_size, &body_size, &stream),
       ==, 0);
   g_assert_nonnull (stream);
@@ -1768,6 +1770,11 @@ assert_virtual_uid_fetch_message_sizes (const guint8 *message_bytes,
   stream = NULL;
   memset (&hdr_size, 0, sizeof (hdr_size));
   memset (&body_size, 0, sizeof (body_size));
+  mail_set_seq (mail, 1);
+  g_assert_cmpuint (mail->uid, ==, 42);
+  g_assert_cmpuint (mail->seq, ==, 1);
+  g_assert_cmpuint (istream_stub_get_unref_count (), ==, 1);
+  g_assert_cmpuint (istream_stub_get_live_count (), ==, 0);
   g_assert_cmpint (mail_get_stream (mail, true, &hdr_size, &body_size, &stream),
       ==, 0);
   g_assert_nonnull (stream);
@@ -1853,7 +1860,11 @@ test_uid_fetch_unknown_uid_fails_without_daemon_fetch (void)
   g_assert_cmpuint (server.request_count, ==, 2);
   istream_stub_reset_counts ();
 
-  mail = alloc_test_mail (box, 999);
+  mail = alloc_test_mail (box);
+  g_assert_false (mail_set_uid (mail, 999));
+  g_assert_cmpuint (mail->uid, ==, 0);
+  g_assert_cmpuint (mail->seq, ==, 0);
+  g_assert_cmpuint (server.request_count, ==, 2);
   g_assert_cmpint (mail_get_stream (mail, true, NULL, NULL, &stream), ==, -1);
   g_assert_null (stream);
   close_free_test_mail (&mail);
