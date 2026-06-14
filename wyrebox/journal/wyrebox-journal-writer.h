@@ -23,6 +23,19 @@ G_DECLARE_FINAL_TYPE (WyreboxJournalWriter,
      WyreboxJournalWriter *wyrebox_journal_writer_new (const char
     *journal_root_dir, GError **error);
 
+     typedef gboolean (*WyreboxJournalWriterGuardedAppendFunc) (const char
+    *journal_root_dir,
+    gpointer user_data,
+    GBytes **out_payload,
+    guint64 *out_offset, guint64 *out_sequence, GError **error);
+
+     gboolean wyrebox_journal_writer_append_guarded (WyreboxJournalWriter
+    *self,
+    WyreboxJournalEventType event_type,
+    WyreboxJournalWriterGuardedAppendFunc callback,
+    gpointer user_data,
+    guint64 *out_offset, guint64 *out_sequence, GError **error);
+
      gboolean wyrebox_journal_writer_append (WyreboxJournalWriter *self,
     WyreboxJournalEventType event_type,
     GBytes *payload,

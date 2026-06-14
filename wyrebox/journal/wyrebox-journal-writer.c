@@ -438,6 +438,36 @@ wyrebox_journal_writer_append_unlocked (WyreboxJournalWriter *self,
 }
 
 gboolean
+wyrebox_journal_writer_append_guarded (WyreboxJournalWriter *self,
+    WyreboxJournalEventType event_type,
+    WyreboxJournalWriterGuardedAppendFunc callback,
+    gpointer user_data, guint64 *out_offset, guint64 *out_sequence,
+    GError **error)
+{
+  g_autoptr (GBytes) payload = NULL;
+  gboolean success = FALSE;
+
+  g_return_val_if_fail (WYREBOX_IS_JOURNAL_WRITER (self), FALSE);
+  g_return_val_if_fail (callback != NULL, FALSE);
+  g_return_val_if_fail (out_offset != NULL, FALSE);
+  g_return_val_if_fail (out_sequence != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  *out_offset = 0;
+  *out_sequence = 0;
+
+  g_mutex_lock (&self->append_mutex);
+  success = callback (self->journal_root_dir, user_data, &payload, out_offset,
+      out_sequence, error);
+  if (success && payload != NULL)
+    success = wyrebox_journal_writer_append_unlocked (self, event_type,
+        payload, out_offset, out_sequence, error);
+  g_mutex_unlock (&self->append_mutex);
+
+  return success;
+}
+
+gboolean
 wyrebox_journal_writer_append (WyreboxJournalWriter *self,
     WyreboxJournalEventType event_type,
     GBytes *payload, guint64 *out_offset, guint64 *out_sequence, GError **error)
