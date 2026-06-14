@@ -17,6 +17,8 @@
 #include "wyrebox-daemon-mailbox-select-result.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-response-frame.h"
+#include "wyrebox-derived-view-materializer-wirelog.h"
+#include "wyrebox-schema-migration.h"
 #include "wyrebox-schema-metadata-store.h"
 
 #include <duckdb.h>
@@ -173,6 +175,31 @@ exec_sql (duckdb_connection connection, const char *sql)
   duckdb_destroy_result (&result);
 }
 
+static const gchar *project_membership_rules =
+    ".decl project_keyword(message_id: symbol, view_id: symbol)\n"
+    ".decl show_in_virtual_folder(view_id: symbol, message_id: symbol)\n"
+    "show_in_virtual_folder(view_id, message_id) :- "
+    "project_keyword(message_id, view_id).\n";
+
+static gboolean
+bootstrap_current_catalog (const char *catalog_path)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+
+  store = wyrebox_schema_metadata_store_new_duckdb (catalog_path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  migration = wyrebox_schema_migration_new ();
+  g_assert_nonnull (migration);
+  g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
+          store, FALSE, &error));
+  g_assert_no_error (error);
+  return TRUE;
+}
+
 static void
 seed_virtual_mailbox_catalog (const char *catalog_path)
 {
@@ -203,6 +230,83 @@ seed_virtual_mailbox_catalog (const char *catalog_path)
       "materialized_at_unix_us) VALUES "
       "('dvm-1', 'account-1', 'view-projects', 'message-1', 41, TRUE, "
       "'rule-hash-1', 1);");
+}
+
+static void
+seed_virtual_mailbox_base_catalog (const char *catalog_path)
+{
+  g_auto (duckdb_database) database = NULL;
+  g_auto (duckdb_connection) connection = NULL;
+
+  g_assert_cmpint (duckdb_open (catalog_path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  exec_sql (connection,
+      "INSERT INTO accounts (account_id) VALUES ('account-1');");
+  exec_sql (connection,
+      "INSERT INTO messages (message_id, account_id, object_id, "
+      "journal_offset, journal_sequence) VALUES "
+      "('message-1', 'account-1', 'object-1', 1, 1),"
+      "('message-2', 'account-1', 'object-2', 2, 1);");
+}
+
+static void
+fact_record_ptr_free (gpointer data)
+{
+  WyreboxFactRecord *record = data;
+
+  if (record == NULL)
+    return;
+
+  wyrebox_fact_record_clear (record);
+  g_free (record);
+}
+
+static GPtrArray *
+fact_record_array_new (void)
+{
+  return g_ptr_array_new_with_free_func (fact_record_ptr_free);
+}
+
+static void
+add_project_keyword_fact (GPtrArray *facts, const gchar *message_id,
+    const gchar *view_id, guint64 created_at_unix_us)
+{
+  const gchar *args[] = {
+    message_id,
+    view_id,
+    NULL,
+  };
+  g_autoptr (GError) error = NULL;
+  WyreboxFactRecord *record = NULL;
+
+  g_assert_nonnull (facts);
+
+  record = g_new0 (WyreboxFactRecord, 1);
+  g_assert_true (wyrebox_fact_record_init (record,
+          "project_keyword", args, "test:dovecot-plugin-mailbox-smoke",
+          1000000, created_at_unix_us, &error));
+  g_assert_no_error (error);
+  g_ptr_array_add (facts, record);
+}
+
+static gboolean
+refresh_virtual_mailbox_from_facts (const gchar *catalog_path,
+    guint64 materialized_at_unix_us, GPtrArray *facts, GPtrArray **out_changes,
+    GError **error)
+{
+  g_autoptr (WyreboxDerivedViewMaterializer) materializer = NULL;
+
+  materializer = wyrebox_derived_view_materializer_new_duckdb (catalog_path,
+      error);
+  if (materializer == NULL)
+    return FALSE;
+
+  return
+      wyrebox_derived_view_materializer_refresh_from_rules_and_facts_with_changes
+      (materializer, "account-1", "view-projects", "Projects",
+      "wirelog:projects", materialized_at_unix_us, project_membership_rules,
+      facts, "show_in_virtual_folder", out_changes, error);
 }
 
 static gboolean
@@ -1897,6 +2001,215 @@ test_real_daemon_virtual_mailbox_list_and_status (void)
 }
 
 static void
+test_real_daemon_virtual_mailbox_wirelog_refresh_on_reopen (void)
+{
+  const char *patterns[] = { "*", NULL };
+  g_autofree char *socket_root = NULL;
+  g_autofree char *socket_path = NULL;
+  g_autofree char *catalog_path = NULL;
+  g_autoptr (GPtrArray) initial_facts = NULL;
+  g_autoptr (GPtrArray) refreshed_facts = NULL;
+  g_autoptr (GPtrArray) changes = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonMailboxListService) mailbox_list_service = NULL;
+  g_autoptr (WyreboxDaemonMailboxSelectService) mailbox_select_service = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) query_template_service =
+      NULL;
+  g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+  g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
+  MainContextPump pump = { 0 };
+  struct mail_storage *storage_class = NULL;
+  struct mail_storage *storage = NULL;
+  struct mailbox_list *list = NULL;
+  struct mailbox_list_iterate_context *ctx = NULL;
+  const struct mailbox_info *info = NULL;
+  struct mailbox *box = NULL;
+  struct mailbox_status status = {
+    .uidvalidity = 1,
+    .uidnext = 1,
+    .messages = 1,
+  };
+  guint32 initial_uidvalidity = 0;
+  guint32 initial_uidnext = 0;
+  const WyreboxDerivedViewMembershipChange *refreshed_change = NULL;
+
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
+  socket_path = make_socket_path (&socket_root);
+  catalog_path = g_build_filename (socket_root, "catalog.duckdb", NULL);
+  g_assert_true (bootstrap_current_catalog (catalog_path));
+  seed_virtual_mailbox_base_catalog (catalog_path);
+
+  initial_facts = fact_record_array_new ();
+  add_project_keyword_fact (initial_facts, "message-1", "view-projects", 100);
+  g_assert_true (refresh_virtual_mailbox_from_facts (catalog_path, 1000,
+          initial_facts, &changes, &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (changes);
+  g_assert_cmpuint (changes->len, ==, 1);
+
+  mailbox_list_service =
+      wyrebox_daemon_mailbox_catalog_duckdb_new_list_service (catalog_path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (mailbox_list_service);
+
+  mailbox_select_service =
+      wyrebox_daemon_mailbox_catalog_duckdb_new_select_service (catalog_path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (mailbox_select_service);
+
+  query_template_service =
+      wyrebox_daemon_duckdb_query_template_service_new_duckdb (catalog_path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (query_template_service);
+
+  adapter = wyrebox_daemon_request_adapter_new (NULL,
+      NULL,
+      mailbox_list_service,
+      mailbox_select_service,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_decode_request_frame,
+      NULL, NULL, wyrebox_daemon_capnp_codec_encode_response_frame, NULL, NULL);
+  g_assert_nonnull (adapter);
+  wyrebox_daemon_request_adapter_set_duckdb_query_template_service (adapter,
+      query_template_service);
+
+  server = wyrebox_daemon_connection_server_new (socket_path, adapter);
+  g_assert_nonnull (server);
+  g_assert_true (wyrebox_daemon_connection_server_start (server, &error));
+  g_assert_no_error (error);
+  main_context_pump_start (&pump);
+
+  wyrebox_dovecot_test_daemon_socket_path = socket_path;
+  storage_class = init_plugin_and_get_storage_class ();
+  load_storage (storage_class, &storage);
+
+  list = mailbox_list_sink_alloc ();
+  g_assert_nonnull (list);
+  storage->v.add_list (storage, list);
+
+  ctx = list->v.iter_init (list, patterns,
+      MAILBOX_LIST_ITER_RETURN_CHILDREN | MAILBOX_LIST_ITER_RETURN_SPECIALUSE);
+  g_assert_nonnull (ctx);
+
+  info = list->v.iter_next (ctx);
+  g_assert_nonnull (info);
+  g_assert_cmpstr (info->vname, ==, "Projects");
+  g_assert_cmpint (info->flags, ==, MAILBOX_NOCHILDREN);
+  g_assert_null (info->special_use);
+  g_assert_null (list->v.iter_next (ctx));
+  g_assert_cmpint (list->v.iter_deinit (ctx), ==, 0);
+  ctx = NULL;
+
+  list->v.deinit (list);
+  mailbox_list_sink_free (list);
+  list = NULL;
+  storage->v.destroy (storage);
+  storage = NULL;
+
+  load_box (storage_class, &storage, &box);
+  g_assert_cmpint (box->v.open (box), ==, 0);
+  g_assert_true (box->opened);
+  g_assert_cmpint (box->v.get_status (box,
+          STATUS_UIDVALIDITY | STATUS_UIDNEXT | STATUS_MESSAGES, &status), ==,
+      0);
+  g_assert_cmpuint (status.messages, ==, 1);
+  g_assert_cmpuint (status.uidvalidity, !=, 0);
+  g_assert_cmpuint (status.uidnext, ==, 2);
+  initial_uidvalidity = status.uidvalidity;
+  initial_uidnext = status.uidnext;
+
+  box->v.close (box);
+  g_assert_false (box->opened);
+  g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+  g_assert_no_error (error);
+  main_context_pump_stop (&pump);
+  memset (&pump, 0, sizeof (pump));
+  g_clear_object (&server);
+  g_clear_object (&adapter);
+  g_clear_object (&query_template_service);
+  g_clear_object (&mailbox_select_service);
+  g_clear_object (&mailbox_list_service);
+  g_clear_pointer (&changes, g_ptr_array_unref);
+
+  refreshed_facts = fact_record_array_new ();
+  add_project_keyword_fact (refreshed_facts, "message-1", "view-projects", 100);
+  add_project_keyword_fact (refreshed_facts, "message-2", "view-projects", 200);
+  g_assert_true (refresh_virtual_mailbox_from_facts (catalog_path, 2000,
+          refreshed_facts, &changes, &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (changes);
+  g_assert_cmpuint (changes->len, ==, 1);
+  refreshed_change = g_ptr_array_index (changes, 0);
+  g_assert_nonnull (refreshed_change);
+  g_assert_cmpstr (refreshed_change->message_id, ==, "message-2");
+  g_assert_true (refreshed_change->is_visible);
+
+  mailbox_list_service =
+      wyrebox_daemon_mailbox_catalog_duckdb_new_list_service (catalog_path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (mailbox_list_service);
+
+  mailbox_select_service =
+      wyrebox_daemon_mailbox_catalog_duckdb_new_select_service (catalog_path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (mailbox_select_service);
+
+  query_template_service =
+      wyrebox_daemon_duckdb_query_template_service_new_duckdb (catalog_path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (query_template_service);
+
+  adapter = wyrebox_daemon_request_adapter_new (NULL,
+      NULL,
+      mailbox_list_service,
+      mailbox_select_service,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_decode_request_frame,
+      NULL, NULL, wyrebox_daemon_capnp_codec_encode_response_frame, NULL, NULL);
+  g_assert_nonnull (adapter);
+  wyrebox_daemon_request_adapter_set_duckdb_query_template_service (adapter,
+      query_template_service);
+
+  server = wyrebox_daemon_connection_server_new (socket_path, adapter);
+  g_assert_nonnull (server);
+  g_assert_true (wyrebox_daemon_connection_server_start (server, &error));
+  g_assert_no_error (error);
+  main_context_pump_start (&pump);
+
+  memset (&status, 0, sizeof (status));
+  g_assert_cmpint (box->v.open (box), ==, 0);
+  g_assert_true (box->opened);
+  g_assert_cmpint (box->v.get_status (box,
+          STATUS_UIDVALIDITY | STATUS_UIDNEXT | STATUS_MESSAGES, &status), ==,
+      0);
+  g_assert_cmpuint (status.messages, ==, 2);
+  g_assert_cmpuint (status.uidvalidity, ==, initial_uidvalidity);
+  g_assert_cmpuint (status.uidnext, ==, initial_uidnext + 1);
+
+  wyrebox_dovecot_test_daemon_socket_path = NULL;
+  close_unload_box_and_plugin (storage, box);
+  g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+  g_assert_no_error (error);
+  main_context_pump_stop (&pump);
+  remove_tree (socket_root);
+#else
+  g_test_skip ("CAPNP serialization is disabled");
+#endif
+}
+
+static void
 test_open_and_get_status_after_open (void)
 {
   g_autofree char *socket_root = NULL;
@@ -2348,6 +2661,10 @@ main (int argc, char **argv)
   g_test_add_func
       ("/dovecot/plugin-mailbox-smoke/real-daemon-virtual-list-and-status",
       test_real_daemon_virtual_mailbox_list_and_status);
+  g_test_add_func
+      ("/dovecot/plugin-mailbox-smoke/"
+      "real-daemon-virtual-wirelog-refresh-on-reopen",
+      test_real_daemon_virtual_mailbox_wirelog_refresh_on_reopen);
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/open-get-status-after-open",
       test_open_and_get_status_after_open);
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/lazy-status-before-open",
