@@ -486,10 +486,43 @@ def main() -> None:
     require(r"\.name\s*=\s*\"wyrebox\"", text, "storage class name")
     require(r"\.class_flags\s*=\s*0", text, "storage class flags")
     require(
-        r"\.v\s*=\s*\{[\s\S]*?\.add_list\s*=\s*NULL,[\s\S]*?"
+        r"static\s+void\s+wyrebox_dovecot_storage_add_list"
+        r"\s*\(\s*struct\s+mail_storage\s+\*storage,\s*"
+        r"struct\s+mailbox_list\s+\*list\s*\)",
+        text,
+        "mailbox LIST hook installer",
+    )
+    add_list_body = function_body("wyrebox_dovecot_storage_add_list", text)
+    for required_fragment in [
+        "context->previous_vfuncs = list->v;",
+        "context->previous_vlast = list->vlast;",
+        "list->vlast = &context->previous_vfuncs;",
+        "list->v.iter_init = wyrebox_dovecot_mailbox_list_iter_init;",
+        "list->v.iter_next = wyrebox_dovecot_mailbox_list_iter_next;",
+        "list->v.iter_deinit = wyrebox_dovecot_mailbox_list_iter_deinit;",
+    ]:
+        if required_fragment not in add_list_body:
+            raise AssertionError(
+                "plugin source contract failed: add_list missing hook "
+                f"installer fragment: {required_fragment}"
+            )
+    for forbidden_fragment in [
+        "wyrebox_dovecot_daemon_client_list_mailboxes",
+        "wyrebox_dovecot_publish_mailbox_list_result",
+        "wyrebox_dovecot_daemon_client",
+        "g_socket_client_connect",
+    ]:
+        if forbidden_fragment in add_list_body:
+            raise AssertionError(
+                "plugin source contract failed: add_list must not perform "
+                f"daemon LIST/socket work: {forbidden_fragment}"
+            )
+    require(
+        r"\.v\s*=\s*\{[\s\S]*?\.add_list\s*=\s*"
+        r"wyrebox_dovecot_storage_add_list,[\s\S]*?"
         r"\.mailbox_alloc\s*=\s*wyrebox_dovecot_mailbox_alloc",
         text,
-        "inert storage vfuncs",
+        "storage vfuncs wire add_list hook installer",
     )
     require(
         r"\.v\s*=\s*\{[\s\S]*?\.alloc\s*=\s*wyrebox_dovecot_storage_alloc,[\s\S]*?"
