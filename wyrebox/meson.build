@@ -118,6 +118,7 @@ wyrebox_link_deps = [
 if capnp_serialization_found
   wyrebox_sources += [
     'daemon/wyrebox-daemon-capnp-codec.cc',
+    'postfix/wyrebox-postfix-lmtp-delivery-bridge.c',
     daemon_api_capnp_schema,
   ]
   wyrebox_inc_paths += [daemon_api_capnp_schema_include]
