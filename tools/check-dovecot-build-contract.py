@@ -49,6 +49,9 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
     #include "mail-storage.h"
     #include "mail-storage-private.h"
     #include "mail-user.h"
+    #include "mailbox-list.h"
+    #include "mailbox-list-iter.h"
+    #include "mailbox-list-private.h"
 
     typedef struct mailbox *(*wyrebox_mailbox_alloc_fn)(
         struct mail_storage *storage,
@@ -74,6 +77,19 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
         struct mailbox_list *list,
         const char *vname);
 
+    typedef struct mailbox_list_iterate_context *
+        (*wyrebox_mailbox_list_iter_init_fn)(
+            struct mailbox_list *list,
+            const char *const *patterns,
+            enum mailbox_list_iter_flags flags);
+
+    typedef const struct mailbox_info *
+        (*wyrebox_mailbox_list_iter_next_fn)(
+            struct mailbox_list_iterate_context *ctx);
+
+    typedef int (*wyrebox_mailbox_list_iter_deinit_fn)(
+        struct mailbox_list_iterate_context *ctx);
+
     typedef int (*wyrebox_mailbox_open_fn)(struct mailbox *box);
     typedef void (*wyrebox_mailbox_free_fn)(struct mailbox *box);
 
@@ -86,6 +102,9 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
     static struct mailbox wyrebox_mailbox_probe;
     static struct mail_namespace wyrebox_mail_namespace_probe;
     static struct mail_user wyrebox_mail_user_probe;
+    static struct mailbox_list wyrebox_mailbox_list_probe;
+    static struct mailbox_info wyrebox_mailbox_info_probe;
+    static struct mailbox_list_iterate_context wyrebox_mailbox_iter_probe;
 
     static struct mailbox *wyrebox_probe_mailbox_alloc(
         struct mail_storage *storage,
@@ -149,6 +168,78 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
             __typeof__(&mailbox_list_get_storage_name),
             wyrebox_mailbox_list_get_storage_name_fn),
         "mailbox_list_get_storage_name signature mismatch");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_list_probe.v.iter_init),
+            wyrebox_mailbox_list_iter_init_fn),
+        "mailbox_list_vfuncs::iter_init signature mismatch");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_list_probe.v.iter_next),
+            wyrebox_mailbox_list_iter_next_fn),
+        "mailbox_list_vfuncs::iter_next signature mismatch");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_list_probe.v.iter_deinit),
+            wyrebox_mailbox_list_iter_deinit_fn),
+        "mailbox_list_vfuncs::iter_deinit signature mismatch");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_list_probe.v),
+            struct mailbox_list_vfuncs),
+        "mailbox_list::v expected struct mailbox_list_vfuncs");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_list_probe.vlast),
+            struct mailbox_list_vfuncs *),
+        "mailbox_list::vlast expected struct mailbox_list_vfuncs pointer");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_info_probe.vname),
+            const char *),
+        "mailbox_info::vname expected const char pointer");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_info_probe.special_use),
+            const char *),
+        "mailbox_info::special_use expected const char pointer");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_info_probe.flags),
+            enum mailbox_info_flags),
+        "mailbox_info::flags expected enum mailbox_info_flags");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_info_probe.ns),
+            struct mail_namespace *),
+        "mailbox_info::ns expected struct mail_namespace pointer");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_iter_probe.list),
+            struct mailbox_list *),
+        "mailbox_list_iterate_context::list expected mailbox_list pointer");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_iter_probe.pool),
+            pool_t),
+        "mailbox_list_iterate_context::pool expected pool_t");
+
+    _Static_assert(
+        __builtin_types_compatible_p(
+            __typeof__(wyrebox_mailbox_iter_probe.flags),
+            enum mailbox_list_iter_flags),
+        "mailbox_list_iterate_context::flags expected iterator flags enum");
 
     _Static_assert(
         __builtin_types_compatible_p(
@@ -333,10 +424,38 @@ MAILBOX_VFUNC_PROBE_SOURCE = textwrap.dedent(
       wyrebox_mailbox_probe.v.get_status = wyrebox_probe_mailbox_get_status;
       wyrebox_mail_user_probe.username = "account";
       wyrebox_mail_namespace_probe.user = &wyrebox_mail_user_probe;
+      wyrebox_mailbox_info_probe.vname = "INBOX";
+      wyrebox_mailbox_info_probe.special_use = "\\\\Inbox";
+      wyrebox_mailbox_info_probe.flags =
+        MAILBOX_NOSELECT |
+        MAILBOX_NONEXISTENT |
+        MAILBOX_CHILDREN |
+        MAILBOX_NOCHILDREN |
+        MAILBOX_NOINFERIORS |
+        MAILBOX_SUBSCRIBED |
+        MAILBOX_CHILD_SUBSCRIBED |
+        MAILBOX_CHILD_SPECIALUSE |
+        MAILBOX_SPECIALUSE_MASK;
+      wyrebox_mailbox_info_probe.ns = &wyrebox_mail_namespace_probe;
+      wyrebox_mailbox_iter_probe.list = &wyrebox_mailbox_list_probe;
+      wyrebox_mailbox_iter_probe.flags =
+        MAILBOX_LIST_ITER_RAW_LIST |
+        MAILBOX_LIST_ITER_NO_AUTO_BOXES |
+        MAILBOX_LIST_ITER_SKIP_ALIASES |
+        MAILBOX_LIST_ITER_SELECT_SUBSCRIBED |
+        MAILBOX_LIST_ITER_SELECT_RECURSIVEMATCH |
+        MAILBOX_LIST_ITER_SELECT_SPECIALUSE |
+        MAILBOX_LIST_ITER_RETURN_NO_FLAGS |
+        MAILBOX_LIST_ITER_RETURN_SUBSCRIBED |
+        MAILBOX_LIST_ITER_RETURN_CHILDREN |
+        MAILBOX_LIST_ITER_RETURN_SPECIALUSE;
       (void)wyrebox_mail_storage_probe;
       (void)wyrebox_mailbox_probe;
       (void)wyrebox_mail_namespace_probe;
       (void)wyrebox_mail_user_probe;
+      (void)wyrebox_mailbox_list_probe;
+      (void)wyrebox_mailbox_info_probe;
+      (void)wyrebox_mailbox_iter_probe;
       return 0;
     }
     """
