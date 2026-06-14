@@ -236,6 +236,55 @@ test_catalog_rejects_bad_parameter_text (void)
 }
 
 static void
+assert_date_range_validation (const gchar *start_unix_us,
+    const gchar *end_unix_us, gboolean expected_valid)
+{
+  const char *parameters[] = { start_unix_us, end_unix_us, NULL };
+  const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  init_request (&request, "messages.by_date_range.v1", parameters);
+
+  if (expected_valid) {
+    g_assert_true (wyrebox_daemon_duckdb_query_template_catalog_validate
+        (WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI, "account-1", &request,
+            &descriptor, &error));
+    g_assert_no_error (error);
+    g_assert_nonnull (descriptor);
+    g_assert_cmpstr (descriptor->template_id, ==, "messages.by_date_range.v1");
+  } else {
+    g_assert_false (wyrebox_daemon_duckdb_query_template_catalog_validate
+        (WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI, "account-1", &request,
+            &descriptor, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_assert_null (descriptor);
+  }
+}
+
+static void
+test_catalog_validates_date_range_integer_bounds (void)
+{
+  assert_date_range_validation ("-9223372036854775808", "0", TRUE);
+  assert_date_range_validation ("0", "9223372036854775807", TRUE);
+  assert_date_range_validation ("-2", "-1", TRUE);
+  assert_date_range_validation ("0", "0", TRUE);
+  assert_date_range_validation ("1", "2", TRUE);
+  assert_date_range_validation ("9223372036854775807", "0", TRUE);
+  assert_date_range_validation ("abc", "1", FALSE);
+  assert_date_range_validation ("1", "abc", FALSE);
+  assert_date_range_validation ("123abc", "1", FALSE);
+  assert_date_range_validation ("+1", "2", FALSE);
+  assert_date_range_validation (" 1", "2", FALSE);
+  assert_date_range_validation ("1 ", "2", FALSE);
+  assert_date_range_validation ("1.5", "2", FALSE);
+  assert_date_range_validation ("1e6", "2", FALSE);
+  assert_date_range_validation ("0); DROP TABLE messages; --", "1", FALSE);
+  assert_date_range_validation ("9223372036854775808", "1", FALSE);
+  assert_date_range_validation ("-9223372036854775809", "1", FALSE);
+}
+
+static void
 test_catalog_rejects_missing_or_mismatched_scope (void)
 {
   const char *parameters[] = { "mailbox-inbox", NULL };
@@ -284,6 +333,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/catalog/rejects-bad-parameter-text",
       test_catalog_rejects_bad_parameter_text);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/catalog/validates-date-range-integer-bounds",
+      test_catalog_validates_date_range_integer_bounds);
   g_test_add_func ("/daemon-api/duckdb-query-template/catalog/rejects-scope",
       test_catalog_rejects_missing_or_mismatched_scope);
 

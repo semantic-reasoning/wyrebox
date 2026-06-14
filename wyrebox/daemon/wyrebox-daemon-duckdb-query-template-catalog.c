@@ -2,6 +2,8 @@
 
 #include <gio/gio.h>
 
+#include <errno.h>
+
 static const char *const mailbox_uid_map_parameters[] = { "mailbox_id", NULL };
 static const char *const derived_view_uid_map_parameters[] =
     { "view_id", NULL };
@@ -107,6 +109,81 @@ is_uid_map_template (const char *template_id)
 {
   return g_strcmp0 (template_id, "mailbox.uid_map.v1") == 0
       || g_strcmp0 (template_id, "derived_view.uid_map.v1") == 0;
+}
+
+static gboolean
+validate_signed_integer_text (const char *value,
+    const char *parameter_name, GError **error)
+{
+  const char *digits = value;
+  gchar *end = NULL;
+
+  if (*digits == '-') {
+    digits++;
+
+    if (*digits == '\0') {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "duckdb query template parameter '%s' must be a signed integer",
+          parameter_name);
+      return FALSE;
+    }
+  }
+
+  if (*digits == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "duckdb query template parameter '%s' must be a signed integer",
+        parameter_name);
+    return FALSE;
+  }
+
+  for (const char *cursor = digits; *cursor != '\0'; cursor++) {
+    if (!g_ascii_isdigit (*cursor)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "duckdb query template parameter '%s' must be a signed integer",
+          parameter_name);
+      return FALSE;
+    }
+  }
+
+  errno = 0;
+  (void) g_ascii_strtoll (value, &end, 10);
+  if (errno == ERANGE || end == NULL || *end != '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "duckdb query template parameter '%s' is outside the signed integer "
+        "range", parameter_name);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
+    validate_messages_by_date_range_parameters
+    (const WyreboxDaemonDuckDBQueryTemplateRequest * request, GError ** error)
+{
+  return validate_signed_integer_text (request->parameters[0],
+      "start_unix_us", error)
+      && validate_signed_integer_text (request->parameters[1], "end_unix_us",
+      error);
+}
+
+static gboolean
+    validate_template_parameters
+    (const WyreboxDaemonDuckDBQueryTemplateDescriptor * descriptor,
+    const WyreboxDaemonDuckDBQueryTemplateRequest * request, GError ** error)
+{
+  if (g_strcmp0 (descriptor->template_id, "messages.by_date_range.v1") == 0)
+    return validate_messages_by_date_range_parameters (request, error);
+
+  return TRUE;
 }
 
 gboolean
@@ -217,6 +294,9 @@ gboolean
       return FALSE;
     }
   }
+
+  if (!validate_template_parameters (descriptor, request, error))
+    return FALSE;
 
   if (out_descriptor != NULL)
     *out_descriptor = descriptor;

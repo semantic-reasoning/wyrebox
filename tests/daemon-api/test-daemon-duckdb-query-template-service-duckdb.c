@@ -736,6 +736,32 @@ dispatch_messages_by_date_range_csv (const gchar *path,
 }
 
 static void
+assert_messages_by_date_range_rejects_bound (const gchar *path,
+    const gchar *account_id, const gchar *start_unix_us,
+    const gchar *end_unix_us)
+{
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+
+  service = wyrebox_daemon_duckdb_query_template_service_new_duckdb (path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (service);
+
+  init_messages_by_date_range_request (&request, account_id, start_unix_us,
+      end_unix_us);
+  g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
+          "request-1", "admin-cli", account_id, "duckdb-tool",
+          "correlation-1", &request, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+}
+
+static void
 test_duckdb_service_returns_derived_view_uid_map_csv (void)
 {
   g_autofree gchar *path = create_temp_catalog_path ();
@@ -1485,7 +1511,21 @@ test_duckdb_service_messages_by_date_range_excludes_null_dates (void)
 }
 
 static void
-test_duckdb_service_treats_sql_looking_date_range_as_value (void)
+test_duckdb_service_rejects_sql_looking_date_range_bound (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+  seed_messages_by_date_range_headers (path);
+
+  assert_messages_by_date_range_rejects_bound (path, "account-1",
+      "0); DROP TABLE messages; --", "9999999999999999");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_accepts_date_range_int64_boundaries (void)
 {
   g_autofree gchar *path = create_temp_catalog_path ();
   g_autofree gchar *csv = NULL;
@@ -1495,12 +1535,34 @@ test_duckdb_service_treats_sql_looking_date_range_as_value (void)
   seed_messages_by_date_range_headers (path);
 
   csv = dispatch_messages_by_date_range_csv (path, "account-1",
-      "0); DROP TABLE messages; --", "9999999999999999");
+      "-9223372036854775808", "9223372036854775807");
+  g_assert_true (g_strstr_len (csv, -1, "message-a") != NULL);
+  g_assert_true (g_strstr_len (csv, -1, "message-hidden") != NULL);
+  g_assert_false (g_strstr_len (csv, -1, "message-null-date") != NULL);
+
+  g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_by_date_range_csv (path, "account-1", "0", "0");
   g_assert_cmpstr (csv, ==,
       "account_id,message_id,object_id,message_journal_offset,"
       "message_journal_sequence,rfc_message_id,subject,from_addr,to_addr,"
       "cc_addr,bcc_addr,date_raw,header_journal_offset,"
       "header_journal_sequence\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_rejects_overflowing_date_range_bound (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+  seed_messages_by_date_range_headers (path);
+
+  assert_messages_by_date_range_rejects_bound (path, "account-1",
+      "9223372036854775808", "9223372036854775807");
+  assert_messages_by_date_range_rejects_bound (path, "account-1",
+      "-9223372036854775809", "0");
   (void) g_remove (path);
 }
 
@@ -1625,8 +1687,14 @@ main (int argc, char **argv)
       ("/daemon-api/duckdb-query-template/service-duckdb/messages-by-date-range-null-exclusion",
       test_duckdb_service_messages_by_date_range_excludes_null_dates);
   g_test_add_func
-      ("/daemon-api/duckdb-query-template/service-duckdb/sql-looking-date-range-value",
-      test_duckdb_service_treats_sql_looking_date_range_as_value);
+      ("/daemon-api/duckdb-query-template/service-duckdb/sql-looking-date-range-bound-rejected",
+      test_duckdb_service_rejects_sql_looking_date_range_bound);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/date-range-int64-boundaries",
+      test_duckdb_service_accepts_date_range_int64_boundaries);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/date-range-overflow-rejected",
+      test_duckdb_service_rejects_overflowing_date_range_bound);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/missing-path-fails",
       test_duckdb_service_missing_path_fails);
