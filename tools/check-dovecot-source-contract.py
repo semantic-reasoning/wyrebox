@@ -21,6 +21,9 @@ REQUIRED_FILES = [
     Path("src/lib-storage/mail-storage.h"),
     Path("src/lib-storage/mail-storage-private.h"),
     Path("src/lib-storage/mail-storage-hooks.h"),
+    Path("src/lib-storage/mailbox-list.h"),
+    Path("src/lib-storage/mailbox-list-iter.h"),
+    Path("src/lib-storage/mailbox-list-private.h"),
     Path("src/lib-storage/mail-namespace.h"),
     Path("src/lib-storage/mail-user.h"),
     Path("src/lib/module-dir.h"),
@@ -81,6 +84,22 @@ REQUIRED_PRIVATE_STRUCT_FIELDS = {
     ],
 }
 
+REQUIRED_LIST_PRIVATE_STRUCT_FIELDS = {
+    "mailbox_list": [
+        "v",
+        "vlast",
+    ],
+}
+
+REQUIRED_MAILBOX_INFO_FIELDS = {
+    "mailbox_info": [
+        "vname",
+        "special_use",
+        "flags",
+        "ns",
+    ],
+}
+
 REQUIRED_MODULE_STRUCT_MEMBERS = {
     "module": [
         "init",
@@ -115,6 +134,53 @@ REQUIRED_LIST_CONTRACT_SYMBOLS = [
         r"struct\s+mailbox_list\s*\*\s*\w*\s*,\s*"
         r"const\s+char\s*\*\s*\w*\s*\)\s*;",
     ),
+]
+
+REQUIRED_LIST_ITERATOR_VFUNC_SIGNATURES = [
+    (
+        "mailbox_list_vfuncs.iter_init signature",
+        r"\bstruct\s+mailbox_list_iterate_context\s*\*\s*"
+        r"\(\s*\*\s*iter_init\s*\)\s*\(\s*"
+        r"struct\s+mailbox_list\s*\*\s*\w*\s*,\s*"
+        r"const\s+char\s*\*\s*const\s*\*\s*\w*\s*,\s*"
+        r"enum\s+mailbox_list_iter_flags\s+\w+\s*\)\s*;",
+    ),
+    (
+        "mailbox_list_vfuncs.iter_next signature",
+        r"\bconst\s+struct\s+mailbox_info\s*\*\s*"
+        r"\(\s*\*\s*iter_next\s*\)\s*\(\s*"
+        r"struct\s+mailbox_list_iterate_context\s*\*\s*\w*\s*\)\s*;",
+    ),
+    (
+        "mailbox_list_vfuncs.iter_deinit signature",
+        r"\bint\s*\(\s*\*\s*iter_deinit\s*\)\s*\(\s*"
+        r"struct\s+mailbox_list_iterate_context\s*\*\s*\w*\s*\)\s*;",
+    ),
+]
+
+REQUIRED_MAILBOX_LIST_ITER_FLAGS = [
+    "MAILBOX_LIST_ITER_RAW_LIST",
+    "MAILBOX_LIST_ITER_NO_AUTO_BOXES",
+    "MAILBOX_LIST_ITER_SKIP_ALIASES",
+    "MAILBOX_LIST_ITER_SELECT_SUBSCRIBED",
+    "MAILBOX_LIST_ITER_SELECT_RECURSIVEMATCH",
+    "MAILBOX_LIST_ITER_SELECT_SPECIALUSE",
+    "MAILBOX_LIST_ITER_RETURN_NO_FLAGS",
+    "MAILBOX_LIST_ITER_RETURN_SUBSCRIBED",
+    "MAILBOX_LIST_ITER_RETURN_CHILDREN",
+    "MAILBOX_LIST_ITER_RETURN_SPECIALUSE",
+]
+
+REQUIRED_MAILBOX_INFO_FLAGS = [
+    "MAILBOX_NOSELECT",
+    "MAILBOX_NONEXISTENT",
+    "MAILBOX_CHILDREN",
+    "MAILBOX_NOCHILDREN",
+    "MAILBOX_NOINFERIORS",
+    "MAILBOX_SUBSCRIBED",
+    "MAILBOX_CHILD_SUBSCRIBED",
+    "MAILBOX_CHILD_SPECIALUSE",
+    "MAILBOX_SPECIALUSE_MASK",
 ]
 
 @dataclass
@@ -273,6 +339,18 @@ def find_issues_for_list_contract(path: Path) -> list[ContractIssue]:
     return issues
 
 
+def find_issues_for_list_iterator_vfuncs(path: Path) -> list[ContractIssue]:
+    text = read_text(path)
+    struct_block = find_struct_block(text, "mailbox_list_vfuncs")
+    issues: list[ContractIssue] = []
+
+    for label, expression in REQUIRED_LIST_ITERATOR_VFUNC_SIGNATURES:
+        if struct_block is None or re.search(expression, struct_block, re.MULTILINE) is None:
+            issues.append(ContractIssue(f"{path}: missing {label}: {expression}"))
+
+    return issues
+
+
 def check_version(path: Path) -> list[ContractIssue]:
     text = read_text(path)
     match = re.search(
@@ -317,6 +395,9 @@ def validate_source(source_dir: Path) -> list[ContractIssue]:
     storage = source_dir / "src/lib-storage/mail-storage.h"
     storage_private = source_dir / "src/lib-storage/mail-storage-private.h"
     hooks = source_dir / "src/lib-storage/mail-storage-hooks.h"
+    mailbox_list = source_dir / "src/lib-storage/mailbox-list.h"
+    mailbox_list_iter = source_dir / "src/lib-storage/mailbox-list-iter.h"
+    mailbox_list_private = source_dir / "src/lib-storage/mailbox-list-private.h"
     mail_namespace = source_dir / "src/lib-storage/mail-namespace.h"
     mail_user = source_dir / "src/lib-storage/mail-user.h"
     module_dir = source_dir / "src/lib/module-dir.h"
@@ -383,6 +464,36 @@ def validate_source(source_dir: Path) -> list[ContractIssue]:
         find_issues_for_vfuncs(storage_private, "mail_storage_vfuncs", REQUIRED_VFUNC_SYMBOLS["mail_storage_vfuncs"])
     )
     issues.extend(find_issues_for_list_contract(storage_private))
+    issues.extend(find_issues_for_list_iterator_vfuncs(mailbox_list_private))
+    for struct_name, fields in REQUIRED_LIST_PRIVATE_STRUCT_FIELDS.items():
+        issues.extend(
+            find_issues_for_struct_fields(mailbox_list_private, struct_name, fields),
+        )
+    issues.extend(
+        find_issues_for_patterns(
+            mailbox_list_private,
+            [r"\bstruct\s+mailbox_list_iterate_context\s*{"],
+            "mailbox_list_iterate_context definition",
+        )
+    )
+    for struct_name, fields in REQUIRED_MAILBOX_INFO_FIELDS.items():
+        issues.extend(
+            find_issues_for_struct_fields(mailbox_list_iter, struct_name, fields),
+        )
+    issues.extend(
+        find_issues_for_patterns(
+            mailbox_list_iter,
+            [rf"\b{re.escape(flag)}\b" for flag in REQUIRED_MAILBOX_LIST_ITER_FLAGS],
+            "mailbox list iterator flag",
+        )
+    )
+    issues.extend(
+        find_issues_for_patterns(
+            mailbox_list,
+            [rf"\b{re.escape(flag)}\b" for flag in REQUIRED_MAILBOX_INFO_FLAGS],
+            "mailbox info flag",
+        )
+    )
     issues.extend(
         find_issues_for_vfuncs(storage_private, "mailbox_vfuncs", REQUIRED_VFUNC_SYMBOLS["mailbox_vfuncs"])
     )
