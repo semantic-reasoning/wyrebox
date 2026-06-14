@@ -132,6 +132,7 @@ struct MessageFetchRequest {
   mailboxId @1 :Text;
   uidValidity @2 :UInt64;
   mailboxUid @3 :UInt64;
+  namespaceKind @4 :MailboxListEntryKind;
 }
 
 struct MessageSearchRequest {

@@ -510,13 +510,21 @@ decode_message_fetch_request (const RequestFrame::Reader & request_frame,
     WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
 {
   auto message_fetch = request_frame.getMessageFetch ();
+  WyreboxDaemonMailboxListEntryKind namespace_kind =
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
 
   if (!decode_request_identity (request_frame, state, error))
     return FALSE;
 
+  if (!decode_mailbox_list_entry_kind (message_fetch.getNamespaceKind (),
+          &namespace_kind))
+    return set_invalid_argument (error,
+        "message FETCH namespace_kind is unknown");
+
   if (!wyrebox_daemon_message_fetch_request_init (&state->message_fetch,
           message_fetch.getAccountIdentity ().cStr (),
           message_fetch.getMailboxId ().cStr (),
+          namespace_kind,
           message_fetch.getUidValidity (),
           message_fetch.getMailboxUid (), error))
     return FALSE;
@@ -1178,6 +1186,7 @@ validate_message_fetch_encode_input (const WyreboxDaemonRequestIdentity
   if (!wyrebox_daemon_message_fetch_request_init (&validated_request,
           request->account_identity,
           request->mailbox_id,
+          request->namespace_kind,
           request->uid_validity, request->mailbox_uid, error))
     return FALSE;
 
@@ -1282,8 +1291,16 @@ encode_message_fetch_request (const WyreboxDaemonRequestIdentity *identity,
     GError **error)
 {
   try {
+    MailboxListEntryKind encoded_namespace_kind =
+        MailboxListEntryKind::ORDINARY;
+
     if (!validate_message_fetch_encode_input (identity, request, error))
       return FALSE;
+
+    if (!map_mailbox_list_entry_kind (request->namespace_kind,
+            &encoded_namespace_kind))
+      return set_invalid_argument (error,
+          "message FETCH namespace_kind is unknown");
 
     capnp::MallocMessageBuilder request_builder;
     auto request_frame = request_builder.initRoot < RequestFrame > ();
@@ -1305,6 +1322,7 @@ encode_message_fetch_request (const WyreboxDaemonRequestIdentity *identity,
         ? request->mailbox_id : "");
     message_fetch.setUidValidity (request->uid_validity);
     message_fetch.setMailboxUid (request->mailbox_uid);
+    message_fetch.setNamespaceKind (encoded_namespace_kind);
 
     auto words = capnp::messageToFlatArray (request_builder);
     auto bytes = words.asBytes ();

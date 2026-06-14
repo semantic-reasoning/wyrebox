@@ -1015,7 +1015,8 @@ test_request_router_routes_message_fetch (void)
   WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
 
   g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-1", "mailbox-inbox", 77, 42, &error));
+          "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, &error));
   g_assert_no_error (error);
 
   request_frame.request_id = "request-fetch";
@@ -1085,7 +1086,8 @@ test_request_router_rejects_missing_message_fetch_service (void)
   WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
 
   g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-1", "mailbox-inbox", 77, 42, &error));
+          "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, &error));
   g_assert_no_error (error);
 
   request_frame.request_id = "request-fetch";

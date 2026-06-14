@@ -108,6 +108,7 @@ static gboolean
 validate_fetch_inputs (const char *socket_path,
     const char *account_identity,
     const char *mailbox_id,
+    WyreboxDaemonMailboxListEntryKind kind,
     guint64 uid_validity,
     guint64 mailbox_uid, const char *expected_message_id, GError **error)
 {
@@ -133,6 +134,18 @@ validate_fetch_inputs (const char *socket_path,
         G_IO_ERROR_INVALID_ARGUMENT,
         "Dovecot daemon client requires a non-empty mailbox id");
     return FALSE;
+  }
+
+  switch (kind) {
+    case WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY:
+    case WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL:
+      break;
+    default:
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "Dovecot daemon client requires a known mailbox SELECT kind");
+      return FALSE;
   }
 
   if (uid_validity == 0) {
@@ -973,6 +986,7 @@ GBytes *
 wyrebox_dovecot_daemon_client_fetch_message_bytes (const char *socket_path,
     const char *account_identity,
     const char *mailbox_id,
+    WyreboxDaemonMailboxListEntryKind kind,
     guint64 uid_validity,
     guint64 mailbox_uid, const char *expected_message_id, GError **error)
 {
@@ -988,7 +1002,8 @@ wyrebox_dovecot_daemon_client_fetch_message_bytes (const char *socket_path,
 
   if (!validate_fetch_inputs (socket_path,
           account_identity,
-          mailbox_id, uid_validity, mailbox_uid, expected_message_id, error))
+          mailbox_id, kind, uid_validity, mailbox_uid, expected_message_id,
+          error))
     return NULL;
 
   request_id = g_uuid_string_random ();
@@ -1000,7 +1015,7 @@ wyrebox_dovecot_daemon_client_fetch_message_bytes (const char *socket_path,
     return NULL;
 
   if (!wyrebox_daemon_message_fetch_request_init (&request,
-          account_identity, mailbox_id, uid_validity, mailbox_uid, error))
+          account_identity, mailbox_id, kind, uid_validity, mailbox_uid, error))
     return NULL;
 
   request_payload =
@@ -1216,12 +1231,14 @@ GBytes *
 wyrebox_dovecot_daemon_client_fetch_message_bytes (const char *socket_path,
     const char *account_identity,
     const char *mailbox_id,
+    WyreboxDaemonMailboxListEntryKind kind,
     guint64 uid_validity,
     guint64 mailbox_uid, const char *expected_message_id, GError **error)
 {
   (void) socket_path;
   (void) account_identity;
   (void) mailbox_id;
+  (void) kind;
   (void) uid_validity;
   (void) mailbox_uid;
   (void) expected_message_id;
