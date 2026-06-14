@@ -1,0 +1,12 @@
+# Example Postfix transport map entries for WyreBox LMTP delivery.
+#
+# Compile with:
+#   postmap /etc/postfix/transport
+#
+# Then reference the map from main.cf, for example:
+#   transport_maps = hash:/etc/postfix/transport
+#
+# The right-hand side names the master.cf service in master.cf.wyrebox-lmtp
+# and the WyreBox LMTP listener socket that service should connect to.
+example.com wyrebox-lmtp:unix:/run/wyrebox/wyrebox-lmtp.sock
+.example.com wyrebox-lmtp:unix:/run/wyrebox/wyrebox-lmtp.sock

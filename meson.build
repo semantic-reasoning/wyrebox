@@ -587,6 +587,12 @@ test(
   args: files('tests/docs/test_issue_0007_postfix_pipe_examples.py'),
 )
 
+test(
+  'docs issue 0011 postfix lmtp examples',
+  python,
+  args: files('tests/docs/test_issue_0011_postfix_lmtp_examples.py'),
+)
+
 subdir('tests/object-store')
 subdir('tests/ingestion')
 subdir('tests/journal')

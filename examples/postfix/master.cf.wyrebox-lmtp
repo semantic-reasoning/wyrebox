@@ -1,0 +1,16 @@
+# Example Postfix master.cf service for WyreBox LMTP delivery.
+#
+# This defines a named Postfix lmtp(8) client transport. It does not execute
+# wyrebox-postfix-lmtp directly; Postfix lmtp(8) connects to the LMTP nexthop
+# selected by transport_maps.
+#
+# Current support is one accepted recipient per LMTP transaction. Add this
+# transport-specific setting to main.cf so Postfix splits recipients before
+# delivery:
+#
+#   wyrebox-lmtp_destination_recipient_limit = 1
+#
+# The chroot column is "n" so /run/wyrebox/wyrebox-lmtp.sock resolves as a
+# normal host path. If chroot is enabled, place the listener where Postfix can
+# see it from inside the chroot and update transport_maps accordingly.
+wyrebox-lmtp unix  -       -       n       -       -       lmtp
