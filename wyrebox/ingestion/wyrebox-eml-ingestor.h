@@ -101,6 +101,11 @@ gboolean wyrebox_eml_ingestor_ingest_bytes (WyreboxEmlIngestor *self,
  * journal success semantics are identical to wyrebox_eml_ingestor_ingest_bytes,
  * but the MessageDelivered payload records daemon delivery identity as v3 when
  * a journal writer is configured.
+ *
+ * When a journal writer is configured, exact retries with the same daemon
+ * delivery identity return the first durable journal receipt without appending
+ * another MessageDelivered event. Conflicting retries for the same identity
+ * fail with G_IO_ERROR_EXISTS.
  */
 gboolean wyrebox_eml_ingestor_ingest_delivery_bytes (WyreboxEmlIngestor *self,
     GBytes *bytes,
