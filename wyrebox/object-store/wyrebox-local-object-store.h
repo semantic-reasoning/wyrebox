@@ -19,6 +19,14 @@ WyreboxLocalObjectStore *wyrebox_local_object_store_new (const char *root_dir,
     GError **error);
 
 /*
+ * Opens an already-initialized local object store without creating directories.
+ *
+ * Returns: (transfer full): a new local object store rooted at @root_dir.
+ */
+WyreboxLocalObjectStore *wyrebox_local_object_store_open_existing (const char
+    *root_dir, GError **error);
+
+/*
  * @bytes: (transfer none): immutable bytes to store.
  * @out_object_key: (out) (transfer full): receives the deterministic object key.
  */
