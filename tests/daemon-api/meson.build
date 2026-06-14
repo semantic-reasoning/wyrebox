@@ -112,6 +112,12 @@ daemon_message_fetch_dispatcher_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_message_fetch_service_duckdb_test = executable(
+  'test-daemon-message-fetch-service-duckdb',
+  'test-daemon-message-fetch-service-duckdb.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_message_search_request_test = executable(
   'test-daemon-message-search-request',
   'test-daemon-message-search-request.c',
@@ -318,6 +324,14 @@ test('daemon fact batch import dispatcher',
 test('daemon mailbox select dispatcher', daemon_mailbox_select_dispatcher_test)
 test('daemon message fetch request', daemon_message_fetch_request_test)
 test('daemon message fetch dispatcher', daemon_message_fetch_dispatcher_test)
+test(
+  'daemon message fetch service duckdb',
+  daemon_message_fetch_service_duckdb_test,
+  env: {
+    'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() /
+      'tests' / 'object-store' / 'fixtures',
+  },
+)
 test('daemon message search request', daemon_message_search_request_test)
 test('daemon message search dispatcher', daemon_message_search_dispatcher_test)
 test('daemon wirelog predicate query request',

@@ -85,6 +85,55 @@ validate_message_fetch_chunk (const WyreboxDaemonRequestIdentity *identity,
   return TRUE;
 }
 
+static gboolean
+message_fetch_namespace_kind_to_fetcher_kind (WyreboxDaemonMailboxListEntryKind
+    daemon_kind, WyreboxDeliveryFetcherNamespaceKind *out_fetcher_kind,
+    GError **error)
+{
+  switch (daemon_kind) {
+    case WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY:
+      *out_fetcher_kind = WYREBOX_DELIVERY_FETCHER_NAMESPACE_MAILBOX;
+      return TRUE;
+    case WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL:
+      *out_fetcher_kind = WYREBOX_DELIVERY_FETCHER_NAMESPACE_DERIVED_VIEW;
+      return TRUE;
+    default:
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "message FETCH namespace kind is unknown");
+      return FALSE;
+  }
+}
+
+static gboolean
+fetch_message_from_delivery_fetcher (const WyreboxDaemonRequestIdentity
+    *identity, const WyreboxDaemonMessageFetchRequest *request,
+    WyreboxDaemonStreamChunkFrame *out_chunk, gpointer user_data,
+    GError **error)
+{
+  WyreboxDeliveryFetcher *fetcher = WYREBOX_DELIVERY_FETCHER (user_data);
+  WyreboxDeliveryFetcherNamespaceKind fetcher_kind =
+      WYREBOX_DELIVERY_FETCHER_NAMESPACE_MAILBOX;
+  g_auto (WyreboxDeliveryFetchResult) result = { 0 };
+
+  if (!message_fetch_namespace_kind_to_fetcher_kind (request->namespace_kind,
+          &fetcher_kind, error))
+    return FALSE;
+
+  if (!wyrebox_delivery_fetcher_fetch_namespace_result (fetcher,
+          request->account_identity,
+          fetcher_kind,
+          request->mailbox_id,
+          request->uid_validity, request->mailbox_uid, &result, error))
+    return FALSE;
+
+  return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+      identity->request_id,
+      result.message_id,
+      NULL, identity->correlation_id, 0, result.bytes, TRUE, error);
+}
+
 static void
 wyrebox_daemon_message_fetch_service_finalize (GObject *object)
 {
@@ -128,6 +177,17 @@ wyrebox_daemon_message_fetch_service_new (WyreboxDaemonMessageFetchServiceFunc
   self->user_data_destroy = user_data_destroy;
 
   return self;
+}
+
+WyreboxDaemonMessageFetchService *
+wyrebox_daemon_message_fetch_service_new_for_fetcher (WyreboxDeliveryFetcher
+    *fetcher)
+{
+  g_return_val_if_fail (WYREBOX_IS_DELIVERY_FETCHER (fetcher), NULL);
+
+  return wyrebox_daemon_message_fetch_service_new
+      (fetch_message_from_delivery_fetcher,
+      g_object_ref (fetcher), g_object_unref);
 }
 
 gboolean

@@ -21,6 +21,22 @@ typedef enum
   WYREBOX_DELIVERY_FETCHER_NAMESPACE_DERIVED_VIEW,
 } WyreboxDeliveryFetcherNamespaceKind;
 
+typedef struct
+{
+  /*
+   * Resolved immutable message identity and raw RFC 5322 bytes.
+   * Both fields are owned by the result and are released by clear().
+   */
+  char *message_id;
+  GBytes *bytes;
+} WyreboxDeliveryFetchResult;
+
+void wyrebox_delivery_fetch_result_clear (
+    WyreboxDeliveryFetchResult *result);
+
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDeliveryFetchResult,
+    wyrebox_delivery_fetch_result_clear)
+
 /*
  * Construct a DuckDB-backed read-only delivery fetcher for @catalog_path.
  *
@@ -47,6 +63,15 @@ GBytes *wyrebox_delivery_fetcher_fetch_bytes (
     guint64 uid,
     GError **error);
 
+gboolean wyrebox_delivery_fetcher_fetch_result (
+    WyreboxDeliveryFetcher *self,
+    const gchar *account_id,
+    const gchar *mailbox_id,
+    guint64 uidvalidity,
+    guint64 uid,
+    WyreboxDeliveryFetchResult *out_result,
+    GError **error);
+
 /*
  * Resolve a visible namespace UID and return immutable raw RFC 5322 bytes.
  *
@@ -59,6 +84,16 @@ GBytes *wyrebox_delivery_fetcher_fetch_namespace_bytes (
     const gchar *namespace_id,
     guint64 uidvalidity,
     guint64 uid,
+    GError **error);
+
+gboolean wyrebox_delivery_fetcher_fetch_namespace_result (
+    WyreboxDeliveryFetcher *self,
+    const gchar *account_id,
+    WyreboxDeliveryFetcherNamespaceKind namespace_kind,
+    const gchar *namespace_id,
+    guint64 uidvalidity,
+    guint64 uid,
+    WyreboxDeliveryFetchResult *out_result,
     GError **error);
 
 G_END_DECLS
