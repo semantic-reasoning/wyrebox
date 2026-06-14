@@ -177,6 +177,24 @@ find_entry (const WyreboxDaemonMailboxListResult *result, const gchar *name)
   return NULL;
 }
 
+static guint
+count_entries_named (const WyreboxDaemonMailboxListResult *result,
+    const gchar *name)
+{
+  guint count = 0;
+
+  for (guint i = 0;
+      i < wyrebox_daemon_mailbox_list_result_get_n_entries (result); i++) {
+    const WyreboxDaemonMailboxListEntry *entry =
+        wyrebox_daemon_mailbox_list_result_get_entry (result, i);
+
+    if (g_strcmp0 (entry->mailbox_name, name) == 0)
+      count++;
+  }
+
+  return count;
+}
+
 static void
 assert_select (WyreboxDaemonMailboxCatalogDuckDB *catalog,
     const gchar *mailbox_id,
@@ -268,7 +286,7 @@ test_list_and_select_from_duckdb_catalog (void)
   g_assert_no_error (error);
 
   g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
-      (&list_result), ==, 10);
+      (&list_result), ==, 9);
 
   entry = find_entry (&list_result, "INBOX");
   g_assert_nonnull (entry);
@@ -316,6 +334,13 @@ test_list_and_select_from_duckdb_catalog (void)
   g_assert_cmpint (entry->child_state, ==,
       WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN);
 
+  g_assert_cmpuint (count_entries_named (&list_result, "Shared"), ==, 1);
+  entry = find_entry (&list_result, "Shared");
+  g_assert_nonnull (entry);
+  g_assert_cmpint (entry->kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  g_assert_cmpstr (entry->mailbox_id, ==, "mb-conflict");
+  g_assert_true (entry->is_selectable);
+
   g_assert_null (find_entry (&list_result, "Hidden"));
   g_assert_null (find_entry (&list_result, "Hidden View"));
   g_assert_null (find_entry (&list_result, "Other Account"));
@@ -355,6 +380,12 @@ test_list_and_select_from_duckdb_catalog (void)
       WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
       "view'; DROP TABLE mailboxes; --",
       "View'; DROP TABLE derived_views; --", 25, 2, 1);
+  assert_select (catalog, NULL, "Shared",
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, "mb-conflict", "Shared", 14,
+      2, 0);
+  assert_select (catalog, "view-conflict", NULL,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL, "view-conflict", "Shared",
+      24, 2, 0);
 
   assert_select_not_found (catalog, "account-1", "mb-hidden", NULL);
   assert_select_not_found (catalog, "account-1", NULL, "Hidden");
@@ -371,13 +402,11 @@ test_list_and_select_from_duckdb_catalog (void)
 }
 
 static void
-test_select_by_name_conflict_fails (void)
+test_name_conflict_prefers_ordinary_and_keeps_view_id (void)
 {
   g_autoptr (GError) error = NULL;
   g_autofree gchar *path = NULL;
   g_autoptr (WyreboxDaemonMailboxCatalogDuckDB) catalog = NULL;
-  g_auto (WyreboxDaemonMailboxSelectRequest) request = { 0 };
-  g_auto (WyreboxDaemonMailboxSelectResult) result = { 0 };
 
   path = create_temp_catalog_path ();
   bootstrap_catalog (path);
@@ -387,13 +416,12 @@ test_select_by_name_conflict_fails (void)
   g_assert_no_error (error);
   g_assert_nonnull (catalog);
 
-  g_assert_true (wyrebox_daemon_mailbox_select_request_init (&request,
-          "account-1", NULL, "Shared", &error));
-  g_assert_no_error (error);
-
-  g_assert_false (wyrebox_daemon_mailbox_catalog_duckdb_select (NULL, &request,
-          &result, catalog, &error));
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_EXISTS);
+  assert_select (catalog, NULL, "Shared",
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, "mb-conflict", "Shared", 14,
+      2, 0);
+  assert_select (catalog, "view-conflict", NULL,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL, "view-conflict", "Shared",
+      24, 2, 0);
 
   (void) g_remove (path);
 }
@@ -406,7 +434,7 @@ main (int argc, char **argv)
   g_test_add_func ("/wyrebox/daemon/mailbox-catalog-duckdb/list-select",
       test_list_and_select_from_duckdb_catalog);
   g_test_add_func ("/wyrebox/daemon/mailbox-catalog-duckdb/conflict",
-      test_select_by_name_conflict_fails);
+      test_name_conflict_prefers_ordinary_and_keeps_view_id);
 
   return g_test_run ();
 }
