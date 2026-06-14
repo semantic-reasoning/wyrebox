@@ -2,14 +2,29 @@
 
 #include "wyrebox-daemon-client-identity.h"
 #include "wyrebox-daemon-audit-payload.h"
+#include "wyrebox-derived-view-materializer-wirelog.h"
+#include "wyrebox-fact-journal-snapshot.h"
 
 #include <gio/gio.h>
+
+static const char *configured_derived_view_id = "view-projects";
+static const char *configured_derived_view_imap_name = "Projects";
+static const char *configured_derived_view_definition_ref = "wirelog:projects";
+static const char *configured_derived_view_relation_name =
+    "show_in_virtual_folder";
+static const char *configured_derived_view_rules_source =
+    ".decl project_keyword(message_id: symbol, view_id: symbol)\n"
+    ".decl show_in_virtual_folder(view_id: symbol, message_id: symbol)\n"
+    "show_in_virtual_folder(view_id, message_id) :- "
+    "project_keyword(message_id, view_id).\n";
 
 struct _WyreboxDaemonFactMutationService
 {
   GObject parent_instance;
 
   WyreboxJournalWriter *journal_writer;
+  WyreboxDerivedViewMaterializer *derived_view_materializer;
+  char *derived_view_journal_root_dir;
 };
 
 G_DEFINE_TYPE (WyreboxDaemonFactMutationService,
@@ -91,6 +106,8 @@ wyrebox_daemon_fact_mutation_service_finalize (GObject *object)
   WyreboxDaemonFactMutationService *self =
       WYREBOX_DAEMON_FACT_MUTATION_SERVICE (object);
 
+  g_clear_object (&self->derived_view_materializer);
+  g_clear_pointer (&self->derived_view_journal_root_dir, g_free);
   g_clear_object (&self->journal_writer);
 
   G_OBJECT_CLASS (wyrebox_daemon_fact_mutation_service_parent_class)->finalize
@@ -123,6 +140,44 @@ wyrebox_daemon_fact_mutation_service_new (WyreboxJournalWriter *journal_writer)
   self->journal_writer = g_object_ref (journal_writer);
 
   return self;
+}
+
+gboolean
+    wyrebox_daemon_fact_mutation_service_configure_wirelog_derived_view
+    (WyreboxDaemonFactMutationService * self, const char *journal_root_dir,
+    const char *catalog_path, GError ** error)
+{
+  g_autoptr (WyreboxDerivedViewMaterializer) materializer = NULL;
+
+  g_return_val_if_fail (WYREBOX_IS_DAEMON_FACT_MUTATION_SERVICE (self), FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (journal_root_dir == NULL || *journal_root_dir == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "derived view materialization journal root is required");
+    return FALSE;
+  }
+
+  if (catalog_path == NULL || *catalog_path == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "derived view materialization catalog path is required");
+    return FALSE;
+  }
+
+  materializer = wyrebox_derived_view_materializer_new_duckdb (catalog_path,
+      error);
+  if (materializer == NULL)
+    return FALSE;
+
+  g_set_object (&self->derived_view_materializer, materializer);
+  g_free (self->derived_view_journal_root_dir);
+  self->derived_view_journal_root_dir = g_strdup (journal_root_dir);
+
+  return TRUE;
 }
 
 static gboolean
@@ -160,6 +215,92 @@ append_audit_record (WyreboxDaemonFactMutationService *self,
   return wyrebox_journal_writer_append (self->journal_writer,
       WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED, payload_bytes,
       &audit_offset, &audit_sequence, error);
+}
+
+static void
+fact_record_ptr_free (gpointer data)
+{
+  WyreboxFactRecord *record = data;
+
+  if (record == NULL)
+    return;
+
+  wyrebox_fact_record_clear (record);
+  g_free (record);
+}
+
+static GPtrArray *
+fact_record_array_new (void)
+{
+  return g_ptr_array_new_with_free_func (fact_record_ptr_free);
+}
+
+static GPtrArray *
+filter_facts_for_scope (GPtrArray *facts, const char *scope_id, GError **error)
+{
+  g_autofree char *expected_source = NULL;
+  g_autoptr (GPtrArray) scoped_facts = NULL;
+
+  expected_source = g_strdup_printf ("fact-mutation:%s", scope_id);
+  scoped_facts = fact_record_array_new ();
+
+  for (guint i = 0; i < facts->len; i++) {
+    const WyreboxFactRecord *record = g_ptr_array_index (facts, i);
+    WyreboxFactRecord *copy = NULL;
+
+    if (record == NULL) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA, "fact snapshot contains NULL record");
+      return NULL;
+    }
+
+    if (g_strcmp0 (record->source, expected_source) != 0)
+      continue;
+
+    copy = g_new0 (WyreboxFactRecord, 1);
+    if (!wyrebox_fact_record_init (copy,
+            record->predicate,
+            (const char *const *) record->args,
+            record->source, record->confidence_ppm,
+            record->created_at_unix_us, error)) {
+      fact_record_ptr_free (copy);
+      return NULL;
+    }
+
+    g_ptr_array_add (scoped_facts, copy);
+  }
+
+  return g_steal_pointer (&scoped_facts);
+}
+
+static gboolean
+materialize_configured_derived_view (WyreboxDaemonFactMutationService *self,
+    const char *scope_id, GError **error)
+{
+  g_autoptr (GPtrArray) facts = NULL;
+  g_autoptr (GPtrArray) scoped_facts = NULL;
+  g_autoptr (GPtrArray) changes = NULL;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (self->derived_view_materializer == NULL)
+    return TRUE;
+
+  facts = wyrebox_fact_journal_snapshot_load_active
+      (self->derived_view_journal_root_dir, error);
+  if (facts == NULL)
+    return FALSE;
+
+  scoped_facts = filter_facts_for_scope (facts, scope_id, error);
+  if (scoped_facts == NULL)
+    return FALSE;
+
+  if (!wyrebox_derived_view_materializer_refresh_from_rules_and_facts_with_changes (self->derived_view_materializer, scope_id, configured_derived_view_id, configured_derived_view_imap_name, configured_derived_view_definition_ref, (guint64) g_get_real_time (), configured_derived_view_rules_source, scoped_facts, configured_derived_view_relation_name, &changes, error))
+    return FALSE;
+
+  return wyrebox_derived_view_membership_changes_append_journal (changes,
+      self->journal_writer, error);
 }
 
 static gboolean
@@ -232,6 +373,18 @@ handle_authorized_fact_batch_import (WyreboxDaemonFactMutationService
           wyrebox_daemon_fact_batch_import_request_get_scope_id (request),
           n_entries, NULL, journal_offset, journal_sequence, error))
     return FALSE;
+
+  if (self->derived_view_materializer != NULL) {
+    g_autoptr (GError) materialize_error = NULL;
+    const char *scope_id =
+        wyrebox_daemon_fact_batch_import_request_get_scope_id (request);
+
+    if (!materialize_configured_derived_view (self, scope_id,
+            &materialize_error)) {
+      g_debug ("fact batch import materialization failed after durable "
+          "commit: %s", materialize_error->message);
+    }
+  }
 
   return wyrebox_daemon_response_frame_init_fact_batch_import_success
       (out_frame, identity->request_id, identity->correlation_id, request,
