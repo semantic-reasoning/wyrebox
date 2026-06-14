@@ -171,4 +171,10 @@ if capnp_serialization_found
     dependencies: [wyrebox_dep],
     install: true,
   )
+  wyrebox_postfix_lmtp = executable(
+    'wyrebox-postfix-lmtp',
+    'postfix/wyrebox-postfix-lmtp-main.c',
+    dependencies: [wyrebox_dep],
+    install: true,
+  )
 endif
