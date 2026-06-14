@@ -916,8 +916,12 @@ static gboolean
 duckdb_store_add_message_header_sender_domain (WyreboxSchemaMetadataStoreDuckdb
     *self, GError **error)
 {
+  g_autoptr (GError) current_error = NULL;
   g_autoptr (GError) v6_error = NULL;
   g_autoptr (GError) v3_error = NULL;
+
+  if (duckdb_store_validate_message_header_table (self, &current_error))
+    return TRUE;
 
   if (duckdb_store_validate_message_header_table_v6 (self, &v6_error))
     return TRUE;
