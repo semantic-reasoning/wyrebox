@@ -269,6 +269,15 @@ scan_safe_prefix_for_root (const char *journal_root_dir,
 }
 
 static gboolean
+scan_safe_prefix_for_segment_fd (int fd,
+    const char *segment_path, WyreboxJournalSafePrefix *out_prefix,
+    GError **error)
+{
+  return wyrebox_journal_reader_scan_safe_prefix_for_segment_fd (fd,
+      segment_path, out_prefix, error);
+}
+
+static gboolean
 safe_prefix_is_recoverable_torn_suffix (const WyreboxJournalSafePrefix *prefix)
 {
   return prefix->unsafe_suffix_found &&
@@ -509,7 +518,8 @@ wyrebox_journal_writer_recover_torn_suffix (const char *journal_root_dir,
   if (!stat_segment (segment_path, &locked_path_stat, error))
     return FALSE;
 
-  if (!scan_safe_prefix_for_root (journal_root_dir, &locked_prefix, error))
+  if (!scan_safe_prefix_for_segment_fd (fd, segment_path, &locked_prefix,
+          error))
     return FALSE;
 
   if (initial_stat.size != locked_path_stat.size ||

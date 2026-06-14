@@ -24,6 +24,29 @@ static const char *canonical_event_types[] = {
   "DaemonAuditRecorded",
 };
 
+static gboolean track_fd_scoped_scan_calls = FALSE;
+static guint fd_scoped_scan_call_count = 0;
+
+gboolean __real_wyrebox_journal_reader_scan_safe_prefix_for_segment_fd (int
+    segment_fd, const char *segment_description,
+    WyreboxJournalSafePrefix * out_prefix, GError ** error);
+
+gboolean __wrap_wyrebox_journal_reader_scan_safe_prefix_for_segment_fd (int
+    segment_fd, const char *segment_description,
+    WyreboxJournalSafePrefix * out_prefix, GError ** error);
+
+gboolean
+__wrap_wyrebox_journal_reader_scan_safe_prefix_for_segment_fd (int segment_fd,
+    const char *segment_description, WyreboxJournalSafePrefix *out_prefix,
+    GError **error)
+{
+  if (track_fd_scoped_scan_calls)
+    fd_scoped_scan_call_count++;
+
+  return __real_wyrebox_journal_reader_scan_safe_prefix_for_segment_fd
+      (segment_fd, segment_description, out_prefix, error);
+}
+
 static void
 remove_tree (const char *path)
 {
@@ -868,9 +891,14 @@ test_recovers_partial_header_after_valid_record (void)
 
   append_bytes_to_segment (segment_path, torn_header, sizeof (torn_header));
 
-  g_assert_true (wyrebox_journal_writer_recover_torn_suffix (root,
-          &recovered_safe_end_offset, &recovered_last_safe_sequence, &error));
+  fd_scoped_scan_call_count = 0;
+  track_fd_scoped_scan_calls = TRUE;
+  gboolean recovered = wyrebox_journal_writer_recover_torn_suffix (root,
+      &recovered_safe_end_offset, &recovered_last_safe_sequence, &error);
+  track_fd_scoped_scan_calls = FALSE;
+  g_assert_true (recovered);
   g_assert_no_error (error);
+  g_assert_cmpuint (fd_scoped_scan_call_count, ==, 1);
   g_assert_cmpuint (recovered_safe_end_offset, ==, safe_end_offset);
   g_assert_cmpuint (recovered_last_safe_sequence, ==, last_safe_sequence);
   assert_segment_size (segment_path, safe_end_offset);
@@ -1408,6 +1436,82 @@ test_rejects_recovery_while_lock_held (void)
   remove_tree (root);
 }
 
+static void
+test_fd_scoped_scan_uses_open_segment_after_path_replaced (void)
+{
+  const guint8 original_payload[] = { 0x6f, 0x6c, 0x64 };
+  const guint8 replacement_payload[] = { 0x6e, 0x65, 0x77 };
+  const guint8 torn_header[] = { 0x57, 0x59, 0x52, 0x45 };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autofree char *detached_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxJournalReader) path_reader = NULL;
+  g_autoptr (GBytes) original_bytes =
+      g_bytes_new_static (original_payload, sizeof (original_payload));
+  g_autoptr (GBytes) replacement_bytes =
+      g_bytes_new_static (replacement_payload, sizeof (replacement_payload));
+  g_autofd int fd = -1;
+  WyreboxJournalSafePrefix fd_prefix = { 0 };
+  WyreboxJournalSafePrefix path_prefix = { 0 };
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  guint64 safe_end_offset = 0;
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+  detached_path = g_strconcat (segment_path, ".detached", NULL);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          original_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  safe_end_offset = 64 + strlen (canonical_event_types[0]) +
+      sizeof (original_payload);
+  g_clear_object (&writer);
+
+  append_bytes_to_segment (segment_path, torn_header, sizeof (torn_header));
+
+  fd = open (segment_path, O_RDONLY | O_CLOEXEC);
+  g_assert_cmpint (fd, >=, 0);
+  g_assert_cmpint (g_rename (segment_path, detached_path), ==, 0);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          replacement_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_clear_object (&writer);
+
+  g_assert_true (wyrebox_journal_reader_scan_safe_prefix_for_segment_fd (fd,
+          segment_path, &fd_prefix, &error));
+  g_assert_no_error (error);
+  (void) close (fd);
+  fd = -1;
+
+  g_assert_false (fd_prefix.reached_eof);
+  g_assert_true (fd_prefix.unsafe_suffix_found);
+  g_assert_cmpint (fd_prefix.stop_reason, ==,
+      WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_HEADER);
+  g_assert_cmpuint (fd_prefix.safe_end_offset, ==, safe_end_offset);
+  g_assert_cmpuint (fd_prefix.last_safe_sequence, ==, 1);
+
+  path_reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_reader_scan_safe_prefix (path_reader,
+          &path_prefix, &error));
+  g_assert_no_error (error);
+  g_assert_true (path_prefix.reached_eof);
+  g_assert_false (path_prefix.unsafe_suffix_found);
+
+  remove_tree (root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1474,6 +1578,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/journal-writer/rejects-recovery-while-lock-held",
       test_rejects_recovery_while_lock_held);
+  g_test_add_func
+      ("/journal-writer/fd-scoped-scan-uses-open-segment-after-path-replaced",
+      test_fd_scoped_scan_uses_open_segment_after_path_replaced);
 
   return g_test_run ();
 }

@@ -66,6 +66,17 @@ gboolean wyrebox_journal_reader_scan_safe_prefix (WyreboxJournalReader *self,
     WyreboxJournalSafePrefix *out_prefix, GError **error);
 
 /*
+ * Scans an already-open journal segment fd.
+ *
+ * The scan duplicates @segment_fd and owns the duplicate; the caller retains
+ * ownership of @segment_fd. The readable size is captured with fstat() before
+ * scanning.
+ */
+gboolean wyrebox_journal_reader_scan_safe_prefix_for_segment_fd (int
+    segment_fd, const char *segment_description,
+    WyreboxJournalSafePrefix *out_prefix, GError **error);
+
+/*
  * Validates and consumes the journal record at @checkpoint_offset.
  *
  * On success, the record at @checkpoint_offset must have
