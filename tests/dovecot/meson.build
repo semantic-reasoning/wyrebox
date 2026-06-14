@@ -46,7 +46,14 @@ if have_dovecot_backend
     dependencies: [wyrebox_dep],
   )
 
-  test('dovecot plugin mailbox smoke', dovecot_plugin_mailbox_smoke)
+  test(
+    'dovecot plugin mailbox smoke',
+    dovecot_plugin_mailbox_smoke,
+    env: {
+      'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() /
+        'tests' / 'object-store' / 'fixtures',
+    },
+  )
 endif
 
 if have_dovecot_loader_smoke
