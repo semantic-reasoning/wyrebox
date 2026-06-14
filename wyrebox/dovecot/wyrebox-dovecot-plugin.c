@@ -36,7 +36,17 @@ typedef struct
 {
   struct mailbox_list_vfuncs previous_vfuncs;
   struct mailbox_list_vfuncs *previous_vlast;
+  char *socket_path;
+  char *account_identity;
 } WyreboxDovecotMailboxListHookContext;
+
+typedef struct
+{
+  struct mailbox_list_iterate_context ctx;
+  struct mailbox_info *entries;
+  guint n_entries;
+  guint next_entry;
+} WyreboxDovecotMailboxListIterContext;
 
 typedef gboolean (*WyreboxDovecotMailboxListPublishFunc) (struct mailbox_list
     * list, const char *name, char hierarchy_delimiter, gboolean selectable,
@@ -70,6 +80,36 @@ wyrebox_dovecot_socket_path (void)
   return "/run/wyrebox/wyrebox.sock";
 }
 
+static void
+wyrebox_dovecot_mailbox_list_hook_context_free (gpointer data)
+{
+  WyreboxDovecotMailboxListHookContext *context = data;
+
+  if (context == NULL) {
+    return;
+  }
+
+  g_free (context->socket_path);
+  g_free (context->account_identity);
+  g_free (context);
+}
+
+static void
+    wyrebox_dovecot_mailbox_list_iter_context_free
+    (WyreboxDovecotMailboxListIterContext * context)
+{
+  if (context == NULL) {
+    return;
+  }
+
+  for (guint i = 0; i < context->n_entries; i++) {
+    g_free ((char *) context->entries[i].vname);
+    g_free ((char *) context->entries[i].special_use);
+  }
+  g_free (context->entries);
+  g_free (context);
+}
+
 static WyreboxDovecotMailboxListHookContext *
 wyrebox_dovecot_mailbox_list_hook_context_lookup (struct mailbox_list *list)
 {
@@ -78,23 +118,6 @@ wyrebox_dovecot_mailbox_list_hook_context_lookup (struct mailbox_list *list)
   }
 
   return g_hash_table_lookup (wyrebox_dovecot_mailbox_list_hook_contexts, list);
-}
-
-static struct mailbox_list_vfuncs *
-wyrebox_dovecot_mailbox_list_previous_vfuncs (struct mailbox_list *list)
-{
-  WyreboxDovecotMailboxListHookContext *context;
-
-  if (list == NULL) {
-    return NULL;
-  }
-
-  context = wyrebox_dovecot_mailbox_list_hook_context_lookup (list);
-  if (context != NULL) {
-    return &context->previous_vfuncs;
-  }
-
-  return NULL;
 }
 
 static gboolean
@@ -115,6 +138,76 @@ wyrebox_dovecot_mailbox_list_restore_hook (struct mailbox_list *list,
   list->v = context->previous_vfuncs;
   list->vlast = context->previous_vlast;
   g_hash_table_remove (wyrebox_dovecot_mailbox_list_hook_contexts, list);
+  return TRUE;
+}
+
+static enum mailbox_info_flags
+    wyrebox_dovecot_mailbox_list_flags_from_entry
+    (const WyreboxDaemonMailboxListEntry * entry)
+{
+  enum mailbox_info_flags flags = 0;
+
+  if (!entry->is_selectable) {
+    flags |= MAILBOX_NOSELECT;
+  }
+
+  switch (entry->child_state) {
+    case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN:
+      flags |= MAILBOX_CHILDREN;
+      break;
+    case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN:
+      flags |= MAILBOX_NOCHILDREN;
+      break;
+    case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN:
+    default:
+      break;
+  }
+
+  return flags;
+}
+
+static gboolean
+    wyrebox_dovecot_mailbox_list_iter_context_append_entry
+    (WyreboxDovecotMailboxListIterContext * context,
+    const WyreboxDaemonMailboxListEntry * entry, GError ** error)
+{
+  struct mailbox_info *info;
+
+  if (entry == NULL || entry->mailbox_name == NULL
+      || entry->mailbox_name[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "Dovecot mailbox LIST iterator received invalid mailbox name");
+    return FALSE;
+  }
+
+  info = &context->entries[context->n_entries];
+  info->vname = g_strdup (entry->mailbox_name);
+  if (info->vname == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "Dovecot mailbox LIST iterator failed to copy mailbox name");
+    return FALSE;
+  }
+
+  if (entry->special_use != NULL) {
+    info->special_use = g_strdup (entry->special_use);
+    if (info->special_use == NULL) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_FAILED,
+          "Dovecot mailbox LIST iterator failed to copy special-use flag");
+      g_free ((char *) info->vname);
+      info->vname = NULL;
+      return FALSE;
+    }
+  }
+
+  info->flags = wyrebox_dovecot_mailbox_list_flags_from_entry (entry);
+  info->ns = NULL;
+  context->n_entries++;
   return TRUE;
 }
 
@@ -139,50 +232,79 @@ static struct mailbox_list_iterate_context *
 wyrebox_dovecot_mailbox_list_iter_init (struct mailbox_list *list,
     const char *const *patterns, enum mailbox_list_iter_flags flags)
 {
-  struct mailbox_list_vfuncs *previous_vfuncs;
+  WyreboxDovecotMailboxListHookContext *hook_context;
+  WyreboxDovecotMailboxListIterContext *context;
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  guint n_entries;
 
-  previous_vfuncs = wyrebox_dovecot_mailbox_list_previous_vfuncs (list);
-  if (previous_vfuncs == NULL || previous_vfuncs->iter_init == NULL) {
+  (void) patterns;
+
+  hook_context = wyrebox_dovecot_mailbox_list_hook_context_lookup (list);
+  if (hook_context == NULL) {
     return NULL;
   }
 
-  return previous_vfuncs->iter_init (list, patterns, flags);
+  context = g_new0 (WyreboxDovecotMailboxListIterContext, 1);
+  context->ctx.list = list;
+  context->ctx.flags = flags;
+
+  if (!wyrebox_dovecot_daemon_client_list_mailboxes (hook_context->socket_path,
+          hook_context->account_identity, "", &result, &error)) {
+    context->ctx.failed = TRUE;
+    return &context->ctx;
+  }
+
+  n_entries = wyrebox_daemon_mailbox_list_result_get_n_entries (&result);
+  context->entries = g_new0 (struct mailbox_info, n_entries);
+
+  for (guint i = 0; i < n_entries; i++) {
+    const WyreboxDaemonMailboxListEntry *entry =
+        wyrebox_daemon_mailbox_list_result_get_entry (&result, i);
+
+    if (!wyrebox_dovecot_mailbox_list_iter_context_append_entry (context,
+            entry, &error)) {
+      context->ctx.failed = TRUE;
+      break;
+    }
+  }
+
+  return &context->ctx;
 }
 
 static const struct mailbox_info *
 wyrebox_dovecot_mailbox_list_iter_next (struct
     mailbox_list_iterate_context *ctx)
 {
-  struct mailbox_list_vfuncs *previous_vfuncs;
+  WyreboxDovecotMailboxListIterContext *context;
 
   if (ctx == NULL) {
     return NULL;
   }
 
-  previous_vfuncs = wyrebox_dovecot_mailbox_list_previous_vfuncs (ctx->list);
-  if (previous_vfuncs == NULL || previous_vfuncs->iter_next == NULL) {
+  context = (WyreboxDovecotMailboxListIterContext *) ctx;
+  if (context->next_entry >= context->n_entries) {
     return NULL;
   }
 
-  return previous_vfuncs->iter_next (ctx);
+  return &context->entries[context->next_entry++];
 }
 
 static int
 wyrebox_dovecot_mailbox_list_iter_deinit (struct
     mailbox_list_iterate_context *ctx)
 {
-  struct mailbox_list_vfuncs *previous_vfuncs;
+  WyreboxDovecotMailboxListIterContext *context;
+  gboolean failed;
 
   if (ctx == NULL) {
     return 0;
   }
 
-  previous_vfuncs = wyrebox_dovecot_mailbox_list_previous_vfuncs (ctx->list);
-  if (previous_vfuncs == NULL || previous_vfuncs->iter_deinit == NULL) {
-    return 0;
-  }
-
-  return previous_vfuncs->iter_deinit (ctx);
+  context = (WyreboxDovecotMailboxListIterContext *) ctx;
+  failed = ctx->failed;
+  wyrebox_dovecot_mailbox_list_iter_context_free (context);
+  return failed ? -1 : 0;
 }
 
 static void
@@ -607,10 +729,10 @@ wyrebox_dovecot_storage_add_list (struct mail_storage *storage,
     struct mailbox_list *list)
 {
   WyreboxDovecotMailboxListHookContext *context;
+  struct wyrebox_dovecot_storage *wstorage =
+      (struct wyrebox_dovecot_storage *) storage;
 
-  (void) storage;
-
-  if (list == NULL) {
+  if (storage == NULL || list == NULL) {
     return;
   }
 
@@ -621,10 +743,17 @@ wyrebox_dovecot_storage_add_list (struct mail_storage *storage,
   context = g_new0 (WyreboxDovecotMailboxListHookContext, 1);
   context->previous_vfuncs = list->v;
   context->previous_vlast = list->vlast;
+  context->socket_path = g_strdup (wstorage->socket_path);
+  context->account_identity = g_strdup (wstorage->account_identity);
+  if (context->socket_path == NULL || context->account_identity == NULL) {
+    wyrebox_dovecot_mailbox_list_hook_context_free (context);
+    return;
+  }
 
   if (wyrebox_dovecot_mailbox_list_hook_contexts == NULL) {
     wyrebox_dovecot_mailbox_list_hook_contexts =
-        g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
+        g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL,
+        wyrebox_dovecot_mailbox_list_hook_context_free);
   }
 
   g_hash_table_insert (wyrebox_dovecot_mailbox_list_hook_contexts, list,

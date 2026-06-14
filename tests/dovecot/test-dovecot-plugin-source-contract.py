@@ -496,6 +496,8 @@ def main() -> None:
     for required_fragment in [
         "context->previous_vfuncs = list->v;",
         "context->previous_vlast = list->vlast;",
+        "context->socket_path = g_strdup (wstorage->socket_path);",
+        "context->account_identity = g_strdup (wstorage->account_identity);",
         "list->vlast = &context->previous_vfuncs;",
         "list->v.iter_init = wyrebox_dovecot_mailbox_list_iter_init;",
         "list->v.iter_next = wyrebox_dovecot_mailbox_list_iter_next;",
@@ -516,6 +518,38 @@ def main() -> None:
             raise AssertionError(
                 "plugin source contract failed: add_list must not perform "
                 f"daemon LIST/socket work: {forbidden_fragment}"
+            )
+    iter_init_body = function_body(
+        "wyrebox_dovecot_mailbox_list_iter_init", text)
+    if "wyrebox_dovecot_daemon_client_list_mailboxes" not in iter_init_body:
+        raise AssertionError(
+            "plugin source contract failed: iter_init must perform daemon LIST"
+        )
+    for required_fragment in [
+        "hook_context->socket_path",
+        "hook_context->account_identity",
+        "\"\"",
+        "&result",
+        "context->ctx.list = list;",
+        "context->ctx.flags = flags;",
+    ]:
+        if required_fragment not in text:
+            raise AssertionError(
+                "plugin source contract failed: LIST iterator missing "
+                f"fragment: {required_fragment}"
+            )
+    for required_fragment in [
+        "info->vname = g_strdup (entry->mailbox_name);",
+        "info->special_use = g_strdup (entry->special_use);",
+        "flags |= MAILBOX_NOSELECT;",
+        "flags |= MAILBOX_CHILDREN;",
+        "flags |= MAILBOX_NOCHILDREN;",
+        "return &context->entries[context->next_entry++];",
+    ]:
+        if required_fragment not in text:
+            raise AssertionError(
+                "plugin source contract failed: daemon LIST entry mapping "
+                f"missing fragment: {required_fragment}"
             )
     require(
         r"\.v\s*=\s*\{[\s\S]*?\.add_list\s*=\s*"
