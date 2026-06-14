@@ -1656,6 +1656,27 @@ def main() -> None:
         "## DuckDB Query Template Operation Contract",
         r"may read daemon-owned DuckDB materialized state",
     )
+    for template_contract in [
+        r"`messages\.by_from_addr\.v1\(from_addr, limit, offset\)` performs an exact match",
+        r"`messages\.by_sender_domain\.v1\(sender_domain, limit, offset\)` performs an exact match",
+        r"sender-domain metadata.*normalized to lowercase ASCII",
+        r"`messages\.by_subject\.v1\(subject, limit, offset\)` performs an exact, case-sensitive match",
+        r"`messages\.subject_contains\.v1\(subject_term, limit, offset\)` performs an ASCII case-insensitive substring match",
+        r"Search wildcard characters `%`, `_`, and `\\` are treated as literal input",
+        r"`messages\.by_date_range\.v1\(start_unix_us, end_unix_us, limit, offset\)`",
+        r"half-open range.*start_unix_us, end_unix_us",
+        r"Metadata search parameters must be non-empty",
+        r"`limit` is required and must be between `1` and `100`, inclusive",
+        r"`offset` is required, non-negative, and within signed 64-bit range",
+        r"exclude rows where the searched metadata field is `NULL`",
+        r"date range template excludes rows where the decoded timestamp is `NULL`",
+        r"ordered by `journal_sequence ASC, message_id ASC`",
+    ]:
+        assert_section_matches(
+            sections,
+            "## DuckDB Query Template Operation Contract",
+            template_contract,
+        )
     assert_section_matches(
         sections,
         "## DuckDB Query Template Operation Contract",
