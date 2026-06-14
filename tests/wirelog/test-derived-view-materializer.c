@@ -245,6 +245,23 @@ apply_memberships_with_changes (const gchar *path,
 }
 
 static gboolean
+apply_memberships_for_view (const gchar *path, const gchar *view_id,
+    const gchar *imap_name, const gchar *definition_ref, GPtrArray *memberships,
+    GError **error)
+{
+  g_autoptr (WyreboxDerivedViewMaterializer) materializer = NULL;
+
+  materializer = wyrebox_derived_view_materializer_new_duckdb (path, error);
+  if (materializer == NULL)
+    return FALSE;
+
+  return wyrebox_derived_view_materializer_apply_memberships (materializer,
+      "account-1", view_id, imap_name, definition_ref,
+      "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      1000, memberships, error);
+}
+
+static gboolean
 refresh_memberships (const gchar *path, GPtrArray *memberships, GError **error)
 {
   g_autoptr (WyreboxDerivedViewMaterializer) materializer = NULL;
@@ -286,7 +303,8 @@ change_at (GPtrArray *changes, guint index)
 
 static void
 assert_change (const WyreboxDerivedViewMembershipChange *change,
-    const gchar *message_id, guint64 uid, gboolean is_visible)
+    const gchar *message_id, guint64 uid, guint64 uidvalidity,
+    gboolean is_visible)
 {
   g_assert_nonnull (change);
   g_assert_cmpstr (change->account_id, ==, "account-1");
@@ -298,7 +316,7 @@ assert_change (const WyreboxDerivedViewMembershipChange *change,
   g_assert_cmpstr (change->rule_version_hash, ==,
       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   g_assert_cmpuint (change->uid, ==, uid);
-  g_assert_cmpuint (change->uidvalidity, ==, 1);
+  g_assert_cmpuint (change->uidvalidity, ==, uidvalidity);
   g_assert_cmpint (change->is_visible, ==, is_visible);
   g_assert_cmpuint (change->materialized_at_unix_us, ==, 1000);
 }
@@ -426,7 +444,12 @@ assert_materialized_state (const gchar *path, guint64 expected_memberships,
           "SELECT uidvalidity FROM mailbox_uid_state "
           "WHERE account_id = 'account-1' "
           "AND namespace_kind = 'derived_view' "
-          "AND namespace_id = 'view-project-alpha';"), ==, 1);
+          "AND namespace_id = 'view-project-alpha';"), >, 0);
+  g_assert_cmpuint (query_uint64 (fixture.connection,
+          "SELECT uidvalidity FROM mailbox_uid_state "
+          "WHERE account_id = 'account-1' "
+          "AND namespace_kind = 'derived_view' "
+          "AND namespace_id = 'view-project-alpha';"), <=, G_MAXUINT32);
   g_assert_cmpuint (query_uint64 (fixture.connection,
           "SELECT COUNT(*) FROM derived_view_memberships;"), ==,
       expected_memberships);
@@ -498,6 +521,30 @@ query_uidnext (const gchar *path)
   return uidnext;
 }
 
+static guint64
+query_uidvalidity_for_view (const gchar *path, const gchar *view_id)
+{
+  TestDuckdbFixture fixture = { 0 };
+  g_autofree gchar *sql = NULL;
+  guint64 uidvalidity = 0;
+
+  open_duckdb_fixture (path, &fixture);
+  sql = g_strdup_printf ("SELECT uidvalidity FROM mailbox_uid_state "
+      "WHERE account_id = 'account-1' "
+      "AND namespace_kind = 'derived_view' "
+      "AND namespace_id = '%s';", view_id);
+  uidvalidity = query_uint64 (fixture.connection, sql);
+  close_duckdb_fixture (&fixture);
+
+  return uidvalidity;
+}
+
+static guint64
+query_uidvalidity (const gchar *path)
+{
+  return query_uidvalidity_for_view (path, "view-project-alpha");
+}
+
 static void
 test_refresh_initial_snapshot_inserts_two (void)
 {
@@ -527,6 +574,7 @@ test_apply_with_changes_reports_visible_inserts (void)
   g_autoptr (GPtrArray) memberships = new_memberships ();
   g_autoptr (GPtrArray) changes = NULL;
   g_autoptr (GError) error = NULL;
+  guint64 uidvalidity = 0;
 
   seed_messages (path);
   add_membership (memberships, "view-project-alpha", "msg-1");
@@ -535,10 +583,11 @@ test_apply_with_changes_reports_visible_inserts (void)
   g_assert_true (apply_memberships_with_changes (path, memberships, &changes,
           &error));
   g_assert_no_error (error);
+  uidvalidity = query_uidvalidity (path);
   g_assert_nonnull (changes);
   g_assert_cmpuint (changes->len, ==, 2);
-  assert_change (change_at (changes, 0), "msg-1", 1, TRUE);
-  assert_change (change_at (changes, 1), "msg-2", 2, TRUE);
+  assert_change (change_at (changes, 0), "msg-1", 1, uidvalidity, TRUE);
+  assert_change (change_at (changes, 1), "msg-2", 2, uidvalidity, TRUE);
 
   remove_catalog (path);
 }
@@ -639,6 +688,7 @@ test_refresh_with_changes_reports_hidden_stale_row (void)
   g_autoptr (GPtrArray) changes = NULL;
   g_autofree gchar *original_membership_id = NULL;
   g_autoptr (GError) error = NULL;
+  guint64 uidvalidity = 0;
 
   seed_messages (path);
   add_membership (initial, "view-project-alpha", "msg-1");
@@ -654,9 +704,10 @@ test_refresh_with_changes_reports_hidden_stale_row (void)
   g_assert_true (refresh_memberships_with_changes (path, refreshed, &changes,
           &error));
   g_assert_no_error (error);
+  uidvalidity = query_uidvalidity (path);
   g_assert_nonnull (changes);
   g_assert_cmpuint (changes->len, ==, 1);
-  assert_change (change_at (changes, 0), "msg-2", 2, FALSE);
+  assert_change (change_at (changes, 0), "msg-2", 2, uidvalidity, FALSE);
   g_assert_cmpstr (change_at (changes, 0)->membership_id, ==,
       original_membership_id);
 
@@ -742,6 +793,7 @@ test_refresh_hidden_change_append_journal_round_trip (void)
   g_autoptr (GPtrArray) changes = NULL;
   g_autoptr (WyreboxJournalWriter) writer = NULL;
   g_autoptr (GError) error = NULL;
+  guint64 uidvalidity = 0;
 
   seed_messages (path);
   add_membership (initial, "view-project-alpha", "msg-1");
@@ -755,8 +807,9 @@ test_refresh_hidden_change_append_journal_round_trip (void)
   g_assert_true (refresh_memberships_with_changes (path, refreshed, &changes,
           &error));
   g_assert_no_error (error);
+  uidvalidity = query_uidvalidity (path);
   g_assert_cmpuint (changes->len, ==, 1);
-  assert_change (change_at (changes, 0), "msg-2", 2, FALSE);
+  assert_change (change_at (changes, 0), "msg-2", 2, uidvalidity, FALSE);
 
   writer = wyrebox_journal_writer_new (journal_root, &error);
   g_assert_no_error (error);
@@ -782,6 +835,7 @@ test_refresh_with_changes_reports_restore_with_original_uid (void)
   g_autoptr (GPtrArray) changes = NULL;
   g_autofree gchar *original_membership_id = NULL;
   g_autoptr (GError) error = NULL;
+  guint64 uidvalidity = 0;
 
   seed_messages (path);
   add_membership (initial, "view-project-alpha", "msg-1");
@@ -803,9 +857,10 @@ test_refresh_with_changes_reports_restore_with_original_uid (void)
   g_assert_true (refresh_memberships_with_changes (path, restored, &changes,
           &error));
   g_assert_no_error (error);
+  uidvalidity = query_uidvalidity (path);
   g_assert_nonnull (changes);
   g_assert_cmpuint (changes->len, ==, 1);
-  assert_change (change_at (changes, 0), "msg-2", 2, TRUE);
+  assert_change (change_at (changes, 0), "msg-2", 2, uidvalidity, TRUE);
   g_assert_cmpstr (change_at (changes, 0)->membership_id, ==,
       original_membership_id);
 
@@ -852,6 +907,7 @@ test_refresh_with_changes_reports_new_row_after_cleanup (void)
   g_autoptr (GPtrArray) appended = new_memberships ();
   g_autoptr (GPtrArray) changes = NULL;
   g_autoptr (GError) error = NULL;
+  guint64 uidvalidity = 0;
 
   seed_messages (path);
   add_membership (initial, "view-project-alpha", "msg-1");
@@ -872,9 +928,10 @@ test_refresh_with_changes_reports_new_row_after_cleanup (void)
   g_assert_true (refresh_memberships_with_changes (path, appended, &changes,
           &error));
   g_assert_no_error (error);
+  uidvalidity = query_uidvalidity (path);
   g_assert_nonnull (changes);
   g_assert_cmpuint (changes->len, ==, 1);
-  assert_change (change_at (changes, 0), "msg-3", 3, TRUE);
+  assert_change (change_at (changes, 0), "msg-3", 3, uidvalidity, TRUE);
 
   remove_catalog (path);
 }
@@ -1125,6 +1182,8 @@ test_reapply_preserves_uids_and_uidnext (void)
   g_autofree gchar *path = create_catalog ();
   g_autoptr (GPtrArray) memberships = new_memberships ();
   g_autoptr (GError) error = NULL;
+  guint64 before_uidnext = 0;
+  guint64 before_uidvalidity = 0;
 
   seed_messages (path);
   add_membership (memberships, "view-project-alpha", "msg-1");
@@ -1132,12 +1191,118 @@ test_reapply_preserves_uids_and_uidnext (void)
 
   g_assert_true (apply_memberships (path, memberships, &error));
   g_assert_no_error (error);
+  before_uidnext = query_uidnext (path);
+  before_uidvalidity = query_uidvalidity (path);
   g_assert_true (apply_memberships (path, memberships, &error));
   g_assert_no_error (error);
 
   assert_materialized_state (path, 2, 3);
+  g_assert_cmpuint (query_uidnext (path), ==, before_uidnext);
+  g_assert_cmpuint (query_uidvalidity (path), ==, before_uidvalidity);
   g_assert_cmpuint (query_uid_for_message (path, "msg-1"), ==, 1);
   g_assert_cmpuint (query_uid_for_message (path, "msg-2"), ==, 2);
+
+  remove_catalog (path);
+}
+
+static void
+test_two_views_get_distinct_nonzero_uidvalidity (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autoptr (GPtrArray) alpha_memberships = new_memberships ();
+  g_autoptr (GPtrArray) beta_memberships = new_memberships ();
+  g_autoptr (GError) error = NULL;
+  guint64 alpha_uidvalidity = 0;
+  guint64 beta_uidvalidity = 0;
+
+  seed_messages (path);
+  add_membership (alpha_memberships, "view-project-alpha", "msg-1");
+  add_membership (beta_memberships, "view-project-beta", "msg-1");
+
+  g_assert_true (apply_memberships_for_view (path, "view-project-alpha",
+          "Project Alpha", "wirelog:project-alpha", alpha_memberships, &error));
+  g_assert_no_error (error);
+  g_assert_true (apply_memberships_for_view (path, "view-project-beta",
+          "Project Beta", "wirelog:project-beta", beta_memberships, &error));
+  g_assert_no_error (error);
+
+  alpha_uidvalidity = query_uidvalidity_for_view (path, "view-project-alpha");
+  beta_uidvalidity = query_uidvalidity_for_view (path, "view-project-beta");
+
+  g_assert_cmpuint (alpha_uidvalidity, >, 0);
+  g_assert_cmpuint (alpha_uidvalidity, <=, G_MAXUINT32);
+  g_assert_cmpuint (beta_uidvalidity, >, 0);
+  g_assert_cmpuint (beta_uidvalidity, <=, G_MAXUINT32);
+  g_assert_cmpuint (alpha_uidvalidity, !=, beta_uidvalidity);
+
+  remove_catalog (path);
+}
+
+static void
+test_refresh_preserves_uidvalidity_and_uidnext (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autoptr (GPtrArray) memberships = new_memberships ();
+  g_autoptr (GError) error = NULL;
+  guint64 before_uidnext = 0;
+  guint64 before_uidvalidity = 0;
+
+  seed_messages (path);
+  add_membership (memberships, "view-project-alpha", "msg-1");
+  add_membership (memberships, "view-project-alpha", "msg-2");
+
+  g_assert_true (refresh_memberships (path, memberships, &error));
+  g_assert_no_error (error);
+  before_uidnext = query_uidnext (path);
+  before_uidvalidity = query_uidvalidity (path);
+  g_assert_true (refresh_memberships (path, memberships, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpuint (query_uidnext (path), ==, before_uidnext);
+  g_assert_cmpuint (query_uidvalidity (path), ==, before_uidvalidity);
+
+  remove_catalog (path);
+}
+
+static void
+test_reopened_materializer_preserves_uidvalidity (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autoptr (GPtrArray) memberships = new_memberships ();
+  g_autoptr (WyreboxDerivedViewMaterializer) materializer = NULL;
+  g_autoptr (GError) error = NULL;
+  guint64 before_uidvalidity = 0;
+  guint64 before_uidnext = 0;
+
+  seed_messages (path);
+  add_membership (memberships, "view-project-alpha", "msg-1");
+
+  materializer = wyrebox_derived_view_materializer_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (materializer);
+  g_assert_true (wyrebox_derived_view_materializer_apply_memberships
+      (materializer, "account-1", "view-project-alpha", "Project Alpha",
+          "wirelog:project-alpha",
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          1000, memberships, &error));
+  g_assert_no_error (error);
+  g_clear_object (&materializer);
+
+  before_uidvalidity = query_uidvalidity (path);
+  before_uidnext = query_uidnext (path);
+
+  materializer = wyrebox_derived_view_materializer_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (materializer);
+  g_assert_true (wyrebox_derived_view_materializer_apply_memberships
+      (materializer, "account-1", "view-project-alpha", "Project Alpha",
+          "wirelog:project-alpha",
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          1000, memberships, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpuint (query_uidvalidity (path), ==, before_uidvalidity);
+  g_assert_cmpuint (query_uidnext (path), ==, before_uidnext);
 
   remove_catalog (path);
 }
@@ -1414,6 +1579,12 @@ main (int argc, char **argv)
       test_apply_changes_append_journal_round_trip);
   g_test_add_func ("/wirelog/derived-view-materializer/reapply",
       test_reapply_preserves_uids_and_uidnext);
+  g_test_add_func ("/wirelog/derived-view-materializer/uidvalidity-distinct",
+      test_two_views_get_distinct_nonzero_uidvalidity);
+  g_test_add_func ("/wirelog/derived-view-materializer/uidvalidity-refresh",
+      test_refresh_preserves_uidvalidity_and_uidnext);
+  g_test_add_func ("/wirelog/derived-view-materializer/uidvalidity-reopen",
+      test_reopened_materializer_preserves_uidvalidity);
   g_test_add_func ("/wirelog/derived-view-materializer/reapply-changes",
       test_idempotent_apply_with_changes_reports_no_changes);
   g_test_add_func

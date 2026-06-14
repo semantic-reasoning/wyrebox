@@ -18,8 +18,6 @@ struct _WyreboxDerivedViewMaterializer
 G_DEFINE_TYPE (WyreboxDerivedViewMaterializer,
     wyrebox_derived_view_materializer, G_TYPE_OBJECT);
 
-#define DERIVED_VIEW_UIDVALIDITY 1
-
 typedef enum
 {
   MATERIALIZER_MEMBERSHIP_ABSENT,
@@ -43,7 +41,7 @@ static WyreboxDerivedViewMembershipChange *
 membership_change_new (const gchar *account_id,
     const gchar *view_id, const gchar *message_id,
     const gchar *membership_id, const gchar *rule_version_hash, guint64 uid,
-    gboolean is_visible, guint64 materialized_at_unix_us)
+    guint64 uidvalidity, gboolean is_visible, guint64 materialized_at_unix_us)
 {
   WyreboxDerivedViewMembershipChange *change = NULL;
 
@@ -54,7 +52,7 @@ membership_change_new (const gchar *account_id,
   change->membership_id = g_strdup (membership_id);
   change->rule_version_hash = g_strdup (rule_version_hash);
   change->uid = uid;
-  change->uidvalidity = DERIVED_VIEW_UIDVALIDITY;
+  change->uidvalidity = uidvalidity;
   change->is_visible = is_visible;
   change->materialized_at_unix_us = materialized_at_unix_us;
 
@@ -65,14 +63,15 @@ static void
 append_membership_change (GPtrArray *changes, const gchar *account_id,
     const gchar *view_id, const gchar *message_id,
     const gchar *membership_id, const gchar *rule_version_hash, guint64 uid,
-    gboolean is_visible, guint64 materialized_at_unix_us)
+    guint64 uidvalidity, gboolean is_visible, guint64 materialized_at_unix_us)
 {
   if (changes == NULL)
     return;
 
   g_ptr_array_add (changes,
       membership_change_new (account_id, view_id, message_id, membership_id,
-          rule_version_hash, uid, is_visible, materialized_at_unix_us));
+          rule_version_hash, uid, uidvalidity, is_visible,
+          materialized_at_unix_us));
 }
 
 static void
@@ -277,11 +276,61 @@ materializer_ensure_derived_view (WyreboxDerivedViewMaterializer *self,
   return FALSE;
 }
 
+static guint32
+materializer_generate_uidvalidity (const gchar *account_id,
+    const gchar *view_id)
+{
+  g_autoptr (GChecksum) checksum = NULL;
+  const gchar *components[] = {
+    "derived-view-uidvalidity:v1",
+    account_id,
+    view_id,
+  };
+  const gchar *digest = NULL;
+  guint32 uidvalidity = 0;
+
+  checksum = g_checksum_new (G_CHECKSUM_SHA256);
+  for (guint i = 0; i < G_N_ELEMENTS (components); i++) {
+    const guint64 len = strlen (components[i]);
+    guint8 len_bytes[8] = {
+      (guint8) ((len >> 56) & 0xff),
+      (guint8) ((len >> 48) & 0xff),
+      (guint8) ((len >> 40) & 0xff),
+      (guint8) ((len >> 32) & 0xff),
+      (guint8) ((len >> 24) & 0xff),
+      (guint8) ((len >> 16) & 0xff),
+      (guint8) ((len >> 8) & 0xff),
+      (guint8) (len & 0xff),
+    };
+
+    g_checksum_update (checksum, len_bytes, sizeof (len_bytes));
+    g_checksum_update (checksum, (const guchar *) components[i], len);
+  }
+  digest = g_checksum_get_string (checksum);
+
+  for (guint i = 0; i < 8; i++) {
+    const gchar c = digest[i];
+    uidvalidity <<= 4;
+    if (c >= '0' && c <= '9')
+      uidvalidity |= (guint32) (c - '0');
+    else
+      uidvalidity |= (guint32) (c - 'a' + 10);
+  }
+
+  if (uidvalidity == 0)
+    uidvalidity = 1;
+
+  return uidvalidity;
+}
+
 static gboolean
 materializer_insert_uid_state (WyreboxDerivedViewMaterializer *self,
     const gchar *account_id, const gchar *view_id, GError **error)
 {
   g_auto (duckdb_prepared_statement) statement = NULL;
+  guint32 uidvalidity = 0;
+
+  uidvalidity = materializer_generate_uidvalidity (account_id, view_id);
 
   return materializer_prepare (self,
       "INSERT OR IGNORE INTO mailbox_uid_state ("
@@ -289,14 +338,14 @@ materializer_insert_uid_state (WyreboxDerivedViewMaterializer *self,
       ") VALUES (?, 'derived_view', ?, 1, ?);", &statement, error)
       && bind_varchar (statement, 1, account_id, error)
       && bind_varchar (statement, 2, view_id, error)
-      && bind_uint64 (statement, 3, DERIVED_VIEW_UIDVALIDITY, error)
+      && bind_uint64 (statement, 3, uidvalidity, error)
       && materializer_execute_prepared (statement, error);
 }
 
 static gboolean
 materializer_select_uidnext (WyreboxDerivedViewMaterializer *self,
     const gchar *account_id, const gchar *view_id, guint64 *out_uidnext,
-    GError **error)
+    guint64 *out_uidvalidity, GError **error)
 {
   g_auto (duckdb_prepared_statement) statement = NULL;
   g_auto (duckdb_result) result = { 0 };
@@ -335,11 +384,11 @@ materializer_select_uidnext (WyreboxDerivedViewMaterializer *self,
 
   uidnext = (guint64) duckdb_value_uint64 (&result, 0, 0);
   uidvalidity = (guint64) duckdb_value_uint64 (&result, 1, 0);
-  if (uidvalidity != DERIVED_VIEW_UIDVALIDITY) {
+  if (uidvalidity == 0) {
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_DATA,
-        "derived view UID state has unexpected UIDVALIDITY for %s/%s",
+        "derived view UID state has invalid UIDVALIDITY for %s/%s",
         account_id, view_id);
     return FALSE;
   }
@@ -362,6 +411,7 @@ materializer_select_uidnext (WyreboxDerivedViewMaterializer *self,
   }
 
   *out_uidnext = uidnext;
+  *out_uidvalidity = uidvalidity;
   return TRUE;
 }
 
@@ -630,7 +680,8 @@ static gboolean
 materializer_append_stale_hide_changes (WyreboxDerivedViewMaterializer *self,
     const gchar *account_id, const gchar *view_id,
     const gchar *rule_version_hash, guint64 materialized_at_unix_us,
-    GHashTable *incoming_message_ids, GPtrArray *changes, GError **error)
+    GHashTable *incoming_message_ids, guint64 uidvalidity,
+    GPtrArray *changes, GError **error)
 {
   g_auto (duckdb_prepared_statement) statement = NULL;
   g_auto (duckdb_result) result = { 0 };
@@ -689,7 +740,7 @@ materializer_append_stale_hide_changes (WyreboxDerivedViewMaterializer *self,
 
     if (!g_hash_table_contains (incoming_message_ids, message_id))
       append_membership_change (changes, account_id, view_id, message_id,
-          membership_id, rule_version_hash, uid, FALSE,
+          membership_id, rule_version_hash, uid, uidvalidity, FALSE,
           materialized_at_unix_us);
 
     duckdb_free (membership_id);
@@ -703,7 +754,8 @@ static gboolean
     materializer_append_other_rule_hide_changes
     (WyreboxDerivedViewMaterializer * self, const gchar * account_id,
     const gchar * view_id, const gchar * current_rule_version_hash,
-    guint64 materialized_at_unix_us, GPtrArray * changes, GError ** error)
+    guint64 materialized_at_unix_us, guint64 uidvalidity,
+    GPtrArray * changes, GError ** error)
 {
   g_auto (duckdb_prepared_statement) statement = NULL;
   g_auto (duckdb_result) result = { 0 };
@@ -766,7 +818,8 @@ static gboolean
     uid = (guint64) duckdb_value_uint64 (&result, 3, row);
 
     append_membership_change (changes, account_id, view_id, message_id,
-        membership_id, rule_version_hash, uid, FALSE, materialized_at_unix_us);
+        membership_id, rule_version_hash, uid, uidvalidity, FALSE,
+        materialized_at_unix_us);
 
     duckdb_free (membership_id);
     duckdb_free (message_id);
@@ -858,7 +911,7 @@ materializer_apply_membership (WyreboxDerivedViewMaterializer *self,
     const gchar *account_id, const gchar *view_id,
     const gchar *rule_version_hash, guint64 materialized_at_unix_us,
     const WyreboxWirelogDerivedMembership *membership, guint64 *uidnext,
-    GPtrArray *changes, GError **error)
+    guint64 uidvalidity, GPtrArray *changes, GError **error)
 {
   gboolean exists = FALSE;
   g_autofree gchar *membership_id = NULL;
@@ -903,8 +956,8 @@ materializer_apply_membership (WyreboxDerivedViewMaterializer *self,
     return FALSE;
 
   append_membership_change (changes, account_id, view_id,
-      membership->message_id, membership_id, rule_version_hash, *uidnext, TRUE,
-      materialized_at_unix_us);
+      membership->message_id, membership_id, rule_version_hash, *uidnext,
+      uidvalidity, TRUE, materialized_at_unix_us);
   (*uidnext)++;
   return TRUE;
 }
@@ -914,7 +967,8 @@ materializer_refresh_membership (WyreboxDerivedViewMaterializer *self,
     const gchar *account_id, const gchar *view_id,
     const gchar *rule_version_hash, guint64 materialized_at_unix_us,
     const WyreboxWirelogDerivedMembership *membership, guint64 *uidnext,
-    GHashTable *hidden_before_refresh, GPtrArray *changes, GError **error)
+    guint64 uidvalidity, GHashTable *hidden_before_refresh,
+    GPtrArray *changes, GError **error)
 {
   MaterializerMembershipState state = MATERIALIZER_MEMBERSHIP_ABSENT;
   g_autofree gchar *membership_id = NULL;
@@ -961,8 +1015,8 @@ materializer_refresh_membership (WyreboxDerivedViewMaterializer *self,
 
     if (g_hash_table_contains (hidden_before_refresh, membership->message_id))
       append_membership_change (changes, account_id, view_id,
-          membership->message_id, membership_id, rule_version_hash, uid, TRUE,
-          materialized_at_unix_us);
+          membership->message_id, membership_id, rule_version_hash, uid,
+          uidvalidity, TRUE, materialized_at_unix_us);
     return TRUE;
   }
 
@@ -974,8 +1028,8 @@ materializer_refresh_membership (WyreboxDerivedViewMaterializer *self,
     return FALSE;
 
   append_membership_change (changes, account_id, view_id,
-      membership->message_id, membership_id, rule_version_hash, *uidnext, TRUE,
-      materialized_at_unix_us);
+      membership->message_id, membership_id, rule_version_hash, *uidnext,
+      uidvalidity, TRUE, materialized_at_unix_us);
   (*uidnext)++;
   return TRUE;
 }
@@ -1228,6 +1282,7 @@ gboolean
     GPtrArray ** out_changes, GError ** error)
 {
   guint64 uidnext = 0;
+  guint64 uidvalidity = 0;
   g_autoptr (GPtrArray) changes = NULL;
 
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
@@ -1258,7 +1313,8 @@ gboolean
       !materializer_ensure_derived_view (self, account_id, view_id, imap_name,
           definition_ref, error) ||
       !materializer_insert_uid_state (self, account_id, view_id, error) ||
-      !materializer_select_uidnext (self, account_id, view_id, &uidnext, error))
+      !materializer_select_uidnext (self, account_id, view_id, &uidnext,
+          &uidvalidity, error))
     goto fail;
 
   for (guint i = 0; i < memberships->len; i++) {
@@ -1267,7 +1323,7 @@ gboolean
 
     if (!materializer_apply_membership (self, account_id, view_id,
             rule_version_hash, materialized_at_unix_us, membership, &uidnext,
-            changes, error))
+            uidvalidity, changes, error))
       goto fail;
   }
 
@@ -1308,6 +1364,7 @@ materializer_refresh_memberships_with_changes (WyreboxDerivedViewMaterializer
     GPtrArray **out_changes, GError **error)
 {
   guint64 uidnext = 0;
+  guint64 uidvalidity = 0;
   g_autoptr (GPtrArray) changes = NULL;
   g_autoptr (GHashTable) incoming_message_ids = NULL;
   g_autoptr (GHashTable) hidden_before_refresh = NULL;
@@ -1351,12 +1408,12 @@ materializer_refresh_memberships_with_changes (WyreboxDerivedViewMaterializer
           definition_ref, error) ||
       !materializer_insert_uid_state (self, account_id, view_id, error) ||
       !materializer_select_uidnext (self, account_id, view_id, &uidnext,
-          error) ||
+          &uidvalidity, error) ||
       !materializer_collect_hidden_message_ids (self, account_id, view_id,
           rule_version_hash, hidden_before_refresh, error) ||
       !materializer_append_stale_hide_changes (self, account_id, view_id,
           rule_version_hash, materialized_at_unix_us, incoming_message_ids,
-          changes, error) ||
+          uidvalidity, changes, error) ||
       !materializer_hide_scope_memberships (self, account_id, view_id,
           rule_version_hash, materialized_at_unix_us, error))
     goto fail;
@@ -1367,7 +1424,7 @@ materializer_refresh_memberships_with_changes (WyreboxDerivedViewMaterializer
 
     if (!materializer_refresh_membership (self, account_id, view_id,
             rule_version_hash, materialized_at_unix_us, membership, &uidnext,
-            hidden_before_refresh, changes, error))
+            uidvalidity, hidden_before_refresh, changes, error))
       goto fail;
   }
 
@@ -1376,7 +1433,8 @@ materializer_refresh_memberships_with_changes (WyreboxDerivedViewMaterializer
 
   if (hide_other_rule_versions &&
       (!materializer_append_other_rule_hide_changes (self, account_id, view_id,
-              rule_version_hash, materialized_at_unix_us, changes, error) ||
+              rule_version_hash, materialized_at_unix_us, uidvalidity, changes,
+              error) ||
           !materializer_hide_other_rule_versions (self, account_id, view_id,
               rule_version_hash, materialized_at_unix_us, error)))
     goto fail;
