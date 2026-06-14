@@ -338,6 +338,13 @@ test_dispatcher_ingestor_backed_service_ingests_delivery (void)
   g_assert_cmpstr (decoded.to, ==, "Bob <bob@example.test>");
   g_assert_cmpstr (decoded.date, ==, "Tue, 02 Jun 2026 12:34:56 +0000");
   g_assert_cmpuint (decoded.duplicate_message_id_count, ==, 0);
+  g_assert_cmpstr (decoded.delivery_id, ==, "delivery-123");
+  g_assert_cmpstr (decoded.queue_id, ==, "queue-1");
+  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.envelope_sender, ==, "sender@example.com");
+  g_assert_nonnull (decoded.recipients);
+  g_assert_cmpstr (decoded.recipients[0], ==, "alice@example.com");
+  g_assert_null (decoded.recipients[1]);
 
   stored = wyrebox_local_object_store_get_bytes (store, decoded.object_key,
       &error);

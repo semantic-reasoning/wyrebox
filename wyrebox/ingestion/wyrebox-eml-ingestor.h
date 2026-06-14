@@ -96,5 +96,21 @@ gboolean wyrebox_eml_ingestor_ingest_bytes (WyreboxEmlIngestor *self,
     WyreboxEmlIngestResult *out_result,
     GError **error);
 
+/*
+ * Identity-aware variant for daemon delivery ingestion. The raw object and
+ * journal success semantics are identical to wyrebox_eml_ingestor_ingest_bytes,
+ * but the MessageDelivered payload records daemon delivery identity as v3 when
+ * a journal writer is configured.
+ */
+gboolean wyrebox_eml_ingestor_ingest_delivery_bytes (WyreboxEmlIngestor *self,
+    GBytes *bytes,
+    const char *delivery_id,
+    const char *queue_id,
+    const char *account_identity,
+    const char *envelope_sender,
+    const gchar * const *recipients,
+    WyreboxEmlIngestResult *out_result,
+    GError **error);
+
 G_END_DECLS
 /* *INDENT-ON* */

@@ -4,9 +4,11 @@
 
 #define WYREBOX_MESSAGE_DELIVERED_PAYLOAD_MAGIC_V1 "WYREMDP1"
 #define WYREBOX_MESSAGE_DELIVERED_PAYLOAD_MAGIC_V2 "WYREMDP2"
+#define WYREBOX_MESSAGE_DELIVERED_PAYLOAD_MAGIC_V3 "WYREMDP3"
 #define WYREBOX_MESSAGE_DELIVERED_PAYLOAD_MAGIC_LEN 8
 #define WYREBOX_MESSAGE_DELIVERED_PAYLOAD_HEADER_SIZE_V1 18
 #define WYREBOX_MESSAGE_DELIVERED_PAYLOAD_HEADER_SIZE_V2 30
+#define WYREBOX_MESSAGE_DELIVERED_PAYLOAD_HEADER_SIZE_V3 30
 #define WYREBOX_MESSAGE_DELIVERED_PAYLOAD_NULL_STRING G_MAXUINT32
 #define WYREBOX_SHA256_OBJECT_KEY_PREFIX "sha256:"
 #define WYREBOX_SHA256_OBJECT_KEY_PREFIX_LEN 7
@@ -17,8 +19,9 @@
 /*
  * MessageDelivered payload binary formats:
  *
- * v1 is decoded for journal replay compatibility, but new payloads are always
- * encoded as v2.
+ * v1 is decoded for journal replay compatibility. Ingestor-only payloads are
+ * still encoded as v2. Daemon-backed delivery ingestion encodes v3 when
+ * delivery identity is available.
  *
  * v1:
  *
@@ -37,6 +40,17 @@
  *   30..N   object_key bytes, no NUL terminator
  *   N..     metadata strings in this order:
  *           message_id, subject, from, to, cc, bcc, date
+ *
+ * v3:
+ *
+ *   0..7    ASCII magic "WYREMDP3"
+ *   8..29   same fixed fields as v2, unchanged
+ *   30..N   object_key bytes, no NUL terminator
+ *   N..     v2 metadata strings in the same order, unchanged
+ *   N..     delivery identity strings in this order:
+ *           delivery_id, queue_id, account_identity, envelope_sender
+ *   N..     recipient_count, little-endian guint32
+ *   N..     ordered recipient strings
  *
  * Each metadata string is encoded as a little-endian guint32 byte length
  * followed by that many bytes, without a NUL terminator. G_MAXUINT32 denotes
@@ -139,6 +153,32 @@ checked_add_encoded_string_len (gsize *total, const char *value, GError **error)
   return checked_add_size (total, value_len, error);
 }
 
+static gboolean
+checked_add_encoded_strv_len (gsize *total, const gchar *const *values,
+    GError **error)
+{
+  if (!checked_add_size (total, sizeof (guint32), error))
+    return FALSE;
+
+  if (values == NULL)
+    return TRUE;
+
+  for (gsize i = 0; values[i] != NULL; i++) {
+    if (i == G_MAXUINT32) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "MessageDelivered recipient count is too large");
+      return FALSE;
+    }
+
+    if (!checked_add_encoded_string_len (total, values[i], error))
+      return FALSE;
+  }
+
+  return TRUE;
+}
+
 static void
 write_nullable_string (guint8 **cursor, const char *value)
 {
@@ -156,6 +196,25 @@ write_nullable_string (guint8 **cursor, const char *value)
   *cursor += sizeof (guint32);
   memcpy (*cursor, value, value_len);
   *cursor += value_len;
+}
+
+static void
+write_strv (guint8 **cursor, const gchar *const *values)
+{
+  guint32 count = 0;
+
+  if (values != NULL) {
+    while (values[count] != NULL) {
+      g_assert (count < G_MAXUINT32);
+      count++;
+    }
+  }
+
+  write_u32_le (*cursor, count);
+  *cursor += sizeof (guint32);
+
+  for (guint32 i = 0; i < count; i++)
+    write_nullable_string (cursor, values[i]);
 }
 
 static gboolean
@@ -198,6 +257,50 @@ read_nullable_string (const guint8 *data,
   *out_value = g_strndup ((const char *) data + *offset, value_len);
   *offset += value_len;
 
+  return TRUE;
+}
+
+static gboolean
+read_strv (const guint8 *data,
+    gsize size, gsize *offset, gchar ***out_values, GError **error)
+{
+  guint32 count = 0;
+  g_auto (GStrv) values = NULL;
+
+  g_assert (out_values != NULL);
+  *out_values = NULL;
+
+  if (size - *offset < sizeof (guint32)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA, "MessageDelivered payload is truncated");
+    return FALSE;
+  }
+
+  count = read_u32_le (data + *offset);
+  *offset += sizeof (guint32);
+
+  if ((gsize) count > (size - *offset) / sizeof (guint32)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA, "MessageDelivered payload is truncated");
+    return FALSE;
+  }
+
+  values = g_new0 (gchar *, (gsize) count + 1);
+  for (guint32 i = 0; i < count; i++) {
+    if (!read_nullable_string (data, size, offset, &values[i], error))
+      return FALSE;
+
+    if (values[i] == NULL) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA, "MessageDelivered recipient string is null");
+      return FALSE;
+    }
+  }
+
+  *out_values = g_steal_pointer (&values);
   return TRUE;
 }
 
@@ -368,6 +471,89 @@ decode_v2_payload (const guint8 *data,
   return TRUE;
 }
 
+static gboolean
+decode_v3_payload (const guint8 *data,
+    gsize size, WyreboxMessageDeliveredPayload *out_payload, GError **error)
+{
+  g_auto (WyreboxMessageDeliveredPayload) decoded = { 0 };
+  gsize offset = 0;
+  guint16 object_key_len = 0;
+  guint64 size_bytes = 0;
+  guint64 internal_date_unix_us = 0;
+  guint32 duplicate_message_id_count = 0;
+
+  if (size < WYREBOX_MESSAGE_DELIVERED_PAYLOAD_HEADER_SIZE_V3) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA, "MessageDelivered payload is truncated");
+    return FALSE;
+  }
+
+  size_bytes = read_u64_le (data + 8);
+  internal_date_unix_us = read_u64_le (data + 16);
+  duplicate_message_id_count = read_u32_le (data + 24);
+  object_key_len = read_u16_le (data + 28);
+  if (object_key_len != WYREBOX_SHA256_OBJECT_KEY_LEN) {
+    set_invalid_object_key_error (error, G_IO_ERROR_INVALID_DATA);
+    g_prefix_error (error, "invalid MessageDelivered payload: ");
+    return FALSE;
+  }
+
+  offset = WYREBOX_MESSAGE_DELIVERED_PAYLOAD_HEADER_SIZE_V3;
+  if ((gsize) object_key_len > size - offset) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA, "MessageDelivered payload is truncated");
+    return FALSE;
+  }
+
+  decoded.object_key = g_strndup ((const char *) data + offset, object_key_len);
+  offset += object_key_len;
+  decoded.size_bytes = size_bytes;
+  decoded.internal_date_unix_us = internal_date_unix_us;
+  decoded.duplicate_message_id_count = duplicate_message_id_count;
+
+  if (!validate_object_key (decoded.object_key, G_IO_ERROR_INVALID_DATA, error)) {
+    g_prefix_error (error, "invalid MessageDelivered payload: ");
+    return FALSE;
+  }
+
+  if (!read_nullable_string (data, size, &offset, &decoded.message_id, error) ||
+      !read_nullable_string (data, size, &offset, &decoded.subject, error) ||
+      !read_nullable_string (data, size, &offset, &decoded.from, error) ||
+      !read_nullable_string (data, size, &offset, &decoded.to, error) ||
+      !read_nullable_string (data, size, &offset, &decoded.cc, error) ||
+      !read_nullable_string (data, size, &offset, &decoded.bcc, error) ||
+      !read_nullable_string (data, size, &offset, &decoded.date, error) ||
+      !read_nullable_string (data, size, &offset, &decoded.delivery_id,
+          error) ||
+      !read_nullable_string (data, size, &offset, &decoded.queue_id, error) ||
+      !read_nullable_string (data, size, &offset, &decoded.account_identity,
+          error) ||
+      !read_nullable_string (data, size, &offset, &decoded.envelope_sender,
+          error) ||
+      !read_strv (data, size, &offset, &decoded.recipients, error))
+    return FALSE;
+
+  if (decoded.delivery_id == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA, "MessageDelivered delivery_id is null");
+    return FALSE;
+  }
+
+  if (offset != size) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "MessageDelivered payload length is malformed");
+    return FALSE;
+  }
+
+  take_decoded_payload (out_payload, &decoded);
+  return TRUE;
+}
+
 void
 wyrebox_message_delivered_payload_clear (WyreboxMessageDeliveredPayload
     *payload)
@@ -383,6 +569,11 @@ wyrebox_message_delivered_payload_clear (WyreboxMessageDeliveredPayload
   g_clear_pointer (&payload->cc, g_free);
   g_clear_pointer (&payload->bcc, g_free);
   g_clear_pointer (&payload->date, g_free);
+  g_clear_pointer (&payload->delivery_id, g_free);
+  g_clear_pointer (&payload->queue_id, g_free);
+  g_clear_pointer (&payload->account_identity, g_free);
+  g_clear_pointer (&payload->envelope_sender, g_free);
+  g_clear_pointer (&payload->recipients, g_strfreev);
   payload->size_bytes = 0;
   payload->internal_date_unix_us = 0;
   payload->duplicate_message_id_count = 0;
@@ -397,9 +588,11 @@ wyrebox_message_delivered_payload_encode (const char *object_key,
 }
 
 GBytes *
-wyrebox_message_delivered_payload_encode_full (const char *object_key,
+wyrebox_message_delivered_payload_encode_with_identity (const char *object_key,
     guint64 size_bytes, const WyreboxEmlMetadata *metadata,
-    guint64 internal_date_unix_us, GError **error)
+    guint64 internal_date_unix_us, const char *delivery_id,
+    const char *queue_id, const char *account_identity,
+    const char *envelope_sender, const gchar *const *recipients, GError **error)
 {
   g_autofree guint8 *data = NULL;
   guint8 *cursor = NULL;
@@ -413,11 +606,18 @@ wyrebox_message_delivered_payload_encode_full (const char *object_key,
   const char *bcc = NULL;
   const char *date = NULL;
   guint duplicate_message_id_count = 0;
+  gboolean has_identity = delivery_id != NULL;
 
   g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
   if (!validate_object_key (object_key, G_IO_ERROR_INVALID_ARGUMENT, error))
     return NULL;
+
+  if (has_identity && delivery_id[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "delivery_id is required");
+    return NULL;
+  }
 
   if (metadata != NULL) {
     message_id = metadata->message_id;
@@ -431,7 +631,9 @@ wyrebox_message_delivered_payload_encode_full (const char *object_key,
   }
 
   object_key_len = strlen (object_key);
-  payload_len = WYREBOX_MESSAGE_DELIVERED_PAYLOAD_HEADER_SIZE_V2;
+  payload_len = has_identity ?
+      WYREBOX_MESSAGE_DELIVERED_PAYLOAD_HEADER_SIZE_V3 :
+      WYREBOX_MESSAGE_DELIVERED_PAYLOAD_HEADER_SIZE_V2;
   if (!checked_add_size (&payload_len, object_key_len, error) ||
       !checked_add_encoded_string_len (&payload_len, message_id, error) ||
       !checked_add_encoded_string_len (&payload_len, subject, error) ||
@@ -442,19 +644,34 @@ wyrebox_message_delivered_payload_encode_full (const char *object_key,
       !checked_add_encoded_string_len (&payload_len, date, error))
     return NULL;
 
+  if (has_identity &&
+      (!checked_add_encoded_string_len (&payload_len, delivery_id, error) ||
+          !checked_add_encoded_string_len (&payload_len, queue_id, error) ||
+          !checked_add_encoded_string_len (&payload_len, account_identity,
+              error) ||
+          !checked_add_encoded_string_len (&payload_len, envelope_sender,
+              error) ||
+          !checked_add_encoded_strv_len (&payload_len, recipients, error)))
+    return NULL;
+
   data = g_malloc0 (payload_len);
 
   memcpy (data,
+      has_identity ?
+      WYREBOX_MESSAGE_DELIVERED_PAYLOAD_MAGIC_V3 :
       WYREBOX_MESSAGE_DELIVERED_PAYLOAD_MAGIC_V2,
       WYREBOX_MESSAGE_DELIVERED_PAYLOAD_MAGIC_LEN);
   write_u64_le (data + 8, size_bytes);
   write_u64_le (data + 16, internal_date_unix_us);
   write_u32_le (data + 24, duplicate_message_id_count);
   write_u16_le (data + 28, (guint16) object_key_len);
-  memcpy (data + WYREBOX_MESSAGE_DELIVERED_PAYLOAD_HEADER_SIZE_V2,
+  memcpy (data + (has_identity ?
+          WYREBOX_MESSAGE_DELIVERED_PAYLOAD_HEADER_SIZE_V3 :
+          WYREBOX_MESSAGE_DELIVERED_PAYLOAD_HEADER_SIZE_V2),
       object_key, object_key_len);
-  cursor = data + WYREBOX_MESSAGE_DELIVERED_PAYLOAD_HEADER_SIZE_V2 +
-      object_key_len;
+  cursor = data + (has_identity ?
+      WYREBOX_MESSAGE_DELIVERED_PAYLOAD_HEADER_SIZE_V3 :
+      WYREBOX_MESSAGE_DELIVERED_PAYLOAD_HEADER_SIZE_V2) + object_key_len;
   write_nullable_string (&cursor, message_id);
   write_nullable_string (&cursor, subject);
   write_nullable_string (&cursor, from);
@@ -462,9 +679,26 @@ wyrebox_message_delivered_payload_encode_full (const char *object_key,
   write_nullable_string (&cursor, cc);
   write_nullable_string (&cursor, bcc);
   write_nullable_string (&cursor, date);
+  if (has_identity) {
+    write_nullable_string (&cursor, delivery_id);
+    write_nullable_string (&cursor, queue_id);
+    write_nullable_string (&cursor, account_identity);
+    write_nullable_string (&cursor, envelope_sender);
+    write_strv (&cursor, recipients);
+  }
   g_assert (cursor == data + payload_len);
 
   return g_bytes_new_take (g_steal_pointer (&data), payload_len);
+}
+
+GBytes *
+wyrebox_message_delivered_payload_encode_full (const char *object_key,
+    guint64 size_bytes, const WyreboxEmlMetadata *metadata,
+    guint64 internal_date_unix_us, GError **error)
+{
+  return wyrebox_message_delivered_payload_encode_with_identity (object_key,
+      size_bytes, metadata, internal_date_unix_us, NULL, NULL, NULL, NULL,
+      NULL, error);
 }
 
 gboolean
@@ -502,6 +736,11 @@ wyrebox_message_delivered_payload_decode (GBytes *bytes,
           WYREBOX_MESSAGE_DELIVERED_PAYLOAD_MAGIC_V2,
           WYREBOX_MESSAGE_DELIVERED_PAYLOAD_MAGIC_LEN) == 0)
     return decode_v2_payload (data, size, out_payload, error);
+
+  if (memcmp (data,
+          WYREBOX_MESSAGE_DELIVERED_PAYLOAD_MAGIC_V3,
+          WYREBOX_MESSAGE_DELIVERED_PAYLOAD_MAGIC_LEN) == 0)
+    return decode_v3_payload (data, size, out_payload, error);
 
   g_set_error (error,
       G_IO_ERROR,
