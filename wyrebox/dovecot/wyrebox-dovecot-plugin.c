@@ -63,10 +63,13 @@ typedef struct
 } WyreboxDovecotMailboxListMappedEntry;
 
 static struct mail_storage wyrebox_mail_storage_class;
+static const struct mail_vfuncs wyrebox_dovecot_mail_vfuncs;
 static GHashTable *wyrebox_dovecot_mailbox_list_hook_contexts;
 
 extern const char *wyrebox_dovecot_test_daemon_socket_path
     __attribute__((weak));
+
+struct istream *i_stream_create_from_data (const void *data, size_t size);
 
 static gboolean
 wyrebox_dovecot_map_mailbox_list_child_state (WyreboxDaemonMailboxListChildState
@@ -728,6 +731,122 @@ wyrebox_dovecot_mailbox_get_status (struct mailbox *box,
   return 0;
 }
 
+static const WyreboxDovecotMailboxUidMapRow *
+wyrebox_dovecot_mailbox_lookup_uid_map_row (struct wyrebox_dovecot_mailbox
+    *wbox, guint64 uid, GError **error)
+{
+  if (!wbox->select_result_valid) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED, "WyreBox mailbox SELECT state is unavailable");
+    return NULL;
+  }
+
+  if (wbox->uid_map_snapshot.rows == NULL
+      || wbox->uid_map_snapshot.rows->len == 0) {
+    g_set_error (error,
+        G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "WyreBox mailbox UID map is empty");
+    return NULL;
+  }
+
+  for (guint i = 0; i < wbox->uid_map_snapshot.rows->len; i++) {
+    const WyreboxDovecotMailboxUidMapRow *row =
+        g_ptr_array_index (wbox->uid_map_snapshot.rows, i);
+
+    if (row != NULL && row->uid == uid) {
+      if (row->uid_validity != wbox->select_result.uid_validity) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "WyreBox mailbox UID map row has stale UIDVALIDITY");
+        return NULL;
+      }
+
+      if (row->message_id == NULL || row->message_id[0] == '\0') {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "WyreBox mailbox UID map row has empty message_id");
+        return NULL;
+      }
+
+      return row;
+    }
+  }
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_NOT_FOUND, "WyreBox mailbox UID %" G_GUINT64_FORMAT
+      " is not present in the selected mailbox", uid);
+  return NULL;
+}
+
+static int
+wyrebox_dovecot_mail_get_stream (struct mail *mail, int get_body,
+    struct message_size *hdr_size,
+    struct message_size *body_size, struct istream **stream)
+{
+  struct mailbox *box;
+  struct wyrebox_dovecot_mailbox *wbox;
+  struct wyrebox_dovecot_storage *storage;
+  const WyreboxDovecotMailboxUidMapRow *row;
+  g_autoptr (GBytes) message_bytes = NULL;
+  g_autoptr (GError) error = NULL;
+  gconstpointer data = NULL;
+  gsize size = 0;
+
+  (void) get_body;
+  (void) hdr_size;
+  (void) body_size;
+
+  if (stream != NULL) {
+    *stream = NULL;
+  }
+
+  if (mail == NULL || stream == NULL || mail->box == NULL) {
+    return -1;
+  }
+
+  box = mail->box;
+  wbox = (struct wyrebox_dovecot_mailbox *) box;
+  storage = (struct wyrebox_dovecot_storage *) box->storage;
+
+  row = wyrebox_dovecot_mailbox_lookup_uid_map_row (wbox, mail->uid, &error);
+  if (row == NULL) {
+    mail_storage_set_error (box->storage, MAIL_ERROR_NOTPOSSIBLE,
+        wyrebox_dovecot_mailbox_error_message (error));
+    return -1;
+  }
+
+  message_bytes = wyrebox_dovecot_daemon_client_fetch_message_bytes
+      (storage->socket_path,
+      storage->account_identity,
+      wbox->select_result.mailbox_id,
+      wbox->select_result.kind,
+      wbox->select_result.uid_validity, mail->uid, row->message_id, &error);
+  if (message_bytes == NULL) {
+    mail_storage_set_error (box->storage, MAIL_ERROR_NOTPOSSIBLE,
+        wyrebox_dovecot_mailbox_error_message (error));
+    return -1;
+  }
+
+  data = g_bytes_get_data (message_bytes, &size);
+  if (data == NULL || size == 0) {
+    mail_storage_set_error (box->storage, MAIL_ERROR_NOTPOSSIBLE,
+        "WyreBox daemon returned empty message bytes");
+    return -1;
+  }
+
+  *stream = i_stream_create_from_data (data, size);
+  if (*stream == NULL) {
+    mail_storage_set_error (box->storage, MAIL_ERROR_NOTPOSSIBLE,
+        "WyreBox Dovecot plugin failed to create message stream");
+    return -1;
+  }
+
+  return 0;
+}
+
 static struct mailbox *
 wyrebox_dovecot_mailbox_alloc (struct mail_storage *storage,
     struct mailbox_list *list, const char *vname, enum mailbox_flags flags)
@@ -750,7 +869,7 @@ wyrebox_dovecot_mailbox_alloc (struct mail_storage *storage,
   }
   wbox->mailbox.name = p_strdup (pool, name);
   wbox->mailbox.event = event_create (storage->event);
-  wbox->mailbox.mail_vfuncs = NULL;
+  wbox->mailbox.mail_vfuncs = &wyrebox_dovecot_mail_vfuncs;
   wbox->mailbox.vlast = NULL;
   wbox->mailbox.v.open = wyrebox_dovecot_mailbox_open;
   wbox->mailbox.v.get_status = wyrebox_dovecot_mailbox_get_status;
@@ -786,6 +905,10 @@ wyrebox_dovecot_storage_alloc (void)
 
   return &storage->storage;
 }
+
+static const struct mail_vfuncs wyrebox_dovecot_mail_vfuncs = {
+  .get_stream = wyrebox_dovecot_mail_get_stream,
+};
 
 static int
 wyrebox_dovecot_storage_create (struct mail_storage *storage,
