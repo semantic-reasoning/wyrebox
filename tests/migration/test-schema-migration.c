@@ -228,6 +228,41 @@ assert_message_header_sender_domain_retry_rows_preserved (const gchar *path)
 }
 
 static void
+assert_message_header_date_retry_rows_preserved (const gchar *path)
+{
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+  duckdb_result result = { 0 };
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_query (connection,
+          "SELECT COUNT(*) FROM message_headers;", &result), ==, DuckDBSuccess);
+  g_assert_cmpuint (duckdb_value_uint64 (&result, 0, 0), ==, 3);
+  duckdb_destroy_result (&result);
+  memset (&result, 0, sizeof result);
+
+  g_assert_cmpint (duckdb_query (connection,
+          "SELECT COUNT(*) FROM message_headers "
+          "WHERE message_id IN ("
+          "'message-mixed', 'message-malformed', 'message-old-current-year'"
+          ");", &result), ==, DuckDBSuccess);
+  g_assert_cmpuint (duckdb_value_uint64 (&result, 0, 0), ==, 3);
+  duckdb_destroy_result (&result);
+  memset (&result, 0, sizeof result);
+
+  g_assert_cmpint (duckdb_query (connection,
+          "SELECT COUNT(*) FROM information_schema.tables "
+          "WHERE table_name = 'message_headers_replacement';", &result), ==,
+      DuckDBSuccess);
+  g_assert_cmpuint (duckdb_value_uint64 (&result, 0, 0), ==, 0);
+  duckdb_destroy_result (&result);
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
+}
+
+static void
 assert_message_header_date_unix_us_column_exists (const gchar *path)
 {
   duckdb_database database = NULL;
@@ -1585,6 +1620,53 @@ create_retry_v6_message_header_shape (const gchar *path)
 }
 
 static void
+create_retry_current_message_header_shape (const gchar *path)
+{
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  assert_bootstrap_query_succeeds (connection, "DROP TABLE message_headers;");
+  assert_bootstrap_query_succeeds (connection,
+      "CREATE TABLE message_headers ("
+      "message_id VARCHAR PRIMARY KEY,"
+      "rfc_message_id VARCHAR,"
+      "duplicate_message_id_count UBIGINT NOT NULL,"
+      "subject VARCHAR,"
+      "from_addr VARCHAR,"
+      "sender_domain VARCHAR,"
+      "to_addr VARCHAR,"
+      "cc_addr VARCHAR,"
+      "bcc_addr VARCHAR,"
+      "date_raw VARCHAR,"
+      "date_unix_us BIGINT,"
+      "journal_offset UBIGINT NOT NULL,"
+      "journal_sequence UBIGINT NOT NULL" ");");
+  assert_bootstrap_query_succeeds (connection,
+      "INSERT INTO message_headers ("
+      "message_id, rfc_message_id, duplicate_message_id_count, subject, "
+      "from_addr, sender_domain, to_addr, cc_addr, bcc_addr, date_raw, "
+      "date_unix_us, journal_offset, journal_sequence"
+      ") VALUES "
+      "('message-mixed', '<message-mixed@example.test>', 0, "
+      "'Mixed sender', 'Sender <SENDER@Example.TEST>', 'example.test', "
+      "'to@example.test', NULL, NULL, "
+      "'Fri, 12 Jun 2026 05:00:00 -0500', 1781258400000000, 100, 1),"
+      "('message-malformed', '<message-malformed@example.test>', 0, "
+      "'Malformed sender', 'no-domain-address', NULL, "
+      "'to@example.test', NULL, NULL, NULL, NULL, 101, 2),"
+      "('message-old-current-year', '<message-old@example.test>', 0, "
+      "'Old current year', 'sender@example.test', 'example.test', "
+      "'to@example.test', NULL, NULL, "
+      "'Fri, 12 Jun 1899 05:00:00 -0500', NULL, 102, 3);");
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
+}
+
+static void
 test_schema_migration_duckdb_run_store_v5_adds_sender_domain (void)
 {
   g_autofree char *root = NULL;
@@ -1721,6 +1803,89 @@ static void
   assert_message_header_sender_domain_retry_rows_preserved (path);
   assert_message_header_date_unix_us_column_exists (path);
   assert_message_header_date_unix_us_backfilled (path);
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_metadata_store_load (store, &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==,
+      wyrebox_schema_migration_get_current_schema_version ());
+  g_assert_false (loaded.materialization_checkpoint_present);
+  g_assert_cmpuint (loaded.materialization_checkpoint_journal_offset, ==, 0);
+  g_assert_cmpuint (loaded.materialization_checkpoint_sequence, ==, 0);
+  g_assert_false (loaded.checkpoint_precondition_satisfied);
+
+  g_clear_object (&store);
+  remove_directory_tree (root);
+}
+
+static void
+    test_schema_migration_duckdb_run_store_v6_date_unix_us_retry_completes
+    (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  base.schema_version_present = TRUE;
+  base.schema_version = 6;
+  test_schema_migration_set_materialization_checkpoint_fields (&base);
+  g_assert_true (wyrebox_schema_metadata_store_save (store, &base, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
+          0, wyrebox_schema_migration_get_first_supported_schema_version (),
+          &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES,
+          wyrebox_schema_migration_get_first_supported_schema_version (), 2,
+          &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE,
+          2, 3, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS,
+          3, 4, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT,
+          4, 5, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN,
+          5, 6, &error));
+  g_assert_no_error (error);
+  g_clear_object (&store);
+
+  create_retry_current_message_header_shape (path);
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
+          store, FALSE, &error));
+  g_assert_no_error (error);
+  g_clear_object (&store);
+
+  assert_message_header_sender_domain_column_exists (path);
+  assert_message_header_sender_domain_backfilled (path);
+  assert_message_header_date_unix_us_column_exists (path);
+  assert_message_header_date_unix_us_backfilled (path);
+  assert_message_header_date_retry_rows_preserved (path);
 
   store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
   g_assert_no_error (error);
@@ -2528,6 +2693,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/migration/schema/duckdb-run-store-v5-sender-domain-retry-completes",
       test_schema_migration_duckdb_run_store_v5_sender_domain_retry_completes);
+  g_test_add_func
+      ("/migration/schema/duckdb-run-store-v6-date-unix-us-retry-completes",
+      test_schema_migration_duckdb_run_store_v6_date_unix_us_retry_completes);
   g_test_add_func
       ("/migration/schema/duckdb-run-store-v2-adds-message-header-table-rejects-shape-mismatch",
       test_schema_migration_duckdb_run_store_v2_adds_message_header_table_rejects_shape_mismatch);
