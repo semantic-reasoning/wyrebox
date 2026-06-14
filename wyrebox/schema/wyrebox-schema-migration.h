@@ -97,7 +97,7 @@ typedef struct
 
   /*
    * TRUE when the caller has explicitly satisfied the in-memory snapshot/
-   * checkpoint precondition for legacy migration steps that require it.
+   * checkpoint precondition for migration steps that require it.
    *
    * Ownership: value type field; owned by the struct.
    */

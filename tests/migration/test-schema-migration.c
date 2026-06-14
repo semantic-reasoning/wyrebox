@@ -165,6 +165,26 @@ assert_message_header_sender_domain_column_exists (const gchar *path)
 }
 
 static void
+assert_message_header_sender_domain_column_missing (const gchar *path)
+{
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+  duckdb_result result = { 0 };
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_query (connection,
+          "SELECT COUNT(*) FROM information_schema.columns "
+          "WHERE table_name = 'message_headers' "
+          "AND column_name = 'sender_domain';", &result), ==, DuckDBSuccess);
+  g_assert_cmpuint (duckdb_value_uint64 (&result, 0, 0), ==, 0);
+  duckdb_destroy_result (&result);
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
+}
+
+static void
 assert_message_header_sender_domain_backfilled (const gchar *path)
 {
   duckdb_database database = NULL;
@@ -1105,7 +1125,7 @@ static void
   g_assert_no_error (error);
   g_assert_nonnull (store);
   g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
-          store, FALSE, &error));
+          store, TRUE, &error));
   g_assert_no_error (error);
   g_clear_object (&store);
 
@@ -1170,7 +1190,7 @@ test_schema_migration_duckdb_run_store_v2_adds_message_header_table (void)
   g_assert_no_error (error);
   g_assert_nonnull (store);
   g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
-          store, FALSE, &error));
+          store, TRUE, &error));
   g_assert_no_error (error);
   g_clear_object (&store);
 
@@ -1505,7 +1525,7 @@ static void
   g_assert_no_error (error);
   g_assert_nonnull (store);
   g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
-          store, FALSE, &error));
+          store, TRUE, &error));
   g_assert_no_error (error);
   g_clear_object (&store);
 
@@ -1717,7 +1737,7 @@ test_schema_migration_duckdb_run_store_v5_adds_sender_domain (void)
   g_assert_no_error (error);
   g_assert_nonnull (store);
   g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
-          store, FALSE, &error));
+          store, TRUE, &error));
   g_assert_no_error (error);
   g_clear_object (&store);
 
@@ -1737,6 +1757,82 @@ test_schema_migration_duckdb_run_store_v5_adds_sender_domain (void)
   g_assert_false (loaded.materialization_checkpoint_present);
   g_assert_cmpuint (loaded.materialization_checkpoint_journal_offset, ==, 0);
   g_assert_cmpuint (loaded.materialization_checkpoint_sequence, ==, 0);
+
+  g_clear_object (&store);
+  remove_directory_tree (root);
+}
+
+static void
+    test_schema_migration_duckdb_run_store_v5_without_checkpoint_preserves_state
+    (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  base.schema_version_present = TRUE;
+  base.schema_version = 5;
+  g_assert_true (wyrebox_schema_metadata_store_save (store, &base, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
+          0, wyrebox_schema_migration_get_first_supported_schema_version (),
+          &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES,
+          wyrebox_schema_migration_get_first_supported_schema_version (), 2,
+          &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE,
+          2, 3, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS,
+          3, 4, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT,
+          4, 5, &error));
+  g_assert_no_error (error);
+  g_clear_object (&store);
+
+  create_old_v5_message_header_shape (path);
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_false (wyrebox_schema_migration_run_store_to_current (migration,
+          store, TRUE, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+  g_clear_error (&error);
+  g_clear_object (&store);
+
+  assert_message_header_sender_domain_column_missing (path);
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_metadata_store_load (store, &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==, base.schema_version);
+  g_assert_false (loaded.materialization_checkpoint_present);
+  g_assert_cmpuint (loaded.materialization_checkpoint_journal_offset, ==,
+      base.materialization_checkpoint_journal_offset);
+  g_assert_cmpuint (loaded.materialization_checkpoint_sequence, ==,
+      base.materialization_checkpoint_sequence);
+  g_assert_false (loaded.checkpoint_precondition_satisfied);
 
   g_clear_object (&store);
   remove_directory_tree (root);
@@ -1794,7 +1890,7 @@ static void
   g_assert_no_error (error);
   g_assert_nonnull (store);
   g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
-          store, FALSE, &error));
+          store, TRUE, &error));
   g_assert_no_error (error);
   g_clear_object (&store);
 
@@ -1873,7 +1969,7 @@ static void
   g_assert_no_error (error);
   g_assert_nonnull (store);
   g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
-          store, FALSE, &error));
+          store, TRUE, &error));
   g_assert_no_error (error);
   g_clear_object (&store);
 
@@ -1956,7 +2052,7 @@ static void
   g_assert_no_error (error);
   g_assert_nonnull (store);
   g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
-          store, FALSE, &error));
+          store, TRUE, &error));
   g_assert_no_error (error);
   g_clear_object (&store);
 
@@ -2026,7 +2122,7 @@ test_schema_migration_duckdb_run_store_v3_adds_derived_view_memberships (void)
   g_assert_no_error (error);
   g_assert_nonnull (store);
   g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
-          store, FALSE, &error));
+          store, TRUE, &error));
   g_assert_no_error (error);
   g_clear_object (&store);
 
@@ -2414,6 +2510,110 @@ test_materialization_checkpoint_missing_blocks_checkpointed_migration (void)
 }
 
 static void
+test_destructive_forward_path_without_checkpoint_precondition_fails (void)
+{
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) metadata = { 0 };
+  g_autoptr (GError) error = NULL;
+  TestMigrationFixtureData fixture_data = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  metadata.schema_version_present = TRUE;
+  metadata.schema_version = 4;
+  test_schema_migration_set_materialization_checkpoint_fields (&metadata);
+  wyrebox_schema_migration_set_test_step_hooks (migration,
+      test_schema_migration_record_step_calls,
+      test_schema_migration_record_validation_calls, &fixture_data, NULL);
+
+  g_assert_false (wyrebox_schema_migration_evaluate_to_current (migration,
+          &metadata, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+  g_assert_true (metadata.schema_version_present);
+  g_assert_cmpuint (metadata.schema_version, ==, 4);
+  g_assert_false (metadata.checkpoint_precondition_satisfied);
+  g_assert_cmpuint (fixture_data.operation_call_count, ==, 0);
+  g_assert_cmpuint (fixture_data.validation_call_count, ==, 0);
+  g_assert_true (metadata.materialization_checkpoint_present);
+  g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==,
+      4096);
+  g_assert_cmpuint (metadata.materialization_checkpoint_sequence, ==, 2048);
+}
+
+static void
+test_destructive_forward_path_without_materialization_checkpoint_fails (void)
+{
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) metadata = { 0 };
+  g_autoptr (GError) error = NULL;
+  TestMigrationFixtureData fixture_data = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  metadata.schema_version_present = TRUE;
+  metadata.schema_version = 4;
+  metadata.checkpoint_precondition_satisfied = TRUE;
+  wyrebox_schema_migration_set_test_step_hooks (migration,
+      test_schema_migration_record_step_calls,
+      test_schema_migration_record_validation_calls, &fixture_data, NULL);
+
+  g_assert_false (wyrebox_schema_migration_evaluate_to_current (migration,
+          &metadata, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+  g_assert_true (metadata.schema_version_present);
+  g_assert_cmpuint (metadata.schema_version, ==, 4);
+  g_assert_true (metadata.checkpoint_precondition_satisfied);
+  g_assert_cmpuint (fixture_data.operation_call_count, ==, 0);
+  g_assert_cmpuint (fixture_data.validation_call_count, ==, 0);
+  g_assert_false (metadata.materialization_checkpoint_present);
+  g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==, 0);
+  g_assert_cmpuint (metadata.materialization_checkpoint_sequence, ==, 0);
+}
+
+static void
+    test_schema_migration_run_store_to_current_destructive_without_materialization_checkpoint_fails
+    (void)
+{
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  TestSchemaMetadataStoreSpy *spy = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  spy = test_schema_metadata_store_spy_new ();
+
+  base.schema_version_present = TRUE;
+  base.schema_version = 5;
+
+  g_assert_true (wyrebox_schema_metadata_store_save ((WyreboxSchemaMetadataStore
+              *) spy, &base, &error));
+  g_assert_no_error (error);
+  spy->save_called = FALSE;
+  spy->save_call_count = 0;
+  spy->migration_operation_call_count = 0;
+
+  g_clear_error (&error);
+  g_assert_false (wyrebox_schema_migration_run_store_to_current (migration,
+          (WyreboxSchemaMetadataStore *) spy, TRUE, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+  g_assert_false (spy->save_called);
+  g_assert_cmpuint (spy->save_call_count, ==, 0);
+  g_assert_cmpuint (spy->migration_operation_call_count, ==, 0);
+
+  g_clear_error (&error);
+  g_assert_true (wyrebox_schema_metadata_store_load (
+          (WyreboxSchemaMetadataStore *) spy, &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==, 5);
+  g_assert_false (loaded.checkpoint_precondition_satisfied);
+  g_assert_false (loaded.materialization_checkpoint_present);
+  g_assert_cmpuint (loaded.materialization_checkpoint_journal_offset, ==, 0);
+  g_assert_cmpuint (loaded.materialization_checkpoint_sequence, ==, 0);
+
+  g_object_unref (spy);
+}
+
+static void
     test_schema_migration_run_store_to_current_legacy_without_materialization_checkpoint_fails
     (void)
 {
@@ -2770,6 +2970,9 @@ main (int argc, char **argv)
       ("/migration/schema/duckdb-run-store-v5-adds-sender-domain",
       test_schema_migration_duckdb_run_store_v5_adds_sender_domain);
   g_test_add_func
+      ("/migration/schema/duckdb-run-store-v5-without-checkpoint-preserves-state",
+      test_schema_migration_duckdb_run_store_v5_without_checkpoint_preserves_state);
+  g_test_add_func
       ("/migration/schema/duckdb-run-store-v5-sender-domain-retry-completes",
       test_schema_migration_duckdb_run_store_v5_sender_domain_retry_completes);
   g_test_add_func
@@ -2798,6 +3001,15 @@ main (int argc, char **argv)
   g_test_add_func
       ("/migration/schema/legacy-forward-path-without-materialization-checkpoint-fails",
       test_materialization_checkpoint_missing_blocks_checkpointed_migration);
+  g_test_add_func
+      ("/migration/schema/destructive-forward-path-without-checkpoint-precondition-fails",
+      test_destructive_forward_path_without_checkpoint_precondition_fails);
+  g_test_add_func
+      ("/migration/schema/destructive-forward-path-without-materialization-checkpoint-fails",
+      test_destructive_forward_path_without_materialization_checkpoint_fails);
+  g_test_add_func
+      ("/migration/schema/run-store-to-current-destructive-without-materialization-checkpoint",
+      test_schema_migration_run_store_to_current_destructive_without_materialization_checkpoint_fails);
   g_test_add_func
       ("/migration/schema/run-store-to-current-legacy-without-materialization-checkpoint",
       test_schema_migration_run_store_to_current_legacy_without_materialization_checkpoint_fails);
