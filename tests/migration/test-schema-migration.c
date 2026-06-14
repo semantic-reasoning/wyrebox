@@ -193,6 +193,62 @@ assert_message_header_sender_domain_backfilled (const gchar *path)
 }
 
 static void
+assert_message_header_date_unix_us_column_exists (const gchar *path)
+{
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+  duckdb_result result = { 0 };
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_query (connection,
+          "SELECT COUNT(*) FROM information_schema.columns "
+          "WHERE table_name = 'message_headers' "
+          "AND column_name = 'date_unix_us';", &result), ==, DuckDBSuccess);
+  g_assert_cmpuint (duckdb_value_uint64 (&result, 0, 0), ==, 1);
+  duckdb_destroy_result (&result);
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
+}
+
+static void
+assert_message_header_date_unix_us_backfilled (const gchar *path)
+{
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+  duckdb_result result = { 0 };
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_query (connection,
+          "SELECT COUNT(*) FROM message_headers "
+          "WHERE message_id = 'message-mixed' "
+          "AND date_unix_us = 1781258400000000;", &result), ==, DuckDBSuccess);
+  g_assert_cmpuint (duckdb_value_uint64 (&result, 0, 0), ==, 1);
+  duckdb_destroy_result (&result);
+  memset (&result, 0, sizeof result);
+
+  g_assert_cmpint (duckdb_query (connection,
+          "SELECT COUNT(*) FROM message_headers "
+          "WHERE message_id = 'message-malformed' "
+          "AND date_unix_us IS NULL;", &result), ==, DuckDBSuccess);
+  g_assert_cmpuint (duckdb_value_uint64 (&result, 0, 0), ==, 1);
+  duckdb_destroy_result (&result);
+  memset (&result, 0, sizeof result);
+
+  g_assert_cmpint (duckdb_query (connection,
+          "SELECT COUNT(*) FROM message_headers "
+          "WHERE message_id = 'message-old-current-year' "
+          "AND date_unix_us IS NULL;", &result), ==, DuckDBSuccess);
+  g_assert_cmpuint (duckdb_value_uint64 (&result, 0, 0), ==, 1);
+  duckdb_destroy_result (&result);
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
+}
+
+static void
 assert_message_attribute_tables_missing (const gchar *path)
 {
   duckdb_database database = NULL;
@@ -284,7 +340,7 @@ struct _TestSchemaMetadataStoreSpy
   gboolean save_called;
   gboolean observed_checkpoint_precondition_satisfied;
   guint migration_operation_call_count;
-  WyreboxSchemaMetadataStoreMigrationOperation observed_operations[6];
+  WyreboxSchemaMetadataStoreMigrationOperation observed_operations[7];
   gboolean fail_next_migration_operation;
   WyreboxSchemaMetadataStoreMigrationOperation observed_operation;
   guint64 observed_operation_source_version;
@@ -391,7 +447,9 @@ static gboolean
       || operation ==
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT
       || operation ==
-      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN;
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN
+      || operation ==
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US;
 }
 
 static void
@@ -621,10 +679,10 @@ static void
   g_assert_no_error (error);
   g_assert_true (spy->save_called);
   g_assert_cmpuint (spy->save_call_count, ==, 1);
-  g_assert_cmpuint (spy->migration_operation_call_count, ==, 6);
+  g_assert_cmpuint (spy->migration_operation_call_count, ==, 7);
   g_assert_cmpint (spy->observed_operation, ==,
-      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN);
-  g_assert_cmpuint (spy->observed_operation_source_version, ==, 5);
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US);
+  g_assert_cmpuint (spy->observed_operation_source_version, ==, 6);
   g_assert_cmpuint (spy->observed_operation_target_version, ==,
       wyrebox_schema_migration_get_current_schema_version ());
   g_assert_false (spy->observed_checkpoint_precondition_satisfied);
@@ -655,7 +713,7 @@ test_schema_migration_run_store_missing_metadata_applies_full_path (void)
   g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
           (WyreboxSchemaMetadataStore *) spy, FALSE, &error));
   g_assert_no_error (error);
-  g_assert_cmpuint (spy->migration_operation_call_count, ==, 6);
+  g_assert_cmpuint (spy->migration_operation_call_count, ==, 7);
   g_assert_cmpint (spy->observed_operations[0], ==,
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP);
   g_assert_cmpint (spy->observed_operations[1], ==,
@@ -668,6 +726,8 @@ test_schema_migration_run_store_missing_metadata_applies_full_path (void)
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT);
   g_assert_cmpint (spy->observed_operations[5], ==,
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN);
+  g_assert_cmpint (spy->observed_operations[6], ==,
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US);
   g_assert_cmpuint (spy->save_call_count, ==, 1);
 
   g_object_unref (spy);
@@ -1429,10 +1489,15 @@ create_old_v5_message_header_shape (const gchar *path)
       ") VALUES "
       "('message-mixed', '<message-mixed@example.test>', 0, "
       "'Mixed sender', 'Sender <SENDER@Example.TEST>', "
-      "'to@example.test', NULL, NULL, NULL, 100, 1),"
+      "'to@example.test', NULL, NULL, "
+      "'Fri, 12 Jun 2026 05:00:00 -0500', 100, 1),"
       "('message-malformed', '<message-malformed@example.test>', 0, "
       "'Malformed sender', 'no-domain-address', "
-      "'to@example.test', NULL, NULL, NULL, 101, 2);");
+      "'to@example.test', NULL, NULL, NULL, 101, 2),"
+      "('message-old-current-year', '<message-old@example.test>', 0, "
+      "'Old current year', 'sender@example.test', "
+      "'to@example.test', NULL, NULL, "
+      "'Fri, 12 Jun 1899 05:00:00 -0500', 102, 3);");
 
   (void) duckdb_disconnect (&connection);
   (void) duckdb_close (&database);
@@ -1495,6 +1560,8 @@ test_schema_migration_duckdb_run_store_v5_adds_sender_domain (void)
 
   assert_message_header_sender_domain_column_exists (path);
   assert_message_header_sender_domain_backfilled (path);
+  assert_message_header_date_unix_us_column_exists (path);
+  assert_message_header_date_unix_us_backfilled (path);
 
   store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
   g_assert_no_error (error);
@@ -2002,7 +2069,7 @@ test_missing_schema_metadata_runs_legacy_bootstrap_to_first_version (void)
 
   g_assert_false (metadata.schema_version_present);
   g_assert_cmpuint (first_version, ==, 1);
-  g_assert_cmpuint (current_version, ==, 6);
+  g_assert_cmpuint (current_version, ==, 7);
   g_assert_true (wyrebox_schema_migration_evaluate_to_version (migration,
           &metadata, first_version, &error));
   g_assert_no_error (error);
@@ -2138,8 +2205,8 @@ test_explicit_forward_path_succeeds_with_checkpoint_precondition (void)
   g_assert_true (wyrebox_schema_migration_evaluate_to_current (migration,
           &metadata, &error));
   g_assert_no_error (error);
-  g_assert_cmpuint (fixture_data.operation_call_count, ==, 6);
-  g_assert_cmpuint (fixture_data.validation_call_count, ==, 6);
+  g_assert_cmpuint (fixture_data.operation_call_count, ==, 7);
+  g_assert_cmpuint (fixture_data.validation_call_count, ==, 7);
   g_assert_cmpuint (metadata.schema_version, ==, current_version);
   g_assert_false (metadata.materialization_checkpoint_present);
   g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==, 0);
@@ -2227,7 +2294,7 @@ test_schema_version_constants_are_testable (void)
   g_assert_cmpuint (wyrebox_schema_migration_get_first_supported_schema_version
       (), ==, 1);
   g_assert_cmpuint (wyrebox_schema_migration_get_current_schema_version (),
-      ==, 6);
+      ==, 7);
 }
 
 int

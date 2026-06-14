@@ -57,6 +57,7 @@ wyrebox_sources = files(
   'ingestion/wyrebox-delivery-catchup.c',
   'ingestion/wyrebox-delivery-projection.c',
   'ingestion/wyrebox-delivery-replay-validator.c',
+  'ingestion/wyrebox-rfc5322-date.c',
   'facts/wyrebox-deterministic-fact-extractor.c',
   'facts/wyrebox-fact-journal-snapshot.c',
   'facts/wyrebox-fact-reconciliation.c',

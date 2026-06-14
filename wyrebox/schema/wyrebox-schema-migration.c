@@ -12,7 +12,7 @@
  * Keep these small and explicit for fixture-backed deterministic transitions.
  */
 #define WYREBOX_SCHEMA_VERSION_FIRST 1
-#define WYREBOX_SCHEMA_VERSION_CURRENT 6
+#define WYREBOX_SCHEMA_VERSION_CURRENT 7
 #define WYREBOX_SCHEMA_VERSION_LEGACY_0 0
 
 typedef struct
@@ -111,9 +111,17 @@ static const WyreboxSchemaMigrationStep wyrebox_schema_migration_steps[] = {
         FALSE,
       WYREBOX_SCHEMA_MIGRATION_MATERIALIZATION_CHECKPOINT_INVALIDATE},
   {5,
-        WYREBOX_SCHEMA_VERSION_CURRENT,
+        6,
         "add-message-header-sender-domain",
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN,
+        wyrebox_schema_migration_default_step_operation,
+        wyrebox_schema_migration_default_step_validation,
+        FALSE,
+      WYREBOX_SCHEMA_MIGRATION_MATERIALIZATION_CHECKPOINT_INVALIDATE},
+  {6,
+        WYREBOX_SCHEMA_VERSION_CURRENT,
+        "add-message-header-date-unix-us",
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US,
         wyrebox_schema_migration_default_step_operation,
         wyrebox_schema_migration_default_step_validation,
         FALSE,

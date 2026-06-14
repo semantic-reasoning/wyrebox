@@ -11,6 +11,8 @@ static const char *const messages_by_from_addr_parameters[] =
 static const char *const messages_by_sender_domain_parameters[] =
     { "sender_domain", NULL };
 static const char *const messages_by_subject_parameters[] = { "subject", NULL };
+static const char *const messages_by_date_range_parameters[] =
+    { "start_unix_us", "end_unix_us", NULL };
 
 static const WyreboxDaemonDuckDBQueryTemplateDescriptor catalog[] = {
   {
@@ -55,6 +57,13 @@ static const WyreboxDaemonDuckDBQueryTemplateDescriptor catalog[] = {
         "stream-chunk.duckdb-template.messages-by-subject.v1",
         1,
       messages_by_subject_parameters},
+  {
+        "messages.by_date_range.v1",
+        "messages by date range",
+        "account_id",
+        "stream-chunk.duckdb-template.messages-by-date-range.v1",
+        2,
+      messages_by_date_range_parameters},
 };
 
 static gboolean
