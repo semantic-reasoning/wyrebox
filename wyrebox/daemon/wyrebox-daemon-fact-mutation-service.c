@@ -23,8 +23,8 @@ struct _WyreboxDaemonFactMutationService
   GObject parent_instance;
 
   WyreboxJournalWriter *journal_writer;
-  WyreboxDerivedViewMaterializer *derived_view_materializer;
   char *derived_view_journal_root_dir;
+  char *derived_view_catalog_path;
 };
 
 G_DEFINE_TYPE (WyreboxDaemonFactMutationService,
@@ -106,8 +106,8 @@ wyrebox_daemon_fact_mutation_service_finalize (GObject *object)
   WyreboxDaemonFactMutationService *self =
       WYREBOX_DAEMON_FACT_MUTATION_SERVICE (object);
 
-  g_clear_object (&self->derived_view_materializer);
   g_clear_pointer (&self->derived_view_journal_root_dir, g_free);
+  g_clear_pointer (&self->derived_view_catalog_path, g_free);
   g_clear_object (&self->journal_writer);
 
   G_OBJECT_CLASS (wyrebox_daemon_fact_mutation_service_parent_class)->finalize
@@ -173,9 +173,10 @@ gboolean
   if (materializer == NULL)
     return FALSE;
 
-  g_set_object (&self->derived_view_materializer, materializer);
   g_free (self->derived_view_journal_root_dir);
   self->derived_view_journal_root_dir = g_strdup (journal_root_dir);
+  g_free (self->derived_view_catalog_path);
+  self->derived_view_catalog_path = g_strdup (catalog_path);
 
   return TRUE;
 }
@@ -278,14 +279,20 @@ static gboolean
 materialize_configured_derived_view (WyreboxDaemonFactMutationService *self,
     const char *scope_id, GError **error)
 {
+  g_autoptr (WyreboxDerivedViewMaterializer) materializer = NULL;
   g_autoptr (GPtrArray) facts = NULL;
   g_autoptr (GPtrArray) scoped_facts = NULL;
   g_autoptr (GPtrArray) changes = NULL;
 
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  if (self->derived_view_materializer == NULL)
+  if (self->derived_view_catalog_path == NULL)
     return TRUE;
+
+  materializer = wyrebox_derived_view_materializer_new_duckdb
+      (self->derived_view_catalog_path, error);
+  if (materializer == NULL)
+    return FALSE;
 
   facts = wyrebox_fact_journal_snapshot_load_active
       (self->derived_view_journal_root_dir, error);
@@ -296,7 +303,7 @@ materialize_configured_derived_view (WyreboxDaemonFactMutationService *self,
   if (scoped_facts == NULL)
     return FALSE;
 
-  if (!wyrebox_derived_view_materializer_refresh_from_rules_and_facts_with_changes (self->derived_view_materializer, scope_id, configured_derived_view_id, configured_derived_view_imap_name, configured_derived_view_definition_ref, (guint64) g_get_real_time (), configured_derived_view_rules_source, scoped_facts, configured_derived_view_relation_name, &changes, error))
+  if (!wyrebox_derived_view_materializer_refresh_from_rules_and_facts_with_changes (materializer, scope_id, configured_derived_view_id, configured_derived_view_imap_name, configured_derived_view_definition_ref, (guint64) g_get_real_time (), configured_derived_view_rules_source, scoped_facts, configured_derived_view_relation_name, &changes, error))
     return FALSE;
 
   return wyrebox_derived_view_membership_changes_append_journal (changes,
@@ -309,7 +316,7 @@ log_materialization_failure_if_needed (WyreboxDaemonFactMutationService *self,
 {
   g_autoptr (GError) materialize_error = NULL;
 
-  if (self->derived_view_materializer == NULL)
+  if (self->derived_view_catalog_path == NULL)
     return;
 
   if (!materialize_configured_derived_view (self, scope_id, &materialize_error)) {

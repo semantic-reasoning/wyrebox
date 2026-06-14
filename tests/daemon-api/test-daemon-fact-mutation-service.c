@@ -1,6 +1,7 @@
 #include "wyrebox-daemon-fact-mutation-service.h"
 #include "wyrebox-daemon-audit-payload.h"
 #include "wyrebox-daemon-mailbox-catalog-duckdb.h"
+#include "wyrebox-derived-view-membership-changed-payload.h"
 #include "wyrebox-journal-reader.h"
 #include "wyrebox-schema-metadata-store.h"
 #include "wyrebox-schema-migration.h"
@@ -210,6 +211,65 @@ assert_journal_events (const char *root,
         out_audit != NULL) {
       g_assert_true (wyrebox_daemon_audit_payload_decode (record.payload,
               out_audit, &error));
+      g_assert_no_error (error);
+    }
+  }
+
+  g_auto (WyreboxJournalRecord) record = { 0 };
+  g_assert_false (wyrebox_journal_reader_read_next (reader,
+          &record, &eof, &error));
+  g_assert_no_error (error);
+  g_assert_true (eof);
+}
+
+static void
+assert_journal_events_from_sequence (const char *root,
+    guint64 first_sequence, const WyreboxJournalEventType *event_types,
+    guint n_event_types,
+    WyreboxDerivedViewMembershipChangedPayload *out_membership_change)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_auto (WyreboxJournalRecord) current = { 0 };
+  gboolean eof = FALSE;
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_no_error (error);
+
+  for (;;) {
+    g_assert_true (wyrebox_journal_reader_read_next (reader,
+            &current, &eof, &error));
+    g_assert_no_error (error);
+    g_assert_false (eof);
+
+    if (current.sequence >= first_sequence)
+      break;
+
+    wyrebox_journal_record_clear (&current);
+  }
+
+  for (guint i = 0; i < n_event_types; i++) {
+    g_auto (WyreboxJournalRecord) record = { 0 };
+    WyreboxJournalRecord *record_to_assert = NULL;
+
+    if (i == 0) {
+      record_to_assert = &current;
+    } else {
+      g_assert_true (wyrebox_journal_reader_read_next (reader,
+              &record, &eof, &error));
+      g_assert_no_error (error);
+      g_assert_false (eof);
+      record_to_assert = &record;
+    }
+
+    g_assert_cmpint (record_to_assert->event_type, ==, event_types[i]);
+    g_assert_cmpuint (record_to_assert->sequence, ==, first_sequence + i);
+
+    if (record_to_assert->event_type ==
+        WYREBOX_JOURNAL_EVENT_DERIVED_VIEW_MEMBERSHIP_CHANGED &&
+        out_membership_change != NULL) {
+      g_assert_true (wyrebox_derived_view_membership_changed_payload_decode
+          (record_to_assert->payload, out_membership_change, &error));
       g_assert_no_error (error);
     }
   }
@@ -657,6 +717,205 @@ test_fact_mutation_service_materializes_configured_wirelog_view (void)
 }
 
 static void
+test_fact_mutation_service_retracts_materialized_configured_wirelog_view (void)
+{
+  const WyreboxJournalEventType insert_expected[] = {
+    WYREBOX_JOURNAL_EVENT_FACT_INSERTED,
+    WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED,
+    WYREBOX_JOURNAL_EVENT_DERIVED_VIEW_MEMBERSHIP_CHANGED,
+  };
+  const WyreboxJournalEventType retract_expected[] = {
+    WYREBOX_JOURNAL_EVENT_FACT_RETRACTED,
+    WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED,
+    WYREBOX_JOURNAL_EVENT_DERIVED_VIEW_MEMBERSHIP_CHANGED,
+  };
+  const WyreboxJournalEventType repeated_retract_expected[] = {
+    WYREBOX_JOURNAL_EVENT_FACT_RETRACTED,
+    WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED,
+  };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-fact-mutation-service-XXXXXX", NULL);
+  g_autofree char *catalog_path = create_catalog_path ();
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxDaemonFactMutationService) service = NULL;
+  g_autoptr (WyreboxDaemonMailboxCatalogDuckDB) catalog = NULL;
+  g_auto (WyreboxDaemonRequestIdentity) insert_identity = { 0 };
+  g_auto (WyreboxDaemonRequestIdentity) retract_identity = { 0 };
+  g_auto (WyreboxDaemonRequestIdentity) repeated_retract_identity = { 0 };
+  g_auto (WyreboxDaemonFactMutationRequest) insert_mutation = { 0 };
+  g_auto (WyreboxDaemonFactMutationRequest) retract_mutation = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) insert_frame = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) retract_frame = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) repeated_retract_frame = { 0 };
+  g_auto (WyreboxDaemonMailboxSelectRequest) select_request = { 0 };
+  g_auto (WyreboxDaemonMailboxSelectResult) insert_result = { 0 };
+  g_auto (WyreboxDaemonMailboxSelectResult) retract_result = { 0 };
+  g_auto (WyreboxDaemonMailboxSelectResult) repeated_retract_result = { 0 };
+  g_auto (WyreboxDerivedViewMembershipChangedPayload) insert_change = { 0 };
+  g_auto (WyreboxDerivedViewMembershipChangedPayload) retract_change = { 0 };
+  guint64 insert_uid_validity = 0;
+  guint64 insert_uid_next = 0;
+
+  g_assert_nonnull (root);
+  seed_materialization_catalog (catalog_path, "account-1");
+  g_assert_true (wyrebox_daemon_request_identity_init (&insert_identity,
+          "request-insert",
+          "trusted-tool", "account-1", "fact-importer", "correlation-1",
+          &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_request_identity_init (&retract_identity,
+          "request-retract",
+          "trusted-tool", "account-1", "fact-importer", "correlation-2",
+          &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_request_identity_init
+      (&repeated_retract_identity, "request-retract-again",
+          "trusted-tool", "account-1", "fact-importer", "correlation-3",
+          &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_fact_mutation_request_init (&insert_mutation,
+          WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+          "project_keyword", "account-1",
+          (const char *[]) { "mail-1", "view-projects", NULL }, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_fact_mutation_request_init (&retract_mutation,
+          WYREBOX_DAEMON_FACT_MUTATION_RETRACT,
+          "project_keyword", "account-1",
+          (const char *[]) { "mail-1", "view-projects", NULL }, &error));
+  g_assert_no_error (error);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  service = wyrebox_daemon_fact_mutation_service_new (writer);
+  g_assert_nonnull (service);
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_configure_wirelog_derived_view
+      (service, root, catalog_path, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_fact_mutation_service_handle_identity (service,
+          &insert_identity, &insert_mutation, &insert_frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (insert_frame.kind, ==,
+      WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+  assert_journal_events_from_sequence (root, 1, insert_expected,
+      G_N_ELEMENTS (insert_expected), &insert_change);
+  g_assert_cmpstr (insert_change.account_id, ==, "account-1");
+  g_assert_cmpstr (insert_change.view_id, ==, "view-projects");
+  g_assert_cmpstr (insert_change.message_id, ==, "mail-1");
+  g_assert_true (insert_change.is_visible);
+  g_assert_cmpuint (insert_change.uid, ==, 1);
+  g_assert_cmpuint (insert_change.uidvalidity, !=, 0);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM derived_view_memberships "
+          "WHERE account_id = 'account-1' "
+          "AND view_id = 'view-projects' "
+          "AND message_id = 'mail-1' AND is_visible = TRUE;"), ==, 1);
+
+  catalog = wyrebox_daemon_mailbox_catalog_duckdb_new (catalog_path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (catalog);
+  g_assert_true (wyrebox_daemon_mailbox_select_request_init (&select_request,
+          "account-1", NULL, "Projects", &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_mailbox_catalog_duckdb_select (NULL,
+          &select_request, &insert_result, catalog, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (insert_result.kind, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
+  g_assert_cmpstr (insert_result.mailbox_name, ==, "Projects");
+  g_assert_cmpuint (insert_result.message_count, ==, 1);
+  g_assert_cmpuint (insert_result.uid_validity, ==, insert_change.uidvalidity);
+  g_assert_cmpuint (insert_result.uid_next, ==, 2);
+  insert_uid_validity = insert_result.uid_validity;
+  insert_uid_next = insert_result.uid_next;
+  g_clear_pointer (&catalog, wyrebox_daemon_mailbox_catalog_duckdb_free);
+
+  g_assert_true (wyrebox_daemon_fact_mutation_service_handle_identity (service,
+          &retract_identity, &retract_mutation, &retract_frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (retract_frame.kind, ==,
+      WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+  assert_journal_events_from_sequence (root, 4, retract_expected,
+      G_N_ELEMENTS (retract_expected), &retract_change);
+  g_assert_cmpstr (retract_change.account_id, ==, "account-1");
+  g_assert_cmpstr (retract_change.view_id, ==, "view-projects");
+  g_assert_cmpstr (retract_change.message_id, ==, "mail-1");
+  g_assert_false (retract_change.is_visible);
+  g_assert_cmpstr (retract_change.membership_id, ==,
+      insert_change.membership_id);
+  g_assert_cmpuint (retract_change.uid, ==, insert_change.uid);
+  g_assert_cmpuint (retract_change.uidvalidity, ==, insert_change.uidvalidity);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM derived_view_memberships "
+          "WHERE account_id = 'account-1' "
+          "AND view_id = 'view-projects' "
+          "AND message_id = 'mail-1' AND is_visible = TRUE;"), ==, 0);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM derived_view_memberships "
+          "WHERE account_id = 'account-1' "
+          "AND view_id = 'view-projects' "
+          "AND message_id = 'mail-1' AND is_visible = FALSE;"), ==, 1);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM messages;"), ==, 2);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM derived_views "
+          "WHERE account_id = 'account-1' "
+          "AND view_id = 'view-projects' "
+          "AND imap_name = 'Projects' "
+          "AND is_selectable = TRUE " "AND is_visible = TRUE;"), ==, 1);
+  wyrebox_daemon_mailbox_select_result_clear (&insert_result);
+  catalog = wyrebox_daemon_mailbox_catalog_duckdb_new (catalog_path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (catalog);
+  g_assert_true (wyrebox_daemon_mailbox_catalog_duckdb_select (NULL,
+          &select_request, &retract_result, catalog, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (retract_result.kind, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
+  g_assert_cmpstr (retract_result.mailbox_name, ==, "Projects");
+  g_assert_cmpuint (retract_result.message_count, ==, 0);
+  g_assert_cmpuint (retract_result.uid_validity, ==, insert_uid_validity);
+  g_assert_cmpuint (retract_result.uid_next, ==, insert_uid_next);
+  g_clear_pointer (&catalog, wyrebox_daemon_mailbox_catalog_duckdb_free);
+
+  g_assert_true (wyrebox_daemon_fact_mutation_service_handle_identity (service,
+          &repeated_retract_identity, &retract_mutation,
+          &repeated_retract_frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (repeated_retract_frame.kind, ==,
+      WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+  assert_journal_events_from_sequence (root, 7, repeated_retract_expected,
+      G_N_ELEMENTS (repeated_retract_expected), NULL);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM derived_view_memberships "
+          "WHERE account_id = 'account-1' "
+          "AND view_id = 'view-projects' "
+          "AND message_id = 'mail-1' AND is_visible = TRUE;"), ==, 0);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM derived_view_memberships "
+          "WHERE account_id = 'account-1' "
+          "AND view_id = 'view-projects' "
+          "AND message_id = 'mail-1' AND is_visible = FALSE;"), ==, 1);
+  catalog = wyrebox_daemon_mailbox_catalog_duckdb_new (catalog_path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (catalog);
+  g_assert_true (wyrebox_daemon_mailbox_catalog_duckdb_select (NULL,
+          &select_request, &repeated_retract_result, catalog, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (repeated_retract_result.kind, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
+  g_assert_cmpuint (repeated_retract_result.message_count, ==, 0);
+  g_assert_cmpuint (repeated_retract_result.uid_validity, ==,
+      insert_uid_validity);
+  g_assert_cmpuint (repeated_retract_result.uid_next, ==, insert_uid_next);
+
+  remove_tree (root);
+  remove_catalog_path (catalog_path);
+}
+
+static void
 test_fact_mutation_service_keeps_success_when_materialization_fails (void)
 {
   const WyreboxJournalEventType expected[] = {
@@ -746,6 +1005,9 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/fact-mutation-service/"
       "materializes-configured-wirelog-view",
       test_fact_mutation_service_materializes_configured_wirelog_view);
+  g_test_add_func ("/daemon-api/fact-mutation-service/"
+      "retracts-materialized-configured-wirelog-view",
+      test_fact_mutation_service_retracts_materialized_configured_wirelog_view);
   g_test_add_func ("/daemon-api/fact-mutation-service/"
       "keeps-success-when-materialization-fails",
       test_fact_mutation_service_keeps_success_when_materialization_fails);
