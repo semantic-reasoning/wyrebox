@@ -1,6 +1,0 @@
-#ifndef CONFIG_H
-#define CONFIG_H
-
-#undef DOVECOT_ABI_VERSION
-
-#endif
