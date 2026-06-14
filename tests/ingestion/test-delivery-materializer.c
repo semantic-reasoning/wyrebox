@@ -146,7 +146,11 @@ create_bootstrap_catalog (void)
   g_assert_no_error (error);
   g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN,
-          5, wyrebox_schema_migration_get_current_schema_version (), &error));
+          5, 6, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US,
+          6, wyrebox_schema_migration_get_current_schema_version (), &error));
   g_assert_no_error (error);
 
   return g_steal_pointer (&path);
@@ -770,6 +774,133 @@ test_duplicate_object_materializes_distinct_messages (void)
 }
 
 static void
+test_date_unix_us_is_materialized_from_rfc5322_date (void)
+{
+  g_autofree gchar *path = create_bootstrap_catalog ();
+  g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+  TestDuckdbFixture duckdb = { 0 };
+
+  append_projection_record_with_headers (&projection, "sha256:first",
+      101, 1001, 11, 1, "<first@example.test>", 0, "First subject",
+      "sender@example.test", "to@example.test", NULL, NULL,
+      "Fri, 12 Jun 2026 05:00:00 -0500");
+  append_projection_record_with_headers (&projection, "sha256:second",
+      202, 1002, 22, 2, "<second@example.test>", 0, "Second subject",
+      "sender@example.test", "to@example.test", NULL, NULL,
+      "12 Jun 2026 19:30 +0930");
+  append_projection_record_with_headers (&projection, "sha256:third",
+      303, 1003, 33, 3, "<third@example.test>", 0, "Third subject",
+      "sender@example.test", "to@example.test", NULL, NULL,
+      "Fri, 12 Jun 126 05:00:00 -0500");
+
+  apply_projection_to_inbox (path, &projection);
+
+  open_duckdb_fixture (path, &duckdb);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT date_unix_us FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"), ==, 1781258400000000);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT date_unix_us FROM message_headers WHERE "
+          "message_id = 'journal:22:2';"), ==, 1781258400000000);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT date_unix_us FROM message_headers WHERE "
+          "message_id = 'journal:33:3';"), ==, 1781258400000000);
+  close_duckdb_fixture (&duckdb);
+
+  remove_catalog (path);
+}
+
+static void
+test_missing_and_malformed_dates_materialize_null (void)
+{
+  g_autofree gchar *path = create_bootstrap_catalog ();
+  g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+  TestDuckdbFixture duckdb = { 0 };
+
+  append_projection_record_with_headers (&projection, "sha256:first",
+      101, 1001, 11, 1, "<first@example.test>", 0, "First subject",
+      "sender@example.test", "to@example.test", NULL, NULL, NULL);
+  append_projection_record_with_headers (&projection, "sha256:second",
+      202, 1002, 22, 2, "<second@example.test>", 0, "Second subject",
+      "sender@example.test", "to@example.test", NULL, NULL,
+      "Fri, 12 Jun 2026 10:00:00 EST");
+  append_projection_record_with_headers (&projection, "sha256:third",
+      303, 1003, 33, 3, "<third@example.test>", 0, "Third subject",
+      "sender@example.test", "to@example.test", NULL, NULL,
+      "Thu, 12 Jun 2026 05:00:00 -0500");
+  append_projection_record_with_headers (&projection, "sha256:fourth",
+      404, 1004, 44, 4, "<fourth@example.test>", 0, "Fourth subject",
+      "sender@example.test", "to@example.test", NULL, NULL,
+      "Bogus, 12 Jun 2026 05:00:00 -0500");
+
+  apply_projection_to_inbox (path, &projection);
+
+  open_duckdb_fixture (path, &duckdb);
+  g_assert_true (query_is_null (duckdb.connection,
+          "SELECT date_unix_us FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"));
+  g_assert_true (query_is_null (duckdb.connection,
+          "SELECT date_unix_us FROM message_headers WHERE "
+          "message_id = 'journal:22:2';"));
+  g_assert_true (query_is_null (duckdb.connection,
+          "SELECT date_unix_us FROM message_headers WHERE "
+          "message_id = 'journal:33:3';"));
+  g_assert_true (query_is_null (duckdb.connection,
+          "SELECT date_unix_us FROM message_headers WHERE "
+          "message_id = 'journal:44:4';"));
+  close_duckdb_fixture (&duckdb);
+
+  remove_catalog (path);
+}
+
+static void
+test_reapply_projection_with_date_is_idempotent (void)
+{
+  g_autofree gchar *path = create_bootstrap_catalog ();
+  g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+  TestDuckdbFixture duckdb = { 0 };
+
+  append_projection_record_with_headers (&projection, "sha256:first",
+      101, 1001, 11, 1, "<first@example.test>", 0, "First subject",
+      "sender@example.test", "to@example.test", NULL, NULL,
+      "Fri, 12 Jun 2026 10:00:00 UTC");
+
+  apply_projection_to_inbox (path, &projection);
+  apply_projection_to_inbox (path, &projection);
+
+  open_duckdb_fixture (path, &duckdb);
+  assert_table_count (duckdb.connection, "message_headers", 1);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT date_unix_us FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"), ==, 1781258400000000);
+  close_duckdb_fixture (&duckdb);
+
+  remove_catalog (path);
+}
+
+static void
+test_divergent_message_header_date_conflicts (void)
+{
+  g_autofree gchar *path = create_bootstrap_catalog ();
+  g_auto (WyreboxDeliveryProjectionList) initial = { 0 };
+  g_auto (WyreboxDeliveryProjectionList) changed = { 0 };
+
+  append_projection_record_with_headers (&initial, "sha256:first",
+      101, 1001, 11, 1, "<first@example.test>", 0, "First subject",
+      "sender@example.test", "to@example.test", NULL, NULL,
+      "Fri, 12 Jun 2026 10:00:00 +0000");
+  append_projection_record_with_headers (&changed, "sha256:first",
+      101, 1001, 11, 1, "<first@example.test>", 0, "First subject",
+      "sender@example.test", "to@example.test", NULL, NULL,
+      "Fri, 12 Jun 2026 11:00:00 +0000");
+
+  apply_projection_to_inbox (path, &initial);
+  assert_apply_to_inbox_fails_invalid_data (path, &changed);
+
+  remove_catalog (path);
+}
+
+static void
 test_reapply_projection_is_idempotent (void)
 {
   g_autofree gchar *path = create_bootstrap_catalog ();
@@ -1014,6 +1145,14 @@ main (int argc, char **argv)
       test_sender_domain_is_materialized_from_from_addr);
   g_test_add_func ("/ingestion/delivery-materializer/duplicate-object",
       test_duplicate_object_materializes_distinct_messages);
+  g_test_add_func ("/ingestion/delivery-materializer/date-unix-us",
+      test_date_unix_us_is_materialized_from_rfc5322_date);
+  g_test_add_func ("/ingestion/delivery-materializer/date-null",
+      test_missing_and_malformed_dates_materialize_null);
+  g_test_add_func ("/ingestion/delivery-materializer/date-idempotent",
+      test_reapply_projection_with_date_is_idempotent);
+  g_test_add_func ("/ingestion/delivery-materializer/date-conflict",
+      test_divergent_message_header_date_conflicts);
   g_test_add_func ("/ingestion/delivery-materializer/idempotent-reapply",
       test_reapply_projection_is_idempotent);
   g_test_add_func ("/ingestion/delivery-materializer/membership-attributes",

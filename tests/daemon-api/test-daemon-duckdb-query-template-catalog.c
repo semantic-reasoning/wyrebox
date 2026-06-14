@@ -42,6 +42,13 @@ assert_template_resolves (const char *template_id, const char *parameter,
 static void
 test_catalog_resolves_allowlisted_templates (void)
 {
+  const char *date_range_parameters[] = { "1704067200000000",
+    "1704240000000000", NULL
+  };
+  const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) date_range_request = { 0 };
+  g_autoptr (GError) error = NULL;
+
   assert_template_resolves ("mailbox.uid_map.v1", "mailbox-inbox",
       "mailbox uid map", "mailbox_id",
       "stream-chunk.duckdb-template.uid-map.v1");
@@ -60,6 +67,23 @@ test_catalog_resolves_allowlisted_templates (void)
   assert_template_resolves ("messages.by_subject.v1", "Subject A",
       "messages by subject", "subject",
       "stream-chunk.duckdb-template.messages-by-subject.v1");
+
+  init_request (&date_range_request, "messages.by_date_range.v1",
+      date_range_parameters);
+  g_assert_true (wyrebox_daemon_duckdb_query_template_catalog_validate
+      (WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI, "account-1",
+          &date_range_request, &descriptor, &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (descriptor);
+  g_assert_cmpstr (descriptor->template_id, ==, "messages.by_date_range.v1");
+  g_assert_cmpstr (descriptor->name, ==, "messages by date range");
+  g_assert_cmpstr (descriptor->scope_kind, ==, "account_id");
+  g_assert_cmpstr (descriptor->output_format, ==,
+      "stream-chunk.duckdb-template.messages-by-date-range.v1");
+  g_assert_cmpuint (descriptor->n_parameters, ==, 2);
+  g_assert_cmpstr (descriptor->parameter_names[0], ==, "start_unix_us");
+  g_assert_cmpstr (descriptor->parameter_names[1], ==, "end_unix_us");
+  g_assert_null (descriptor->parameter_names[2]);
 }
 
 static void

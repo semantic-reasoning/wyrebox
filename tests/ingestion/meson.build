@@ -31,6 +31,12 @@ delivery_projection_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+rfc5322_date_test = executable(
+  'test-rfc5322-date',
+  'test-rfc5322-date.c',
+  dependencies: [wyrebox_dep],
+)
+
 delivery_materializer_test = executable(
   'test-delivery-materializer',
   'test-delivery-materializer.c',
@@ -82,6 +88,8 @@ test(
     'WYREBOX_EML_FIXTURE_DIR': eml_fixture_dir,
   },
 )
+
+test('rfc5322 date parser', rfc5322_date_test)
 
 test(
   'delivery materializer',

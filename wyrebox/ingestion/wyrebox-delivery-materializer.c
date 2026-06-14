@@ -1,4 +1,5 @@
 #include "wyrebox-delivery-materializer.h"
+#include "wyrebox-rfc5322-date.h"
 
 #include <duckdb.h>
 #include <gio/gio.h>
@@ -173,6 +174,33 @@ bind_uint64 (duckdb_prepared_statement statement, idx_t index,
       G_IO_ERROR,
       G_IO_ERROR_FAILED,
       "DuckDB delivery materializer uint64 bind failed at index %"
+      G_GUINT64_FORMAT, (guint64) index);
+  return FALSE;
+}
+
+static gboolean
+bind_nullable_int64 (duckdb_prepared_statement statement, idx_t index,
+    gboolean has_value, gint64 value, GError **error)
+{
+  if (!has_value) {
+    if (duckdb_bind_null (statement, index) == DuckDBSuccess)
+      return TRUE;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB delivery materializer NULL bind failed at index %"
+        G_GUINT64_FORMAT, (guint64) index);
+    return FALSE;
+  }
+
+  if (duckdb_bind_int64 (statement, index, (int64_t) value) == DuckDBSuccess)
+    return TRUE;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_FAILED,
+      "DuckDB delivery materializer int64 bind failed at index %"
       G_GUINT64_FORMAT, (guint64) index);
   return FALSE;
 }
@@ -461,17 +489,21 @@ materializer_ensure_message_headers (WyreboxDeliveryMaterializer *self,
 {
   g_auto (duckdb_prepared_statement) statement = NULL;
   g_autofree gchar *sender_domain = NULL;
+  gboolean has_date_unix_us = FALSE;
+  gint64 date_unix_us = 0;
   guint64 count = 0;
 
   sender_domain = extract_sender_domain_from_from_addr (record->from);
+  has_date_unix_us = wyrebox_rfc5322_date_parse_unix_us (record->date_raw,
+      &date_unix_us);
 
   if (!materializer_prepare (self,
           "INSERT OR IGNORE INTO message_headers ("
           "message_id, rfc_message_id, duplicate_message_id_count, "
           "subject, from_addr, sender_domain, to_addr, cc_addr, bcc_addr, "
-          "date_raw, "
+          "date_raw, date_unix_us, "
           "journal_offset, journal_sequence"
-          ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+          ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
           &statement, error) ||
       !bind_varchar (statement, 1, message_id, error) ||
       !bind_nullable_varchar (statement, 2, record->rfc_message_id, error) ||
@@ -483,8 +515,10 @@ materializer_ensure_message_headers (WyreboxDeliveryMaterializer *self,
       !bind_nullable_varchar (statement, 8, record->cc, error) ||
       !bind_nullable_varchar (statement, 9, record->bcc, error) ||
       !bind_nullable_varchar (statement, 10, record->date_raw, error) ||
-      !bind_uint64 (statement, 11, record->journal_offset, error) ||
-      !bind_uint64 (statement, 12, record->journal_sequence, error) ||
+      !bind_nullable_int64 (statement, 11, has_date_unix_us, date_unix_us,
+          error) ||
+      !bind_uint64 (statement, 12, record->journal_offset, error) ||
+      !bind_uint64 (statement, 13, record->journal_sequence, error) ||
       !materializer_execute_prepared (statement, error))
     return FALSE;
 
@@ -500,6 +534,7 @@ materializer_ensure_message_headers (WyreboxDeliveryMaterializer *self,
           "AND cc_addr IS NOT DISTINCT FROM ? "
           "AND bcc_addr IS NOT DISTINCT FROM ? "
           "AND date_raw IS NOT DISTINCT FROM ? "
+          "AND date_unix_us IS NOT DISTINCT FROM ? "
           "AND journal_offset = ? AND journal_sequence = ?;",
           &statement, error) ||
       !bind_varchar (statement, 1, message_id, error) ||
@@ -512,8 +547,10 @@ materializer_ensure_message_headers (WyreboxDeliveryMaterializer *self,
       !bind_nullable_varchar (statement, 8, record->cc, error) ||
       !bind_nullable_varchar (statement, 9, record->bcc, error) ||
       !bind_nullable_varchar (statement, 10, record->date_raw, error) ||
-      !bind_uint64 (statement, 11, record->journal_offset, error) ||
-      !bind_uint64 (statement, 12, record->journal_sequence, error) ||
+      !bind_nullable_int64 (statement, 11, has_date_unix_us, date_unix_us,
+          error) ||
+      !bind_uint64 (statement, 12, record->journal_offset, error) ||
+      !bind_uint64 (statement, 13, record->journal_sequence, error) ||
       !materializer_count_prepared (statement, &count, error))
     return FALSE;
 
