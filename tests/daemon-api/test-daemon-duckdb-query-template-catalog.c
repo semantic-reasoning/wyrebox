@@ -40,10 +40,38 @@ assert_template_resolves (const char *template_id, const char *parameter,
 }
 
 static void
+assert_metadata_template_resolves (const char *template_id,
+    const char *parameter, const char *expected_name,
+    const char *expected_parameter_name, const char *expected_output_format)
+{
+  const char *parameters[] = { parameter, "100", "0", NULL };
+  const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  init_request (&request, template_id, parameters);
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_catalog_validate
+      (WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI, "account-1", &request,
+          &descriptor, &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (descriptor);
+  g_assert_cmpstr (descriptor->template_id, ==, template_id);
+  g_assert_cmpstr (descriptor->name, ==, expected_name);
+  g_assert_cmpstr (descriptor->scope_kind, ==, "account_id");
+  g_assert_cmpstr (descriptor->output_format, ==, expected_output_format);
+  g_assert_cmpuint (descriptor->n_parameters, ==, 3);
+  g_assert_cmpstr (descriptor->parameter_names[0], ==, expected_parameter_name);
+  g_assert_cmpstr (descriptor->parameter_names[1], ==, "limit");
+  g_assert_cmpstr (descriptor->parameter_names[2], ==, "offset");
+  g_assert_null (descriptor->parameter_names[3]);
+}
+
+static void
 test_catalog_resolves_allowlisted_templates (void)
 {
   const char *date_range_parameters[] = { "1704067200000000",
-    "1704240000000000", NULL
+    "1704240000000000", "100", "0", NULL
   };
   const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
   g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) date_range_request = { 0 };
@@ -58,13 +86,14 @@ test_catalog_resolves_allowlisted_templates (void)
   assert_template_resolves ("message.by_id.v1", "message-1",
       "message by id", "message_id",
       "stream-chunk.duckdb-template.message-by-id.v1");
-  assert_template_resolves ("messages.by_from_addr.v1",
+  assert_metadata_template_resolves ("messages.by_from_addr.v1",
       "Alice <alice@example.test>", "messages by from address", "from_addr",
       "stream-chunk.duckdb-template.messages-by-from-addr.v1");
-  assert_template_resolves ("messages.by_sender_domain.v1", "example.test",
+  assert_metadata_template_resolves ("messages.by_sender_domain.v1",
+      "example.test",
       "messages by sender domain", "sender_domain",
       "stream-chunk.duckdb-template.messages-by-sender-domain.v1");
-  assert_template_resolves ("messages.by_subject.v1", "Subject A",
+  assert_metadata_template_resolves ("messages.by_subject.v1", "Subject A",
       "messages by subject", "subject",
       "stream-chunk.duckdb-template.messages-by-subject.v1");
 
@@ -80,10 +109,12 @@ test_catalog_resolves_allowlisted_templates (void)
   g_assert_cmpstr (descriptor->scope_kind, ==, "account_id");
   g_assert_cmpstr (descriptor->output_format, ==,
       "stream-chunk.duckdb-template.messages-by-date-range.v1");
-  g_assert_cmpuint (descriptor->n_parameters, ==, 2);
+  g_assert_cmpuint (descriptor->n_parameters, ==, 4);
   g_assert_cmpstr (descriptor->parameter_names[0], ==, "start_unix_us");
   g_assert_cmpstr (descriptor->parameter_names[1], ==, "end_unix_us");
-  g_assert_null (descriptor->parameter_names[2]);
+  g_assert_cmpstr (descriptor->parameter_names[2], ==, "limit");
+  g_assert_cmpstr (descriptor->parameter_names[3], ==, "offset");
+  g_assert_null (descriptor->parameter_names[4]);
 }
 
 static void
@@ -239,7 +270,7 @@ static void
 assert_date_range_validation (const gchar *start_unix_us,
     const gchar *end_unix_us, gboolean expected_valid)
 {
-  const char *parameters[] = { start_unix_us, end_unix_us, NULL };
+  const char *parameters[] = { start_unix_us, end_unix_us, "100", "0", NULL };
   const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
   g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
   g_autoptr (GError) error = NULL;
@@ -253,6 +284,33 @@ assert_date_range_validation (const gchar *start_unix_us,
     g_assert_no_error (error);
     g_assert_nonnull (descriptor);
     g_assert_cmpstr (descriptor->template_id, ==, "messages.by_date_range.v1");
+  } else {
+    g_assert_false (wyrebox_daemon_duckdb_query_template_catalog_validate
+        (WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI, "account-1", &request,
+            &descriptor, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_assert_null (descriptor);
+  }
+}
+
+static void
+assert_metadata_limit_offset_validation (const gchar *limit,
+    const gchar *offset, gboolean expected_valid)
+{
+  const char *parameters[] = { "Subject A", limit, offset, NULL };
+  const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  init_request (&request, "messages.by_subject.v1", parameters);
+
+  if (expected_valid) {
+    g_assert_true (wyrebox_daemon_duckdb_query_template_catalog_validate
+        (WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI, "account-1", &request,
+            &descriptor, &error));
+    g_assert_no_error (error);
+    g_assert_nonnull (descriptor);
+    g_assert_cmpstr (descriptor->template_id, ==, "messages.by_subject.v1");
   } else {
     g_assert_false (wyrebox_daemon_duckdb_query_template_catalog_validate
         (WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI, "account-1", &request,
@@ -282,6 +340,23 @@ test_catalog_validates_date_range_integer_bounds (void)
   assert_date_range_validation ("0); DROP TABLE messages; --", "1", FALSE);
   assert_date_range_validation ("9223372036854775808", "1", FALSE);
   assert_date_range_validation ("-9223372036854775809", "1", FALSE);
+}
+
+static void
+test_catalog_validates_metadata_limit_offset_bounds (void)
+{
+  assert_metadata_limit_offset_validation ("1", "0", TRUE);
+  assert_metadata_limit_offset_validation ("100", "9223372036854775807", TRUE);
+  assert_metadata_limit_offset_validation ("0", "0", FALSE);
+  assert_metadata_limit_offset_validation ("101", "0", FALSE);
+  assert_metadata_limit_offset_validation ("-1", "0", FALSE);
+  assert_metadata_limit_offset_validation ("1", "-1", FALSE);
+  assert_metadata_limit_offset_validation ("1.5", "0", FALSE);
+  assert_metadata_limit_offset_validation ("1", "0); DROP TABLE messages; --",
+      FALSE);
+  assert_metadata_limit_offset_validation ("18446744073709551616", "0", FALSE);
+  assert_metadata_limit_offset_validation ("1", "9223372036854775808", FALSE);
+  assert_metadata_limit_offset_validation ("1", "18446744073709551615", FALSE);
 }
 
 static void
@@ -336,6 +411,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/catalog/validates-date-range-integer-bounds",
       test_catalog_validates_date_range_integer_bounds);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/catalog/validates-metadata-limit-offset-bounds",
+      test_catalog_validates_metadata_limit_offset_bounds);
   g_test_add_func ("/daemon-api/duckdb-query-template/catalog/rejects-scope",
       test_catalog_rejects_missing_or_mismatched_scope);
 

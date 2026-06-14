@@ -131,6 +131,21 @@ duckdb_query_template_bind_int64 (duckdb_prepared_statement statement,
 }
 
 static gboolean
+duckdb_query_template_bind_uint64 (duckdb_prepared_statement statement,
+    idx_t index, guint64 value, GError **error)
+{
+  if (duckdb_bind_uint64 (statement, index, (uint64_t) value) == DuckDBSuccess)
+    return TRUE;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_FAILED,
+      "DuckDB query template UBIGINT bind failed at index %" G_GUINT64_FORMAT,
+      (guint64) index);
+  return FALSE;
+}
+
+static gboolean
 duckdb_query_template_parse_int64 (const gchar *value,
     const gchar *parameter_name, gint64 *out_value, GError **error)
 {
@@ -168,6 +183,48 @@ duckdb_query_template_parse_int64 (const gchar *value,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_ARGUMENT,
         "duckdb query template parameter '%s' must be a signed integer",
+        parameter_name);
+    return FALSE;
+  }
+
+  *out_value = parsed;
+  return TRUE;
+}
+
+static gboolean
+duckdb_query_template_parse_uint64 (const gchar *value,
+    const gchar *parameter_name, guint64 *out_value, GError **error)
+{
+  gchar *end = NULL;
+  guint64 parsed = 0;
+
+  if (*value == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "duckdb query template parameter '%s' must be an unsigned integer",
+        parameter_name);
+    return FALSE;
+  }
+
+  for (const gchar * cursor = value; *cursor != '\0'; cursor++) {
+    if (!g_ascii_isdigit (*cursor)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "duckdb query template parameter '%s' must be an unsigned integer",
+          parameter_name);
+      return FALSE;
+    }
+  }
+
+  errno = 0;
+  parsed = g_ascii_strtoull (value, &end, 10);
+  if (errno == ERANGE || end == NULL || *end != '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "duckdb query template parameter '%s' must be an unsigned integer",
         parameter_name);
     return FALSE;
   }
@@ -576,17 +633,25 @@ duckdb_query_template_execute_messages_by_from_addr (DuckDBQueryTemplateExecutor
       "JOIN message_headers mh ON mh.message_id = m.message_id "
       "WHERE m.account_id = ? "
       "AND mh.from_addr = ? "
-      "ORDER BY m.journal_sequence ASC, m.message_id ASC;";
+      "ORDER BY m.journal_sequence ASC, m.message_id ASC " "LIMIT ? OFFSET ?;";
   g_auto (duckdb_prepared_statement) statement = NULL;
   g_auto (duckdb_result) result = { 0 };
   g_autoptr (GString) csv = NULL;
   g_autoptr (GBytes) bytes = NULL;
   const gchar *from_addr = request->parameters[0];
+  guint64 limit = 0;
+  guint64 offset = 0;
 
-  if (!duckdb_query_template_prepare (executor, sql, &statement, error) ||
+  if (!duckdb_query_template_parse_uint64 (request->parameters[1], "limit",
+          &limit, error) ||
+      !duckdb_query_template_parse_uint64 (request->parameters[2], "offset",
+          &offset, error) ||
+      !duckdb_query_template_prepare (executor, sql, &statement, error) ||
       !duckdb_query_template_bind_varchar (statement, 1, request->scope_id,
           error) ||
-      !duckdb_query_template_bind_varchar (statement, 2, from_addr, error))
+      !duckdb_query_template_bind_varchar (statement, 2, from_addr, error) ||
+      !duckdb_query_template_bind_uint64 (statement, 3, limit, error) ||
+      !duckdb_query_template_bind_uint64 (statement, 4, offset, error))
     return FALSE;
 
   if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
@@ -640,19 +705,28 @@ static gboolean
       "JOIN message_headers mh ON mh.message_id = m.message_id "
       "WHERE m.account_id = ? "
       "AND mh.sender_domain = ? "
-      "ORDER BY m.journal_sequence ASC, m.message_id ASC;";
+      "ORDER BY m.journal_sequence ASC, m.message_id ASC " "LIMIT ? OFFSET ?;";
   g_auto (duckdb_prepared_statement) statement = NULL;
   g_auto (duckdb_result) result = { 0 };
   g_autoptr (GString) csv = NULL;
   g_autoptr (GBytes) bytes = NULL;
   g_autofree gchar *sender_domain = NULL;
+  guint64 limit = 0;
+  guint64 offset = 0;
 
   sender_domain = g_ascii_strdown (request->parameters[0], -1);
 
-  if (!duckdb_query_template_prepare (executor, sql, &statement, error) ||
+  if (!duckdb_query_template_parse_uint64 (request->parameters[1], "limit",
+          &limit, error) ||
+      !duckdb_query_template_parse_uint64 (request->parameters[2], "offset",
+          &offset, error) ||
+      !duckdb_query_template_prepare (executor, sql, &statement, error) ||
       !duckdb_query_template_bind_varchar (statement, 1, request->scope_id,
           error) ||
-      !duckdb_query_template_bind_varchar (statement, 2, sender_domain, error))
+      !duckdb_query_template_bind_varchar (statement, 2, sender_domain,
+          error) ||
+      !duckdb_query_template_bind_uint64 (statement, 3, limit, error) ||
+      !duckdb_query_template_bind_uint64 (statement, 4, offset, error))
     return FALSE;
 
   if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
@@ -705,17 +779,25 @@ duckdb_query_template_execute_messages_by_subject (DuckDBQueryTemplateExecutor
       "JOIN message_headers mh ON mh.message_id = m.message_id "
       "WHERE m.account_id = ? "
       "AND mh.subject = ? "
-      "ORDER BY m.journal_sequence ASC, m.message_id ASC;";
+      "ORDER BY m.journal_sequence ASC, m.message_id ASC " "LIMIT ? OFFSET ?;";
   g_auto (duckdb_prepared_statement) statement = NULL;
   g_auto (duckdb_result) result = { 0 };
   g_autoptr (GString) csv = NULL;
   g_autoptr (GBytes) bytes = NULL;
   const gchar *subject = request->parameters[0];
+  guint64 limit = 0;
+  guint64 offset = 0;
 
-  if (!duckdb_query_template_prepare (executor, sql, &statement, error) ||
+  if (!duckdb_query_template_parse_uint64 (request->parameters[1], "limit",
+          &limit, error) ||
+      !duckdb_query_template_parse_uint64 (request->parameters[2], "offset",
+          &offset, error) ||
+      !duckdb_query_template_prepare (executor, sql, &statement, error) ||
       !duckdb_query_template_bind_varchar (statement, 1, request->scope_id,
           error) ||
-      !duckdb_query_template_bind_varchar (statement, 2, subject, error))
+      !duckdb_query_template_bind_varchar (statement, 2, subject, error) ||
+      !duckdb_query_template_bind_uint64 (statement, 3, limit, error) ||
+      !duckdb_query_template_bind_uint64 (statement, 4, offset, error))
     return FALSE;
 
   if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
@@ -771,23 +853,31 @@ static gboolean
       "AND mh.date_unix_us IS NOT NULL "
       "AND mh.date_unix_us >= ? "
       "AND mh.date_unix_us < ? "
-      "ORDER BY m.journal_sequence ASC, m.message_id ASC;";
+      "ORDER BY m.journal_sequence ASC, m.message_id ASC " "LIMIT ? OFFSET ?;";
   g_auto (duckdb_prepared_statement) statement = NULL;
   g_auto (duckdb_result) result = { 0 };
   g_autoptr (GString) csv = NULL;
   g_autoptr (GBytes) bytes = NULL;
   gint64 start_unix_us = 0;
   gint64 end_unix_us = 0;
+  guint64 limit = 0;
+  guint64 offset = 0;
 
   if (!duckdb_query_template_parse_int64 (request->parameters[0],
           "start_unix_us", &start_unix_us, error) ||
       !duckdb_query_template_parse_int64 (request->parameters[1],
           "end_unix_us", &end_unix_us, error) ||
+      !duckdb_query_template_parse_uint64 (request->parameters[2], "limit",
+          &limit, error) ||
+      !duckdb_query_template_parse_uint64 (request->parameters[3], "offset",
+          &offset, error) ||
       !duckdb_query_template_prepare (executor, sql, &statement, error) ||
       !duckdb_query_template_bind_varchar (statement, 1, request->scope_id,
           error) ||
       !duckdb_query_template_bind_int64 (statement, 2, start_unix_us, error) ||
-      !duckdb_query_template_bind_int64 (statement, 3, end_unix_us, error))
+      !duckdb_query_template_bind_int64 (statement, 3, end_unix_us, error) ||
+      !duckdb_query_template_bind_uint64 (statement, 4, limit, error) ||
+      !duckdb_query_template_bind_uint64 (statement, 5, offset, error))
     return FALSE;
 
   if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
