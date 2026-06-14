@@ -22,7 +22,10 @@ typedef struct
   GThread *thread;
   FakeServerResponse response;
   WyreboxDaemonErrorClass error_class;
+  const FakeServerResponse *responses;
+  const WyreboxDaemonErrorClass *error_classes;
   const char *const *expected_recipients;
+  guint expected_request_count;
   const guint8 *expected_message;
   gsize expected_message_size;
 } FakeServer;
@@ -190,88 +193,119 @@ static gpointer
 fake_server_thread_main (gpointer user_data)
 {
   FakeServer *server = (FakeServer *) user_data;
-  g_autoptr (GError) error = NULL;
-  g_autoptr (GSocketConnection) connection = NULL;
-  g_autoptr (GBytes) request = NULL;
-  g_autoptr (GBytes) response = NULL;
-  GInputStream *input = NULL;
-  GOutputStream *output = NULL;
-  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
-  gpointer decoded_state = NULL;
-  GDestroyNotify decoded_state_clear = NULL;
-
-  connection = g_socket_listener_accept (server->listener, NULL, NULL, &error);
-  g_assert_no_error (error);
-  g_assert_nonnull (connection);
-
-  input = g_io_stream_get_input_stream (G_IO_STREAM (connection));
-  output = g_io_stream_get_output_stream (G_IO_STREAM (connection));
-  request = wyrebox_daemon_frame_io_read_payload (input, &error);
-  g_assert_no_error (error);
-  g_assert_nonnull (request);
-
-  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
-          request,
-          &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
-  g_assert_no_error (error);
-  g_assert_cmpint (decoded.operation, ==,
-      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION);
-  g_assert_cmpstr (decoded.request_id, ==,
-      "postfix-lmtp:stable-delivery-1");
-  g_assert_cmpstr (decoded.caller_identity, ==, "postfix");
-  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
-  g_assert_cmpstr (decoded.tool_identity, ==,
-      "wyrebox-postfix-lmtp-listener");
-  g_assert_cmpstr (decoded.delivery_ingestion->delivery_id, ==,
-      "stable-delivery-1");
-  g_assert_cmpstr (decoded.delivery_ingestion->envelope_sender, ==,
-      "sender@example.com");
   g_assert_nonnull (server->expected_recipients);
-  {
-    guint expected_count = 0;
+  g_assert_cmpuint (server->expected_request_count, >, 0);
 
-    for (; server->expected_recipients[expected_count] != NULL;
-        expected_count++) {
-      g_assert_cmpstr (decoded.delivery_ingestion->recipients[expected_count],
-          ==, server->expected_recipients[expected_count]);
+  for (guint request_index = 0; request_index < server->expected_request_count;
+      request_index++) {
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GSocketConnection) connection = NULL;
+    g_autoptr (GBytes) request = NULL;
+    g_autoptr (GBytes) response = NULL;
+    g_autofree char *expected_delivery_id = NULL;
+    g_autofree char *expected_request_id = NULL;
+    GInputStream *input = NULL;
+    GOutputStream *output = NULL;
+    WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+    gpointer decoded_state = NULL;
+    GDestroyNotify decoded_state_clear = NULL;
+    FakeServerResponse response_kind = server->response;
+    WyreboxDaemonErrorClass error_class = server->error_class;
+
+    connection = g_socket_listener_accept (server->listener, NULL, NULL,
+        &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (connection);
+
+    input = g_io_stream_get_input_stream (G_IO_STREAM (connection));
+    output = g_io_stream_get_output_stream (G_IO_STREAM (connection));
+    request = wyrebox_daemon_frame_io_read_payload (input, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (request);
+
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+            request,
+            &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
+    g_assert_no_error (error);
+
+    expected_delivery_id = g_strdup_printf ("stable-delivery-1/rcpt/%u",
+        request_index + 1);
+    expected_request_id = g_strdup_printf ("postfix-lmtp:%s",
+        expected_delivery_id);
+
+    g_assert_cmpint (decoded.operation, ==,
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION);
+    g_assert_cmpstr (decoded.request_id, ==, expected_request_id);
+    g_assert_cmpstr (decoded.correlation_id, ==, expected_request_id);
+    g_assert_cmpstr (decoded.caller_identity, ==, "postfix");
+    g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+    g_assert_cmpstr (decoded.tool_identity, ==,
+        "wyrebox-postfix-lmtp-listener");
+    g_assert_cmpstr (decoded.delivery_ingestion->delivery_id, ==,
+        expected_delivery_id);
+    g_assert_cmpstr (decoded.delivery_ingestion->envelope_sender, ==,
+        "sender@example.com");
+    g_assert_cmpstr (decoded.delivery_ingestion->recipients[0], ==,
+        server->expected_recipients[request_index]);
+    g_assert_null (decoded.delivery_ingestion->recipients[1]);
+    assert_message_equal (decoded.delivery_ingestion->message_bytes,
+        server->expected_message, server->expected_message_size);
+
+    if (server->responses != NULL)
+      response_kind = server->responses[request_index];
+    if (server->error_classes != NULL)
+      error_class = server->error_classes[request_index];
+
+    switch (response_kind) {
+      case FAKE_SERVER_SUCCESS:
+        response = build_success_response (&decoded);
+        break;
+      case FAKE_SERVER_DAEMON_ERROR:
+        response = build_daemon_error_response (&decoded, error_class);
+        break;
     }
-    g_assert_null (decoded.delivery_ingestion->recipients[expected_count]);
-  }
-  assert_message_equal (decoded.delivery_ingestion->message_bytes,
-      server->expected_message, server->expected_message_size);
+    {
+      const guint8 *response_data = NULL;
+      gsize response_size = 0;
 
-  switch (server->response) {
-    case FAKE_SERVER_SUCCESS:
-      response = build_success_response (&decoded);
-      break;
-    case FAKE_SERVER_DAEMON_ERROR:
-      response = build_daemon_error_response (&decoded, server->error_class);
-      break;
-  }
-  {
-    const guint8 *response_data = NULL;
-    gsize response_size = 0;
+      response_data = (const guint8 *) g_bytes_get_data (response,
+          &response_size);
+      g_assert_true (wyrebox_daemon_frame_io_write_payload (output,
+              response_data, response_size, &error));
+      g_assert_no_error (error);
+    }
 
-    response_data = (const guint8 *) g_bytes_get_data (response,
-        &response_size);
-    g_assert_true (wyrebox_daemon_frame_io_write_payload (output,
-            response_data, response_size, &error));
+    if (decoded_state_clear != NULL)
+      decoded_state_clear (decoded_state);
+
+    g_assert_true (g_io_stream_close (G_IO_STREAM (connection), NULL,
+            &error));
     g_assert_no_error (error);
   }
 
-  if (decoded_state_clear != NULL)
-    decoded_state_clear (decoded_state);
-
-  g_assert_true (g_io_stream_close (G_IO_STREAM (connection), NULL, &error));
-  g_assert_no_error (error);
+  g_assert_null (server->expected_recipients[server->expected_request_count]);
 
   return NULL;
 }
 
+static guint
+count_expected_recipients (const char *const *expected_recipients)
+{
+  guint count = 0;
+
+  g_assert_nonnull (expected_recipients);
+  for (; expected_recipients[count] != NULL; count++);
+  g_assert_cmpuint (count, >, 0);
+
+  return count;
+}
+
 static void
-fake_server_start (FakeServer *server,
+fake_server_start_sequence (FakeServer *server,
     const char *socket_path, FakeServerResponse response,
     WyreboxDaemonErrorClass error_class,
+    const FakeServerResponse *responses,
+    const WyreboxDaemonErrorClass *error_classes,
     const char *const *expected_recipients,
     const guint8 *expected_message, gsize expected_message_size)
 {
@@ -281,7 +315,11 @@ fake_server_start (FakeServer *server,
   server->listener = g_socket_listener_new ();
   server->response = response;
   server->error_class = error_class;
+  server->responses = responses;
+  server->error_classes = error_classes;
   server->expected_recipients = expected_recipients;
+  server->expected_request_count =
+      count_expected_recipients (expected_recipients);
   server->expected_message = expected_message;
   server->expected_message_size = expected_message_size;
 
@@ -294,6 +332,23 @@ fake_server_start (FakeServer *server,
   server->thread =
       g_thread_new ("fake-postfix-lmtp-listener-daemon",
       fake_server_thread_main, server);
+}
+
+static void
+fake_server_start (FakeServer *server,
+    const char *socket_path, FakeServerResponse response,
+    WyreboxDaemonErrorClass error_class,
+    const char *const *expected_recipients,
+    const guint8 *expected_message, gsize expected_message_size)
+{
+  fake_server_start_sequence (server,
+      socket_path,
+      response,
+      error_class,
+      NULL,
+      NULL,
+      expected_recipients,
+      expected_message, expected_message_size);
 }
 
 static void
@@ -715,6 +770,127 @@ test_successful_multi_recipient_transaction (void)
 }
 
 static void
+test_multi_recipient_mixed_daemon_replies_preserve_rcpt_order (void)
+{
+  const guint8 expected_message[] =
+      "Subject: hi\r\n\r\nbody\r\n";
+  const char *expected_recipients[] = {
+    "alice@example.com",
+    "bob@example.com",
+    "carol@example.com",
+    NULL
+  };
+  const FakeServerResponse responses[] = {
+    FAKE_SERVER_SUCCESS,
+    FAKE_SERVER_DAEMON_ERROR,
+    FAKE_SERVER_DAEMON_ERROR
+  };
+  const WyreboxDaemonErrorClass error_classes[] = {
+    WYREBOX_DAEMON_ERROR_INTERNAL_ERROR,
+    WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE,
+    WYREBOX_DAEMON_ERROR_TEMPORARY_FAILURE
+  };
+  g_autofree char *root = make_temp_root ();
+  g_autofree char *daemon_socket_path = g_build_filename (root,
+      "wyrebox.sock", NULL);
+  g_autofree char *listen_socket_path = g_build_filename (root,
+      "wyrebox-lmtp.sock", NULL);
+  FakeServer server = { 0 };
+  g_autoptr (GSubprocess) listener = NULL;
+  g_autoptr (GSocketConnection) connection = NULL;
+  GInputStream *input = NULL;
+  GOutputStream *output = NULL;
+
+  fake_server_start_sequence (&server,
+      daemon_socket_path,
+      FAKE_SERVER_SUCCESS,
+      WYREBOX_DAEMON_ERROR_INTERNAL_ERROR,
+      responses,
+      error_classes,
+      expected_recipients,
+      expected_message, sizeof (expected_message) - 1);
+  listener = start_listener (listen_socket_path, daemon_socket_path);
+  connection = connect_to_listener (listen_socket_path);
+  input = g_io_stream_get_input_stream (G_IO_STREAM (connection));
+  output = g_io_stream_get_output_stream (G_IO_STREAM (connection));
+
+  assert_reply_prefix (input, "220 ");
+  write_all (output, "LHLO localhost\r\n");
+  assert_reply_prefix (input, "250-");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "MAIL FROM:<sender@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RCPT TO:<alice@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RCPT TO:<bob@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RCPT TO:<carol@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "DATA\r\n");
+  assert_reply_prefix (input, "354 ");
+  write_all (output, "Subject: hi\r\n\r\nbody\r\n.\r\n");
+  assert_reply_prefix (input, "250 2.0.0 Delivery accepted");
+  assert_reply_prefix (input, "554 5.6.0");
+  assert_reply_prefix (input, "451 4.3.0");
+  assert_reply_prefix (input, "221 ");
+
+  g_assert_true (g_io_stream_close (G_IO_STREAM (connection), NULL, NULL));
+  finish_listener (listener);
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_invalid_later_recipient_is_rejected_before_data (void)
+{
+  const guint8 expected_message[] =
+      "Subject: hi\r\n\r\nbody\r\n";
+  const char *expected_recipients[] = { "alice@example.com", NULL };
+  g_autofree char *root = make_temp_root ();
+  g_autofree char *daemon_socket_path = g_build_filename (root,
+      "wyrebox.sock", NULL);
+  g_autofree char *listen_socket_path = g_build_filename (root,
+      "wyrebox-lmtp.sock", NULL);
+  FakeServer server = { 0 };
+  g_autoptr (GSubprocess) listener = NULL;
+  g_autoptr (GSocketConnection) connection = NULL;
+  GInputStream *input = NULL;
+  GOutputStream *output = NULL;
+
+  fake_server_start (&server,
+      daemon_socket_path,
+      FAKE_SERVER_SUCCESS,
+      WYREBOX_DAEMON_ERROR_INTERNAL_ERROR,
+      expected_recipients,
+      expected_message, sizeof (expected_message) - 1);
+  listener = start_listener (listen_socket_path, daemon_socket_path);
+  connection = connect_to_listener (listen_socket_path);
+  input = g_io_stream_get_input_stream (G_IO_STREAM (connection));
+  output = g_io_stream_get_output_stream (G_IO_STREAM (connection));
+
+  assert_reply_prefix (input, "220 ");
+  write_all (output, "LHLO localhost\r\n");
+  assert_reply_prefix (input, "250-");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "MAIL FROM:<sender@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RCPT TO:<alice@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RCPT TO:<>\r\n");
+  assert_reply_prefix (input, "501 5.5.4 Bad recipient address");
+  write_all (output, "DATA\r\n");
+  assert_reply_prefix (input, "354 ");
+  write_all (output, "Subject: hi\r\n\r\nbody\r\n.\r\n");
+  assert_reply_prefix (input, "250 2.0.0 Delivery accepted");
+  assert_reply_prefix (input, "221 ");
+
+  g_assert_true (g_io_stream_close (G_IO_STREAM (connection), NULL, NULL));
+  finish_listener (listener);
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
 test_multi_recipient_daemon_permanent_failure_fans_out (void)
 {
   const guint8 expected_message[] =
@@ -945,6 +1121,10 @@ main (int argc, char **argv)
       test_daemon_permanent_failure_returns_permanent_reply);
   g_test_add_func ("/postfix/lmtp-listener/successful-multi-recipient",
       test_successful_multi_recipient_transaction);
+  g_test_add_func ("/postfix/lmtp-listener/multi-recipient-mixed-replies",
+      test_multi_recipient_mixed_daemon_replies_preserve_rcpt_order);
+  g_test_add_func ("/postfix/lmtp-listener/reject-invalid-later-recipient",
+      test_invalid_later_recipient_is_rejected_before_data);
   g_test_add_func ("/postfix/lmtp-listener/multi-recipient-permanent-failure",
       test_multi_recipient_daemon_permanent_failure_fans_out);
   g_test_add_func ("/postfix/lmtp-listener/multi-recipient-daemon-unavailable",

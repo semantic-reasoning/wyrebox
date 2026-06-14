@@ -238,6 +238,20 @@ extract_path_argument (const char *line, const char *command)
 }
 
 static gboolean
+is_valid_delivery_recipient (const char *recipient)
+{
+  if (recipient == NULL || *recipient == '\0')
+    return FALSE;
+
+  for (const char *cursor = recipient; *cursor != '\0'; cursor++) {
+    if (g_ascii_iscntrl (*cursor))
+      return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
 append_data_line (ListenerTransaction *transaction,
     const guint8 *line, gsize line_len, guint64 max_message_bytes,
     GError **error)
@@ -273,21 +287,23 @@ append_data_line (ListenerTransaction *transaction,
 }
 
 static char *
-build_request_id (const ListenerOptions *options)
+build_recipient_delivery_id (const ListenerOptions *options,
+    guint recipient_index)
 {
-  return g_strdup_printf ("postfix-lmtp:%s", options->delivery_id);
+  return g_strdup_printf ("%s/rcpt/%u", options->delivery_id,
+      recipient_index + 1);
+}
+
+static char *
+build_request_id (const char *delivery_id)
+{
+  return g_strdup_printf ("postfix-lmtp:%s", delivery_id);
 }
 
 static gboolean
-build_delivery_request (const ListenerOptions *options,
-    ListenerTransaction *transaction,
-    WyreboxPostfixLmtpOptions *bridge_options,
-    WyreboxDaemonRequestIdentity *identity,
-    WyreboxDaemonDeliveryIngestionRequest *request, GError **error)
+validate_delivery_transaction (const ListenerTransaction *transaction,
+    GError **error)
 {
-  g_autofree char *request_id = NULL;
-  g_autoptr (GBytes) message_bytes = NULL;
-  g_auto (GStrv) recipients = NULL;
   guint recipient_count = 0;
 
   if (transaction->recipients != NULL)
@@ -301,7 +317,22 @@ build_delivery_request (const ListenerOptions *options,
     return FALSE;
   }
 
-  request_id = build_request_id (options);
+  return TRUE;
+}
+
+static gboolean
+build_delivery_request (const ListenerOptions *options,
+    ListenerTransaction *transaction, guint recipient_index,
+    GBytes *message_bytes,
+    WyreboxPostfixLmtpOptions *bridge_options,
+    WyreboxDaemonRequestIdentity *identity,
+    WyreboxDaemonDeliveryIngestionRequest *request, GError **error)
+{
+  g_autofree char *delivery_id = NULL;
+  g_autofree char *request_id = NULL;
+
+  delivery_id = build_recipient_delivery_id (options, recipient_index);
+  request_id = build_request_id (delivery_id);
   if (!wyrebox_daemon_request_identity_init (identity,
           request_id,
           WYREBOX_POSTFIX_LMTP_LISTENER_CALLER_IDENTITY,
@@ -309,17 +340,18 @@ build_delivery_request (const ListenerOptions *options,
           WYREBOX_POSTFIX_LMTP_LISTENER_TOOL_IDENTITY, request_id, error))
     return FALSE;
 
-  message_bytes =
-      g_byte_array_free_to_bytes (g_steal_pointer (&transaction->message));
-  recipients = g_new0 (gchar *, recipient_count + 1);
-  for (guint i = 0; i < recipient_count; i++)
-    recipients[i] = g_strdup (g_ptr_array_index (transaction->recipients, i));
+  {
+    const gchar *recipients[] = {
+      (const gchar *) g_ptr_array_index (transaction->recipients,
+          recipient_index),
+      NULL
+    };
 
-  if (!wyrebox_daemon_delivery_ingestion_request_init (request,
-          options->delivery_id,
-          NULL, transaction->sender, (const gchar * const *) recipients,
-          message_bytes, error))
-    return FALSE;
+    if (!wyrebox_daemon_delivery_ingestion_request_init (request,
+            delivery_id,
+            NULL, transaction->sender, recipients, message_bytes, error))
+      return FALSE;
+  }
 
   bridge_options->socket_path = g_strdup (options->daemon_socket_path);
   return TRUE;
@@ -370,27 +402,44 @@ static gboolean
 deliver_transaction (const ListenerOptions *options,
     ListenerTransaction *transaction, GOutputStream *output, GError **error)
 {
-  g_auto (WyreboxPostfixLmtpOptions) bridge_options = { 0 };
-  g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
-  g_auto (WyreboxDaemonDeliveryIngestionRequest) request = { 0 };
-  g_auto (WyreboxPostfixLmtpReply) reply = { 0 };
   g_autoptr (GError) local_error = NULL;
-  g_autofree char *reply_line = NULL;
+  g_autoptr (GBytes) message_bytes = NULL;
+  guint recipient_count = transaction_recipient_count (transaction);
 
-  if (!build_delivery_request (options, transaction, &bridge_options,
-          &identity, &request, &local_error))
+  if (!validate_delivery_transaction (transaction, &local_error))
     return write_local_temporary_failure (output, local_error, transaction,
         error);
 
-  if (!wyrebox_postfix_lmtp_delivery_bridge_deliver (&bridge_options,
-          &identity, &request, &reply, &local_error))
-    return write_local_temporary_failure (output, local_error, transaction,
-        error);
+  message_bytes =
+      g_byte_array_free_to_bytes (g_steal_pointer (&transaction->message));
 
-  reply_line = g_strdup_printf ("%d %s %s",
-      reply.reply_code, reply.enhanced_status, reply.reply_text);
-  g_printerr ("%s\n", reply.log_message);
-  return write_line_for_each_recipient (output, transaction, reply_line, error);
+  for (guint i = 0; i < recipient_count; i++) {
+    g_auto (WyreboxPostfixLmtpOptions) bridge_options = { 0 };
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonDeliveryIngestionRequest) request = { 0 };
+    g_auto (WyreboxPostfixLmtpReply) reply = { 0 };
+    g_autofree char *reply_line = NULL;
+
+    g_clear_error (&local_error);
+    if (!build_delivery_request (options, transaction, i, message_bytes,
+            &bridge_options, &identity, &request, &local_error))
+      return write_local_temporary_failure (output, local_error, transaction,
+          error);
+
+    g_clear_error (&local_error);
+    if (!wyrebox_postfix_lmtp_delivery_bridge_deliver (&bridge_options,
+            &identity, &request, &reply, &local_error))
+      return write_local_temporary_failure (output, local_error, transaction,
+          error);
+
+    reply_line = g_strdup_printf ("%d %s %s",
+        reply.reply_code, reply.enhanced_status, reply.reply_text);
+    g_printerr ("%s\n", reply.log_message);
+    if (!write_line (output, reply_line, error))
+      return FALSE;
+  }
+
+  return TRUE;
 }
 
 static gboolean
@@ -474,7 +523,7 @@ handle_connection (const ListenerOptions *options,
       }
 
       recipient = extract_path_argument (line, "RCPT TO:");
-      if (recipient == NULL) {
+      if (!is_valid_delivery_recipient (recipient)) {
         if (!write_line (output, "501 5.5.4 Bad recipient address", error))
           return FALSE;
         continue;
