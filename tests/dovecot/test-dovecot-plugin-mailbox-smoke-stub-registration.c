@@ -338,6 +338,21 @@ i_stream_create_from_data (const void *data, size_t size)
   if (stream == NULL)
     return NULL;
 
+  stream->data = (void *) data;
+  stream->size = size;
+  stream->owns_data = false;
+  return stream;
+}
+
+struct istream *
+i_stream_create_copy_from_data (const void *data, size_t size)
+{
+  struct istream *stream;
+
+  stream = i_stream_create_from_data (data, size);
+  if (stream == NULL)
+    return NULL;
+
   stream->data = malloc (size);
   if (stream->data == NULL) {
     free (stream);
@@ -345,7 +360,7 @@ i_stream_create_from_data (const void *data, size_t size)
   }
 
   memcpy (stream->data, data, size);
-  stream->size = size;
+  stream->owns_data = true;
   return stream;
 }
 
@@ -355,7 +370,8 @@ i_stream_unref (struct istream **stream)
   if (stream == NULL || *stream == NULL)
     return;
 
-  free ((*stream)->data);
+  if ((*stream)->owns_data)
+    free ((*stream)->data);
   free (*stream);
   *stream = NULL;
 }

@@ -69,7 +69,7 @@ static GHashTable *wyrebox_dovecot_mailbox_list_hook_contexts;
 extern const char *wyrebox_dovecot_test_daemon_socket_path
     __attribute__((weak));
 
-struct istream *i_stream_create_from_data (const void *data, size_t size);
+struct istream *i_stream_create_copy_from_data (const void *data, size_t size);
 
 static gboolean
 wyrebox_dovecot_map_mailbox_list_child_state (WyreboxDaemonMailboxListChildState
@@ -85,6 +85,65 @@ wyrebox_dovecot_socket_path (void)
   }
 
   return "/run/wyrebox/wyrebox.sock";
+}
+
+static void
+wyrebox_dovecot_message_size_scan_part (const guint8 *data, gsize size,
+    struct message_size *message_size)
+{
+  gsize missing_cr_count = 0;
+
+  memset (message_size, 0, sizeof (*message_size));
+
+  for (gsize i = 0; i < size; i++) {
+    if (data[i] != '\n') {
+      continue;
+    }
+
+    message_size->lines++;
+    if (i == 0 || data[i - 1] != '\r') {
+      missing_cr_count++;
+    }
+  }
+
+  message_size->physical_size = size;
+  message_size->virtual_size = size + missing_cr_count;
+}
+
+static gsize
+wyrebox_dovecot_message_header_physical_size (const guint8 *data, gsize size)
+{
+  for (gsize i = 0; i < size; i++) {
+    if (data[i] != '\n') {
+      continue;
+    }
+
+    if (i == 0 || (i == 1 && data[i - 1] == '\r')
+        || data[i - 1] == '\n'
+        || (i > 1 && data[i - 2] == '\n' && data[i - 1] == '\r')) {
+      return i + 1;
+    }
+  }
+
+  return size;
+}
+
+static void
+wyrebox_dovecot_message_size_scan (const guint8 *data, gsize size,
+    struct message_size *hdr_size, struct message_size *body_size)
+{
+  gsize header_size;
+
+  header_size = wyrebox_dovecot_message_header_physical_size (data, size);
+
+  if (hdr_size != NULL) {
+    wyrebox_dovecot_message_size_scan_part (data, header_size, hdr_size);
+  }
+
+  if (body_size != NULL) {
+    wyrebox_dovecot_message_size_scan_part (data + header_size,
+        size - header_size, body_size);
+  }
 }
 
 static void
@@ -782,7 +841,7 @@ wyrebox_dovecot_mailbox_lookup_uid_map_row (struct wyrebox_dovecot_mailbox
 }
 
 static int
-wyrebox_dovecot_mail_get_stream (struct mail *mail, int get_body,
+wyrebox_dovecot_mail_get_stream (struct mail *mail, bool get_body,
     struct message_size *hdr_size,
     struct message_size *body_size, struct istream **stream)
 {
@@ -837,7 +896,9 @@ wyrebox_dovecot_mail_get_stream (struct mail *mail, int get_body,
     return -1;
   }
 
-  *stream = i_stream_create_from_data (data, size);
+  wyrebox_dovecot_message_size_scan (data, size, hdr_size, body_size);
+
+  *stream = i_stream_create_copy_from_data (data, size);
   if (*stream == NULL) {
     mail_storage_set_error (box->storage, MAIL_ERROR_NOTPOSSIBLE,
         "WyreBox Dovecot plugin failed to create message stream");
