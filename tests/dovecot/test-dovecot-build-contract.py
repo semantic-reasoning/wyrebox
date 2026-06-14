@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import os
+import shutil
 import shlex
 import subprocess
 import sys
@@ -11,12 +12,6 @@ import tempfile
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_DIR = REPO_ROOT / "tests" / "dovecot" / "fixtures"
 VALID_SOURCE_FIXTURE = FIXTURES_DIR / "valid-2.3.21.1"
-MAILBOX_VFUNC_NEGATIVE_SOURCE_FIXTURE = FIXTURES_DIR / "missing-vfunc"
-MAILBOX_ALLOC_NEGATIVE_SOURCE_FIXTURE = FIXTURES_DIR / "missing-mailbox-allocation"
-LIST_CONTRACT_NEGATIVE_SOURCE_FIXTURE = FIXTURES_DIR / "missing-list-contract"
-LIST_ITERATOR_CONTRACT_NEGATIVE_SOURCE_FIXTURE = (
-    FIXTURES_DIR / "missing-list-iterator-contract"
-)
 BUILD_CHECKER_PATH = REPO_ROOT / "tools" / "check-dovecot-build-contract.py"
 CC_SHIM_LOG_ENV = "WYREBOX_CC_SHIM_LOG"
 
@@ -59,6 +54,47 @@ def run_checker(
     return result
 
 
+def assert_checker_fails_with(
+    source_dir: Path,
+    build_dir: Path,
+    expected_diagnostics: list[str],
+    *,
+    unexpected_diagnostics: list[str] | None = None,
+) -> subprocess.CompletedProcess:
+    result = run_checker(source_dir, build_dir, expect_success=False)
+    output = result.stdout + result.stderr
+    for diagnostic in expected_diagnostics:
+        assert diagnostic in output, (
+            f"expected diagnostic {diagnostic!r}\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+    for diagnostic in unexpected_diagnostics or []:
+        assert diagnostic not in output, (
+            f"unexpected diagnostic {diagnostic!r}\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+    return result
+
+
+def run_checker_with_source_mutation(
+    header_relative_path: Path,
+    old: str,
+    new: str,
+) -> subprocess.CompletedProcess:
+    with tempfile.TemporaryDirectory() as tempdir:
+        source_dir = Path(tempdir) / "dovecot-source"
+        shutil.copytree(VALID_SOURCE_FIXTURE, source_dir)
+        header = source_dir / header_relative_path
+        text = header.read_text(encoding="utf-8")
+        assert old in text, f"mutation target not found: {old!r}"
+        header.write_text(text.replace(old, new, 1), encoding="utf-8")
+        return run_checker(
+            source_dir,
+            VALID_SOURCE_FIXTURE / "build-config-valid",
+            expect_success=False,
+        )
+
+
 def _build_cc_shim(shim_dir: Path) -> Path:
     shim_path = shim_dir / "wyrebox-cc-shim.py"
     shim_path.write_text(
@@ -87,70 +123,106 @@ def test_dovecot_build_contract_happy_path() -> None:
 
 
 def test_dovecot_build_contract_missing_file() -> None:
-    run_checker(
+    assert_checker_fails_with(
         VALID_SOURCE_FIXTURE,
         FIXTURES_DIR / "valid-2.3.21.1" / "build-config-missing-file",
-        expect_success=False,
+        ["build directory is missing required config.h"],
     )
 
 
 def test_dovecot_build_contract_invalid_macros() -> None:
-    run_checker(
+    assert_checker_fails_with(
         VALID_SOURCE_FIXTURE,
         FIXTURES_DIR / "valid-2.3.21.1" / "build-config-missing-uoff-selector",
-        expect_success=False,
+        ["config.h must define one uoff_t selector macro"],
     )
 
 
 def test_dovecot_build_contract_wrong_abi() -> None:
-    run_checker(
+    assert_checker_fails_with(
         VALID_SOURCE_FIXTURE,
         FIXTURES_DIR / "valid-2.3.21.1" / "build-config-wrong-abi",
-        expect_success=False,
+        ['config.h DOVECOT_ABI_VERSION must equal "2.3.ABIv21(2.3.21.1)"'],
     )
 
 
 def test_dovecot_build_contract_missing_mailbox_vfunc_shape() -> None:
-    run_checker(
-        MAILBOX_VFUNC_NEGATIVE_SOURCE_FIXTURE,
-        FIXTURES_DIR / "missing-vfunc" / "build-config-valid",
-        expect_success=False,
+    result = run_checker_with_source_mutation(
+        Path("src/lib-storage/mail-storage-private.h"),
+        "void (*free) (struct mailbox * box);",
+        "int (*free) (struct mailbox * box);",
     )
+    output = result.stdout + result.stderr
+    assert "mailbox_vfuncs::free signature mismatch" in output
+    assert "fatal error:" not in output
 
 
 def test_dovecot_build_contract_missing_mailbox_allocation_surface() -> None:
-    run_checker(
-        MAILBOX_ALLOC_NEGATIVE_SOURCE_FIXTURE,
-        FIXTURES_DIR / "missing-mailbox-allocation" / "build-config-valid",
-        expect_success=False,
+    result = run_checker_with_source_mutation(
+        Path("src/lib-storage/mail-storage-private.h"),
+        "struct mailbox\n{\n  const char *name;",
+        "struct mailbox\n{\n  char *name;",
     )
+    output = result.stdout + result.stderr
+    assert "mailbox struct::name expected const char pointer" in output
+    assert "fatal error:" not in output
 
 
 def test_dovecot_build_contract_missing_list_contract() -> None:
-    run_checker(
-        LIST_CONTRACT_NEGATIVE_SOURCE_FIXTURE,
-        FIXTURES_DIR / "missing-list-contract" / "build-config-valid",
-        expect_success=False,
+    result = run_checker_with_source_mutation(
+        Path("src/lib-storage/mail-storage-private.h"),
+        "void (*add_list) (struct mail_storage * storage, struct mailbox_list * list);",
+        "int (*add_list) (struct mail_storage * storage, struct mailbox_list * list);",
     )
+    output = result.stdout + result.stderr
+    assert "mail_storage_vfuncs::add_list signature mismatch" in output
+    assert "fatal error:" not in output
 
 
-def test_dovecot_build_contract_missing_list_iterator_contract() -> None:
-    run_checker(
-        LIST_ITERATOR_CONTRACT_NEGATIVE_SOURCE_FIXTURE,
-        (
-            FIXTURES_DIR /
-            "missing-list-iterator-contract" /
-            "build-config-valid"
-        ),
-        expect_success=False,
+def test_dovecot_build_contract_list_iterator_iter_init_signature() -> None:
+    result = run_checker_with_source_mutation(
+        Path("src/lib-storage/mailbox-list-private.h"),
+        "const char *const *patterns",
+        "const char **patterns",
     )
+    output = result.stdout + result.stderr
+    assert "mailbox_list_vfuncs::iter_init signature mismatch" in output
+    assert "mailbox_list_vfuncs::iter_next signature mismatch" not in output
+    assert "mailbox_list_vfuncs::iter_deinit signature mismatch" not in output
+    assert "fatal error:" not in output
+
+
+def test_dovecot_build_contract_list_iterator_iter_next_signature() -> None:
+    result = run_checker_with_source_mutation(
+        Path("src/lib-storage/mailbox-list-private.h"),
+        "const struct mailbox_info *(*iter_next)",
+        "struct mailbox_info *(*iter_next)",
+    )
+    output = result.stdout + result.stderr
+    assert "mailbox_list_vfuncs::iter_init signature mismatch" not in output
+    assert "mailbox_list_vfuncs::iter_next signature mismatch" in output
+    assert "mailbox_list_vfuncs::iter_deinit signature mismatch" not in output
+    assert "fatal error:" not in output
+
+
+def test_dovecot_build_contract_list_iterator_iter_deinit_signature() -> None:
+    result = run_checker_with_source_mutation(
+        Path("src/lib-storage/mailbox-list-private.h"),
+        "int (*iter_deinit)",
+        "bool (*iter_deinit)",
+    )
+    output = result.stdout + result.stderr
+    assert "mailbox_list_vfuncs::iter_init signature mismatch" not in output
+    assert "mailbox_list_vfuncs::iter_next signature mismatch" not in output
+    assert "mailbox_list_vfuncs::iter_deinit signature mismatch" in output
+    assert "fatal error:" not in output
 
 
 def test_dovecot_build_contract_missing_source_directory() -> None:
-    run_checker(
+    assert_checker_fails_with(
         Path('/definitely-not-a-real-dovecot-source-tree'),
         FIXTURES_DIR / "valid-2.3.21.1" / "build-config-valid",
-        expect_success=False,
+        ["source directory not found: /definitely-not-a-real-dovecot-source-tree"],
     )
 
 
@@ -202,7 +274,9 @@ def main() -> None:
         test_dovecot_build_contract_missing_mailbox_vfunc_shape,
         test_dovecot_build_contract_missing_mailbox_allocation_surface,
         test_dovecot_build_contract_missing_list_contract,
-        test_dovecot_build_contract_missing_list_iterator_contract,
+        test_dovecot_build_contract_list_iterator_iter_init_signature,
+        test_dovecot_build_contract_list_iterator_iter_next_signature,
+        test_dovecot_build_contract_list_iterator_iter_deinit_signature,
         test_dovecot_build_contract_missing_source_directory,
         test_dovecot_build_contract_cc_wrapper_and_args,
     ]

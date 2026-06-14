@@ -17,11 +17,11 @@ struct mailbox_list_vfuncs
   int (*init) (struct mailbox_list * list, const char **error_r);
   void (*deinit) (struct mailbox_list * list);
 
-  struct mailbox_list_iterate_context *(*scan_init) (struct mailbox_list *
+  struct mailbox_list_iterate_context *(*iter_init) (struct mailbox_list *
       list, const char *const *patterns, enum mailbox_list_iter_flags flags);
-  const struct mailbox_info *(*scan_next) (struct
+  const struct mailbox_info *(*iter_next) (struct
       mailbox_list_iterate_context * ctx);
-  int (*scan_deinit) (struct mailbox_list_iterate_context * ctx);
+  int (*iter_deinit) (struct mailbox_list_iterate_context * ctx);
 };
 
 struct mailbox_list
