@@ -14,6 +14,8 @@ static const char *const messages_by_sender_domain_parameters[] =
     { "sender_domain", "limit", "offset", NULL };
 static const char *const messages_by_subject_parameters[] =
     { "subject", "limit", "offset", NULL };
+static const char *const messages_subject_contains_parameters[] =
+    { "subject_term", "limit", "offset", NULL };
 static const char *const messages_by_date_range_parameters[] =
     { "start_unix_us", "end_unix_us", "limit", "offset", NULL };
 
@@ -60,6 +62,13 @@ static const WyreboxDaemonDuckDBQueryTemplateDescriptor catalog[] = {
         "stream-chunk.duckdb-template.messages-by-subject.v1",
         3,
       messages_by_subject_parameters},
+  {
+        "messages.subject_contains.v1",
+        "messages subject contains",
+        "account_id",
+        "stream-chunk.duckdb-template.messages-subject-contains.v1",
+        3,
+      messages_subject_contains_parameters},
   {
         "messages.by_date_range.v1",
         "messages by date range",
@@ -260,7 +269,9 @@ static gboolean
 {
   if (g_strcmp0 (descriptor->template_id, "messages.by_from_addr.v1") == 0 ||
       g_strcmp0 (descriptor->template_id, "messages.by_sender_domain.v1") ==
-      0 || g_strcmp0 (descriptor->template_id, "messages.by_subject.v1") == 0)
+      0 || g_strcmp0 (descriptor->template_id, "messages.by_subject.v1") == 0
+      || g_strcmp0 (descriptor->template_id, "messages.subject_contains.v1")
+      == 0)
     return validate_limit_offset_parameters (request->parameters[1],
         request->parameters[2], error);
 

@@ -96,6 +96,9 @@ test_catalog_resolves_allowlisted_templates (void)
   assert_metadata_template_resolves ("messages.by_subject.v1", "Subject A",
       "messages by subject", "subject",
       "stream-chunk.duckdb-template.messages-by-subject.v1");
+  assert_metadata_template_resolves ("messages.subject_contains.v1",
+      "subject", "messages subject contains", "subject_term",
+      "stream-chunk.duckdb-template.messages-subject-contains.v1");
 
   init_request (&date_range_request, "messages.by_date_range.v1",
       date_range_parameters);
@@ -193,12 +196,12 @@ test_catalog_rejects_unauthorized_clients (void)
 static void
 test_catalog_rejects_dovecot_for_search_templates (void)
 {
-  const char *parameters[] = { "message-1", NULL };
+  const char *parameters[] = { "subject", "100", "0", NULL };
   const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
   g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
   g_autoptr (GError) error = NULL;
 
-  init_request (&request, "message.by_id.v1", parameters);
+  init_request (&request, "messages.subject_contains.v1", parameters);
 
   g_assert_false (wyrebox_daemon_duckdb_query_template_catalog_validate
       (WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN, "account-1", &request,

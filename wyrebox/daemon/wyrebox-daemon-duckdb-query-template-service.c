@@ -233,6 +233,25 @@ duckdb_query_template_parse_uint64 (const gchar *value,
   return TRUE;
 }
 
+static gchar *
+duckdb_query_template_make_contains_like_pattern (const gchar *term)
+{
+  g_autofree gchar *lower = NULL;
+  g_autoptr (GString) pattern = NULL;
+
+  lower = g_ascii_strdown (term, -1);
+  pattern = g_string_new ("%");
+
+  for (const gchar * cursor = lower; *cursor != '\0'; cursor++) {
+    if (*cursor == '\\' || *cursor == '%' || *cursor == '_')
+      g_string_append_c (pattern, '\\');
+    g_string_append_c (pattern, *cursor);
+  }
+
+  g_string_append_c (pattern, '%');
+  return g_string_free (g_steal_pointer (&pattern), FALSE);
+}
+
 static void
 csv_append_value (GString *csv, const gchar *value)
 {
@@ -836,6 +855,83 @@ duckdb_query_template_execute_messages_by_subject (DuckDBQueryTemplateExecutor
 }
 
 static gboolean
+    duckdb_query_template_execute_messages_subject_contains
+    (DuckDBQueryTemplateExecutor * executor,
+    const WyreboxDaemonRequestIdentity * identity,
+    const WyreboxDaemonDuckDBQueryTemplateRequest * request,
+    WyreboxDaemonStreamChunkFrame * out_chunk, GError ** error)
+{
+  static const gchar *sql =
+      "SELECT m.account_id, m.message_id, m.object_id, "
+      "m.journal_offset, m.journal_sequence, mh.rfc_message_id, "
+      "mh.subject, mh.from_addr, mh.to_addr, mh.cc_addr, mh.bcc_addr, "
+      "mh.date_raw, mh.journal_offset, mh.journal_sequence "
+      "FROM messages m "
+      "JOIN message_headers mh ON mh.message_id = m.message_id "
+      "WHERE m.account_id = ? "
+      "AND mh.subject IS NOT NULL "
+      "AND lower(mh.subject) LIKE ? ESCAPE '\\' "
+      "ORDER BY m.journal_sequence ASC, m.message_id ASC " "LIMIT ? OFFSET ?;";
+  g_auto (duckdb_prepared_statement) statement = NULL;
+  g_auto (duckdb_result) result = { 0 };
+  g_autoptr (GString) csv = NULL;
+  g_autoptr (GBytes) bytes = NULL;
+  g_autofree gchar *subject_pattern = NULL;
+  guint64 limit = 0;
+  guint64 offset = 0;
+
+  subject_pattern =
+      duckdb_query_template_make_contains_like_pattern (request->parameters[0]);
+
+  if (!duckdb_query_template_parse_uint64 (request->parameters[1], "limit",
+          &limit, error) ||
+      !duckdb_query_template_parse_uint64 (request->parameters[2], "offset",
+          &offset, error) ||
+      !duckdb_query_template_prepare (executor, sql, &statement, error) ||
+      !duckdb_query_template_bind_varchar (statement, 1, request->scope_id,
+          error) ||
+      !duckdb_query_template_bind_varchar (statement, 2, subject_pattern,
+          error) ||
+      !duckdb_query_template_bind_uint64 (statement, 3, limit, error) ||
+      !duckdb_query_template_bind_uint64 (statement, 4, offset, error))
+    return FALSE;
+
+  if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+    const char *detail = duckdb_result_error (&result);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB query template execution failed: %s",
+        detail != NULL ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  csv = g_string_new
+      ("account_id,message_id,object_id,message_journal_offset,"
+      "message_journal_sequence,rfc_message_id,subject,from_addr,to_addr,"
+      "cc_addr,bcc_addr,date_raw,header_journal_offset,"
+      "header_journal_sequence\n");
+
+  for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+    if (!duckdb_query_template_append_message_by_id_row (csv, &result, row,
+            error))
+      return FALSE;
+  }
+
+  {
+    gsize csv_len = csv->len;
+    gchar *csv_data = g_string_free (g_steal_pointer (&csv), FALSE);
+
+    bytes = g_bytes_new_take (csv_data, csv_len);
+  }
+
+  return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+      identity->request_id,
+      NULL, request->query_id, identity->correlation_id, 0, bytes, TRUE, error);
+}
+
+static gboolean
     duckdb_query_template_execute_messages_by_date_range
     (DuckDBQueryTemplateExecutor * executor,
     const WyreboxDaemonRequestIdentity * identity,
@@ -945,6 +1041,10 @@ duckdb_query_template_service_execute (const WyreboxDaemonRequestIdentity
 
   if (g_strcmp0 (request->template_id, "messages.by_subject.v1") == 0)
     return duckdb_query_template_execute_messages_by_subject (executor,
+        identity, request, out_chunk, error);
+
+  if (g_strcmp0 (request->template_id, "messages.subject_contains.v1") == 0)
+    return duckdb_query_template_execute_messages_subject_contains (executor,
         identity, request, out_chunk, error);
 
   if (g_strcmp0 (request->template_id, "messages.by_date_range.v1") == 0)
