@@ -10,6 +10,9 @@
 #include <gio/gio.h>
 #include <glib.h>
 #include <glib/gstdio.h>
+#include <unistd.h>
+
+#define JOURNAL_SEGMENT_NAME "00000000000000000000.wbj"
 
 typedef char *TestDuckdbOwnedString;
 
@@ -38,6 +41,60 @@ remove_tree (const char *path)
   }
 
   (void) g_rmdir (path);
+}
+
+static gchar *
+journal_segment_path (const gchar *journal_root)
+{
+  return g_build_filename (journal_root, JOURNAL_SEGMENT_NAME, NULL);
+}
+
+static void
+read_journal_segment (const gchar *journal_root,
+    guint8 **out_data, gsize *out_size)
+{
+  g_autoptr (GError) error = NULL;
+  g_autofree gchar *segment_path = journal_segment_path (journal_root);
+  g_autofree gchar *contents = NULL;
+
+  g_assert_true (g_file_get_contents (segment_path, &contents, out_size,
+          &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (contents);
+
+  *out_data = (guint8 *) g_steal_pointer (&contents);
+}
+
+static void
+write_journal_segment (const gchar *journal_root, guint8 *data, gsize size)
+{
+  g_autoptr (GError) error = NULL;
+  g_autofree gchar *segment_path = journal_segment_path (journal_root);
+
+  g_assert_true (g_file_set_contents (segment_path, (const gchar *) data,
+          (gssize) size, &error));
+  g_assert_no_error (error);
+}
+
+static void
+truncate_journal_segment (const gchar *journal_root, guint64 size)
+{
+  g_autofree gchar *segment_path = journal_segment_path (journal_root);
+
+  g_assert_cmpuint (size, <=, G_MAXSSIZE);
+  g_assert_cmpint (truncate (segment_path, (off_t) size), ==, 0);
+}
+
+static void
+corrupt_journal_checksum (const gchar *journal_root, guint64 record_offset)
+{
+  g_autofree guint8 *segment = NULL;
+  gsize segment_size = 0;
+
+  read_journal_segment (journal_root, &segment, &segment_size);
+  g_assert_cmpuint (segment_size, >, record_offset + 32);
+  segment[record_offset + 32] ^= 0x01;
+  write_journal_segment (journal_root, segment, segment_size);
 }
 
 static void
@@ -143,6 +200,21 @@ assert_materialization_checkpoint (duckdb_connection connection,
   g_assert_cmpuint (query_uint64 (connection,
           "SELECT journal_sequence FROM materialization_checkpoint WHERE "
           "checkpoint_key = 'materialization';"), ==, expected_sequence);
+}
+
+static void
+assert_unmaterialized_state (const gchar *catalog_path)
+{
+  TestDuckdbFixture duckdb = { 0 };
+
+  open_duckdb_fixture (catalog_path, &duckdb);
+  assert_table_count (duckdb.connection, "messages", 0);
+  assert_table_count (duckdb.connection, "message_headers", 0);
+  assert_table_count (duckdb.connection, "mailbox_memberships", 0);
+  assert_table_count (duckdb.connection, "mailboxes", 0);
+  assert_table_count (duckdb.connection, "mailbox_uid_state", 0);
+  assert_table_count (duckdb.connection, "materialization_checkpoint", 0);
+  close_duckdb_fixture (&duckdb);
 }
 
 static gchar *
@@ -325,6 +397,35 @@ save_wrong_checkpoint (const gchar *catalog_path,
 }
 
 static void
+assert_unsafe_suffix_error (GError *error,
+    const gchar *reason,
+    guint64 unsafe_offset, guint64 safe_end_offset,
+    gboolean has_last_safe_sequence, guint64 last_safe_sequence)
+{
+  g_autofree gchar *unsafe_offset_fragment =
+      g_strdup_printf ("unsafe offset %" G_GUINT64_FORMAT, unsafe_offset);
+  g_autofree gchar *safe_end_offset_fragment =
+      g_strdup_printf ("safe end offset %" G_GUINT64_FORMAT, safe_end_offset);
+  g_autofree gchar *last_safe_sequence_fragment = NULL;
+
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_nonnull (strstr (error->message, "journal unsafe suffix found"));
+  g_assert_nonnull (strstr (error->message, "stop reason"));
+  g_assert_nonnull (strstr (error->message, reason));
+  g_assert_nonnull (strstr (error->message, unsafe_offset_fragment));
+  g_assert_nonnull (strstr (error->message, safe_end_offset_fragment));
+
+  if (has_last_safe_sequence) {
+    last_safe_sequence_fragment =
+        g_strdup_printf ("last safe sequence %" G_GUINT64_FORMAT,
+        last_safe_sequence);
+  } else {
+    last_safe_sequence_fragment = g_strdup ("last safe sequence none");
+  }
+  g_assert_nonnull (strstr (error->message, last_safe_sequence_fragment));
+}
+
+static void
 test_no_checkpoint_materializes_two_deliveries (void)
 {
   g_autofree gchar *object_root =
@@ -354,6 +455,125 @@ test_no_checkpoint_materializes_two_deliveries (void)
       second.journal_sequence);
   assert_membership_uid (catalog_path, &first, 1);
   assert_membership_uid (catalog_path, &second, 2);
+
+  remove_tree (object_root);
+  remove_tree (journal_root);
+  remove_catalog (catalog_path);
+}
+
+static void
+test_partial_trailing_record_fails_without_materializing (void)
+{
+  g_autofree gchar *object_root =
+      g_dir_make_tmp ("wyrebox-delivery-catchup-objects-XXXXXX", NULL);
+  g_autofree gchar *journal_root =
+      g_dir_make_tmp ("wyrebox-delivery-catchup-journal-XXXXXX", NULL);
+  g_autofree gchar *catalog_path = create_bootstrap_catalog ();
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxLocalObjectStore) ingest_object_store = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+  g_auto (WyreboxEmlIngestResult) first = { 0 };
+  g_auto (WyreboxEmlIngestResult) second = { 0 };
+  g_auto (WyreboxEmlIngestResult) third = { 0 };
+
+  g_assert_nonnull (object_root);
+  g_assert_nonnull (journal_root);
+
+  ingestor = create_ingestor (object_root, journal_root,
+      &ingest_object_store, &writer);
+  ingest_fixture (ingestor, "simple-crlf.eml", &first);
+  ingest_fixture (ingestor, "duplicate-message-id.eml", &second);
+  ingest_fixture (ingestor, "html-message.eml", &third);
+  g_clear_object (&ingestor);
+  g_clear_object (&writer);
+
+  truncate_journal_segment (journal_root, third.journal_offset + 17);
+
+  g_assert_false (run_catchup (catalog_path, object_root, journal_root,
+          &error));
+  assert_unsafe_suffix_error (error, "partial-header", third.journal_offset,
+      third.journal_offset, TRUE, second.journal_sequence);
+  assert_unmaterialized_state (catalog_path);
+
+  remove_tree (object_root);
+  remove_tree (journal_root);
+  remove_catalog (catalog_path);
+}
+
+static void
+test_checksum_mismatch_fails_without_materializing (void)
+{
+  g_autofree gchar *object_root =
+      g_dir_make_tmp ("wyrebox-delivery-catchup-objects-XXXXXX", NULL);
+  g_autofree gchar *journal_root =
+      g_dir_make_tmp ("wyrebox-delivery-catchup-journal-XXXXXX", NULL);
+  g_autofree gchar *catalog_path = create_bootstrap_catalog ();
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxLocalObjectStore) ingest_object_store = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+  g_auto (WyreboxEmlIngestResult) first = { 0 };
+  g_auto (WyreboxEmlIngestResult) second = { 0 };
+  g_auto (WyreboxEmlIngestResult) third = { 0 };
+
+  g_assert_nonnull (object_root);
+  g_assert_nonnull (journal_root);
+
+  ingestor = create_ingestor (object_root, journal_root,
+      &ingest_object_store, &writer);
+  ingest_fixture (ingestor, "simple-crlf.eml", &first);
+  ingest_fixture (ingestor, "duplicate-message-id.eml", &second);
+  ingest_fixture (ingestor, "html-message.eml", &third);
+  g_clear_object (&ingestor);
+  g_clear_object (&writer);
+
+  corrupt_journal_checksum (journal_root, third.journal_offset);
+
+  g_assert_false (run_catchup (catalog_path, object_root, journal_root,
+          &error));
+  assert_unsafe_suffix_error (error, "checksum-mismatch",
+      third.journal_offset, third.journal_offset, TRUE,
+      second.journal_sequence);
+  assert_unmaterialized_state (catalog_path);
+
+  remove_tree (object_root);
+  remove_tree (journal_root);
+  remove_catalog (catalog_path);
+}
+
+static void
+test_first_record_corruption_fails_without_materializing (void)
+{
+  g_autofree gchar *object_root =
+      g_dir_make_tmp ("wyrebox-delivery-catchup-objects-XXXXXX", NULL);
+  g_autofree gchar *journal_root =
+      g_dir_make_tmp ("wyrebox-delivery-catchup-journal-XXXXXX", NULL);
+  g_autofree gchar *catalog_path = create_bootstrap_catalog ();
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxLocalObjectStore) ingest_object_store = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+  g_auto (WyreboxEmlIngestResult) first = { 0 };
+  g_auto (WyreboxEmlIngestResult) second = { 0 };
+
+  g_assert_nonnull (object_root);
+  g_assert_nonnull (journal_root);
+
+  ingestor = create_ingestor (object_root, journal_root,
+      &ingest_object_store, &writer);
+  ingest_fixture (ingestor, "simple-crlf.eml", &first);
+  ingest_fixture (ingestor, "duplicate-message-id.eml", &second);
+  g_clear_object (&ingestor);
+  g_clear_object (&writer);
+
+  corrupt_journal_checksum (journal_root, first.journal_offset);
+
+  g_assert_false (run_catchup (catalog_path, object_root, journal_root,
+          &error));
+  assert_unsafe_suffix_error (error, "checksum-mismatch",
+      first.journal_offset, 0, FALSE, 0);
+  assert_unmaterialized_state (catalog_path);
 
   remove_tree (object_root);
   remove_tree (journal_root);
@@ -491,6 +711,12 @@ main (int argc, char **argv)
 
   g_test_add_func ("/ingestion/delivery-catchup/no-checkpoint",
       test_no_checkpoint_materializes_two_deliveries);
+  g_test_add_func ("/ingestion/delivery-catchup/partial-trailing-record",
+      test_partial_trailing_record_fails_without_materializing);
+  g_test_add_func ("/ingestion/delivery-catchup/checksum-mismatch",
+      test_checksum_mismatch_fails_without_materializing);
+  g_test_add_func ("/ingestion/delivery-catchup/first-record-corruption",
+      test_first_record_corruption_fails_without_materializing);
   g_test_add_func ("/ingestion/delivery-catchup/existing-checkpoint",
       test_existing_checkpoint_materializes_suffix);
   g_test_add_func ("/ingestion/delivery-catchup/checkpoint-at-eof",
