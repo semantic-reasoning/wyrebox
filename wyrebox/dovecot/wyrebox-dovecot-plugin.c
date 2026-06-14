@@ -34,7 +34,7 @@ struct wyrebox_dovecot_mailbox
 
 struct wyrebox_dovecot_mail
 {
-  struct mail mail;
+  struct mail_private private;
   struct istream *stream;
 };
 
@@ -853,10 +853,18 @@ wyrebox_dovecot_mail_clear_stream (struct wyrebox_dovecot_mail *wmail)
   i_stream_unref (&wmail->stream);
 }
 
+static struct wyrebox_dovecot_mail *
+wyrebox_dovecot_mail_from_mail (struct mail *mail)
+{
+  struct mail_private *private = (struct mail_private *) mail;
+
+  return (struct wyrebox_dovecot_mail *) private;
+}
+
 static void
 wyrebox_dovecot_mail_close (struct mail *mail)
 {
-  struct wyrebox_dovecot_mail *wmail = (struct wyrebox_dovecot_mail *) mail;
+  struct wyrebox_dovecot_mail *wmail = wyrebox_dovecot_mail_from_mail (mail);
 
   wyrebox_dovecot_mail_clear_stream (wmail);
 }
@@ -864,7 +872,7 @@ wyrebox_dovecot_mail_close (struct mail *mail)
 static void
 wyrebox_dovecot_mail_free (struct mail *mail)
 {
-  struct wyrebox_dovecot_mail *wmail = (struct wyrebox_dovecot_mail *) mail;
+  struct wyrebox_dovecot_mail *wmail = wyrebox_dovecot_mail_from_mail (mail);
 
   wyrebox_dovecot_mail_clear_stream (wmail);
   free (wmail);
@@ -897,7 +905,7 @@ wyrebox_dovecot_mail_get_stream (struct mail *mail, bool get_body,
     return -1;
   }
 
-  wmail = (struct wyrebox_dovecot_mail *) mail;
+  wmail = wyrebox_dovecot_mail_from_mail (mail);
   box = mail->box;
   wbox = (struct wyrebox_dovecot_mailbox *) box;
   storage = (struct wyrebox_dovecot_storage *) box->storage;
@@ -955,13 +963,15 @@ wyrebox_dovecot_mail_alloc (struct mailbox_transaction_context *transaction,
   }
 
   if (transaction != NULL) {
-    wmail->mail.box = transaction->box;
-    wmail->mail.transaction = transaction;
+    wmail->private.mail.box = transaction->box;
+    wmail->private.mail.transaction = transaction;
   }
+  wmail->private.v = wyrebox_dovecot_mail_vfuncs;
+  wmail->private.vlast = NULL;
 
   (void) wanted_fields;
   (void) wanted_headers;
-  return &wmail->mail;
+  return &wmail->private.mail;
 }
 
 static struct mailbox *

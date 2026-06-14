@@ -221,9 +221,18 @@ struct mail
   struct mailbox *box;
   struct mailbox_transaction_context *transaction;
   unsigned int uid;
-  const struct mail_vfuncs *v;
 };
 
+struct mail_private
+{
+  struct mail mail;
+  struct mail_vfuncs v, *vlast;
+};
+
+int mail_get_stream (struct mail *mail, bool get_body,
+    struct message_size *hdr_size,
+    struct message_size *body_size, struct istream **stream);
+void mail_free (struct mail **mail);
 void i_stream_unref (struct istream **stream);
 
 #endif
