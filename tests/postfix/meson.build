@@ -32,6 +32,15 @@ if capnp_serialization_found
     dependencies: [wyrebox_dep, capnp_dep, kj_dep],
     include_directories: [daemon_api_capnp_schema_include],
   )
+  postfix_lmtp_delivery_bridge_test = executable(
+    'test-postfix-lmtp-delivery-bridge',
+    [
+      'test-postfix-lmtp-delivery-bridge.cc',
+      daemon_api_capnp_schema,
+    ],
+    dependencies: [wyrebox_dep, capnp_dep, kj_dep],
+    include_directories: [daemon_api_capnp_schema_include],
+  )
 endif
 
 test('postfix pipe input', postfix_pipe_input_test)
@@ -46,4 +55,5 @@ if capnp_serialization_found
       'WYREBOX_POSTFIX_PIPE_EXECUTABLE': wyrebox_postfix_pipe.full_path(),
     },
   )
+  test('postfix lmtp delivery bridge', postfix_lmtp_delivery_bridge_test)
 endif
