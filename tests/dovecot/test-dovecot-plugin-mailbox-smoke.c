@@ -10,6 +10,7 @@
 #include "wyrebox-daemon-capnp-codec.h"
 #include "wyrebox-daemon-error-frame.h"
 #include "wyrebox-daemon-frame-io.h"
+#include "wyrebox-daemon-mailbox-list-result.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
 #include "wyrebox-daemon-response-frame.h"
 
@@ -41,6 +42,9 @@ typedef enum
   FAKE_SERVER_MAILBOX_SELECT_RESPONSE,
   FAKE_SERVER_DAEMON_ERROR_RESPONSE,
   FAKE_SERVER_MAILBOX_SELECT_THEN_UID_MAP_RESPONSE,
+  FAKE_SERVER_MAILBOX_LIST_RESPONSE,
+  FAKE_SERVER_EMPTY_MAILBOX_LIST_RESPONSE,
+  FAKE_SERVER_MAILBOX_LIST_ERROR_RESPONSE,
 } FakeServerBehavior;
 
 typedef struct
@@ -181,7 +185,67 @@ assert_decoded_uid_map_request (GBytes *request,
   return request_id;
 }
 
+static char *
+assert_decoded_list_request (GBytes *request)
+{
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+  char *request_id = NULL;
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+          request, &decoded, &decoded_state, &decoded_state_clear, NULL,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.operation, ==,
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_LIST);
+  g_assert_nonnull (decoded.mailbox_list);
+  g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
+  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.tool_identity, ==, "dovecot-storage");
+  g_assert_cmpstr (decoded.request_id, !=, "");
+  g_assert_cmpstr (decoded.correlation_id, ==, "");
+  g_assert_cmpstr (decoded.mailbox_list->account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.mailbox_list->namespace_prefix, ==, "");
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  request_id = g_strdup (decoded.request_id);
+  decoded_state_clear (decoded_state);
+
+  return request_id;
+}
+
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
+static GBytes *
+encode_mailbox_list_response (const char *request_id, gboolean empty)
+{
+  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  wyrebox_daemon_mailbox_list_result_init_empty (&result);
+  if (!empty) {
+    g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
+            WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+            "mailbox-inbox", "INBOX", "/", "\\Inbox", TRUE,
+            WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN, &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_mailbox_list_result_append_entry (&result,
+            WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
+            "view-projects", "Projects", "/", NULL, FALSE,
+            WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN, &error));
+    g_assert_no_error (error);
+  }
+
+  g_assert_true (wyrebox_daemon_response_frame_init_mailbox_list (&frame,
+          request_id, NULL, &result, &error));
+  g_assert_no_error (error);
+
+  return wyrebox_daemon_capnp_codec_encode_response_frame (&frame, NULL,
+      &error);
+}
+
 static GBytes *
 encode_mailbox_select_response (const char *request_id)
 {
@@ -330,6 +394,30 @@ fake_server_thread_main (gpointer user_data)
         }
 
         g_assert_not_reached ();
+      case FAKE_SERVER_MAILBOX_LIST_RESPONSE:
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
+        request_id = assert_decoded_list_request (request);
+        response = encode_mailbox_list_response (request_id, FALSE);
+#else
+        g_assert_not_reached ();
+#endif
+        break;
+      case FAKE_SERVER_EMPTY_MAILBOX_LIST_RESPONSE:
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
+        request_id = assert_decoded_list_request (request);
+        response = encode_mailbox_list_response (request_id, TRUE);
+#else
+        g_assert_not_reached ();
+#endif
+        break;
+      case FAKE_SERVER_MAILBOX_LIST_ERROR_RESPONSE:
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
+        request_id = assert_decoded_list_request (request);
+        response = encode_daemon_error_response (request_id);
+#else
+        g_assert_not_reached ();
+#endif
+        break;
       default:
         g_assert_not_reached ();
     }
@@ -400,8 +488,8 @@ init_plugin_and_get_storage_class (void)
 }
 
 static void
-load_box (struct mail_storage *storage_class,
-    struct mail_storage **storage_r, struct mailbox **box_r)
+load_storage (struct mail_storage *storage_class,
+    struct mail_storage **storage_r)
 {
   struct mail_storage *storage;
   struct mail_user user = { "account-1", };
@@ -409,13 +497,24 @@ load_box (struct mail_storage *storage_class,
     .user = &user,
     .owner = &user,
   };
-  struct mailbox *box = NULL;
   const char *error = NULL;
 
   storage = storage_class->v.alloc ();
   g_assert_nonnull (storage);
   g_assert_cmpint (storage->v.create (storage, &ns, &error), ==, 0);
   g_assert_null (error);
+
+  *storage_r = storage;
+}
+
+static void
+load_box (struct mail_storage *storage_class,
+    struct mail_storage **storage_r, struct mailbox **box_r)
+{
+  struct mail_storage *storage = NULL;
+  struct mailbox *box = NULL;
+
+  load_storage (storage_class, &storage);
   box = storage->v.mailbox_alloc (storage, NULL, "Projects", 0);
   g_assert_nonnull (box);
 
@@ -443,18 +542,20 @@ close_unload_box_and_plugin (struct mail_storage *storage, struct mailbox *box)
 static void
 test_registered_storage_installs_add_list_hooks_without_socket_io (void)
 {
-  const char *patterns[] = { "*", NULL };
   struct mailbox_list *list = NULL;
   struct mailbox_list *other_list = NULL;
-  struct mailbox_list_iterate_context *ctx = NULL;
   struct mail_storage *storage_class = NULL;
+  struct mail_storage *storage = NULL;
   struct mailbox_list_vfuncs original_vfuncs;
   struct mailbox_list_vfuncs other_original_vfuncs;
   struct mailbox_list_vfuncs *original_vlast = NULL;
   struct mailbox_list_vfuncs *other_original_vlast = NULL;
 
+  wyrebox_dovecot_test_daemon_socket_path =
+      "/tmp/wyrebox-add-list-must-not-connect.sock";
   storage_class = init_plugin_and_get_storage_class ();
   g_assert_nonnull (storage_class->v.add_list);
+  load_storage (storage_class, &storage);
 
   list = mailbox_list_sink_alloc ();
   other_list = mailbox_list_sink_alloc ();
@@ -466,9 +567,7 @@ test_registered_storage_installs_add_list_hooks_without_socket_io (void)
   other_original_vfuncs = other_list->v;
   other_original_vlast = other_list->vlast;
 
-  wyrebox_dovecot_test_daemon_socket_path =
-      "/tmp/wyrebox-add-list-must-not-connect.sock";
-  storage_class->v.add_list (storage_class, list);
+  storage->v.add_list (storage, list);
   wyrebox_dovecot_test_daemon_socket_path = NULL;
 
   g_assert_true (list->v.iter_init != original_vfuncs.iter_init);
@@ -488,17 +587,12 @@ test_registered_storage_installs_add_list_hooks_without_socket_io (void)
       other_original_vfuncs.iter_deinit);
   g_assert_true (other_list->v.deinit == other_original_vfuncs.deinit);
   g_assert_true (other_list->vlast == other_original_vlast);
-
-  ctx = list->v.iter_init (list, patterns, MAILBOX_LIST_ITER_RETURN_CHILDREN);
-  g_assert_nonnull (ctx);
   g_assert_cmpuint (mailbox_list_sink_get_original_iter_init_calls (list), ==,
-      1);
-  g_assert_null (list->v.iter_next (ctx));
+      0);
   g_assert_cmpuint (mailbox_list_sink_get_original_iter_next_calls (list), ==,
-      1);
-  g_assert_cmpint (list->v.iter_deinit (ctx), ==, 0);
+      0);
   g_assert_cmpuint (mailbox_list_sink_get_original_iter_deinit_calls (list),
-      ==, 1);
+      ==, 0);
   g_assert_cmpuint (mailbox_list_sink_get_original_iter_init_calls
       (other_list), ==, 0);
 
@@ -512,6 +606,7 @@ test_registered_storage_installs_add_list_hooks_without_socket_io (void)
 
   mailbox_list_sink_free (list);
   mailbox_list_sink_free (other_list);
+  storage->v.destroy (storage);
 
   wyrebox_plugin_deinit ();
   g_assert_true (wyrebox_dovecot_loader_shim_mail_storage_class_unregister_calls
@@ -552,11 +647,13 @@ test_plugin_deinit_restores_list_hooks_before_list_deinit (void)
 {
   struct mailbox_list *list = NULL;
   struct mail_storage *storage_class = NULL;
+  struct mail_storage *storage = NULL;
   struct mailbox_list_vfuncs original_vfuncs;
   struct mailbox_list_vfuncs *original_vlast = NULL;
 
   storage_class = init_plugin_and_get_storage_class ();
   g_assert_nonnull (storage_class->v.add_list);
+  load_storage (storage_class, &storage);
 
   list = mailbox_list_sink_alloc ();
   g_assert_nonnull (list);
@@ -564,7 +661,7 @@ test_plugin_deinit_restores_list_hooks_before_list_deinit (void)
   original_vfuncs = list->v;
   original_vlast = list->vlast;
 
-  storage_class->v.add_list (storage_class, list);
+  storage->v.add_list (storage, list);
   assert_mailbox_list_uses_original_vfuncs_as_sink (list, &original_vfuncs,
       original_vlast);
 
@@ -578,20 +675,21 @@ test_plugin_deinit_restores_list_hooks_before_list_deinit (void)
   g_assert_cmpuint (mailbox_list_sink_get_original_deinit_calls (list), ==, 1);
 
   mailbox_list_sink_free (list);
+  storage->v.destroy (storage);
 }
 
 static void
 test_plugin_reload_rehooks_same_list_with_original_sink_vfuncs (void)
 {
-  const char *patterns[] = { "*", NULL };
   struct mailbox_list *list = NULL;
-  struct mailbox_list_iterate_context *ctx = NULL;
   struct mail_storage *storage_class = NULL;
+  struct mail_storage *storage = NULL;
   struct mailbox_list_vfuncs original_vfuncs;
   struct mailbox_list_vfuncs *original_vlast = NULL;
 
   storage_class = init_plugin_and_get_storage_class ();
   g_assert_nonnull (storage_class->v.add_list);
+  load_storage (storage_class, &storage);
 
   list = mailbox_list_sink_alloc ();
   g_assert_nonnull (list);
@@ -599,32 +697,31 @@ test_plugin_reload_rehooks_same_list_with_original_sink_vfuncs (void)
   original_vfuncs = list->v;
   original_vlast = list->vlast;
 
-  storage_class->v.add_list (storage_class, list);
+  storage->v.add_list (storage, list);
   wyrebox_plugin_deinit ();
   assert_mailbox_list_vfuncs_restored (list, &original_vfuncs, original_vlast);
+  storage->v.destroy (storage);
 
   storage_class = init_plugin_and_get_storage_class ();
   g_assert_nonnull (storage_class->v.add_list);
+  storage = NULL;
+  load_storage (storage_class, &storage);
 
-  storage_class->v.add_list (storage_class, list);
+  storage->v.add_list (storage, list);
   assert_mailbox_list_uses_original_vfuncs_as_sink (list, &original_vfuncs,
       original_vlast);
-
-  ctx = list->v.iter_init (list, patterns, MAILBOX_LIST_ITER_RETURN_CHILDREN);
-  g_assert_nonnull (ctx);
   g_assert_cmpuint (mailbox_list_sink_get_original_iter_init_calls (list), ==,
-      1);
-  g_assert_null (list->v.iter_next (ctx));
+      0);
   g_assert_cmpuint (mailbox_list_sink_get_original_iter_next_calls (list), ==,
-      1);
-  g_assert_cmpint (list->v.iter_deinit (ctx), ==, 0);
+      0);
   g_assert_cmpuint (mailbox_list_sink_get_original_iter_deinit_calls (list),
-      ==, 1);
+      ==, 0);
 
   list->v.deinit (list);
   g_assert_cmpuint (mailbox_list_sink_get_original_deinit_calls (list), ==, 1);
 
   mailbox_list_sink_free (list);
+  storage->v.destroy (storage);
 
   wyrebox_plugin_deinit ();
   g_assert_true (wyrebox_dovecot_loader_shim_mail_storage_class_unregister_calls
@@ -887,6 +984,258 @@ test_publish_mailbox_list_result_reports_publish_failure (void)
 }
 
 static void
+test_list_iter_next_yields_daemon_mailboxes (void)
+{
+  const char *patterns[] = { "*", NULL };
+  g_autofree char *socket_root = NULL;
+  g_autofree char *socket_path = NULL;
+  FakeServer server = { 0 };
+  struct mail_storage *storage_class = NULL;
+  struct mail_storage *storage = NULL;
+  struct mailbox_list *list = NULL;
+  struct mailbox_list_iterate_context *ctx = NULL;
+  const struct mailbox_info *first = NULL;
+  const struct mailbox_info *second = NULL;
+
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
+  g_autofree char *socket_path_local = make_socket_path (&socket_root);
+  fake_server_start (&server, socket_path_local,
+      FAKE_SERVER_MAILBOX_LIST_RESPONSE, NULL, NULL,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  socket_path = g_steal_pointer (&socket_path_local);
+
+  wyrebox_dovecot_test_daemon_socket_path = socket_path;
+  storage_class = init_plugin_and_get_storage_class ();
+  load_storage (storage_class, &storage);
+
+  list = mailbox_list_sink_alloc ();
+  g_assert_nonnull (list);
+  storage->v.add_list (storage, list);
+
+  ctx = list->v.iter_init (list, patterns,
+      MAILBOX_LIST_ITER_RETURN_CHILDREN | MAILBOX_LIST_ITER_RETURN_SPECIALUSE);
+  g_assert_nonnull (ctx);
+  g_assert_cmpuint (mailbox_list_sink_get_original_iter_init_calls (list), ==,
+      0);
+
+  first = list->v.iter_next (ctx);
+  g_assert_nonnull (first);
+  g_assert_cmpstr (first->vname, ==, "INBOX");
+  g_assert_cmpstr (first->special_use, ==, "\\Inbox");
+  g_assert_false ((first->flags & MAILBOX_NOSELECT) != 0);
+  g_assert_true ((first->flags & MAILBOX_NOCHILDREN) != 0);
+  g_assert_false ((first->flags & MAILBOX_CHILDREN) != 0);
+
+  second = list->v.iter_next (ctx);
+  g_assert_nonnull (second);
+  g_assert_true (first != second);
+  g_assert_cmpstr (first->vname, ==, "INBOX");
+  g_assert_cmpstr (second->vname, ==, "Projects");
+  g_assert_null (second->special_use);
+  g_assert_true ((second->flags & MAILBOX_NOSELECT) != 0);
+  g_assert_true ((second->flags & MAILBOX_CHILDREN) != 0);
+  g_assert_false ((second->flags & MAILBOX_NOCHILDREN) != 0);
+
+  g_assert_null (list->v.iter_next (ctx));
+  g_assert_cmpuint (mailbox_list_sink_get_original_iter_next_calls (list), ==,
+      0);
+  g_assert_cmpint (list->v.iter_deinit (ctx), ==, 0);
+  g_assert_cmpuint (mailbox_list_sink_get_original_iter_deinit_calls (list),
+      ==, 0);
+
+  fake_server_join (&server);
+  g_assert_cmpuint (server.request_count, ==, 1);
+  remove_tree (socket_root);
+
+  list->v.deinit (list);
+  mailbox_list_sink_free (list);
+  storage->v.destroy (storage);
+  wyrebox_dovecot_test_daemon_socket_path = NULL;
+  wyrebox_plugin_deinit ();
+#else
+  g_test_skip ("CAPNP serialization is disabled");
+#endif
+}
+
+static void
+test_list_iter_empty_daemon_result_is_clean (void)
+{
+  const char *patterns[] = { "*", NULL };
+  g_autofree char *socket_root = NULL;
+  g_autofree char *socket_path = NULL;
+  FakeServer server = { 0 };
+  struct mail_storage *storage_class = NULL;
+  struct mail_storage *storage = NULL;
+  struct mailbox_list *list = NULL;
+  struct mailbox_list_iterate_context *ctx = NULL;
+
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
+  g_autofree char *socket_path_local = make_socket_path (&socket_root);
+  fake_server_start (&server, socket_path_local,
+      FAKE_SERVER_EMPTY_MAILBOX_LIST_RESPONSE, NULL, NULL,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  socket_path = g_steal_pointer (&socket_path_local);
+
+  wyrebox_dovecot_test_daemon_socket_path = socket_path;
+  storage_class = init_plugin_and_get_storage_class ();
+  load_storage (storage_class, &storage);
+
+  list = mailbox_list_sink_alloc ();
+  g_assert_nonnull (list);
+  storage->v.add_list (storage, list);
+
+  ctx = list->v.iter_init (list, patterns, MAILBOX_LIST_ITER_RETURN_CHILDREN);
+  g_assert_nonnull (ctx);
+  g_assert_null (list->v.iter_next (ctx));
+  g_assert_cmpint (list->v.iter_deinit (ctx), ==, 0);
+
+  fake_server_join (&server);
+  g_assert_cmpuint (server.request_count, ==, 1);
+  remove_tree (socket_root);
+
+  list->v.deinit (list);
+  mailbox_list_sink_free (list);
+  storage->v.destroy (storage);
+  wyrebox_dovecot_test_daemon_socket_path = NULL;
+  wyrebox_plugin_deinit ();
+#else
+  g_test_skip ("CAPNP serialization is disabled");
+#endif
+}
+
+static void
+test_list_iter_daemon_error_is_clean_failure (void)
+{
+  const char *patterns[] = { "*", NULL };
+  g_autofree char *socket_root = NULL;
+  g_autofree char *socket_path = NULL;
+  FakeServer server = { 0 };
+  struct mail_storage *storage_class = NULL;
+  struct mail_storage *storage = NULL;
+  struct mailbox_list *list = NULL;
+  struct mailbox_list_iterate_context *ctx = NULL;
+
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
+  g_autofree char *socket_path_local = make_socket_path (&socket_root);
+  fake_server_start (&server, socket_path_local,
+      FAKE_SERVER_MAILBOX_LIST_ERROR_RESPONSE, NULL, NULL,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  socket_path = g_steal_pointer (&socket_path_local);
+
+  wyrebox_dovecot_test_daemon_socket_path = socket_path;
+  storage_class = init_plugin_and_get_storage_class ();
+  load_storage (storage_class, &storage);
+
+  list = mailbox_list_sink_alloc ();
+  g_assert_nonnull (list);
+  storage->v.add_list (storage, list);
+
+  ctx = list->v.iter_init (list, patterns, MAILBOX_LIST_ITER_RETURN_CHILDREN);
+  g_assert_nonnull (ctx);
+  g_assert_null (list->v.iter_next (ctx));
+  g_assert_cmpint (list->v.iter_deinit (ctx), ==, -1);
+
+  fake_server_join (&server);
+  g_assert_cmpuint (server.request_count, ==, 1);
+  remove_tree (socket_root);
+
+  list->v.deinit (list);
+  mailbox_list_sink_free (list);
+  storage->v.destroy (storage);
+  wyrebox_dovecot_test_daemon_socket_path = NULL;
+  wyrebox_plugin_deinit ();
+#else
+  g_test_skip ("CAPNP serialization is disabled");
+#endif
+}
+
+static void
+test_list_iter_missing_socket_is_clean_failure (void)
+{
+  const char *patterns[] = { "*", NULL };
+  g_autofree char *socket_root = NULL;
+  g_autofree char *missing_socket_path = NULL;
+  struct mail_storage *storage_class = NULL;
+  struct mail_storage *storage = NULL;
+  struct mailbox_list *list = NULL;
+  struct mailbox_list_iterate_context *ctx = NULL;
+
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
+  missing_socket_path = make_socket_path (&socket_root);
+  wyrebox_dovecot_test_daemon_socket_path = missing_socket_path;
+  storage_class = init_plugin_and_get_storage_class ();
+  load_storage (storage_class, &storage);
+
+  list = mailbox_list_sink_alloc ();
+  g_assert_nonnull (list);
+  storage->v.add_list (storage, list);
+
+  ctx = list->v.iter_init (list, patterns, MAILBOX_LIST_ITER_RETURN_CHILDREN);
+  g_assert_nonnull (ctx);
+  g_assert_null (list->v.iter_next (ctx));
+  g_assert_cmpint (list->v.iter_deinit (ctx), ==, -1);
+
+  list->v.deinit (list);
+  mailbox_list_sink_free (list);
+  storage->v.destroy (storage);
+  wyrebox_dovecot_test_daemon_socket_path = NULL;
+  wyrebox_plugin_deinit ();
+  remove_tree (socket_root);
+#else
+  g_test_skip ("CAPNP serialization is disabled");
+#endif
+}
+
+static void
+test_list_iter_deinit_after_partial_iteration (void)
+{
+  const char *patterns[] = { "*", NULL };
+  g_autofree char *socket_root = NULL;
+  g_autofree char *socket_path = NULL;
+  FakeServer server = { 0 };
+  struct mail_storage *storage_class = NULL;
+  struct mail_storage *storage = NULL;
+  struct mailbox_list *list = NULL;
+  struct mailbox_list_iterate_context *ctx = NULL;
+  const struct mailbox_info *info = NULL;
+
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
+  g_autofree char *socket_path_local = make_socket_path (&socket_root);
+  fake_server_start (&server, socket_path_local,
+      FAKE_SERVER_MAILBOX_LIST_RESPONSE, NULL, NULL,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  socket_path = g_steal_pointer (&socket_path_local);
+
+  wyrebox_dovecot_test_daemon_socket_path = socket_path;
+  storage_class = init_plugin_and_get_storage_class ();
+  load_storage (storage_class, &storage);
+
+  list = mailbox_list_sink_alloc ();
+  g_assert_nonnull (list);
+  storage->v.add_list (storage, list);
+
+  ctx = list->v.iter_init (list, patterns, MAILBOX_LIST_ITER_RETURN_CHILDREN);
+  g_assert_nonnull (ctx);
+  info = list->v.iter_next (ctx);
+  g_assert_nonnull (info);
+  g_assert_cmpstr (info->vname, ==, "INBOX");
+  g_assert_cmpint (list->v.iter_deinit (ctx), ==, 0);
+
+  fake_server_join (&server);
+  g_assert_cmpuint (server.request_count, ==, 1);
+  remove_tree (socket_root);
+
+  list->v.deinit (list);
+  mailbox_list_sink_free (list);
+  storage->v.destroy (storage);
+  wyrebox_dovecot_test_daemon_socket_path = NULL;
+  wyrebox_plugin_deinit ();
+#else
+  g_test_skip ("CAPNP serialization is disabled");
+#endif
+}
+
+static void
 test_open_and_get_status_after_open (void)
 {
   g_autofree char *socket_root = NULL;
@@ -1076,6 +1425,16 @@ main (int argc, char **argv)
       test_publish_mailbox_list_result_validates_before_publishing);
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/list-publish-failure",
       test_publish_mailbox_list_result_reports_publish_failure);
+  g_test_add_func ("/dovecot/plugin-mailbox-smoke/list-iter-yields-daemon",
+      test_list_iter_next_yields_daemon_mailboxes);
+  g_test_add_func ("/dovecot/plugin-mailbox-smoke/list-iter-empty-daemon",
+      test_list_iter_empty_daemon_result_is_clean);
+  g_test_add_func ("/dovecot/plugin-mailbox-smoke/list-iter-daemon-error",
+      test_list_iter_daemon_error_is_clean_failure);
+  g_test_add_func ("/dovecot/plugin-mailbox-smoke/list-iter-missing-socket",
+      test_list_iter_missing_socket_is_clean_failure);
+  g_test_add_func ("/dovecot/plugin-mailbox-smoke/list-iter-partial-deinit",
+      test_list_iter_deinit_after_partial_iteration);
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/open-get-status-after-open",
       test_open_and_get_status_after_open);
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/lazy-status-before-open",
