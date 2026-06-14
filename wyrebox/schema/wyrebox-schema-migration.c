@@ -108,7 +108,7 @@ static const WyreboxSchemaMigrationStep wyrebox_schema_migration_steps[] = {
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT,
         wyrebox_schema_migration_default_step_operation,
         wyrebox_schema_migration_default_step_validation,
-        FALSE,
+        TRUE,
       WYREBOX_SCHEMA_MIGRATION_MATERIALIZATION_CHECKPOINT_INVALIDATE},
   {5,
         6,
@@ -116,7 +116,7 @@ static const WyreboxSchemaMigrationStep wyrebox_schema_migration_steps[] = {
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN,
         wyrebox_schema_migration_default_step_operation,
         wyrebox_schema_migration_default_step_validation,
-        FALSE,
+        TRUE,
       WYREBOX_SCHEMA_MIGRATION_MATERIALIZATION_CHECKPOINT_INVALIDATE},
   {6,
         WYREBOX_SCHEMA_VERSION_CURRENT,
@@ -124,7 +124,7 @@ static const WyreboxSchemaMigrationStep wyrebox_schema_migration_steps[] = {
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US,
         wyrebox_schema_migration_default_step_operation,
         wyrebox_schema_migration_default_step_validation,
-        FALSE,
+        TRUE,
       WYREBOX_SCHEMA_MIGRATION_MATERIALIZATION_CHECKPOINT_INVALIDATE},
 };
 
@@ -296,7 +296,8 @@ static gboolean
 wyrebox_schema_migration_apply_step (WyreboxSchemaMigration *self,
     const WyreboxSchemaMigrationStep *step,
     WyreboxSchemaMetadataStore *metadata_store,
-    WyreboxSchemaMigrationMetadataState *state, GError **error)
+    WyreboxSchemaMigrationMetadataState *state,
+    gboolean materialization_checkpoint_available, GError **error)
 {
   if (step->requires_checkpoint && !state->checkpoint_precondition_satisfied) {
     g_set_error (error,
@@ -307,7 +308,7 @@ wyrebox_schema_migration_apply_step (WyreboxSchemaMigration *self,
     return FALSE;
   }
 
-  if (step->requires_checkpoint && !state->materialization_checkpoint_present) {
+  if (step->requires_checkpoint && !materialization_checkpoint_available) {
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_FAILED,
@@ -348,7 +349,8 @@ static gboolean
 metadata_apply_to_version (WyreboxSchemaMigration *self,
     WyreboxSchemaMigrationMetadataState *state,
     WyreboxSchemaMetadataStore *metadata_store,
-    guint64 source_version, guint64 target_version, GError **error)
+    guint64 source_version, guint64 target_version,
+    gboolean materialization_checkpoint_available, GError **error)
 {
   guint64 cursor = source_version;
 
@@ -383,7 +385,8 @@ metadata_apply_to_version (WyreboxSchemaMigration *self,
     }
 
     if (!wyrebox_schema_migration_apply_step (self,
-            step, metadata_store, state, error))
+            step, metadata_store, state,
+            materialization_checkpoint_available, error))
       return FALSE;
 
     cursor = step->target_version;
@@ -400,6 +403,7 @@ wyrebox_schema_migration_evaluate_to_version_internal (WyreboxSchemaMigration
 {
   guint64 source_version = 0;
   g_auto (WyreboxSchemaMigrationMetadataState) updated_state = { 0 };
+  gboolean materialization_checkpoint_available = FALSE;
 
   g_return_val_if_fail (WYREBOX_IS_SCHEMA_MIGRATION (self), FALSE);
   g_return_val_if_fail (state != NULL, FALSE);
@@ -413,6 +417,8 @@ wyrebox_schema_migration_evaluate_to_version_internal (WyreboxSchemaMigration
     updated_state.checkpoint_precondition_satisfied = TRUE;
     updated_state.materialization_checkpoint_present = TRUE;
   }
+  materialization_checkpoint_available =
+      updated_state.materialization_checkpoint_present;
 
   if (!metadata_source_is_supported (source_version, error))
     return FALSE;
@@ -426,7 +432,7 @@ wyrebox_schema_migration_evaluate_to_version_internal (WyreboxSchemaMigration
   if (source_version < target_version &&
       !metadata_apply_to_version (self,
           &updated_state, metadata_store, source_version, target_version,
-          error))
+          materialization_checkpoint_available, error))
     return FALSE;
 
   updated_state.schema_version_present = TRUE;
