@@ -1884,6 +1884,60 @@ test_uid_fetch_unknown_uid_fails_without_daemon_fetch (void)
 }
 
 static void
+test_seq_fetch_unknown_seq_clears_selected_uid_without_daemon_fetch (void)
+{
+  g_autofree char *socket_root = NULL;
+  g_autofree char *socket_path = NULL;
+  FakeServer server = { 0 };
+  struct mailbox *box = NULL;
+  struct mail_storage *storage = NULL;
+  struct mail *mail = NULL;
+  struct istream *stream = NULL;
+  const char *uid_map_csv =
+      "account_id,view_id,uidvalidity,uid,message_id,object_id,rule_version_hash\n"
+      "account-1,view-projects,77,42,message-1,object-1,hash-1\n";
+  struct mail_storage *storage_class = NULL;
+
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
+  g_autofree char *socket_path_local = make_socket_path (&socket_root);
+  fake_server_start_default (&server, socket_path_local,
+      FAKE_SERVER_MAILBOX_SELECT_THEN_UID_MAP_RESPONSE, uid_map_csv,
+      "view-projects", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
+  socket_path = g_steal_pointer (&socket_path_local);
+
+  wyrebox_dovecot_test_daemon_socket_path = socket_path;
+  storage_class = init_plugin_and_get_storage_class ();
+  load_box (storage_class, &storage, &box);
+
+  g_assert_cmpint (box->v.open (box), ==, 0);
+  fake_server_join (&server);
+  g_assert_cmpuint (server.request_count, ==, 2);
+  istream_stub_reset_counts ();
+
+  mail = alloc_test_mail (box);
+  g_assert_true (mail_set_uid (mail, 42));
+  g_assert_cmpuint (mail->uid, ==, 42);
+  g_assert_cmpuint (mail->seq, ==, 1);
+  mail_set_seq (mail, 999);
+  g_assert_cmpuint (mail->uid, ==, 0);
+  g_assert_cmpuint (mail->seq, ==, 0);
+  g_assert_cmpuint (server.request_count, ==, 2);
+  g_assert_cmpint (mail_get_stream (mail, true, NULL, NULL, &stream), ==, -1);
+  g_assert_null (stream);
+  close_free_test_mail (&mail);
+  g_assert_cmpuint (istream_stub_get_create_count (), ==, 0);
+  g_assert_cmpuint (istream_stub_get_unref_count (), ==, 0);
+  g_assert_cmpuint (istream_stub_get_live_count (), ==, 0);
+  remove_tree (socket_root);
+
+  wyrebox_dovecot_test_daemon_socket_path = NULL;
+  close_unload_box_and_plugin (storage, box);
+#else
+  g_test_skip ("CAPNP serialization is disabled");
+#endif
+}
+
+static void
 test_open_fails_with_missing_socket_clears_state (void)
 {
   g_autofree char *socket_root = NULL;
@@ -2005,6 +2059,8 @@ main (int argc, char **argv)
       test_virtual_uid_fetch_uses_derived_view_namespace);
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/uid-fetch-unknown-uid",
       test_uid_fetch_unknown_uid_fails_without_daemon_fetch);
+  g_test_add_func ("/dovecot/plugin-mailbox-smoke/seq-fetch-unknown-seq",
+      test_seq_fetch_unknown_seq_clears_selected_uid_without_daemon_fetch);
   g_test_add_func
       ("/dovecot/plugin-mailbox-smoke/open-fails-with-missing-socket",
       test_open_fails_with_missing_socket_clears_state);
