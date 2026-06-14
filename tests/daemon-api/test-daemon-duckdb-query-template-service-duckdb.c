@@ -301,6 +301,62 @@ seed_high_cardinality_subject_headers (const gchar *path)
 }
 
 static void
+seed_subject_contains_headers (const gchar *path)
+{
+  g_auto (duckdb_database) database = NULL;
+  g_auto (duckdb_connection) connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  exec_sql (connection,
+      "INSERT INTO messages (message_id, account_id, object_id, "
+      "journal_offset, journal_sequence) VALUES "
+      "('message-contains-a', 'account-1', 'object-contains-a', 30, 30),"
+      "('message-contains-b', 'account-1', 'object-contains-b', 31, 31),"
+      "('message-contains-wildcard', 'account-1', "
+      "'object-contains-wildcard', 32, 32),"
+      "('message-contains-underscore', 'account-1', "
+      "'object-contains-underscore', 33, 33),"
+      "('message-contains-backslash', 'account-1', "
+      "'object-contains-backslash', 34, 34),"
+      "('message-contains-null', 'account-1', 'object-contains-null', "
+      "35, 35),"
+      "('message-contains-other-account', 'account-2', "
+      "'object-contains-other-account', 36, 36);");
+  exec_sql (connection,
+      "INSERT INTO message_headers ("
+      "message_id, rfc_message_id, duplicate_message_id_count, subject, "
+      "from_addr, to_addr, cc_addr, bcc_addr, date_raw, journal_offset, "
+      "journal_sequence) VALUES "
+      "('message-contains-a', '<message-contains-a@example.test>', 0, "
+      "'Quarterly Subject Review', 'Sender <sender@example.test>', "
+      "'Bob <bob@example.test>', NULL, NULL, NULL, 80, 81),"
+      "('message-contains-b', '<message-contains-b@example.test>', 0, "
+      "'embedded subject token', 'Sender <sender@example.test>', "
+      "'Bob <bob@example.test>', NULL, NULL, NULL, 82, 83),"
+      "('message-contains-wildcard', "
+      "'<message-contains-wildcard@example.test>', 0, "
+      "'Budget 100% literal', 'Sender <sender@example.test>', "
+      "'Bob <bob@example.test>', NULL, NULL, NULL, 84, 85),"
+      "('message-contains-underscore', "
+      "'<message-contains-underscore@example.test>', 0, "
+      "'Release tag build_42', 'Sender <sender@example.test>', "
+      "'Bob <bob@example.test>', NULL, NULL, NULL, 86, 87),"
+      "('message-contains-backslash', "
+      "'<message-contains-backslash@example.test>', 0, "
+      "'Path C:\\\\Temp', 'Sender <sender@example.test>', "
+      "'Bob <bob@example.test>', NULL, NULL, NULL, 88, 89),"
+      "('message-contains-null', '<message-contains-null@example.test>', 0, "
+      "NULL, 'Sender <sender@example.test>', 'Bob <bob@example.test>', "
+      "NULL, NULL, NULL, 90, 91),"
+      "('message-contains-other-account', "
+      "'<message-contains-other-account@example.test>', 0, "
+      "'Quarterly Subject Review', 'Sender <sender@example.test>', "
+      "'Bob <bob@example.test>', NULL, NULL, NULL, 92, 93);");
+}
+
+static void
 seed_messages_by_date_range_headers (const gchar *path)
 {
   g_auto (duckdb_database) database = NULL;
@@ -573,6 +629,20 @@ init_messages_by_subject_page_request (WyreboxDaemonDuckDBQueryTemplateRequest
 }
 
 static void
+init_messages_subject_contains_request (WyreboxDaemonDuckDBQueryTemplateRequest
+    *request, const gchar *account_id, const gchar *subject_term,
+    const gchar *limit, const gchar *offset)
+{
+  const gchar *parameters[] = { subject_term, limit, offset, NULL };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (request,
+          "query-1", "messages.subject_contains.v1", account_id, parameters,
+          &error));
+  g_assert_no_error (error);
+}
+
+static void
 init_messages_by_date_range_request (WyreboxDaemonDuckDBQueryTemplateRequest
     *request, const gchar *account_id, const gchar *start_unix_us,
     const gchar *end_unix_us)
@@ -788,6 +858,38 @@ dispatch_messages_by_subject_page_csv (const gchar *path,
 
   init_messages_by_subject_page_request (&request, account_id, subject, limit,
       offset);
+  g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
+          "request-1", "admin-cli", account_id, "duckdb-tool",
+          "correlation-1", &request, &frame, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpuint (frame.stream_chunk.chunk_index, ==, 0);
+  g_assert_true (frame.stream_chunk.end_of_stream);
+
+  data = g_bytes_get_data (frame.stream_chunk.bytes, &size);
+  return g_strndup (data, size);
+}
+
+static gchar *
+dispatch_messages_subject_contains_csv (const gchar *path,
+    const gchar *account_id, const gchar *subject_term, const gchar *limit,
+    const gchar *offset)
+{
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  gconstpointer data = NULL;
+  gsize size = 0;
+
+  service = wyrebox_daemon_duckdb_query_template_service_new_duckdb (path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (service);
+
+  init_messages_subject_contains_request (&request, account_id, subject_term,
+      limit, offset);
   g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
           "request-1", "admin-cli", account_id, "duckdb-tool",
           "correlation-1", &request, &frame, &error));
@@ -1509,6 +1611,76 @@ test_duckdb_service_messages_by_subject_limits_high_cardinality_results (void)
 }
 
 static void
+test_duckdb_service_messages_subject_contains_matches_case_insensitive (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+  seed_subject_contains_headers (path);
+
+  csv = dispatch_messages_subject_contains_csv (path, "account-1", "SUBJECT",
+      "100", "0");
+  g_assert_true (g_strstr_len (csv, -1, "message-contains-a") != NULL);
+  g_assert_true (g_strstr_len (csv, -1, "message-contains-b") != NULL);
+  g_assert_false (g_strstr_len (csv, -1, "message-contains-null") != NULL);
+  g_assert_false (g_strstr_len (csv, -1, "message-contains-other-account")
+      != NULL);
+  (void) g_remove (path);
+}
+
+static void
+    test_duckdb_service_messages_subject_contains_treats_wildcards_as_literals
+    (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+  seed_subject_contains_headers (path);
+
+  csv = dispatch_messages_subject_contains_csv (path, "account-1", "100%",
+      "100", "0");
+  g_assert_true (g_strstr_len (csv, -1, "message-contains-wildcard") != NULL);
+  g_assert_false (g_strstr_len (csv, -1, "message-contains-a") != NULL);
+
+  g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_subject_contains_csv (path, "account-1", "build_",
+      "100", "0");
+  g_assert_true (g_strstr_len (csv, -1, "message-contains-underscore") != NULL);
+  g_assert_false (g_strstr_len (csv, -1, "message-contains-a") != NULL);
+
+  g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_subject_contains_csv (path, "account-1", "C:\\",
+      "100", "0");
+  g_assert_true (g_strstr_len (csv, -1, "message-contains-backslash") != NULL);
+  g_assert_false (g_strstr_len (csv, -1, "message-contains-a") != NULL);
+  (void) g_remove (path);
+}
+
+static void
+    test_duckdb_service_messages_subject_contains_pages_high_cardinality_results
+    (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+  seed_high_cardinality_subject_headers (path);
+
+  csv = dispatch_messages_subject_contains_csv (path, "account-1", "volume",
+      "10", "95");
+  g_assert_cmpuint (count_substring (csv, "object-volume-"), ==, 10);
+  g_assert_false (g_strstr_len (csv, -1, "message-volume-094") != NULL);
+  g_assert_true (g_strstr_len (csv, -1, "message-volume-095") != NULL);
+  g_assert_true (g_strstr_len (csv, -1, "message-volume-104") != NULL);
+  (void) g_remove (path);
+}
+
+static void
 test_duckdb_service_treats_sql_looking_subject_as_value (void)
 {
   g_autofree gchar *path = create_temp_catalog_path ();
@@ -1811,6 +1983,15 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/messages-by-subject-high-cardinality-limit",
       test_duckdb_service_messages_by_subject_limits_high_cardinality_results);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/messages-subject-contains-case-insensitive",
+      test_duckdb_service_messages_subject_contains_matches_case_insensitive);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/messages-subject-contains-literal-wildcards",
+      test_duckdb_service_messages_subject_contains_treats_wildcards_as_literals);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/messages-subject-contains-high-cardinality-page",
+      test_duckdb_service_messages_subject_contains_pages_high_cardinality_results);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/sql-looking-subject-value",
       test_duckdb_service_treats_sql_looking_subject_as_value);
