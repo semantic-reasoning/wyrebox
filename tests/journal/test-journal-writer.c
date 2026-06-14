@@ -1,6 +1,9 @@
 #include <glib.h>
+#include <glib-unix.h>
 #include <glib/gstdio.h>
 #include <gio/gio.h>
+#include <fcntl.h>
+#include <sys/file.h>
 #include <unistd.h>
 
 #include "wyrebox-journal-reader.h"
@@ -138,6 +141,101 @@ read_segment (const char *path, guint8 **out_data, gsize *out_size)
   g_file_get_contents (path, &contents, out_size, NULL);
   g_assert_nonnull (contents);
   *out_data = (guint8 *) g_steal_pointer (&contents);
+}
+
+static void
+write_all_or_fail (int fd, const guint8 *data, gsize size)
+{
+  while (size > 0) {
+    ssize_t wrote = write (fd, data, size);
+
+    g_assert_cmpint (wrote, >, 0);
+    data += wrote;
+    size -= (gsize) wrote;
+  }
+}
+
+static void
+append_bytes_to_segment (const char *path, const guint8 *data, gsize size)
+{
+  g_autofd int fd = -1;
+
+  fd = open (path, O_WRONLY | O_APPEND | O_CLOEXEC);
+  g_assert_cmpint (fd, >=, 0);
+  write_all_or_fail (fd, data, size);
+}
+
+static void
+build_record_header (guint8 header[64],
+    guint32 event_type_len, guint64 sequence, guint64 payload_len)
+{
+  memset (header, 0, 64);
+  memcpy (header, JOURNAL_MAGIC, strlen (JOURNAL_MAGIC));
+  write_u16_le (header + 8, 64);
+  write_u16_le (header + 10, 1);
+  write_u32_le (header + 12, event_type_len);
+  write_u64_le (header + 16, sequence);
+  write_u64_le (header + 24, payload_len);
+}
+
+static void
+write_bytes_to_segment (const char *path, const guint8 *data, gsize size)
+{
+  g_autofd int fd = -1;
+
+  fd = open (path, O_CREAT | O_TRUNC | O_WRONLY | O_CLOEXEC, 0600);
+  g_assert_cmpint (fd, >=, 0);
+  write_all_or_fail (fd, data, size);
+}
+
+static void
+overwrite_one_byte (const char *path, guint64 offset, guint8 value)
+{
+  g_autofd int fd = -1;
+  ssize_t wrote = 0;
+
+  fd = open (path, O_WRONLY | O_CLOEXEC);
+  g_assert_cmpint (fd, >=, 0);
+  g_assert_cmpuint (offset, <=, G_MAXINT64);
+  wrote = pwrite (fd, &value, 1, (off_t) offset);
+  g_assert_cmpint (wrote, ==, 1);
+}
+
+static void
+assert_segment_size (const char *path, guint64 expected_size)
+{
+  GStatBuf stat_buf = { 0 };
+
+  g_assert_cmpint (g_stat (path, &stat_buf), ==, 0);
+  g_assert_cmpint (stat_buf.st_size, >=, 0);
+  g_assert_cmpuint ((guint64) stat_buf.st_size, ==, expected_size);
+}
+
+static void
+assert_reader_reaches_clean_eof (const char *root, guint expected_records)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  guint records = 0;
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  while (TRUE) {
+    g_auto (WyreboxJournalRecord) record = { 0 };
+    gboolean eof = FALSE;
+
+    if (!wyrebox_journal_reader_read_next (reader, &record, &eof, &error)) {
+      g_assert_no_error (error);
+      g_assert_true (eof);
+      break;
+    }
+
+    records++;
+  }
+
+  g_assert_cmpuint (records, ==, expected_records);
 }
 
 static void
@@ -732,6 +830,584 @@ test_rejects_truncated_existing_segment_before_append (void)
   remove_tree (root);
 }
 
+static void
+test_recovers_partial_header_after_valid_record (void)
+{
+  const guint8 payload[] = { 0x6f, 0x6b };
+  const guint8 torn_header[] = { 0x57, 0x59, 0x52, 0x45 };
+  const guint8 next_payload[] = { 0x6e, 0x65, 0x78, 0x74 };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) payload_bytes =
+      g_bytes_new_static (payload, sizeof (payload));
+  g_autoptr (GBytes) next_bytes =
+      g_bytes_new_static (next_payload, sizeof (next_payload));
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  guint64 safe_end_offset = 0;
+  guint64 last_safe_sequence = 0;
+  guint64 recovered_safe_end_offset = 0;
+  guint64 recovered_last_safe_sequence = 0;
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          payload_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (offset, ==, 0);
+  safe_end_offset = 64 + strlen (canonical_event_types[0]) + sizeof (payload);
+  last_safe_sequence = sequence;
+  g_clear_object (&writer);
+
+  append_bytes_to_segment (segment_path, torn_header, sizeof (torn_header));
+
+  g_assert_true (wyrebox_journal_writer_recover_torn_suffix (root,
+          &recovered_safe_end_offset, &recovered_last_safe_sequence, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (recovered_safe_end_offset, ==, safe_end_offset);
+  g_assert_cmpuint (recovered_last_safe_sequence, ==, last_safe_sequence);
+  assert_segment_size (segment_path, safe_end_offset);
+  assert_reader_reaches_clean_eof (root, 1);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          next_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (offset, ==, safe_end_offset);
+  g_assert_cmpuint (sequence, ==, last_safe_sequence + 1);
+
+  remove_tree (root);
+}
+
+static void
+test_recovers_partial_record_after_valid_record (void)
+{
+  const guint8 first_payload[] = { 0x6f, 0x6e, 0x65 };
+  const guint8 second_payload[] = { 0x74, 0x77, 0x6f };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) first_bytes =
+      g_bytes_new_static (first_payload, sizeof (first_payload));
+  g_autoptr (GBytes) second_bytes =
+      g_bytes_new_static (second_payload, sizeof (second_payload));
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  guint64 safe_end_offset = 0;
+  guint64 recovered_safe_end_offset = 0;
+  guint64 recovered_last_safe_sequence = 0;
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED,
+          first_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED,
+          second_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  safe_end_offset = offset;
+  g_clear_object (&writer);
+
+  g_assert_cmpint (truncate (segment_path, (off_t) safe_end_offset + 65), ==,
+      0);
+
+  g_assert_true (wyrebox_journal_writer_recover_torn_suffix (root,
+          &recovered_safe_end_offset, &recovered_last_safe_sequence, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (recovered_safe_end_offset, ==, safe_end_offset);
+  g_assert_cmpuint (recovered_last_safe_sequence, ==, 1);
+  assert_segment_size (segment_path, safe_end_offset);
+  assert_reader_reaches_clean_eof (root, 1);
+
+  remove_tree (root);
+}
+
+static void
+test_rejects_partial_first_record_recovery (void)
+{
+  const guint8 torn_header[] = { 0x57, 0x59, 0x52, 0x45 };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (GError) error = NULL;
+  guint64 safe_end_offset = 0;
+  guint64 last_safe_sequence = 0;
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+  write_bytes_to_segment (segment_path, torn_header, sizeof (torn_header));
+
+  g_assert_false (wyrebox_journal_writer_recover_torn_suffix (root,
+          &safe_end_offset, &last_safe_sequence, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  assert_segment_size (segment_path, sizeof (torn_header));
+
+  remove_tree (root);
+}
+
+static void
+test_rejects_junk_suffix_recovery (void)
+{
+  const guint8 payload[] = { 0x6f, 0x6b };
+  const guint8 junk[] = { 0x4a, 0x55, 0x4e, 0x4b };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) payload_bytes =
+      g_bytes_new_static (payload, sizeof (payload));
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  guint64 original_size = 0;
+  guint64 safe_end_offset = 0;
+  guint64 last_safe_sequence = 0;
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          payload_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  original_size = 64 + strlen (canonical_event_types[0]) + sizeof (payload) +
+      sizeof (junk);
+  g_clear_object (&writer);
+
+  append_bytes_to_segment (segment_path, junk, sizeof (junk));
+
+  g_assert_false (wyrebox_journal_writer_recover_torn_suffix (root,
+          &safe_end_offset, &last_safe_sequence, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  assert_segment_size (segment_path, original_size);
+
+  remove_tree (root);
+}
+
+static void
+test_rejects_bad_partial_header_size_byte_recovery (void)
+{
+  const guint8 payload[] = { 0x6f, 0x6b };
+  const guint8 bad_header_prefix[] = {
+    0x57, 0x59, 0x52, 0x45, 0x4a, 0x4e, 0x4c, 0x31, 0xff
+  };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) payload_bytes =
+      g_bytes_new_static (payload, sizeof (payload));
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  guint64 original_size = 0;
+  guint64 safe_end_offset = 0;
+  guint64 last_safe_sequence = 0;
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          payload_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  original_size = 64 + strlen (canonical_event_types[0]) + sizeof (payload) +
+      sizeof (bad_header_prefix);
+  g_clear_object (&writer);
+
+  append_bytes_to_segment (segment_path,
+      bad_header_prefix, sizeof (bad_header_prefix));
+
+  g_assert_false (wyrebox_journal_writer_recover_torn_suffix (root,
+          &safe_end_offset, &last_safe_sequence, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  assert_segment_size (segment_path, original_size);
+
+  remove_tree (root);
+}
+
+static void
+test_rejects_bad_partial_event_type_len_byte_recovery (void)
+{
+  const guint8 payload[] = { 0x6f, 0x6b };
+  const guint8 bad_header_prefix[] = {
+    0x57, 0x59, 0x52, 0x45, 0x4a, 0x4e, 0x4c, 0x31,
+    0x40, 0x00, 0x01, 0x00, 0xff
+  };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) payload_bytes =
+      g_bytes_new_static (payload, sizeof (payload));
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  guint64 original_size = 0;
+  guint64 safe_end_offset = 0;
+  guint64 last_safe_sequence = 0;
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          payload_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  original_size = 64 + strlen (canonical_event_types[0]) + sizeof (payload) +
+      sizeof (bad_header_prefix);
+  g_clear_object (&writer);
+
+  append_bytes_to_segment (segment_path,
+      bad_header_prefix, sizeof (bad_header_prefix));
+
+  g_assert_false (wyrebox_journal_writer_recover_torn_suffix (root,
+          &safe_end_offset, &last_safe_sequence, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  assert_segment_size (segment_path, original_size);
+
+  remove_tree (root);
+}
+
+static void
+test_rejects_full_header_with_oversized_event_type_len_recovery (void)
+{
+  const guint8 payload[] = { 0x6f, 0x6b };
+  guint8 header[64] = { 0 };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) payload_bytes =
+      g_bytes_new_static (payload, sizeof (payload));
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  guint64 original_size = 0;
+  guint64 safe_end_offset = 0;
+  guint64 last_safe_sequence = 0;
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          payload_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_clear_object (&writer);
+
+  build_record_header (header, 255, sequence + 1, 0);
+  append_bytes_to_segment (segment_path, header, sizeof (header));
+  original_size = 64 + strlen (canonical_event_types[0]) + sizeof (payload) +
+      sizeof (header);
+
+  g_assert_false (wyrebox_journal_writer_recover_torn_suffix (root,
+          &safe_end_offset, &last_safe_sequence, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  assert_segment_size (segment_path, original_size);
+
+  remove_tree (root);
+}
+
+static void
+test_rejects_full_header_with_noncanonical_event_type_len_recovery (void)
+{
+  const guint8 payload[] = { 0x6f, 0x6b };
+  guint8 header[64] = { 0 };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) payload_bytes =
+      g_bytes_new_static (payload, sizeof (payload));
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  guint64 original_size = 0;
+  guint64 safe_end_offset = 0;
+  guint64 last_safe_sequence = 0;
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          payload_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_clear_object (&writer);
+
+  build_record_header (header, 1, sequence + 1, 0);
+  append_bytes_to_segment (segment_path, header, sizeof (header));
+  original_size = 64 + strlen (canonical_event_types[0]) + sizeof (payload) +
+      sizeof (header);
+
+  g_assert_false (wyrebox_journal_writer_recover_torn_suffix (root,
+          &safe_end_offset, &last_safe_sequence, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  assert_segment_size (segment_path, original_size);
+
+  remove_tree (root);
+}
+
+static void
+test_rejects_unknown_event_type_before_missing_payload_recovery (void)
+{
+  const guint8 payload[] = { 0x6f, 0x6b };
+  const char unknown_event_type[] = "NotAnEvent";
+  guint8 header[64] = { 0 };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) payload_bytes =
+      g_bytes_new_static (payload, sizeof (payload));
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  guint64 original_size = 0;
+  guint64 safe_end_offset = 0;
+  guint64 last_safe_sequence = 0;
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          payload_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_clear_object (&writer);
+
+  build_record_header (header, strlen (unknown_event_type), sequence + 1, 8);
+  append_bytes_to_segment (segment_path, header, sizeof (header));
+  append_bytes_to_segment (segment_path,
+      (const guint8 *) unknown_event_type, strlen (unknown_event_type));
+  original_size = 64 + strlen (canonical_event_types[0]) + sizeof (payload) +
+      sizeof (header) + strlen (unknown_event_type);
+
+  g_assert_false (wyrebox_journal_writer_recover_torn_suffix (root,
+          &safe_end_offset, &last_safe_sequence, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  assert_segment_size (segment_path, original_size);
+
+  remove_tree (root);
+}
+
+static void
+test_rejects_embedded_nul_event_type_before_missing_payload_recovery (void)
+{
+  const guint8 payload[] = { 0x6f, 0x6b };
+  const char *declared_event_type =
+      canonical_event_types[WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED];
+  const char *prefix_event_type =
+      canonical_event_types[WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED];
+  guint8 header[64] = { 0 };
+  guint8 event_type_bytes[64] = { 0 };
+  gsize declared_event_type_len = strlen (declared_event_type);
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) payload_bytes =
+      g_bytes_new_static (payload, sizeof (payload));
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  guint64 original_size = 0;
+  guint64 safe_end_offset = 0;
+  guint64 last_safe_sequence = 0;
+
+  g_assert_cmpuint (declared_event_type_len, <=, sizeof (event_type_bytes));
+  g_assert_cmpuint (strlen (prefix_event_type) + 1, <, declared_event_type_len);
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          payload_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_clear_object (&writer);
+
+  memcpy (event_type_bytes, prefix_event_type, strlen (prefix_event_type));
+  build_record_header (header, declared_event_type_len, sequence + 1, 8);
+  append_bytes_to_segment (segment_path, header, sizeof (header));
+  append_bytes_to_segment (segment_path,
+      event_type_bytes, declared_event_type_len);
+  original_size = 64 + strlen (canonical_event_types[0]) + sizeof (payload) +
+      sizeof (header) + declared_event_type_len;
+
+  g_assert_false (wyrebox_journal_writer_recover_torn_suffix (root,
+          &safe_end_offset, &last_safe_sequence, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  assert_segment_size (segment_path, original_size);
+
+  remove_tree (root);
+}
+
+static void
+test_rejects_checksum_mismatch_recovery (void)
+{
+  const guint8 first_payload[] = { 0x6f, 0x6e, 0x65 };
+  const guint8 second_payload[] = { 0x74, 0x77, 0x6f };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) first_bytes =
+      g_bytes_new_static (first_payload, sizeof (first_payload));
+  g_autoptr (GBytes) second_bytes =
+      g_bytes_new_static (second_payload, sizeof (second_payload));
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  guint64 original_size = 0;
+  guint64 safe_end_offset = 0;
+  guint64 last_safe_sequence = 0;
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          first_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          second_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  original_size = offset + 64 + strlen (canonical_event_types[0]) +
+      sizeof (second_payload);
+  g_clear_object (&writer);
+
+  overwrite_one_byte (segment_path,
+      offset + 64 + strlen (canonical_event_types[0]), 0xff);
+
+  g_assert_false (wyrebox_journal_writer_recover_torn_suffix (root,
+          &safe_end_offset, &last_safe_sequence, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  assert_segment_size (segment_path, original_size);
+
+  remove_tree (root);
+}
+
+static void
+test_rejects_clean_valid_journal_recovery (void)
+{
+  const guint8 payload[] = { 0x63, 0x6c, 0x65, 0x61, 0x6e };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) payload_bytes =
+      g_bytes_new_static (payload, sizeof (payload));
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  guint64 original_size = 0;
+  guint64 safe_end_offset = 0;
+  guint64 last_safe_sequence = 0;
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          payload_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  original_size = 64 + strlen (canonical_event_types[0]) + sizeof (payload);
+  g_clear_object (&writer);
+
+  g_assert_false (wyrebox_journal_writer_recover_torn_suffix (root,
+          &safe_end_offset, &last_safe_sequence, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  assert_segment_size (segment_path, original_size);
+
+  remove_tree (root);
+}
+
+static void
+test_rejects_recovery_while_lock_held (void)
+{
+  const guint8 payload[] = { 0x6f, 0x6b };
+  const guint8 torn_header[] = { 0x57, 0x59, 0x52, 0x45 };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) payload_bytes =
+      g_bytes_new_static (payload, sizeof (payload));
+  g_autofd int lock_fd = -1;
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  guint64 original_size = 0;
+  guint64 safe_end_offset = 0;
+  guint64 last_safe_sequence = 0;
+
+  g_assert_nonnull (root);
+  segment_path = segment_path_for_root (root);
+
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          payload_bytes, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_clear_object (&writer);
+
+  append_bytes_to_segment (segment_path, torn_header, sizeof (torn_header));
+  original_size = 64 + strlen (canonical_event_types[0]) + sizeof (payload) +
+      sizeof (torn_header);
+
+  lock_fd = open (segment_path, O_RDWR | O_CLOEXEC);
+  g_assert_cmpint (lock_fd, >=, 0);
+  g_assert_cmpint (flock (lock_fd, LOCK_EX | LOCK_NB), ==, 0);
+
+  g_assert_false (wyrebox_journal_writer_recover_torn_suffix (root,
+          &safe_end_offset, &last_safe_sequence, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_BUSY);
+  assert_segment_size (segment_path, original_size);
+
+  (void) close (lock_fd);
+  lock_fd = -1;
+
+  remove_tree (root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -759,6 +1435,45 @@ main (int argc, char **argv)
   g_test_add_func
       ("/journal-writer/rejects-truncated-existing-segment-before-append",
       test_rejects_truncated_existing_segment_before_append);
+  g_test_add_func
+      ("/journal-writer/recovers-partial-header-after-valid-record",
+      test_recovers_partial_header_after_valid_record);
+  g_test_add_func
+      ("/journal-writer/recovers-partial-record-after-valid-record",
+      test_recovers_partial_record_after_valid_record);
+  g_test_add_func
+      ("/journal-writer/rejects-partial-first-record-recovery",
+      test_rejects_partial_first_record_recovery);
+  g_test_add_func
+      ("/journal-writer/rejects-junk-suffix-recovery",
+      test_rejects_junk_suffix_recovery);
+  g_test_add_func
+      ("/journal-writer/rejects-bad-partial-header-size-byte",
+      test_rejects_bad_partial_header_size_byte_recovery);
+  g_test_add_func
+      ("/journal-writer/rejects-bad-partial-event-type-len-byte",
+      test_rejects_bad_partial_event_type_len_byte_recovery);
+  g_test_add_func
+      ("/journal-writer/rejects-oversized-event-type-len-recovery",
+      test_rejects_full_header_with_oversized_event_type_len_recovery);
+  g_test_add_func
+      ("/journal-writer/rejects-noncanonical-event-type-len-recovery",
+      test_rejects_full_header_with_noncanonical_event_type_len_recovery);
+  g_test_add_func
+      ("/journal-writer/rejects-unknown-event-before-missing-payload",
+      test_rejects_unknown_event_type_before_missing_payload_recovery);
+  g_test_add_func
+      ("/journal-writer/rejects-embedded-nul-event-before-missing-payload",
+      test_rejects_embedded_nul_event_type_before_missing_payload_recovery);
+  g_test_add_func
+      ("/journal-writer/rejects-checksum-mismatch-recovery",
+      test_rejects_checksum_mismatch_recovery);
+  g_test_add_func
+      ("/journal-writer/rejects-clean-valid-journal-recovery",
+      test_rejects_clean_valid_journal_recovery);
+  g_test_add_func
+      ("/journal-writer/rejects-recovery-while-lock-held",
+      test_rejects_recovery_while_lock_held);
 
   return g_test_run ();
 }

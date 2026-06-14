@@ -95,17 +95,17 @@ static gboolean
 parse_event_type (const guint8 *event_type_data,
     gsize event_type_len, WyreboxJournalEventType *out_event_type)
 {
-  g_autofree gchar *event_type = NULL;
-
-  event_type = g_strndup ((const gchar *) event_type_data, event_type_len);
   for (guint index = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
       index <= WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED; index++) {
     const gchar *canonical = wyrebox_journal_event_type_to_string (index);
+    gsize canonical_len = 0;
 
     if (canonical == NULL)
       continue;
 
-    if (g_strcmp0 (canonical, event_type) == 0) {
+    canonical_len = strlen (canonical);
+    if (event_type_len == canonical_len &&
+        memcmp (event_type_data, canonical, event_type_len) == 0) {
       if (out_event_type != NULL)
         *out_event_type = (WyreboxJournalEventType) index;
       return TRUE;
@@ -129,6 +129,190 @@ max_event_type_len (void)
   }
 
   return max_len;
+}
+
+static gboolean
+event_type_length_is_canonical (guint64 declared_len)
+{
+  for (guint index = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
+      index <= WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED; index++) {
+    const gchar *canonical = wyrebox_journal_event_type_to_string (index);
+
+    if (canonical != NULL && strlen (canonical) == declared_len)
+      return TRUE;
+  }
+
+  return FALSE;
+}
+
+static gboolean
+event_type_length_prefix_is_canonical (const guint8 *length_prefix,
+    gsize available_len)
+{
+  g_return_val_if_fail (available_len <= 4, FALSE);
+
+  for (guint index = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
+      index <= WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED; index++) {
+    const gchar *canonical = wyrebox_journal_event_type_to_string (index);
+    gsize canonical_len = 0;
+    gboolean matches = TRUE;
+
+    if (canonical == NULL)
+      continue;
+
+    canonical_len = strlen (canonical);
+    for (gsize byte_index = 0; byte_index < available_len; byte_index++) {
+      guint8 expected_byte =
+          (guint8) ((canonical_len >> (8 * byte_index)) & 0xff);
+
+      if (length_prefix[byte_index] != expected_byte) {
+        matches = FALSE;
+        break;
+      }
+    }
+
+    if (matches)
+      return TRUE;
+  }
+
+  return FALSE;
+}
+
+static gboolean
+event_type_prefix_is_plausible (const guint8 *event_type_data,
+    gsize available_len, guint64 declared_len)
+{
+  if (available_len > declared_len)
+    return FALSE;
+
+  for (guint index = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
+      index <= WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED; index++) {
+    const gchar *canonical = wyrebox_journal_event_type_to_string (index);
+    gsize canonical_len = 0;
+
+    if (canonical == NULL)
+      continue;
+
+    canonical_len = strlen (canonical);
+    if ((guint64) canonical_len != declared_len)
+      continue;
+
+    if (available_len <= canonical_len &&
+        memcmp (canonical, event_type_data, available_len) == 0)
+      return TRUE;
+  }
+
+  return FALSE;
+}
+
+static gboolean
+fixed_header_field_prefix_matches (const guint8 *header,
+    guint64 available_size, guint64 field_offset,
+    const guint8 *expected, gsize expected_len)
+{
+  guint64 available_in_field = 0;
+
+  if (available_size <= field_offset)
+    return TRUE;
+
+  available_in_field = available_size - field_offset;
+  if (available_in_field > expected_len)
+    available_in_field = expected_len;
+
+  return memcmp (header + field_offset, expected, (gsize) available_in_field)
+      == 0;
+}
+
+static void
+write_u16_le (guint8 *buffer, guint16 value)
+{
+  buffer[0] = (guint8) ((value >> 0) & 0xFF);
+  buffer[1] = (guint8) ((value >> 8) & 0xFF);
+}
+
+static void
+write_u64_le (guint8 *buffer, guint64 value)
+{
+  buffer[0] = (guint8) ((value >> 0) & 0xFF);
+  buffer[1] = (guint8) ((value >> 8) & 0xFF);
+  buffer[2] = (guint8) ((value >> 16) & 0xFF);
+  buffer[3] = (guint8) ((value >> 24) & 0xFF);
+  buffer[4] = (guint8) ((value >> 32) & 0xFF);
+  buffer[5] = (guint8) ((value >> 40) & 0xFF);
+  buffer[6] = (guint8) ((value >> 48) & 0xFF);
+  buffer[7] = (guint8) ((value >> 56) & 0xFF);
+}
+
+static WyreboxJournalSafePrefixStopReason
+classify_partial_header_prefix (const guint8 *header,
+    guint64 available_size, guint64 expected_sequence)
+{
+  guint8 expected_header_size[2] = { 0 };
+  guint8 expected_version[2] = { 0 };
+  guint8 expected_sequence_bytes[8] = { 0 };
+
+  if (!fixed_header_field_prefix_matches (header,
+          available_size, 0,
+          (const guint8 *) WYREBOX_JOURNAL_MAGIC,
+          strlen (WYREBOX_JOURNAL_MAGIC)))
+    return WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_MAGIC;
+
+  write_u16_le (expected_header_size, WYREBOX_JOURNAL_RECORD_HEADER_SIZE);
+  if (!fixed_header_field_prefix_matches (header,
+          available_size, 8, expected_header_size,
+          sizeof (expected_header_size)))
+    return WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_HEADER_SIZE;
+
+  write_u16_le (expected_version, WYREBOX_JOURNAL_RECORD_VERSION);
+  if (!fixed_header_field_prefix_matches (header,
+          available_size, 10, expected_version, sizeof (expected_version)))
+    return WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_VERSION;
+
+  if (available_size > 12) {
+    guint64 available_event_len_bytes = available_size - 12;
+
+    if (available_event_len_bytes > 4)
+      available_event_len_bytes = 4;
+
+    if (!event_type_length_prefix_is_canonical (header + 12,
+            (gsize) available_event_len_bytes))
+      return WYREBOX_JOURNAL_SAFE_PREFIX_STOP_UNKNOWN_EVENT_TYPE;
+  }
+
+  if (available_size >= 16) {
+    guint32 event_len32 = read_u32_le (header + 12);
+
+    if (event_len32 == 0)
+      return WYREBOX_JOURNAL_SAFE_PREFIX_STOP_ZERO_EVENT_TYPE_LENGTH;
+
+    if (event_len32 > G_MAXSIZE)
+      return WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_SIZE;
+
+    if (!event_type_length_is_canonical (event_len32))
+      return WYREBOX_JOURNAL_SAFE_PREFIX_STOP_UNKNOWN_EVENT_TYPE;
+  }
+
+  write_u64_le (expected_sequence_bytes, expected_sequence);
+  if (!fixed_header_field_prefix_matches (header,
+          available_size, 16, expected_sequence_bytes,
+          sizeof (expected_sequence_bytes)))
+    return WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_SEQUENCE;
+
+  if (available_size >= 32) {
+    guint64 event_type_len64 = read_u32_le (header + 12);
+    guint64 payload_len64 = read_u64_le (header + 24);
+
+    if (payload_len64 > G_MAXSIZE)
+      return WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_SIZE;
+
+    if (event_type_len64 >
+        G_MAXUINT64 - WYREBOX_JOURNAL_RECORD_HEADER_SIZE ||
+        payload_len64 >
+        G_MAXUINT64 - WYREBOX_JOURNAL_RECORD_HEADER_SIZE - event_type_len64)
+      return WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_SIZE;
+  }
+
+  return WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_HEADER;
 }
 
 static gboolean
@@ -518,6 +702,7 @@ wyrebox_journal_reader_scan_safe_prefix (WyreboxJournalReader *self,
     g_autofree guint8 *computed_checksum = NULL;
     g_autoptr (GChecksum) checksum = NULL;
     guint64 remaining = file_size - offset;
+    guint64 remaining_after_header = 0;
     guint64 event_type_len64 = 0;
     guint64 payload_len64 = 0;
     guint64 record_size = 0;
@@ -530,9 +715,18 @@ wyrebox_journal_reader_scan_safe_prefix (WyreboxJournalReader *self,
     gsize digest_len = 0;
 
     if (remaining < WYREBOX_JOURNAL_RECORD_HEADER_SIZE) {
+      WyreboxJournalSafePrefixStopReason reason =
+          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_HEADER;
+
+      if (!pread_exact (self->fd, offset, header, (gsize) remaining, error))
+        return FALSE;
+
+      reason = classify_partial_header_prefix (header,
+          remaining, expected_sequence);
       safe_prefix_set_unsafe (&prefix,
-          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_HEADER,
-          offset, remaining, WYREBOX_JOURNAL_RECORD_HEADER_SIZE);
+          reason, offset, remaining,
+          reason == WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_HEADER ?
+          WYREBOX_JOURNAL_RECORD_HEADER_SIZE : 0);
       *out_prefix = prefix;
       return TRUE;
     }
@@ -594,6 +788,22 @@ wyrebox_journal_reader_scan_safe_prefix (WyreboxJournalReader *self,
       return TRUE;
     }
 
+    if (event_type_len64 > max_event_len) {
+      safe_prefix_set_unsafe (&prefix,
+          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_UNKNOWN_EVENT_TYPE,
+          offset, remaining, 0);
+      *out_prefix = prefix;
+      return TRUE;
+    }
+
+    if (!event_type_length_is_canonical (event_type_len64)) {
+      safe_prefix_set_unsafe (&prefix,
+          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_UNKNOWN_EVENT_TYPE,
+          offset, remaining, 0);
+      *out_prefix = prefix;
+      return TRUE;
+    }
+
     if (event_type_len64 >
         G_MAXUINT64 - WYREBOX_JOURNAL_RECORD_HEADER_SIZE ||
         payload_len64 >
@@ -607,17 +817,41 @@ wyrebox_journal_reader_scan_safe_prefix (WyreboxJournalReader *self,
     record_size = WYREBOX_JOURNAL_RECORD_HEADER_SIZE +
         event_type_len64 + payload_len64;
     if (record_size > remaining) {
+      remaining_after_header = remaining - WYREBOX_JOURNAL_RECORD_HEADER_SIZE;
+      if (remaining_after_header >= event_type_len64) {
+        event_type_data = g_malloc0 ((gsize) event_type_len64);
+        if (!pread_exact (self->fd,
+                offset + WYREBOX_JOURNAL_RECORD_HEADER_SIZE,
+                event_type_data, (gsize) event_type_len64, error))
+          return FALSE;
+
+        if (!parse_event_type (event_type_data, (gsize) event_type_len64, NULL)) {
+          safe_prefix_set_unsafe (&prefix,
+              WYREBOX_JOURNAL_SAFE_PREFIX_STOP_UNKNOWN_EVENT_TYPE,
+              offset, remaining, 0);
+          *out_prefix = prefix;
+          return TRUE;
+        }
+      } else if (remaining_after_header > 0) {
+        event_type_data = g_malloc0 ((gsize) remaining_after_header);
+        if (!pread_exact (self->fd,
+                offset + WYREBOX_JOURNAL_RECORD_HEADER_SIZE,
+                event_type_data, (gsize) remaining_after_header, error))
+          return FALSE;
+
+        if (!event_type_prefix_is_plausible (event_type_data,
+                (gsize) remaining_after_header, event_type_len64)) {
+          safe_prefix_set_unsafe (&prefix,
+              WYREBOX_JOURNAL_SAFE_PREFIX_STOP_UNKNOWN_EVENT_TYPE,
+              offset, remaining, 0);
+          *out_prefix = prefix;
+          return TRUE;
+        }
+      }
+
       safe_prefix_set_unsafe (&prefix,
           WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_RECORD,
           offset, remaining, record_size);
-      *out_prefix = prefix;
-      return TRUE;
-    }
-
-    if (event_type_len64 > max_event_len) {
-      safe_prefix_set_unsafe (&prefix,
-          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_UNKNOWN_EVENT_TYPE,
-          offset, record_size, 0);
       *out_prefix = prefix;
       return TRUE;
     }
