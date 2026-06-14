@@ -7,13 +7,19 @@
 #include "mail-user.h"
 #include "mailbox-list-private.h"
 #include "module-dir.h"
+#include "wyrebox-daemon-connection-server.h"
 #include "wyrebox-daemon-capnp-codec.h"
+#include "wyrebox-daemon-duckdb-query-template-service.h"
 #include "wyrebox-daemon-error-frame.h"
 #include "wyrebox-daemon-frame-io.h"
+#include "wyrebox-daemon-mailbox-catalog-duckdb.h"
 #include "wyrebox-daemon-mailbox-list-result.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
+#include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-response-frame.h"
+#include "wyrebox-schema-metadata-store.h"
 
+#include <duckdb.h>
 #include <gio/gio.h>
 #include <gio/gunixsocketaddress.h>
 #include <glib/gstdio.h>
@@ -72,6 +78,34 @@ typedef struct
   guint expected_request_count;
 } FakeServer;
 
+typedef struct
+{
+  GMainContext *context;
+  GThread *thread;
+  GMutex mutex;
+  gboolean stop;
+} MainContextPump;
+
+static void
+duckdb_connection_clear (duckdb_connection *connection)
+{
+  duckdb_disconnect (connection);
+}
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_connection, duckdb_connection_clear)
+/* *INDENT-ON* */
+
+static void
+duckdb_database_clear (duckdb_database *database)
+{
+  duckdb_close (database);
+}
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_database, duckdb_database_clear)
+/* *INDENT-ON* */
+
 static void
 remove_tree (const char *path)
 {
@@ -106,6 +140,124 @@ make_socket_path (char **out_root)
   socket_path = g_build_filename (*out_root, "wyrebox.sock", NULL);
   g_assert_nonnull (socket_path);
   return socket_path;
+}
+
+static gboolean
+bootstrap_catalog (const char *catalog_path)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+
+  store = wyrebox_schema_metadata_store_new_duckdb (catalog_path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation
+      (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP, 0,
+          1, &error));
+  g_assert_no_error (error);
+  return TRUE;
+}
+
+static void
+exec_sql (duckdb_connection connection, const char *sql)
+{
+  duckdb_result result = { 0 };
+  duckdb_state state = duckdb_query (connection, sql, &result);
+
+  if (state != DuckDBSuccess) {
+    g_error ("duckdb query failed: %s", duckdb_result_error (&result));
+  }
+
+  duckdb_destroy_result (&result);
+}
+
+static void
+seed_virtual_mailbox_catalog (const char *catalog_path)
+{
+  g_auto (duckdb_database) database = NULL;
+  g_auto (duckdb_connection) connection = NULL;
+
+  g_assert_cmpint (duckdb_open (catalog_path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  exec_sql (connection,
+      "INSERT INTO accounts (account_id) VALUES ('account-1');");
+  exec_sql (connection,
+      "INSERT INTO messages (message_id, account_id, object_id, "
+      "journal_offset, journal_sequence) VALUES "
+      "('message-1', 'account-1', 'object-1', 1, 1);");
+  exec_sql (connection,
+      "INSERT INTO derived_views (view_id, account_id, imap_name, "
+      "definition_ref, is_selectable, is_visible) VALUES "
+      "('view-projects', 'account-1', 'Projects', 'rule:projects', TRUE, "
+      "TRUE);");
+  exec_sql (connection,
+      "INSERT INTO mailbox_uid_state (account_id, namespace_kind, "
+      "namespace_id, uidnext, uidvalidity) VALUES "
+      "('account-1', 'derived_view', 'view-projects', 42, 77);");
+  exec_sql (connection,
+      "INSERT INTO derived_view_memberships (membership_id, account_id, "
+      "view_id, message_id, uid, is_visible, rule_version_hash, "
+      "materialized_at_unix_us) VALUES "
+      "('dvm-1', 'account-1', 'view-projects', 'message-1', 41, TRUE, "
+      "'rule-hash-1', 1);");
+}
+
+static gboolean
+main_context_pump_should_stop (MainContextPump *pump)
+{
+  gboolean stop = FALSE;
+
+  g_mutex_lock (&pump->mutex);
+  stop = pump->stop;
+  g_mutex_unlock (&pump->mutex);
+
+  return stop;
+}
+
+static gpointer
+main_context_pump_thread_main (gpointer user_data)
+{
+  MainContextPump *pump = user_data;
+
+  while (!main_context_pump_should_stop (pump)) {
+    while (g_main_context_pending (pump->context))
+      g_main_context_iteration (pump->context, FALSE);
+
+    g_usleep (1000);
+  }
+
+  while (g_main_context_pending (pump->context))
+    g_main_context_iteration (pump->context, FALSE);
+
+  return NULL;
+}
+
+static void
+main_context_pump_start (MainContextPump *pump)
+{
+  pump->context = g_main_context_ref (g_main_context_default ());
+  g_mutex_init (&pump->mutex);
+  pump->thread = g_thread_new ("wyrebox-daemon-main-context-pump",
+      main_context_pump_thread_main, pump);
+}
+
+static void
+main_context_pump_stop (MainContextPump *pump)
+{
+  if (pump->thread == NULL)
+    return;
+
+  g_mutex_lock (&pump->mutex);
+  pump->stop = TRUE;
+  g_mutex_unlock (&pump->mutex);
+  g_thread_join (pump->thread);
+  pump->thread = NULL;
+  g_main_context_unref (pump->context);
+  pump->context = NULL;
+  g_mutex_clear (&pump->mutex);
 }
 
 static gboolean
@@ -1626,6 +1778,125 @@ test_list_iter_return_no_flags_suppresses_flags_and_special_use (void)
 }
 
 static void
+test_real_daemon_virtual_mailbox_list_and_status (void)
+{
+  const char *patterns[] = { "*", NULL };
+  g_autofree char *socket_root = NULL;
+  g_autofree char *socket_path = NULL;
+  g_autofree char *catalog_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonMailboxListService) mailbox_list_service = NULL;
+  g_autoptr (WyreboxDaemonMailboxSelectService) mailbox_select_service = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) query_template_service =
+      NULL;
+  g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+  g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
+  MainContextPump pump = { 0 };
+  struct mail_storage *storage_class = NULL;
+  struct mail_storage *storage = NULL;
+  struct mailbox_list *list = NULL;
+  struct mailbox_list_iterate_context *ctx = NULL;
+  const struct mailbox_info *info = NULL;
+  struct mailbox *box = NULL;
+  struct mailbox_status status = {
+    .uidvalidity = 1,
+    .uidnext = 1,
+    .messages = 1,
+  };
+
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
+  socket_path = make_socket_path (&socket_root);
+  catalog_path = g_build_filename (socket_root, "catalog.duckdb", NULL);
+  g_assert_true (bootstrap_catalog (catalog_path));
+  seed_virtual_mailbox_catalog (catalog_path);
+
+  mailbox_list_service =
+      wyrebox_daemon_mailbox_catalog_duckdb_new_list_service (catalog_path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (mailbox_list_service);
+
+  mailbox_select_service =
+      wyrebox_daemon_mailbox_catalog_duckdb_new_select_service (catalog_path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (mailbox_select_service);
+
+  query_template_service =
+      wyrebox_daemon_duckdb_query_template_service_new_duckdb (catalog_path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (query_template_service);
+
+  adapter = wyrebox_daemon_request_adapter_new (NULL,
+      NULL,
+      mailbox_list_service,
+      mailbox_select_service,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_decode_request_frame,
+      NULL, NULL, wyrebox_daemon_capnp_codec_encode_response_frame, NULL, NULL);
+  g_assert_nonnull (adapter);
+  wyrebox_daemon_request_adapter_set_duckdb_query_template_service (adapter,
+      query_template_service);
+
+  server = wyrebox_daemon_connection_server_new (socket_path, adapter);
+  g_assert_nonnull (server);
+  g_assert_true (wyrebox_daemon_connection_server_start (server, &error));
+  g_assert_no_error (error);
+  main_context_pump_start (&pump);
+
+  wyrebox_dovecot_test_daemon_socket_path = socket_path;
+  storage_class = init_plugin_and_get_storage_class ();
+  load_storage (storage_class, &storage);
+
+  list = mailbox_list_sink_alloc ();
+  g_assert_nonnull (list);
+  storage->v.add_list (storage, list);
+
+  ctx = list->v.iter_init (list, patterns,
+      MAILBOX_LIST_ITER_RETURN_CHILDREN | MAILBOX_LIST_ITER_RETURN_SPECIALUSE);
+  g_assert_nonnull (ctx);
+
+  info = list->v.iter_next (ctx);
+  g_assert_nonnull (info);
+  g_assert_cmpstr (info->vname, ==, "Projects");
+  g_assert_cmpint (info->flags, ==, MAILBOX_NOCHILDREN);
+  g_assert_null (info->special_use);
+  g_assert_null (list->v.iter_next (ctx));
+  g_assert_cmpint (list->v.iter_deinit (ctx), ==, 0);
+  ctx = NULL;
+
+  list->v.deinit (list);
+  mailbox_list_sink_free (list);
+  list = NULL;
+  storage->v.destroy (storage);
+  storage = NULL;
+
+  load_box (storage_class, &storage, &box);
+  g_assert_cmpint (box->v.open (box), ==, 0);
+  g_assert_true (box->opened);
+  g_assert_cmpint (box->v.get_status (box,
+          STATUS_UIDVALIDITY | STATUS_UIDNEXT | STATUS_MESSAGES, &status), ==,
+      0);
+  g_assert_cmpuint (status.uidvalidity, ==, 77);
+  g_assert_cmpuint (status.uidnext, ==, 42);
+  g_assert_cmpuint (status.messages, ==, 1);
+
+  wyrebox_dovecot_test_daemon_socket_path = NULL;
+  close_unload_box_and_plugin (storage, box);
+  g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+  g_assert_no_error (error);
+  main_context_pump_stop (&pump);
+  remove_tree (socket_root);
+#else
+  g_test_skip ("CAPNP serialization is disabled");
+#endif
+}
+
+static void
 test_open_and_get_status_after_open (void)
 {
   g_autofree char *socket_root = NULL;
@@ -2074,6 +2345,9 @@ main (int argc, char **argv)
       test_list_iter_return_children_controls_child_flags);
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/list-iter-no-flags",
       test_list_iter_return_no_flags_suppresses_flags_and_special_use);
+  g_test_add_func
+      ("/dovecot/plugin-mailbox-smoke/real-daemon-virtual-list-and-status",
+      test_real_daemon_virtual_mailbox_list_and_status);
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/open-get-status-after-open",
       test_open_and_get_status_after_open);
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/lazy-status-before-open",
