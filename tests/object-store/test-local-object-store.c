@@ -224,6 +224,106 @@ test_missing_valid_key_fails (void)
   remove_tree (root);
 }
 
+static void
+test_fetch_rejects_corrupted_object (void)
+{
+  const guint8 message[] = "Subject: integrity\r\n\r\noriginal bytes\r\n";
+  const char replacement[] = "Subject: integrity\r\n\r\ncorrupted bytes\r\n";
+  g_autofree char *root = g_dir_make_tmp ("wyrebox-object-store-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (GBytes) input = g_bytes_new_static (message, sizeof (message) - 1);
+  g_autofree char *key = NULL;
+  g_autofree char *path = NULL;
+  g_autoptr (GBytes) output = NULL;
+
+  g_assert_nonnull (root);
+  store = wyrebox_local_object_store_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  g_assert_true (wyrebox_local_object_store_put_bytes (store, input, &key,
+          &error));
+  g_assert_no_error (error);
+  path = object_path_for_key (root, key);
+  g_assert_true (g_file_set_contents (path, replacement, strlen (replacement),
+          &error));
+  g_assert_no_error (error);
+
+  output = wyrebox_local_object_store_get_bytes (store, key, &error);
+  g_assert_null (output);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+  remove_tree (root);
+}
+
+static void
+test_fetch_rejects_truncated_object (void)
+{
+  const guint8 message[] = "Subject: integrity\r\n\r\noriginal bytes\r\n";
+  const char replacement[] = "Subject: integrity\r\n";
+  g_autofree char *root = g_dir_make_tmp ("wyrebox-object-store-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (GBytes) input = g_bytes_new_static (message, sizeof (message) - 1);
+  g_autofree char *key = NULL;
+  g_autofree char *path = NULL;
+  g_autoptr (GBytes) output = NULL;
+
+  g_assert_nonnull (root);
+  store = wyrebox_local_object_store_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  g_assert_true (wyrebox_local_object_store_put_bytes (store, input, &key,
+          &error));
+  g_assert_no_error (error);
+  path = object_path_for_key (root, key);
+  g_assert_true (g_file_set_contents (path, replacement, strlen (replacement),
+          &error));
+  g_assert_no_error (error);
+
+  output = wyrebox_local_object_store_get_bytes (store, key, &error);
+  g_assert_null (output);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+  remove_tree (root);
+}
+
+static void
+test_duplicate_put_rejects_corrupted_existing_object (void)
+{
+  const guint8 message[] = "Subject: duplicate\r\n\r\nsame bytes\r\n";
+  const char replacement[] = "Subject: duplicate\r\n\r\ncorrupt bytes\r\n";
+  g_autofree char *root = g_dir_make_tmp ("wyrebox-object-store-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (GBytes) input = g_bytes_new_static (message, sizeof (message) - 1);
+  g_autofree char *first_key = NULL;
+  g_autofree char *second_key = NULL;
+  g_autofree char *path = NULL;
+
+  g_assert_nonnull (root);
+  store = wyrebox_local_object_store_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  g_assert_true (wyrebox_local_object_store_put_bytes (store, input, &first_key,
+          &error));
+  g_assert_no_error (error);
+  path = object_path_for_key (root, first_key);
+  g_assert_true (g_file_set_contents (path, replacement, strlen (replacement),
+          &error));
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_local_object_store_put_bytes (store, input,
+          &second_key, &error));
+  g_assert_null (second_key);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+  remove_tree (root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -241,6 +341,12 @@ main (int argc, char **argv)
   g_test_add_func ("/object-store/invalid-key-fails", test_invalid_key_fails);
   g_test_add_func ("/object-store/missing-valid-key-fails",
       test_missing_valid_key_fails);
+  g_test_add_func ("/object-store/fetch-rejects-corrupted-object",
+      test_fetch_rejects_corrupted_object);
+  g_test_add_func ("/object-store/fetch-rejects-truncated-object",
+      test_fetch_rejects_truncated_object);
+  g_test_add_func ("/object-store/duplicate-put-rejects-corrupted-existing",
+      test_duplicate_put_rejects_corrupted_existing_object);
 
   return g_test_run ();
 }
