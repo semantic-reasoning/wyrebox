@@ -53,6 +53,16 @@ init_full_metadata (WyreboxEmlMetadata *metadata)
 }
 
 static void
+assert_no_delivery_identity (const WyreboxMessageDeliveredPayload *decoded)
+{
+  g_assert_null (decoded->delivery_id);
+  g_assert_null (decoded->queue_id);
+  g_assert_null (decoded->account_identity);
+  g_assert_null (decoded->envelope_sender);
+  g_assert_null (decoded->recipients);
+}
+
+static void
 test_round_trip_full_metadata (void)
 {
   WyreboxEmlMetadata metadata = { 0 };
@@ -82,10 +92,70 @@ test_round_trip_full_metadata (void)
   g_assert_null (decoded.bcc);
   g_assert_cmpstr (decoded.date, ==, metadata.date);
   g_assert_cmpuint (decoded.duplicate_message_id_count, ==, 2);
+  assert_no_delivery_identity (&decoded);
 
   reencoded = wyrebox_message_delivered_payload_encode_full
       (decoded.object_key, decoded.size_bytes, &metadata,
       decoded.internal_date_unix_us, &error);
+  g_assert_no_error (error);
+  g_assert_true (g_bytes_equal (encoded, reencoded));
+}
+
+static void
+test_round_trip_v3_identity_preserves_recipients (void)
+{
+  WyreboxEmlMetadata metadata = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+  g_autoptr (GBytes) reencoded = NULL;
+  g_auto (WyreboxMessageDeliveredPayload) decoded = { 0 };
+  const gchar *recipients[] = {
+    "alice@example.test",
+    "bob@example.test",
+    NULL
+  };
+  const guint8 *encoded_data = NULL;
+  gsize encoded_size = 0;
+
+  init_full_metadata (&metadata);
+
+  encoded = wyrebox_message_delivered_payload_encode_with_identity
+      (valid_object_key, 12345, &metadata, 1700000000123456,
+      "delivery-123", "queue-1", "account-1", "sender@example.test",
+      recipients, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  encoded_data = g_bytes_get_data (encoded, &encoded_size);
+  g_assert_cmpuint (encoded_size, >, 8);
+  g_assert_cmpmem (encoded_data, 8, "WYREMDP3", 8);
+
+  g_assert_true (wyrebox_message_delivered_payload_decode (encoded,
+          &decoded, &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (decoded.object_key, ==, valid_object_key);
+  g_assert_cmpuint (decoded.size_bytes, ==, 12345);
+  g_assert_cmpuint (decoded.internal_date_unix_us, ==, 1700000000123456);
+  g_assert_cmpstr (decoded.message_id, ==, metadata.message_id);
+  g_assert_cmpstr (decoded.subject, ==, metadata.subject);
+  g_assert_cmpstr (decoded.from, ==, metadata.from);
+  g_assert_cmpstr (decoded.to, ==, metadata.to);
+  g_assert_cmpstr (decoded.date, ==, metadata.date);
+  g_assert_cmpuint (decoded.duplicate_message_id_count, ==, 2);
+  g_assert_cmpstr (decoded.delivery_id, ==, "delivery-123");
+  g_assert_cmpstr (decoded.queue_id, ==, "queue-1");
+  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.envelope_sender, ==, "sender@example.test");
+  g_assert_nonnull (decoded.recipients);
+  g_assert_cmpstr (decoded.recipients[0], ==, "alice@example.test");
+  g_assert_cmpstr (decoded.recipients[1], ==, "bob@example.test");
+  g_assert_null (decoded.recipients[2]);
+
+  reencoded = wyrebox_message_delivered_payload_encode_with_identity
+      (decoded.object_key, decoded.size_bytes, &metadata,
+      decoded.internal_date_unix_us, decoded.delivery_id, decoded.queue_id,
+      decoded.account_identity, decoded.envelope_sender,
+      (const gchar * const *) decoded.recipients, &error);
   g_assert_no_error (error);
   g_assert_true (g_bytes_equal (encoded, reencoded));
 }
@@ -176,6 +246,7 @@ test_wrapper_encodes_empty_metadata (void)
   g_assert_null (decoded.bcc);
   g_assert_null (decoded.date);
   g_assert_cmpuint (decoded.duplicate_message_id_count, ==, 0);
+  assert_no_delivery_identity (&decoded);
 }
 
 static void
@@ -200,6 +271,7 @@ test_decodes_golden_v1_payload (void)
   g_assert_null (decoded.bcc);
   g_assert_null (decoded.date);
   g_assert_cmpuint (decoded.duplicate_message_id_count, ==, 0);
+  assert_no_delivery_identity (&decoded);
 }
 
 static void
@@ -492,6 +564,9 @@ main (int argc, char **argv)
 
   g_test_add_func ("/message-delivered-payload/round-trip-full-metadata",
       test_round_trip_full_metadata);
+  g_test_add_func
+      ("/message-delivered-payload/round-trip-v3-identity-preserves-recipients",
+      test_round_trip_v3_identity_preserves_recipients);
   g_test_add_func
       ("/message-delivered-payload/encoded-format-matches-golden-v2",
       test_encoded_format_matches_golden_v2);

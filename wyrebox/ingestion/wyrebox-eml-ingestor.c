@@ -81,9 +81,12 @@ wyrebox_eml_ingestor_new_with_journal (WyreboxLocalObjectStore *object_store,
   return wyrebox_eml_ingestor_new_internal (object_store, journal_writer);
 }
 
-gboolean
-wyrebox_eml_ingestor_ingest_bytes (WyreboxEmlIngestor *self,
-    GBytes *bytes, WyreboxEmlIngestResult *out_result, GError **error)
+static gboolean
+wyrebox_eml_ingestor_ingest_bytes_internal (WyreboxEmlIngestor *self,
+    GBytes *bytes, const char *delivery_id, const char *queue_id,
+    const char *account_identity, const char *envelope_sender,
+    const gchar *const *recipients, WyreboxEmlIngestResult *out_result,
+    GError **error)
 {
   g_autoptr (GBytes) payload = NULL;
   g_auto (WyreboxEmlIngestResult) result = { 0 };
@@ -105,8 +108,10 @@ wyrebox_eml_ingestor_ingest_bytes (WyreboxEmlIngestor *self,
             &result.object_key, error))
       return FALSE;
 
-    payload = wyrebox_message_delivered_payload_encode_full (result.object_key,
-        result.size_bytes, &metadata, (guint64) g_get_real_time (), error);
+    payload = wyrebox_message_delivered_payload_encode_with_identity
+        (result.object_key, result.size_bytes, &metadata,
+        (guint64) g_get_real_time (), delivery_id, queue_id, account_identity,
+        envelope_sender, recipients, error);
     if (payload == NULL)
       return FALSE;
 
@@ -127,4 +132,24 @@ wyrebox_eml_ingestor_ingest_bytes (WyreboxEmlIngestor *self,
   result.journal_sequence = 0;
 
   return TRUE;
+}
+
+gboolean
+wyrebox_eml_ingestor_ingest_bytes (WyreboxEmlIngestor *self,
+    GBytes *bytes, WyreboxEmlIngestResult *out_result, GError **error)
+{
+  return wyrebox_eml_ingestor_ingest_bytes_internal (self, bytes, NULL, NULL,
+      NULL, NULL, NULL, out_result, error);
+}
+
+gboolean
+wyrebox_eml_ingestor_ingest_delivery_bytes (WyreboxEmlIngestor *self,
+    GBytes *bytes, const char *delivery_id, const char *queue_id,
+    const char *account_identity, const char *envelope_sender,
+    const gchar *const *recipients, WyreboxEmlIngestResult *out_result,
+    GError **error)
+{
+  return wyrebox_eml_ingestor_ingest_bytes_internal (self, bytes, delivery_id,
+      queue_id, account_identity, envelope_sender, recipients, out_result,
+      error);
 }

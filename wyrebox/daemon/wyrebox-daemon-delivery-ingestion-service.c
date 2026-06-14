@@ -92,13 +92,13 @@ ingest_delivery_with_ingestor (const WyreboxDaemonRequestIdentity *identity,
 {
   WyreboxEmlIngestor *ingestor = user_data;
 
-  (void) identity;
-
   g_return_val_if_fail (WYREBOX_IS_EML_INGESTOR (ingestor), FALSE);
   g_return_val_if_fail (request != NULL, FALSE);
 
-  return wyrebox_eml_ingestor_ingest_bytes (ingestor,
-      request->message_bytes, out_result, error);
+  return wyrebox_eml_ingestor_ingest_delivery_bytes (ingestor,
+      request->message_bytes, request->delivery_id, request->queue_id,
+      identity->account_identity, request->envelope_sender,
+      (const gchar * const *) request->recipients, out_result, error);
 }
 
 WyreboxDaemonDeliveryIngestionService *
