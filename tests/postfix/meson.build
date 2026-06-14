@@ -10,6 +10,12 @@ postfix_pipe_outcome_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+postfix_lmtp_session_test = executable(
+  'test-postfix-lmtp-session',
+  'test-postfix-lmtp-session.c',
+  dependencies: [wyrebox_dep],
+)
+
 if capnp_serialization_found
   postfix_pipe_executable_test = executable(
     'test-postfix-pipe-executable',
@@ -24,6 +30,7 @@ endif
 
 test('postfix pipe input', postfix_pipe_input_test)
 test('postfix pipe outcome', postfix_pipe_outcome_test)
+test('postfix lmtp session', postfix_lmtp_session_test)
 if capnp_serialization_found
   test(
     'postfix pipe executable',

@@ -50,6 +50,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-stream-chunk-frame.c',
   'daemon/wyrebox-daemon-success-receipt.c',
   'dovecot/wyrebox-dovecot-daemon-client.c',
+  'postfix/wyrebox-postfix-lmtp-session.c',
   'postfix/wyrebox-postfix-pipe-input.c',
   'postfix/wyrebox-postfix-pipe-outcome.c',
   'ingestion/wyrebox-delivery-materializer.c',
