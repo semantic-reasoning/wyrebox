@@ -382,9 +382,13 @@ def main() -> None:
         r"static\s+void\s+wyrebox_dovecot_mail_free"
         r"\s*\(\s*struct\s+mail\s+\*mail\s*\)\s*\{[\s\S]*?"
         r"wyrebox_dovecot_mail_clear_stream\s*\(\s*wmail\s*\);[\s\S]*?"
+        r"i_assert\s*\(\s*mail->transaction->mail_ref_count\s*>\s*0\s*\);"
+        r"[\s\S]*?"
+        r"mail->transaction->mail_ref_count--;"
+        r"[\s\S]*?"
         r"free\s*\(\s*wmail\s*\);",
         text,
-        "mail free clears cached stream and releases wrapper",
+        "mail free clears cached stream, releases transaction ref, and releases wrapper",
     )
     require(
         r"static\s+struct\s+mail\s+\*"
@@ -401,6 +405,13 @@ def main() -> None:
         r"[\s\S]*?return\s+&wmail->private\.mail;",
         text,
         "mail allocator initializes Dovecot mail_private prefix",
+    )
+    require(
+        r"if\s*\(\s*transaction\s*!=\s*NULL\s*\)\s*\{[\s\S]*?"
+        r"wmail->private\.mail\.transaction\s*=\s*transaction;\s*"
+        r"[\s\S]*?transaction->mail_ref_count\+\+;",
+        text,
+        "mail allocator increments transaction mail refcount",
     )
     require(
         r"wyrebox_dovecot_mailbox_get_status\s*\(\s*struct\s+mailbox\s+\*box\s*,"

@@ -85,6 +85,9 @@ REQUIRED_PRIVATE_STRUCT_FIELDS = {
         "opened",
         "enabled_features",
     ],
+    "mailbox_transaction_context": [
+        "mail_ref_count",
+    ],
 }
 
 REQUIRED_MAIL_STRUCT_FIELDS = {

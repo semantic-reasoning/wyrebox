@@ -910,6 +910,10 @@ wyrebox_dovecot_mail_free (struct mail *mail)
   struct wyrebox_dovecot_mail *wmail = wyrebox_dovecot_mail_from_mail (mail);
 
   wyrebox_dovecot_mail_clear_stream (wmail);
+  if (mail->transaction != NULL) {
+    i_assert (mail->transaction->mail_ref_count > 0);
+    mail->transaction->mail_ref_count--;
+  }
   free (wmail);
 }
 
@@ -1072,6 +1076,7 @@ wyrebox_dovecot_mail_alloc (struct mailbox_transaction_context *transaction,
   if (transaction != NULL) {
     wmail->private.mail.box = transaction->box;
     wmail->private.mail.transaction = transaction;
+    transaction->mail_ref_count++;
   }
   wmail->private.v = wyrebox_dovecot_mail_vfuncs;
   wmail->private.vlast = NULL;
