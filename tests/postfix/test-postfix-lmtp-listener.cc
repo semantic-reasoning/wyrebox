@@ -22,6 +22,7 @@ typedef struct
   GThread *thread;
   FakeServerResponse response;
   WyreboxDaemonErrorClass error_class;
+  const char *const *expected_recipients;
   const guint8 *expected_message;
   gsize expected_message_size;
 } FakeServer;
@@ -225,9 +226,17 @@ fake_server_thread_main (gpointer user_data)
       "stable-delivery-1");
   g_assert_cmpstr (decoded.delivery_ingestion->envelope_sender, ==,
       "sender@example.com");
-  g_assert_cmpstr (decoded.delivery_ingestion->recipients[0], ==,
-      "alice@example.com");
-  g_assert_null (decoded.delivery_ingestion->recipients[1]);
+  g_assert_nonnull (server->expected_recipients);
+  {
+    guint expected_count = 0;
+
+    for (; server->expected_recipients[expected_count] != NULL;
+        expected_count++) {
+      g_assert_cmpstr (decoded.delivery_ingestion->recipients[expected_count],
+          ==, server->expected_recipients[expected_count]);
+    }
+    g_assert_null (decoded.delivery_ingestion->recipients[expected_count]);
+  }
   assert_message_equal (decoded.delivery_ingestion->message_bytes,
       server->expected_message, server->expected_message_size);
 
@@ -263,6 +272,7 @@ static void
 fake_server_start (FakeServer *server,
     const char *socket_path, FakeServerResponse response,
     WyreboxDaemonErrorClass error_class,
+    const char *const *expected_recipients,
     const guint8 *expected_message, gsize expected_message_size)
 {
   g_autoptr (GError) error = NULL;
@@ -271,6 +281,7 @@ fake_server_start (FakeServer *server,
   server->listener = g_socket_listener_new ();
   server->response = response;
   server->error_class = error_class;
+  server->expected_recipients = expected_recipients;
   server->expected_message = expected_message;
   server->expected_message_size = expected_message_size;
 
@@ -387,6 +398,7 @@ test_successful_single_recipient_transaction (void)
 {
   const guint8 expected_message[] =
       "Subject: hi\r\n\r\nbody\r\n";
+  const char *expected_recipients[] = { "alice@example.com", NULL };
   g_autofree char *root = make_temp_root ();
   g_autofree char *daemon_socket_path = g_build_filename (root,
       "wyrebox.sock", NULL);
@@ -402,6 +414,7 @@ test_successful_single_recipient_transaction (void)
       daemon_socket_path,
       FAKE_SERVER_SUCCESS,
       WYREBOX_DAEMON_ERROR_INTERNAL_ERROR,
+      expected_recipients,
       expected_message, sizeof (expected_message) - 1);
   listener = start_listener (listen_socket_path, daemon_socket_path);
   connection = connect_to_listener (listen_socket_path);
@@ -433,6 +446,7 @@ test_successful_transaction_closes_before_second_mail (void)
 {
   const guint8 expected_message[] =
       "Subject: hi\r\n\r\nbody\r\n";
+  const char *expected_recipients[] = { "alice@example.com", NULL };
   g_autofree char *root = make_temp_root ();
   g_autofree char *daemon_socket_path = g_build_filename (root,
       "wyrebox.sock", NULL);
@@ -448,6 +462,7 @@ test_successful_transaction_closes_before_second_mail (void)
       daemon_socket_path,
       FAKE_SERVER_SUCCESS,
       WYREBOX_DAEMON_ERROR_INTERNAL_ERROR,
+      expected_recipients,
       expected_message, sizeof (expected_message) - 1);
   listener = start_listener (listen_socket_path, daemon_socket_path);
   connection = connect_to_listener (listen_socket_path);
@@ -515,6 +530,7 @@ test_daemon_permanent_failure_returns_permanent_reply (void)
 {
   const guint8 expected_message[] =
       "Subject: hi\r\n\r\nbody\r\n";
+  const char *expected_recipients[] = { "alice@example.com", NULL };
   g_autofree char *root = make_temp_root ();
   g_autofree char *daemon_socket_path = g_build_filename (root,
       "wyrebox.sock", NULL);
@@ -530,6 +546,7 @@ test_daemon_permanent_failure_returns_permanent_reply (void)
       daemon_socket_path,
       FAKE_SERVER_DAEMON_ERROR,
       WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE,
+      expected_recipients,
       expected_message, sizeof (expected_message) - 1);
   listener = start_listener (listen_socket_path, daemon_socket_path);
   connection = connect_to_listener (listen_socket_path);
@@ -598,6 +615,7 @@ static void
 test_message_size_limit_allows_exact_limit (void)
 {
   const guint8 expected_message[] = "1234567890\r\n";
+  const char *expected_recipients[] = { "alice@example.com", NULL };
   g_autofree char *root = make_temp_root ();
   g_autofree char *daemon_socket_path = g_build_filename (root,
       "wyrebox.sock", NULL);
@@ -613,6 +631,7 @@ test_message_size_limit_allows_exact_limit (void)
       daemon_socket_path,
       FAKE_SERVER_SUCCESS,
       WYREBOX_DAEMON_ERROR_INTERNAL_ERROR,
+      expected_recipients,
       expected_message, sizeof (expected_message) - 1);
   listener = start_listener_with_max_message_bytes (listen_socket_path,
       daemon_socket_path, "12");
@@ -641,7 +660,117 @@ test_message_size_limit_allows_exact_limit (void)
 }
 
 static void
-test_second_recipient_is_rejected (void)
+test_successful_multi_recipient_transaction (void)
+{
+  const guint8 expected_message[] =
+      "Subject: hi\r\n\r\n.body\r\n";
+  const char *expected_recipients[] = {
+    "alice@example.com",
+    "bob@example.com",
+    NULL
+  };
+  g_autofree char *root = make_temp_root ();
+  g_autofree char *daemon_socket_path = g_build_filename (root,
+      "wyrebox.sock", NULL);
+  g_autofree char *listen_socket_path = g_build_filename (root,
+      "wyrebox-lmtp.sock", NULL);
+  FakeServer server = { 0 };
+  g_autoptr (GSubprocess) listener = NULL;
+  g_autoptr (GSocketConnection) connection = NULL;
+  GInputStream *input = NULL;
+  GOutputStream *output = NULL;
+
+  fake_server_start (&server,
+      daemon_socket_path,
+      FAKE_SERVER_SUCCESS,
+      WYREBOX_DAEMON_ERROR_INTERNAL_ERROR,
+      expected_recipients,
+      expected_message, sizeof (expected_message) - 1);
+  listener = start_listener (listen_socket_path, daemon_socket_path);
+  connection = connect_to_listener (listen_socket_path);
+  input = g_io_stream_get_input_stream (G_IO_STREAM (connection));
+  output = g_io_stream_get_output_stream (G_IO_STREAM (connection));
+
+  assert_reply_prefix (input, "220 ");
+  write_all (output, "LHLO localhost\r\n");
+  assert_reply_prefix (input, "250-");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "MAIL FROM:<sender@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RCPT TO:<alice@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RCPT TO:<bob@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "DATA\r\n");
+  assert_reply_prefix (input, "354 ");
+  write_all (output, "Subject: hi\r\n\r\n..body\r\n.\r\n");
+  assert_reply_prefix (input, "250 2.0.0 Delivery accepted");
+  assert_reply_prefix (input, "250 2.0.0 Delivery accepted");
+  assert_reply_prefix (input, "221 ");
+
+  g_assert_true (g_io_stream_close (G_IO_STREAM (connection), NULL, NULL));
+  finish_listener (listener);
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_multi_recipient_daemon_permanent_failure_fans_out (void)
+{
+  const guint8 expected_message[] =
+      "Subject: hi\r\n\r\nbody\r\n";
+  const char *expected_recipients[] = {
+    "alice@example.com",
+    "bob@example.com",
+    NULL
+  };
+  g_autofree char *root = make_temp_root ();
+  g_autofree char *daemon_socket_path = g_build_filename (root,
+      "wyrebox.sock", NULL);
+  g_autofree char *listen_socket_path = g_build_filename (root,
+      "wyrebox-lmtp.sock", NULL);
+  FakeServer server = { 0 };
+  g_autoptr (GSubprocess) listener = NULL;
+  g_autoptr (GSocketConnection) connection = NULL;
+  GInputStream *input = NULL;
+  GOutputStream *output = NULL;
+
+  fake_server_start (&server,
+      daemon_socket_path,
+      FAKE_SERVER_DAEMON_ERROR,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE,
+      expected_recipients,
+      expected_message, sizeof (expected_message) - 1);
+  listener = start_listener (listen_socket_path, daemon_socket_path);
+  connection = connect_to_listener (listen_socket_path);
+  input = g_io_stream_get_input_stream (G_IO_STREAM (connection));
+  output = g_io_stream_get_output_stream (G_IO_STREAM (connection));
+
+  assert_reply_prefix (input, "220 ");
+  write_all (output, "LHLO localhost\r\n");
+  assert_reply_prefix (input, "250-");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "MAIL FROM:<sender@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RCPT TO:<alice@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RCPT TO:<bob@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "DATA\r\n");
+  assert_reply_prefix (input, "354 ");
+  write_all (output, "Subject: hi\r\n\r\nbody\r\n.\r\n");
+  assert_reply_prefix (input, "554 5.6.0");
+  assert_reply_prefix (input, "554 5.6.0");
+  assert_reply_prefix (input, "221 ");
+
+  g_assert_true (g_io_stream_close (G_IO_STREAM (connection), NULL, NULL));
+  finish_listener (listener);
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_multi_recipient_daemon_unavailable_fans_out (void)
 {
   g_autofree char *root = make_temp_root ();
   g_autofree char *daemon_socket_path = g_build_filename (root,
@@ -667,7 +796,132 @@ test_second_recipient_is_rejected (void)
   write_all (output, "RCPT TO:<alice@example.com>\r\n");
   assert_reply_prefix (input, "250 ");
   write_all (output, "RCPT TO:<bob@example.com>\r\n");
-  assert_reply_prefix (input, "550 5.5.3");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "DATA\r\n");
+  assert_reply_prefix (input, "354 ");
+  write_all (output, "Subject: hi\r\n\r\nbody-bytes-must-not-appear\r\n.\r\n");
+  assert_reply_prefix (input, "451 4.3.0");
+  assert_reply_prefix (input, "451 4.3.0");
+  assert_reply_prefix (input, "221 ");
+
+  g_assert_true (g_io_stream_close (G_IO_STREAM (connection), NULL, NULL));
+  finish_listener (listener);
+  remove_tree (root);
+}
+
+static void
+test_multi_recipient_message_size_limit_fans_out (void)
+{
+  g_autofree char *root = make_temp_root ();
+  g_autofree char *daemon_socket_path = g_build_filename (root,
+      "missing-daemon.sock", NULL);
+  g_autofree char *listen_socket_path = g_build_filename (root,
+      "wyrebox-lmtp.sock", NULL);
+  g_autoptr (GSubprocess) listener = NULL;
+  g_autoptr (GSocketConnection) connection = NULL;
+  GInputStream *input = NULL;
+  GOutputStream *output = NULL;
+
+  listener = start_listener_with_max_message_bytes (listen_socket_path,
+      daemon_socket_path, "12");
+  connection = connect_to_listener (listen_socket_path);
+  input = g_io_stream_get_input_stream (G_IO_STREAM (connection));
+  output = g_io_stream_get_output_stream (G_IO_STREAM (connection));
+
+  assert_reply_prefix (input, "220 ");
+  write_all (output, "LHLO localhost\r\n");
+  assert_reply_prefix (input, "250-");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "MAIL FROM:<sender@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RCPT TO:<alice@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RCPT TO:<bob@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "DATA\r\n");
+  assert_reply_prefix (input, "354 ");
+  write_all (output, "12345678901\r\n.\r\n");
+  assert_reply_prefix (input, "552 5.3.4");
+  assert_reply_prefix (input, "552 5.3.4");
+  assert_reply_prefix (input, "221 ");
+
+  g_assert_true (g_io_stream_close (G_IO_STREAM (connection), NULL, NULL));
+  finish_listener (listener);
+  remove_tree (root);
+}
+
+static void
+test_multi_recipient_empty_data_local_failure_fans_out (void)
+{
+  g_autofree char *root = make_temp_root ();
+  g_autofree char *daemon_socket_path = g_build_filename (root,
+      "missing-daemon.sock", NULL);
+  g_autofree char *listen_socket_path = g_build_filename (root,
+      "wyrebox-lmtp.sock", NULL);
+  g_autoptr (GSubprocess) listener = NULL;
+  g_autoptr (GSocketConnection) connection = NULL;
+  GInputStream *input = NULL;
+  GOutputStream *output = NULL;
+
+  listener = start_listener (listen_socket_path, daemon_socket_path);
+  connection = connect_to_listener (listen_socket_path);
+  input = g_io_stream_get_input_stream (G_IO_STREAM (connection));
+  output = g_io_stream_get_output_stream (G_IO_STREAM (connection));
+
+  assert_reply_prefix (input, "220 ");
+  write_all (output, "LHLO localhost\r\n");
+  assert_reply_prefix (input, "250-");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "MAIL FROM:<sender@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RCPT TO:<alice@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RCPT TO:<bob@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "DATA\r\n");
+  assert_reply_prefix (input, "354 ");
+  write_all (output, ".\r\n");
+  assert_reply_prefix (input, "451 4.3.0");
+  assert_reply_prefix (input, "451 4.3.0");
+  assert_reply_prefix (input, "221 ");
+
+  g_assert_true (g_io_stream_close (G_IO_STREAM (connection), NULL, NULL));
+  finish_listener (listener);
+  remove_tree (root);
+}
+
+static void
+test_rset_clears_multi_recipient_state (void)
+{
+  g_autofree char *root = make_temp_root ();
+  g_autofree char *daemon_socket_path = g_build_filename (root,
+      "missing-daemon.sock", NULL);
+  g_autofree char *listen_socket_path = g_build_filename (root,
+      "wyrebox-lmtp.sock", NULL);
+  g_autoptr (GSubprocess) listener = NULL;
+  g_autoptr (GSocketConnection) connection = NULL;
+  GInputStream *input = NULL;
+  GOutputStream *output = NULL;
+
+  listener = start_listener (listen_socket_path, daemon_socket_path);
+  connection = connect_to_listener (listen_socket_path);
+  input = g_io_stream_get_input_stream (G_IO_STREAM (connection));
+  output = g_io_stream_get_output_stream (G_IO_STREAM (connection));
+
+  assert_reply_prefix (input, "220 ");
+  write_all (output, "LHLO localhost\r\n");
+  assert_reply_prefix (input, "250-");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "MAIL FROM:<sender@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RCPT TO:<alice@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RCPT TO:<bob@example.com>\r\n");
+  assert_reply_prefix (input, "250 ");
+  write_all (output, "RSET\r\n");
+  assert_reply_prefix (input, "250 2.0.0 Reset state");
+  write_all (output, "DATA\r\n");
+  assert_reply_prefix (input, "503 5.5.1 Bad command sequence");
   write_all (output, "QUIT\r\n");
   assert_reply_prefix (input, "221 ");
 
@@ -689,8 +943,18 @@ main (int argc, char **argv)
       test_daemon_unavailable_returns_temporary_failure);
   g_test_add_func ("/postfix/lmtp-listener/daemon-permanent-failure",
       test_daemon_permanent_failure_returns_permanent_reply);
-  g_test_add_func ("/postfix/lmtp-listener/second-recipient-is-rejected",
-      test_second_recipient_is_rejected);
+  g_test_add_func ("/postfix/lmtp-listener/successful-multi-recipient",
+      test_successful_multi_recipient_transaction);
+  g_test_add_func ("/postfix/lmtp-listener/multi-recipient-permanent-failure",
+      test_multi_recipient_daemon_permanent_failure_fans_out);
+  g_test_add_func ("/postfix/lmtp-listener/multi-recipient-daemon-unavailable",
+      test_multi_recipient_daemon_unavailable_fans_out);
+  g_test_add_func ("/postfix/lmtp-listener/multi-recipient-size-limit",
+      test_multi_recipient_message_size_limit_fans_out);
+  g_test_add_func ("/postfix/lmtp-listener/multi-recipient-empty-data",
+      test_multi_recipient_empty_data_local_failure_fans_out);
+  g_test_add_func ("/postfix/lmtp-listener/rset-clears-multi-recipient",
+      test_rset_clears_multi_recipient_state);
   g_test_add_func ("/postfix/lmtp-listener/message-size-limit",
       test_message_size_limit_rejects_oversized_data);
   g_test_add_func ("/postfix/lmtp-listener/message-size-exact-limit",
