@@ -2,6 +2,7 @@ journal_writer_test = executable(
   'test-journal-writer',
   'test-journal-writer.c',
   dependencies: [wyrebox_dep],
+  link_args: ['-Wl,--wrap=wyrebox_journal_reader_scan_safe_prefix_for_segment_fd'],
 )
 
 journal_reader_test = executable(

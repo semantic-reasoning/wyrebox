@@ -487,6 +487,71 @@ wyrebox_journal_reader_new (const char *journal_root_dir, GError **error)
   return g_steal_pointer (&self);
 }
 
+static WyreboxJournalReader *
+journal_reader_new_for_segment_fd (int segment_fd,
+    const char *segment_description, GError **error)
+{
+  g_autoptr (WyreboxJournalReader) self = NULL;
+  const char *description = segment_description != NULL ?
+      segment_description : "journal segment fd";
+  struct stat segment_stat = { 0 };
+  g_autofd int fd = -1;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  if (segment_fd < 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "journal segment fd is required");
+    return NULL;
+  }
+
+  fd = fcntl (segment_fd, F_DUPFD_CLOEXEC, 0);
+  if (fd < 0) {
+    int saved_errno = errno;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        g_io_error_from_errno (saved_errno),
+        "failed to duplicate %s: %s", description, g_strerror (saved_errno));
+    return NULL;
+  }
+
+  if (fstat (fd, &segment_stat) != 0) {
+    int saved_errno = errno;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        g_io_error_from_errno (saved_errno),
+        "failed to stat %s: %s", description, g_strerror (saved_errno));
+    return NULL;
+  }
+
+  if (segment_stat.st_size < 0) {
+    int saved_errno = EIO;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        g_io_error_from_errno (saved_errno),
+        "failed to read %s: %s", description, g_strerror (saved_errno));
+    return NULL;
+  }
+
+  if ((guint64) segment_stat.st_size > G_MAXSIZE) {
+    g_set_error (error,
+        G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "%s is too large", description);
+    return NULL;
+  }
+
+  self = g_object_new (WYREBOX_TYPE_JOURNAL_READER, NULL);
+  self->segment_path = g_strdup (description);
+  self->fd = fd;
+  fd = -1;
+  self->file_size = (gsize) segment_stat.st_size;
+
+  return g_steal_pointer (&self);
+}
+
 gboolean
 wyrebox_journal_reader_read_next (WyreboxJournalReader *self,
     WyreboxJournalRecord *record, gboolean *out_eof, GError **error)
@@ -922,6 +987,24 @@ wyrebox_journal_reader_scan_safe_prefix (WyreboxJournalReader *self,
   *out_prefix = prefix;
 
   return TRUE;
+}
+
+gboolean
+wyrebox_journal_reader_scan_safe_prefix_for_segment_fd (int segment_fd,
+    const char *segment_description, WyreboxJournalSafePrefix *out_prefix,
+    GError **error)
+{
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+
+  g_return_val_if_fail (out_prefix != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  reader = journal_reader_new_for_segment_fd (segment_fd,
+      segment_description, error);
+  if (reader == NULL)
+    return FALSE;
+
+  return wyrebox_journal_reader_scan_safe_prefix (reader, out_prefix, error);
 }
 
 gboolean
