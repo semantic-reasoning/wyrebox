@@ -22,6 +22,11 @@ const char *wyrebox_daemon_runtime_get_default_fact_dump_dir (void);
  */
 GFile *wyrebox_daemon_runtime_get_default_fact_dump_file (void);
 
+gboolean wyrebox_daemon_runtime_prepare_catalog (
+    const char *catalog_path,
+    gboolean checkpoint_precondition_satisfied,
+    GError **error);
+
 typedef struct _WyreboxDaemonFactMutationService
     WyreboxDaemonFactMutationService;
 

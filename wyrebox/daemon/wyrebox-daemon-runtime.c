@@ -1,6 +1,8 @@
 #include "wyrebox-daemon-runtime.h"
 
 #include "wyrebox-daemon-fact-mutation-service.h"
+#include "wyrebox-schema-metadata-store.h"
+#include "wyrebox-schema-migration.h"
 
 #include <duckdb.h>
 
@@ -70,6 +72,31 @@ GFile *
 wyrebox_daemon_runtime_get_default_fact_dump_file (void)
 {
   return g_file_new_for_path (WYREBOX_DAEMON_DEFAULT_FACT_DUMP_DIR);
+}
+
+gboolean
+wyrebox_daemon_runtime_prepare_catalog (const char *catalog_path,
+    gboolean checkpoint_precondition_satisfied, GError **error)
+{
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (catalog_path == NULL || *catalog_path == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "DuckDB catalog path is required");
+    return FALSE;
+  }
+
+  store = wyrebox_schema_metadata_store_new_duckdb (catalog_path, error);
+  if (store == NULL)
+    return FALSE;
+
+  migration = wyrebox_schema_migration_new ();
+  return wyrebox_schema_migration_run_store_to_current (migration,
+      store, checkpoint_precondition_satisfied, error);
 }
 
 static gboolean
