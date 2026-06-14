@@ -262,6 +262,47 @@ test_scan_safe_prefix_partial_header_after_valid_record (void)
 }
 
 static void
+test_scan_safe_prefix_short_non_magic_suffix (void)
+{
+  const guint8 junk[] = { 0x4a, 0x55, 0x4e, 0x4b };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autofree guint8 *segment = NULL;
+  g_autoptr (GError) error = NULL;
+  WyreboxJournalSafePrefix prefix = { 0 };
+  guint64 offsets[3] = { 0 };
+  guint64 sequences[3] = { 0 };
+  gsize segment_size = 0;
+  gsize partial_size = 0;
+
+  g_assert_nonnull (root);
+  append_three_records (root, offsets, sequences, &error);
+  g_assert_no_error (error);
+
+  segment_path = segment_path_for_root (root);
+  read_segment (segment_path, &segment, &segment_size);
+  partial_size = (gsize) offsets[1] + sizeof (junk);
+  g_assert_cmpuint (segment_size, >, partial_size);
+  memcpy (segment + offsets[1], junk, sizeof (junk));
+  overwrite_segment (segment_path, segment, partial_size);
+
+  scan_safe_prefix (root, &prefix);
+  g_assert_cmpuint (prefix.safe_end_offset, ==, offsets[1]);
+  g_assert_true (prefix.has_last_safe_sequence);
+  g_assert_cmpuint (prefix.last_safe_sequence, ==, sequences[0]);
+  g_assert_false (prefix.reached_eof);
+  g_assert_true (prefix.unsafe_suffix_found);
+  g_assert_cmpint (prefix.stop_reason,
+      ==, WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_MAGIC);
+  g_assert_cmpuint (prefix.unsafe_offset, ==, offsets[1]);
+  g_assert_cmpuint (prefix.unsafe_available_size, ==, sizeof (junk));
+  g_assert_cmpuint (prefix.unsafe_required_size, ==, 0);
+
+  remove_tree (root);
+}
+
+static void
 test_scan_safe_prefix_partial_payload_after_valid_record (void)
 {
   const char *event_type =
@@ -1183,6 +1224,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/journal-reader/scan-safe-prefix/partial-header-after-valid-record",
       test_scan_safe_prefix_partial_header_after_valid_record);
+  g_test_add_func
+      ("/journal-reader/scan-safe-prefix/short-non-magic-suffix",
+      test_scan_safe_prefix_short_non_magic_suffix);
   g_test_add_func
       ("/journal-reader/scan-safe-prefix/partial-payload-after-valid-record",
       test_scan_safe_prefix_partial_payload_after_valid_record);

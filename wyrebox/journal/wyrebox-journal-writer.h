@@ -23,6 +23,18 @@ G_DECLARE_FINAL_TYPE (WyreboxJournalWriter,
      WyreboxJournalWriter *wyrebox_journal_writer_new (const char
     *journal_root_dir, GError **error);
 
+     /*
+      * Explicitly mutates the active journal segment by truncating one
+      * trailing torn suffix. This succeeds only for a partial record header or
+      * partial record after at least one committed record. Clean, missing,
+      * empty, checksum-corrupt, and structurally invalid segments fail and are
+      * preserved.
+      */
+     gboolean wyrebox_journal_writer_recover_torn_suffix (const char
+    *journal_root_dir,
+    guint64 *out_safe_end_offset,
+    guint64 *out_last_safe_sequence, GError **error);
+
      typedef gboolean (*WyreboxJournalWriterGuardedAppendFunc) (const char
     *journal_root_dir,
     gpointer user_data,
