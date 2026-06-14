@@ -126,6 +126,14 @@ def main() -> None:
         "wyrebox mailbox wrapper embeds SELECT result state",
     )
     require(
+        r"struct\s+wyrebox_dovecot_mail\s*\{\s*[\s\S]*?"
+        r"struct\s+mail\s+mail;\s*[\s\S]*?"
+        r"struct\s+istream\s+\*stream;\s*[\s\S]*?"
+        r"}\s*;",
+        text,
+        "wyrebox mail wrapper embeds cached stream state",
+    )
+    require(
         r"wyrebox_dovecot_storage_alloc\s*\(\s*void\s*\)\s*\{[\s\S]*?"
         r"pool_alloconly_create\s*\(\s*\"wyrebox storage\"[\s\S]*?\)",
         text,
@@ -339,12 +347,39 @@ def main() -> None:
         )
     for required_fragment in [
         "wyrebox_dovecot_message_size_scan (data, size, hdr_size, body_size)",
+        "wyrebox_dovecot_mail_clear_stream (wmail)",
+        "wmail->stream = i_stream_create_copy_from_data (data, size)",
+        "*stream = wmail->stream",
     ]:
         if required_fragment not in get_stream_body:
             raise AssertionError(
                 "plugin source contract failed: get_stream missing size "
                 f"fragment: {required_fragment}"
             )
+    require(
+        r"static\s+void\s+wyrebox_dovecot_mail_close"
+        r"\s*\(\s*struct\s+mail\s+\*mail\s*\)\s*\{[\s\S]*?"
+        r"wyrebox_dovecot_mail_clear_stream\s*\(\s*wmail\s*\);",
+        text,
+        "mail close clears cached stream",
+    )
+    require(
+        r"static\s+void\s+wyrebox_dovecot_mail_free"
+        r"\s*\(\s*struct\s+mail\s+\*mail\s*\)\s*\{[\s\S]*?"
+        r"wyrebox_dovecot_mail_clear_stream\s*\(\s*wmail\s*\);[\s\S]*?"
+        r"free\s*\(\s*wmail\s*\);",
+        text,
+        "mail free clears cached stream and releases wrapper",
+    )
+    require(
+        r"static\s+struct\s+mail\s+\*"
+        r"\s*wyrebox_dovecot_mail_alloc\s*\(\s*"
+        r"struct\s+mailbox_transaction_context\s+\*transaction,\s*"
+        r"enum\s+mail_fetch_field\s+wanted_fields,\s*"
+        r"struct\s+mailbox_header_lookup_ctx\s+\*wanted_headers\s*\)",
+        text,
+        "mail allocator vfunc signature",
+    )
     require(
         r"wyrebox_dovecot_mailbox_get_status\s*\(\s*struct\s+mailbox\s+\*box\s*,"
         r"[\s\S]*?struct\s+mailbox_status\s+\*status_r\)",
@@ -484,6 +519,19 @@ def main() -> None:
         r"->mailbox\.v\.sync_deinit\s*=\s*wyrebox_dovecot_mailbox_sync_deinit;",
         text,
         "mailbox sync_deinit vfunc wired",
+    )
+    require(
+        r"->mailbox\.v\.mail_alloc\s*=\s*wyrebox_dovecot_mail_alloc;",
+        text,
+        "mailbox mail_alloc vfunc wired",
+    )
+    require(
+        r"static\s+const\s+struct\s+mail_vfuncs\s+wyrebox_dovecot_mail_vfuncs"
+        r"\s*=\s*\{[\s\S]*?\.close\s*=\s*wyrebox_dovecot_mail_close,"
+        r"[\s\S]*?\.free\s*=\s*wyrebox_dovecot_mail_free,"
+        r"[\s\S]*?\.get_stream\s*=\s*wyrebox_dovecot_mail_get_stream,",
+        text,
+        "mail lifecycle and fetch vfuncs wired",
     )
     require(
         r"->mailbox\.opened\s*=\s*FALSE;",

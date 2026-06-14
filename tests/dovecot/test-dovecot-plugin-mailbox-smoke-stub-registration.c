@@ -9,6 +9,9 @@
 struct mail_storage *wyrebox_dovecot_loader_shim_mail_storage_class;
 int wyrebox_dovecot_loader_shim_mail_storage_class_register_calls;
 int wyrebox_dovecot_loader_shim_mail_storage_class_unregister_calls;
+static unsigned int istream_stub_create_count;
+static unsigned int istream_stub_unref_count;
+static unsigned int istream_stub_live_count;
 
 struct mailbox_list_sink
 {
@@ -341,6 +344,8 @@ i_stream_create_from_data (const void *data, size_t size)
   stream->data = (void *) data;
   stream->size = size;
   stream->owns_data = false;
+  istream_stub_create_count++;
+  istream_stub_live_count++;
   return stream;
 }
 
@@ -374,4 +379,32 @@ i_stream_unref (struct istream **stream)
     free ((*stream)->data);
   free (*stream);
   *stream = NULL;
+  istream_stub_unref_count++;
+  istream_stub_live_count--;
+}
+
+void
+istream_stub_reset_counts (void)
+{
+  istream_stub_create_count = 0;
+  istream_stub_unref_count = 0;
+  istream_stub_live_count = 0;
+}
+
+unsigned int
+istream_stub_get_create_count (void)
+{
+  return istream_stub_create_count;
+}
+
+unsigned int
+istream_stub_get_unref_count (void)
+{
+  return istream_stub_unref_count;
+}
+
+unsigned int
+istream_stub_get_live_count (void)
+{
+  return istream_stub_live_count;
 }

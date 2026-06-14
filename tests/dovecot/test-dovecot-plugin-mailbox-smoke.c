@@ -24,6 +24,10 @@ extern int wyrebox_dovecot_loader_shim_mail_storage_class_register_calls;
 extern int wyrebox_dovecot_loader_shim_mail_storage_class_unregister_calls;
 extern void wyrebox_plugin_init (struct module *module);
 extern void wyrebox_plugin_deinit (void);
+extern void istream_stub_reset_counts (void);
+extern unsigned int istream_stub_get_create_count (void);
+extern unsigned int istream_stub_get_unref_count (void);
+extern unsigned int istream_stub_get_live_count (void);
 
 typedef gboolean (*WyreboxDovecotMailboxListPublishFunc) (struct mailbox_list
     * list, const char *name, char hierarchy_delimiter, gboolean selectable,
@@ -511,7 +515,7 @@ fake_server_thread_main (gpointer user_data)
           break;
         }
 
-        if (server->request_count == 2
+        if (server->request_count >= 2
             && server->behavior ==
             FAKE_SERVER_MAILBOX_SELECT_THEN_UID_MAP_THEN_FETCH_RESPONSE) {
           request_id = assert_decoded_message_fetch_request (request,
@@ -586,7 +590,8 @@ static void
 fake_server_start (FakeServer *server, const char *socket_path,
     FakeServerBehavior behavior,
     const char *uid_map_csv, const char *expected_uid_map_mailbox_id,
-    WyreboxDaemonMailboxListEntryKind expected_uid_map_kind)
+    WyreboxDaemonMailboxListEntryKind expected_uid_map_kind,
+    guint expected_request_count_override)
 {
   g_autoptr (GError) error = NULL;
   g_autoptr (GSocketAddress) address = NULL;
@@ -605,6 +610,9 @@ fake_server_start (FakeServer *server, const char *socket_path,
       behavior == FAKE_SERVER_MAILBOX_SELECT_THEN_UID_MAP_RESPONSE ? 2 :
       behavior == FAKE_SERVER_MAILBOX_SELECT_THEN_UID_MAP_THEN_FETCH_RESPONSE
       ? 3 : 1;
+  if (expected_request_count_override > 0) {
+    server->expected_request_count = expected_request_count_override;
+  }
 
   address = g_unix_socket_address_new (socket_path);
   g_assert_true (g_socket_listener_add_address (server->listener, address,
@@ -612,6 +620,16 @@ fake_server_start (FakeServer *server, const char *socket_path,
   g_assert_no_error (error);
   server->thread = g_thread_new ("wyrebox-plugin-mailbox-smoke-server",
       fake_server_thread_main, server);
+}
+
+static void
+fake_server_start_default (FakeServer *server, const char *socket_path,
+    FakeServerBehavior behavior,
+    const char *uid_map_csv, const char *expected_uid_map_mailbox_id,
+    WyreboxDaemonMailboxListEntryKind expected_uid_map_kind)
+{
+  fake_server_start (server, socket_path, behavior, uid_map_csv,
+      expected_uid_map_mailbox_id, expected_uid_map_kind, 0);
 }
 
 static void
@@ -690,6 +708,43 @@ close_unload_box_and_plugin (struct mail_storage *storage, struct mailbox *box)
   wyrebox_plugin_deinit ();
   g_assert_true (wyrebox_dovecot_loader_shim_mail_storage_class_unregister_calls
       > 0);
+}
+
+static struct mail *
+alloc_test_mail (struct mailbox *box, unsigned int uid)
+{
+  struct mailbox_transaction_context transaction = {
+    .box = box,
+  };
+  struct mail *mail;
+
+  g_assert_nonnull (box);
+  g_assert_nonnull (box->mail_vfuncs);
+  g_assert_nonnull (box->v.mail_alloc);
+
+  mail = box->v.mail_alloc (&transaction, MAIL_FETCH_FIELD_NONE, NULL);
+  g_assert_nonnull (mail);
+  mail->box = box;
+  mail->uid = uid;
+  mail->v = box->mail_vfuncs;
+  return mail;
+}
+
+static void
+close_free_test_mail (struct mail **mail)
+{
+  g_assert_nonnull (mail);
+
+  if (*mail == NULL) {
+    return;
+  }
+
+  g_assert_nonnull ((*mail)->v);
+  g_assert_nonnull ((*mail)->v->close);
+  g_assert_nonnull ((*mail)->v->free);
+  (*mail)->v->close (*mail);
+  (*mail)->v->free (*mail);
+  *mail = NULL;
 }
 
 static void
@@ -1152,7 +1207,7 @@ test_list_iter_next_yields_daemon_mailboxes (void)
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
   g_autofree char *socket_path_local = make_socket_path (&socket_root);
-  fake_server_start (&server, socket_path_local,
+  fake_server_start_default (&server, socket_path_local,
       FAKE_SERVER_MAILBOX_LIST_RESPONSE, NULL, NULL,
       WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
   socket_path = g_steal_pointer (&socket_path_local);
@@ -1224,7 +1279,7 @@ test_list_iter_empty_daemon_result_is_clean (void)
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
   g_autofree char *socket_path_local = make_socket_path (&socket_root);
-  fake_server_start (&server, socket_path_local,
+  fake_server_start_default (&server, socket_path_local,
       FAKE_SERVER_EMPTY_MAILBOX_LIST_RESPONSE, NULL, NULL,
       WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
   socket_path = g_steal_pointer (&socket_path_local);
@@ -1270,7 +1325,7 @@ test_list_iter_daemon_error_is_clean_failure (void)
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
   g_autofree char *socket_path_local = make_socket_path (&socket_root);
-  fake_server_start (&server, socket_path_local,
+  fake_server_start_default (&server, socket_path_local,
       FAKE_SERVER_MAILBOX_LIST_ERROR_RESPONSE, NULL, NULL,
       WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
   socket_path = g_steal_pointer (&socket_path_local);
@@ -1354,7 +1409,7 @@ test_list_iter_deinit_after_partial_iteration (void)
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
   g_autofree char *socket_path_local = make_socket_path (&socket_root);
-  fake_server_start (&server, socket_path_local,
+  fake_server_start_default (&server, socket_path_local,
       FAKE_SERVER_MAILBOX_LIST_RESPONSE, NULL, NULL,
       WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
   socket_path = g_steal_pointer (&socket_path_local);
@@ -1402,7 +1457,7 @@ assert_list_iter_names_from_fake_server (const char *const *patterns,
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
   g_autofree char *socket_path_local = make_socket_path (&socket_root);
-  fake_server_start (&server, socket_path_local,
+  fake_server_start_default (&server, socket_path_local,
       FAKE_SERVER_MAILBOX_LIST_WILDCARD_RESPONSE, NULL, NULL,
       WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
   socket_path = g_steal_pointer (&socket_path_local);
@@ -1499,7 +1554,7 @@ assert_list_iter_single_entry_flags (const char *pattern,
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
   g_autofree char *socket_path_local = make_socket_path (&socket_root);
-  fake_server_start (&server, socket_path_local,
+  fake_server_start_default (&server, socket_path_local,
       FAKE_SERVER_MAILBOX_LIST_RESPONSE, NULL, NULL,
       WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
   socket_path = g_steal_pointer (&socket_path_local);
@@ -1580,7 +1635,7 @@ test_open_and_get_status_after_open (void)
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
   g_autofree char *socket_path_local = make_socket_path (&socket_root);
-  fake_server_start (&server, socket_path_local,
+  fake_server_start_default (&server, socket_path_local,
       FAKE_SERVER_MAILBOX_SELECT_THEN_UID_MAP_RESPONSE, uid_map_csv,
       "view-projects", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
   socket_path = g_steal_pointer (&socket_path_local);
@@ -1631,7 +1686,7 @@ test_lazy_status_before_open (void)
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
   g_autofree char *socket_path_local = make_socket_path (&socket_root);
-  fake_server_start (&server, socket_path_local,
+  fake_server_start_default (&server, socket_path_local,
       FAKE_SERVER_MAILBOX_SELECT_THEN_UID_MAP_RESPONSE, uid_map_csv,
       "view-projects", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
   socket_path = g_steal_pointer (&socket_path_local);
@@ -1672,7 +1727,7 @@ assert_virtual_uid_fetch_message_sizes (const guint8 *message_bytes,
   FakeServer server = { 0 };
   struct mailbox *box = NULL;
   struct mail_storage *storage = NULL;
-  struct mail mail = { 0 };
+  struct mail *mail = NULL;
   struct istream *stream = NULL;
   struct message_size hdr_size = { 0 };
   struct message_size body_size = { 0 };
@@ -1685,10 +1740,11 @@ assert_virtual_uid_fetch_message_sizes (const guint8 *message_bytes,
   g_autofree char *socket_path_local = make_socket_path (&socket_root);
   fake_server_start (&server, socket_path_local,
       FAKE_SERVER_MAILBOX_SELECT_THEN_UID_MAP_THEN_FETCH_RESPONSE, uid_map_csv,
-      "view-projects", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
+      "view-projects", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL, 4);
   server.fetch_payload = message_bytes;
   server.fetch_payload_size = message_size;
   socket_path = g_steal_pointer (&socket_path_local);
+  istream_stub_reset_counts ();
 
   wyrebox_dovecot_test_daemon_socket_path = socket_path;
   storage_class = init_plugin_and_get_storage_class ();
@@ -1698,10 +1754,8 @@ assert_virtual_uid_fetch_message_sizes (const guint8 *message_bytes,
   g_assert_nonnull (box->mail_vfuncs);
   g_assert_nonnull (box->mail_vfuncs->get_stream);
 
-  mail.box = box;
-  mail.uid = 42;
-  mail.v = box->mail_vfuncs;
-  g_assert_cmpint (mail.v->get_stream (&mail, true, &hdr_size, &body_size,
+  mail = alloc_test_mail (box, 42);
+  g_assert_cmpint (mail->v->get_stream (mail, true, &hdr_size, &body_size,
           &stream), ==, 0);
   g_assert_nonnull (stream);
   g_assert_cmpuint (stream->size, ==, message_size);
@@ -1713,10 +1767,37 @@ assert_virtual_uid_fetch_message_sizes (const guint8 *message_bytes,
   g_assert_cmpuint (body_size.physical_size, ==, expected_body_physical_size);
   g_assert_cmpuint (body_size.virtual_size, ==, expected_body_virtual_size);
   g_assert_cmpuint (body_size.lines, ==, expected_body_lines);
-  i_stream_unref (&stream);
+  g_assert_cmpuint (istream_stub_get_create_count (), ==, 1);
+  g_assert_cmpuint (istream_stub_get_unref_count (), ==, 0);
+  g_assert_cmpuint (istream_stub_get_live_count (), ==, 1);
+
+  stream = NULL;
+  memset (&hdr_size, 0, sizeof (hdr_size));
+  memset (&body_size, 0, sizeof (body_size));
+  g_assert_cmpint (mail->v->get_stream (mail, true, &hdr_size, &body_size,
+          &stream), ==, 0);
+  g_assert_nonnull (stream);
+  g_assert_cmpuint (stream->size, ==, message_size);
+  g_assert_true (stream->owns_data);
+  g_assert_cmpmem (stream->data, stream->size, message_bytes, message_size);
+  g_assert_cmpuint (hdr_size.physical_size, ==, expected_hdr_physical_size);
+  g_assert_cmpuint (hdr_size.virtual_size, ==, expected_hdr_virtual_size);
+  g_assert_cmpuint (hdr_size.lines, ==, expected_hdr_lines);
+  g_assert_cmpuint (body_size.physical_size, ==, expected_body_physical_size);
+  g_assert_cmpuint (body_size.virtual_size, ==, expected_body_virtual_size);
+  g_assert_cmpuint (body_size.lines, ==, expected_body_lines);
+  g_assert_cmpuint (istream_stub_get_create_count (), ==, 2);
+  g_assert_cmpuint (istream_stub_get_unref_count (), ==, 1);
+  g_assert_cmpuint (istream_stub_get_live_count (), ==, 1);
+
+  close_free_test_mail (&mail);
+  stream = NULL;
+  g_assert_cmpuint (istream_stub_get_create_count (), ==, 2);
+  g_assert_cmpuint (istream_stub_get_unref_count (), ==, 2);
+  g_assert_cmpuint (istream_stub_get_live_count (), ==, 0);
 
   fake_server_join (&server);
-  g_assert_cmpuint (server.request_count, ==, 3);
+  g_assert_cmpuint (server.request_count, ==, 4);
   remove_tree (socket_root);
 
   wyrebox_dovecot_test_daemon_socket_path = NULL;
@@ -1755,7 +1836,7 @@ test_uid_fetch_unknown_uid_fails_without_daemon_fetch (void)
   FakeServer server = { 0 };
   struct mailbox *box = NULL;
   struct mail_storage *storage = NULL;
-  struct mail mail = { 0 };
+  struct mail *mail = NULL;
   struct istream *stream = NULL;
   const char *uid_map_csv =
       "account_id,view_id,uidvalidity,uid,message_id,object_id,rule_version_hash\n"
@@ -1764,7 +1845,7 @@ test_uid_fetch_unknown_uid_fails_without_daemon_fetch (void)
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
   g_autofree char *socket_path_local = make_socket_path (&socket_root);
-  fake_server_start (&server, socket_path_local,
+  fake_server_start_default (&server, socket_path_local,
       FAKE_SERVER_MAILBOX_SELECT_THEN_UID_MAP_RESPONSE, uid_map_csv,
       "view-projects", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
   socket_path = g_steal_pointer (&socket_path_local);
@@ -1776,13 +1857,16 @@ test_uid_fetch_unknown_uid_fails_without_daemon_fetch (void)
   g_assert_cmpint (box->v.open (box), ==, 0);
   fake_server_join (&server);
   g_assert_cmpuint (server.request_count, ==, 2);
+  istream_stub_reset_counts ();
 
-  mail.box = box;
-  mail.uid = 999;
-  mail.v = box->mail_vfuncs;
-  g_assert_cmpint (mail.v->get_stream (&mail, true, NULL, NULL, &stream), ==,
+  mail = alloc_test_mail (box, 999);
+  g_assert_cmpint (mail->v->get_stream (mail, true, NULL, NULL, &stream), ==,
       -1);
   g_assert_null (stream);
+  close_free_test_mail (&mail);
+  g_assert_cmpuint (istream_stub_get_create_count (), ==, 0);
+  g_assert_cmpuint (istream_stub_get_unref_count (), ==, 0);
+  g_assert_cmpuint (istream_stub_get_live_count (), ==, 0);
   remove_tree (socket_root);
 
   wyrebox_dovecot_test_daemon_socket_path = NULL;
@@ -1830,7 +1914,7 @@ test_open_fails_with_daemon_error (void)
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
   g_autofree char *socket_path_local = make_socket_path (&socket_root);
-  fake_server_start (&server, socket_path_local,
+  fake_server_start_default (&server, socket_path_local,
       FAKE_SERVER_DAEMON_ERROR_RESPONSE, NULL, NULL,
       WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
   socket_path = g_steal_pointer (&socket_path_local);
