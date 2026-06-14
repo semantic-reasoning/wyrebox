@@ -3,6 +3,7 @@
 #include "wyrebox-daemon-message-fetch-request.h"
 #include "wyrebox-daemon-request-identity.h"
 #include "wyrebox-daemon-response-frame.h"
+#include "wyrebox-delivery-fetcher.h"
 
 #include <glib-object.h>
 
@@ -29,6 +30,10 @@ WyreboxDaemonMessageFetchService *wyrebox_daemon_message_fetch_service_new (
     WyreboxDaemonMessageFetchServiceFunc func,
     gpointer user_data,
     GDestroyNotify user_data_destroy);
+
+WyreboxDaemonMessageFetchService *
+wyrebox_daemon_message_fetch_service_new_for_fetcher (
+    WyreboxDeliveryFetcher *fetcher);
 
 gboolean wyrebox_daemon_message_fetch_service_handle_identity (
     WyreboxDaemonMessageFetchService *self,
