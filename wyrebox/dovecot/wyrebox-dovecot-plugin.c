@@ -97,6 +97,44 @@ wyrebox_dovecot_mailbox_list_previous_vfuncs (struct mailbox_list *list)
   return NULL;
 }
 
+static gboolean
+wyrebox_dovecot_mailbox_list_restore_hook (struct mailbox_list *list,
+    struct mailbox_list_vfuncs *previous_vfuncs_r)
+{
+  WyreboxDovecotMailboxListHookContext *context;
+
+  context = wyrebox_dovecot_mailbox_list_hook_context_lookup (list);
+  if (context == NULL) {
+    return FALSE;
+  }
+
+  if (previous_vfuncs_r != NULL) {
+    *previous_vfuncs_r = context->previous_vfuncs;
+  }
+
+  list->v = context->previous_vfuncs;
+  list->vlast = context->previous_vlast;
+  g_hash_table_remove (wyrebox_dovecot_mailbox_list_hook_contexts, list);
+  return TRUE;
+}
+
+static void
+wyrebox_dovecot_mailbox_list_restore_all_hooks (void)
+{
+  while (wyrebox_dovecot_mailbox_list_hook_contexts != NULL
+      && g_hash_table_size (wyrebox_dovecot_mailbox_list_hook_contexts) > 0) {
+    GHashTableIter iter;
+    gpointer list = NULL;
+
+    g_hash_table_iter_init (&iter, wyrebox_dovecot_mailbox_list_hook_contexts);
+    if (!g_hash_table_iter_next (&iter, &list, NULL)) {
+      break;
+    }
+
+    wyrebox_dovecot_mailbox_list_restore_hook (list, NULL);
+  }
+}
+
 static struct mailbox_list_iterate_context *
 wyrebox_dovecot_mailbox_list_iter_init (struct mailbox_list *list,
     const char *const *patterns, enum mailbox_list_iter_flags flags)
@@ -150,20 +188,11 @@ wyrebox_dovecot_mailbox_list_iter_deinit (struct
 static void
 wyrebox_dovecot_mailbox_list_deinit (struct mailbox_list *list)
 {
-  WyreboxDovecotMailboxListHookContext *context;
-  struct mailbox_list_vfuncs previous_vfuncs;
-  struct mailbox_list_vfuncs *previous_vlast;
+  struct mailbox_list_vfuncs previous_vfuncs = { 0 };
 
-  context = wyrebox_dovecot_mailbox_list_hook_context_lookup (list);
-  if (context == NULL) {
+  if (!wyrebox_dovecot_mailbox_list_restore_hook (list, &previous_vfuncs)) {
     return;
   }
-
-  previous_vfuncs = context->previous_vfuncs;
-  previous_vlast = context->previous_vlast;
-  list->v = previous_vfuncs;
-  list->vlast = previous_vlast;
-  g_hash_table_remove (wyrebox_dovecot_mailbox_list_hook_contexts, list);
 
   if (previous_vfuncs.deinit != NULL) {
     previous_vfuncs.deinit (list);
@@ -635,6 +664,7 @@ wyrebox_plugin_init (struct module *module)
 WYREBOX_DOVECOT_PLUGIN_EXPORT void
 wyrebox_plugin_deinit (void)
 {
+  wyrebox_dovecot_mailbox_list_restore_all_hooks ();
   g_clear_pointer (&wyrebox_dovecot_mailbox_list_hook_contexts,
       g_hash_table_unref);
   mail_storage_class_unregister (&wyrebox_mail_storage_class);

@@ -519,6 +519,119 @@ test_registered_storage_installs_add_list_hooks_without_socket_io (void)
 }
 
 static void
+assert_mailbox_list_vfuncs_restored (struct mailbox_list *list,
+    const struct mailbox_list_vfuncs *original_vfuncs,
+    struct mailbox_list_vfuncs *original_vlast)
+{
+  g_assert_true (list->v.iter_init == original_vfuncs->iter_init);
+  g_assert_true (list->v.iter_next == original_vfuncs->iter_next);
+  g_assert_true (list->v.iter_deinit == original_vfuncs->iter_deinit);
+  g_assert_true (list->v.deinit == original_vfuncs->deinit);
+  g_assert_true (list->vlast == original_vlast);
+}
+
+static void
+assert_mailbox_list_uses_original_vfuncs_as_sink (struct mailbox_list *list,
+    const struct mailbox_list_vfuncs *original_vfuncs,
+    struct mailbox_list_vfuncs *original_vlast)
+{
+  g_assert_true (list->v.iter_init != original_vfuncs->iter_init);
+  g_assert_true (list->v.iter_next != original_vfuncs->iter_next);
+  g_assert_true (list->v.iter_deinit != original_vfuncs->iter_deinit);
+  g_assert_true (list->v.deinit != original_vfuncs->deinit);
+  g_assert_nonnull (list->vlast);
+  g_assert_true (list->vlast != original_vlast);
+  g_assert_true (list->vlast->iter_init == original_vfuncs->iter_init);
+  g_assert_true (list->vlast->iter_next == original_vfuncs->iter_next);
+  g_assert_true (list->vlast->iter_deinit == original_vfuncs->iter_deinit);
+  g_assert_true (list->vlast->deinit == original_vfuncs->deinit);
+}
+
+static void
+test_plugin_deinit_restores_list_hooks_before_list_deinit (void)
+{
+  struct mailbox_list *list = NULL;
+  struct mail_storage *storage_class = NULL;
+  struct mailbox_list_vfuncs original_vfuncs;
+  struct mailbox_list_vfuncs *original_vlast = NULL;
+
+  storage_class = init_plugin_and_get_storage_class ();
+  g_assert_nonnull (storage_class->v.add_list);
+
+  list = mailbox_list_sink_alloc ();
+  g_assert_nonnull (list);
+
+  original_vfuncs = list->v;
+  original_vlast = list->vlast;
+
+  storage_class->v.add_list (storage_class, list);
+  assert_mailbox_list_uses_original_vfuncs_as_sink (list, &original_vfuncs,
+      original_vlast);
+
+  wyrebox_plugin_deinit ();
+  g_assert_true (wyrebox_dovecot_loader_shim_mail_storage_class_unregister_calls
+      > 0);
+  g_assert_cmpuint (mailbox_list_sink_get_original_deinit_calls (list), ==, 0);
+  assert_mailbox_list_vfuncs_restored (list, &original_vfuncs, original_vlast);
+
+  list->v.deinit (list);
+  g_assert_cmpuint (mailbox_list_sink_get_original_deinit_calls (list), ==, 1);
+
+  mailbox_list_sink_free (list);
+}
+
+static void
+test_plugin_reload_rehooks_same_list_with_original_sink_vfuncs (void)
+{
+  const char *patterns[] = { "*", NULL };
+  struct mailbox_list *list = NULL;
+  struct mailbox_list_iterate_context *ctx = NULL;
+  struct mail_storage *storage_class = NULL;
+  struct mailbox_list_vfuncs original_vfuncs;
+  struct mailbox_list_vfuncs *original_vlast = NULL;
+
+  storage_class = init_plugin_and_get_storage_class ();
+  g_assert_nonnull (storage_class->v.add_list);
+
+  list = mailbox_list_sink_alloc ();
+  g_assert_nonnull (list);
+
+  original_vfuncs = list->v;
+  original_vlast = list->vlast;
+
+  storage_class->v.add_list (storage_class, list);
+  wyrebox_plugin_deinit ();
+  assert_mailbox_list_vfuncs_restored (list, &original_vfuncs, original_vlast);
+
+  storage_class = init_plugin_and_get_storage_class ();
+  g_assert_nonnull (storage_class->v.add_list);
+
+  storage_class->v.add_list (storage_class, list);
+  assert_mailbox_list_uses_original_vfuncs_as_sink (list, &original_vfuncs,
+      original_vlast);
+
+  ctx = list->v.iter_init (list, patterns, MAILBOX_LIST_ITER_RETURN_CHILDREN);
+  g_assert_nonnull (ctx);
+  g_assert_cmpuint (mailbox_list_sink_get_original_iter_init_calls (list), ==,
+      1);
+  g_assert_null (list->v.iter_next (ctx));
+  g_assert_cmpuint (mailbox_list_sink_get_original_iter_next_calls (list), ==,
+      1);
+  g_assert_cmpint (list->v.iter_deinit (ctx), ==, 0);
+  g_assert_cmpuint (mailbox_list_sink_get_original_iter_deinit_calls (list),
+      ==, 1);
+
+  list->v.deinit (list);
+  g_assert_cmpuint (mailbox_list_sink_get_original_deinit_calls (list), ==, 1);
+
+  mailbox_list_sink_free (list);
+
+  wyrebox_plugin_deinit ();
+  g_assert_true (wyrebox_dovecot_loader_shim_mail_storage_class_unregister_calls
+      > 0);
+}
+
+static void
 test_mailbox_list_sink_captures_published_entries (void)
 {
   struct mailbox_list *list = NULL;
@@ -940,6 +1053,10 @@ main (int argc, char **argv)
 
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/storage-add-list-hooks",
       test_registered_storage_installs_add_list_hooks_without_socket_io);
+  g_test_add_func ("/dovecot/plugin-mailbox-smoke/unload-restores-list-hooks",
+      test_plugin_deinit_restores_list_hooks_before_list_deinit);
+  g_test_add_func ("/dovecot/plugin-mailbox-smoke/reload-rehooks-list",
+      test_plugin_reload_rehooks_same_list_with_original_sink_vfuncs);
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/list-sink-captures-entries",
       test_mailbox_list_sink_captures_published_entries);
   g_test_add_func ("/dovecot/plugin-mailbox-smoke/list-publish-maps-entries",
