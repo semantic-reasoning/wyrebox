@@ -525,6 +525,10 @@ def main() -> None:
         raise AssertionError(
             "plugin source contract failed: iter_init must perform daemon LIST"
         )
+    iter_append_body = function_body(
+        "wyrebox_dovecot_mailbox_list_iter_append_entry", text)
+    iter_flags_body = function_body(
+        "wyrebox_dovecot_mailbox_list_flags_from_entry", text)
     for required_fragment in [
         "hook_context->socket_path",
         "hook_context->account_identity",
@@ -550,6 +554,37 @@ def main() -> None:
             raise AssertionError(
                 "plugin source contract failed: daemon LIST entry mapping "
                 f"missing fragment: {required_fragment}"
+            )
+    for required_fragment in [
+        "wyrebox_dovecot_mailbox_list_pattern_matches",
+        "wyrebox_dovecot_map_mailbox_list_child_state (entry->child_state",
+        "g_steal_pointer (&entries)",
+        "context->entries = g_steal_pointer (&entries);",
+        "context->n_entries = n_published_entries;",
+    ]:
+        if required_fragment not in iter_init_body:
+            raise AssertionError(
+                "plugin source contract failed: daemon LIST iterator missing "
+                f"validation/filter publication fragment: {required_fragment}"
+            )
+    for required_fragment in [
+        "wyrebox_dovecot_map_mailbox_list_child_state (entry->child_state",
+        "MAILBOX_LIST_ITER_RETURN_NO_FLAGS",
+        "MAILBOX_LIST_ITER_RETURN_SPECIALUSE",
+    ]:
+        if required_fragment not in iter_append_body:
+            raise AssertionError(
+                "plugin source contract failed: daemon LIST iterator mapper "
+                f"missing flag/child-state fragment: {required_fragment}"
+            )
+    for required_fragment in [
+        "MAILBOX_LIST_ITER_RETURN_NO_FLAGS",
+        "MAILBOX_LIST_ITER_RETURN_CHILDREN",
+    ]:
+        if required_fragment not in iter_flags_body:
+            raise AssertionError(
+                "plugin source contract failed: daemon LIST iterator flags "
+                f"missing return-flag fragment: {required_fragment}"
             )
     require(
         r"\.v\s*=\s*\{[\s\S]*?\.add_list\s*=\s*"
