@@ -31,6 +31,7 @@ struct event *event_create (struct event *parent);
 void event_unref (struct event **event);
 void p_array_init (array_t * array, pool_t pool, unsigned int count);
 struct istream *i_stream_create_from_data (const void *data, size_t size);
+struct istream *i_stream_create_copy_from_data (const void *data, size_t size);
 
 #define p_new(pool, type, count) ((type *) p_malloc ((pool), sizeof(type) * (count)))
 

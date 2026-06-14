@@ -88,6 +88,19 @@ def main() -> None:
         "Dovecot daemon client include",
     )
     require(
+        r"struct\s+istream\s+\*i_stream_create_copy_from_data\s*"
+        r"\(\s*const\s+void\s+\*data,\s*size_t\s+size\s*\);",
+        text,
+        "owned-copy istream constructor declaration",
+    )
+    require(
+        r"wyrebox_dovecot_mail_get_stream\s*\(\s*struct\s+mail\s+\*mail,\s*"
+        r"bool\s+get_body,\s*struct\s+message_size\s+\*hdr_size,\s*"
+        r"struct\s+message_size\s+\*body_size,\s*struct\s+istream\s+\*\*stream\s*\)",
+        text,
+        "get_stream signature with message size outputs",
+    )
+    require(
         r"struct\s+wyrebox_dovecot_storage\s*\{\s*"
         r"struct\s+mail_storage\s+storage;",
         text,
@@ -312,6 +325,25 @@ def main() -> None:
             raise AssertionError(
                 "plugin source contract failed: mailbox open must not use "
                 f"unsupported daemon helper path: {forbidden_call}"
+            )
+    get_stream_body = function_body("wyrebox_dovecot_mail_get_stream", text)
+    if "i_stream_create_copy_from_data (data, size)" not in get_stream_body:
+        raise AssertionError(
+            "plugin source contract failed: get_stream must copy daemon bytes "
+            "into the returned stream"
+        )
+    if "i_stream_create_from_data" in get_stream_body:
+        raise AssertionError(
+            "plugin source contract failed: get_stream must not return a "
+            "borrowed daemon byte stream"
+        )
+    for required_fragment in [
+        "wyrebox_dovecot_message_size_scan (data, size, hdr_size, body_size)",
+    ]:
+        if required_fragment not in get_stream_body:
+            raise AssertionError(
+                "plugin source contract failed: get_stream missing size "
+                f"fragment: {required_fragment}"
             )
     require(
         r"wyrebox_dovecot_mailbox_get_status\s*\(\s*struct\s+mailbox\s+\*box\s*,"

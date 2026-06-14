@@ -1661,7 +1661,11 @@ test_lazy_status_before_open (void)
 }
 
 static void
-test_virtual_uid_fetch_uses_derived_view_namespace (void)
+assert_virtual_uid_fetch_message_sizes (const guint8 *message_bytes,
+    gsize message_size, uoff_t expected_hdr_physical_size,
+    uoff_t expected_hdr_virtual_size, unsigned int expected_hdr_lines,
+    uoff_t expected_body_physical_size, uoff_t expected_body_virtual_size,
+    unsigned int expected_body_lines)
 {
   g_autofree char *socket_root = NULL;
   g_autofree char *socket_path = NULL;
@@ -1670,10 +1674,8 @@ test_virtual_uid_fetch_uses_derived_view_namespace (void)
   struct mail_storage *storage = NULL;
   struct mail mail = { 0 };
   struct istream *stream = NULL;
-  const guint8 message_bytes[] =
-      "From: sender@example.test\r\n"
-      "Message-ID: <message-1@example.test>\r\n"
-      "Subject: Virtual fetch\r\n" "\r\n" "Exact RFC 5322 bytes.\r\n";
+  struct message_size hdr_size = { 0 };
+  struct message_size body_size = { 0 };
   const char *uid_map_csv =
       "account_id,view_id,uidvalidity,uid,message_id,object_id,rule_version_hash\n"
       "account-1,view-projects,77,42,message-1,object-1,hash-1\n";
@@ -1685,7 +1687,7 @@ test_virtual_uid_fetch_uses_derived_view_namespace (void)
       FAKE_SERVER_MAILBOX_SELECT_THEN_UID_MAP_THEN_FETCH_RESPONSE, uid_map_csv,
       "view-projects", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
   server.fetch_payload = message_bytes;
-  server.fetch_payload_size = sizeof (message_bytes) - 1;
+  server.fetch_payload_size = message_size;
   socket_path = g_steal_pointer (&socket_path_local);
 
   wyrebox_dovecot_test_daemon_socket_path = socket_path;
@@ -1699,12 +1701,18 @@ test_virtual_uid_fetch_uses_derived_view_namespace (void)
   mail.box = box;
   mail.uid = 42;
   mail.v = box->mail_vfuncs;
-  g_assert_cmpint (mail.v->get_stream (&mail, TRUE, NULL, NULL, &stream), ==,
-      0);
+  g_assert_cmpint (mail.v->get_stream (&mail, true, &hdr_size, &body_size,
+          &stream), ==, 0);
   g_assert_nonnull (stream);
-  g_assert_cmpuint (stream->size, ==, sizeof (message_bytes) - 1);
-  g_assert_cmpmem (stream->data, stream->size,
-      message_bytes, sizeof (message_bytes) - 1);
+  g_assert_cmpuint (stream->size, ==, message_size);
+  g_assert_true (stream->owns_data);
+  g_assert_cmpmem (stream->data, stream->size, message_bytes, message_size);
+  g_assert_cmpuint (hdr_size.physical_size, ==, expected_hdr_physical_size);
+  g_assert_cmpuint (hdr_size.virtual_size, ==, expected_hdr_virtual_size);
+  g_assert_cmpuint (hdr_size.lines, ==, expected_hdr_lines);
+  g_assert_cmpuint (body_size.physical_size, ==, expected_body_physical_size);
+  g_assert_cmpuint (body_size.virtual_size, ==, expected_body_virtual_size);
+  g_assert_cmpuint (body_size.lines, ==, expected_body_lines);
   i_stream_unref (&stream);
 
   fake_server_join (&server);
@@ -1716,6 +1724,27 @@ test_virtual_uid_fetch_uses_derived_view_namespace (void)
 #else
   g_test_skip ("CAPNP serialization is disabled");
 #endif
+}
+
+static void
+test_virtual_uid_fetch_uses_derived_view_namespace (void)
+{
+  const guint8 crlf_message_bytes[] =
+      "From: sender@example.test\r\n"
+      "Message-ID: <message-1@example.test>\r\n"
+      "Subject: Virtual fetch\r\n" "\r\n" "Exact RFC 5322 bytes.\r\n";
+  const guint8 lf_message_bytes[] =
+      "From: sender@example.test\n"
+      "Subject: LF fetch\n" "\n" "Body one\n" "Body two\n";
+  const guint8 header_only_message_bytes[] =
+      "From: sender@example.test\n" "Subject: No separator\n";
+
+  assert_virtual_uid_fetch_message_sizes (crlf_message_bytes,
+      sizeof (crlf_message_bytes) - 1, 91, 91, 4, 23, 23, 1);
+  assert_virtual_uid_fetch_message_sizes (lf_message_bytes,
+      sizeof (lf_message_bytes) - 1, 45, 48, 3, 18, 20, 2);
+  assert_virtual_uid_fetch_message_sizes (header_only_message_bytes,
+      sizeof (header_only_message_bytes) - 1, 48, 50, 2, 0, 0, 0);
 }
 
 static void
@@ -1751,7 +1780,7 @@ test_uid_fetch_unknown_uid_fails_without_daemon_fetch (void)
   mail.box = box;
   mail.uid = 999;
   mail.v = box->mail_vfuncs;
-  g_assert_cmpint (mail.v->get_stream (&mail, TRUE, NULL, NULL, &stream), ==,
+  g_assert_cmpint (mail.v->get_stream (&mail, true, NULL, NULL, &stream), ==,
       -1);
   g_assert_null (stream);
   remove_tree (socket_root);

@@ -22,7 +22,12 @@ struct mail_search_args;
 struct mailbox_header_lookup_ctx;
 struct message_part;
 struct mail_keywords;
-struct message_size;
+struct message_size
+{
+  uoff_t physical_size;
+  uoff_t virtual_size;
+  unsigned int lines;
+};
 struct istream;
 struct mail_save_context;
 struct mail_index_transaction_commit_result;
@@ -146,7 +151,7 @@ struct mailbox_vfuncs
 
 struct mail_vfuncs
 {
-  int (*get_stream) (struct mail * mail, int get_body,
+  int (*get_stream) (struct mail * mail, bool get_body,
       struct message_size * hdr_size,
       struct message_size * body_size, struct istream ** stream);
   void (*update_flags) (struct mail * mail, int modify_type, int flags);
@@ -193,6 +198,7 @@ struct istream
 {
   void *data;
   unsigned int size;
+  bool owns_data;
 };
 
 struct mail
