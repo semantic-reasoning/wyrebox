@@ -106,12 +106,89 @@ parse_event_type (const guint8 *event_type_data,
       continue;
 
     if (g_strcmp0 (canonical, event_type) == 0) {
-      *out_event_type = (WyreboxJournalEventType) index;
+      if (out_event_type != NULL)
+        *out_event_type = (WyreboxJournalEventType) index;
       return TRUE;
     }
   }
 
   return FALSE;
+}
+
+static gsize
+max_event_type_len (void)
+{
+  gsize max_len = 0;
+
+  for (guint index = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
+      index <= WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED; index++) {
+    const gchar *canonical = wyrebox_journal_event_type_to_string (index);
+
+    if (canonical != NULL)
+      max_len = MAX (max_len, strlen (canonical));
+  }
+
+  return max_len;
+}
+
+static gboolean
+pread_exact (int fd, guint64 offset, void *data, gsize size, GError **error)
+{
+  guint8 *cursor = data;
+  gsize remaining = size;
+
+  while (remaining > 0) {
+    ssize_t read_count = 0;
+
+    if (offset > G_MAXINT64) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "journal offset %" G_GUINT64_FORMAT " is too large", offset);
+      return FALSE;
+    }
+
+    read_count = pread (fd, cursor, remaining, (off_t) offset);
+    if (read_count < 0) {
+      int saved_errno = errno;
+
+      if (saved_errno == EINTR)
+        continue;
+
+      g_set_error (error,
+          G_IO_ERROR,
+          g_io_error_from_errno (saved_errno),
+          "failed to read journal segment: %s", g_strerror (saved_errno));
+      return FALSE;
+    }
+
+    if (read_count == 0) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "failed to read complete journal record: truncated");
+      return FALSE;
+    }
+
+    cursor += (gsize) read_count;
+    offset += (guint64) read_count;
+    remaining -= (gsize) read_count;
+  }
+
+  return TRUE;
+}
+
+static void
+safe_prefix_set_unsafe (WyreboxJournalSafePrefix *prefix,
+    WyreboxJournalSafePrefixStopReason reason,
+    guint64 unsafe_offset, guint64 available_size, guint64 required_size)
+{
+  prefix->reached_eof = FALSE;
+  prefix->unsafe_suffix_found = TRUE;
+  prefix->stop_reason = reason;
+  prefix->unsafe_offset = unsafe_offset;
+  prefix->unsafe_available_size = available_size;
+  prefix->unsafe_required_size = required_size;
 }
 
 static void
@@ -396,6 +473,219 @@ wyrebox_journal_reader_read_next (WyreboxJournalReader *self,
       event_type_len + payload_len;
   self->offset = record_end_offset;
   self->next_sequence++;
+
+  return TRUE;
+}
+
+gboolean
+wyrebox_journal_reader_scan_safe_prefix (WyreboxJournalReader *self,
+    WyreboxJournalSafePrefix *out_prefix, GError **error)
+{
+  WyreboxJournalSafePrefix prefix = { 0 };
+  guint64 offset = 0;
+  guint64 expected_sequence = 1;
+  guint64 file_size = 0;
+  gsize checksum_len = 0;
+  gsize max_event_len = 0;
+
+  g_return_val_if_fail (WYREBOX_IS_JOURNAL_READER (self), FALSE);
+  g_return_val_if_fail (out_prefix != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  prefix.stop_reason = WYREBOX_JOURNAL_SAFE_PREFIX_STOP_EOF;
+
+  if (self->fd < 0) {
+    prefix.reached_eof = TRUE;
+    prefix.stop_reason = WYREBOX_JOURNAL_SAFE_PREFIX_STOP_MISSING_SEGMENT;
+    *out_prefix = prefix;
+    return TRUE;
+  }
+
+  if (self->file_size == 0) {
+    prefix.reached_eof = TRUE;
+    prefix.stop_reason = WYREBOX_JOURNAL_SAFE_PREFIX_STOP_EMPTY_SEGMENT;
+    *out_prefix = prefix;
+    return TRUE;
+  }
+
+  file_size = self->file_size;
+  checksum_len = g_checksum_type_get_length (G_CHECKSUM_SHA256);
+  max_event_len = max_event_type_len ();
+
+  while (offset < file_size) {
+    guint8 header[WYREBOX_JOURNAL_RECORD_HEADER_SIZE] = { 0 };
+    g_autofree guint8 *event_type_data = NULL;
+    g_autofree guint8 *computed_checksum = NULL;
+    g_autoptr (GChecksum) checksum = NULL;
+    guint64 remaining = file_size - offset;
+    guint64 event_type_len64 = 0;
+    guint64 payload_len64 = 0;
+    guint64 record_size = 0;
+    guint64 payload_offset = 0;
+    guint64 payload_remaining = 0;
+    guint16 header_size = 0;
+    guint16 version = 0;
+    guint32 event_len32 = 0;
+    guint64 sequence = 0;
+    gsize digest_len = 0;
+
+    if (remaining < WYREBOX_JOURNAL_RECORD_HEADER_SIZE) {
+      safe_prefix_set_unsafe (&prefix,
+          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_HEADER,
+          offset, remaining, WYREBOX_JOURNAL_RECORD_HEADER_SIZE);
+      *out_prefix = prefix;
+      return TRUE;
+    }
+
+    if (!pread_exact (self->fd, offset, header, sizeof (header), error))
+      return FALSE;
+
+    if (memcmp (header,
+            WYREBOX_JOURNAL_MAGIC, strlen (WYREBOX_JOURNAL_MAGIC)) != 0) {
+      safe_prefix_set_unsafe (&prefix,
+          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_MAGIC, offset, remaining, 0);
+      *out_prefix = prefix;
+      return TRUE;
+    }
+
+    header_size = read_u16_le (header + 8);
+    if (header_size != WYREBOX_JOURNAL_RECORD_HEADER_SIZE) {
+      safe_prefix_set_unsafe (&prefix,
+          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_HEADER_SIZE,
+          offset, remaining, WYREBOX_JOURNAL_RECORD_HEADER_SIZE);
+      *out_prefix = prefix;
+      return TRUE;
+    }
+
+    version = read_u16_le (header + 10);
+    if (version != WYREBOX_JOURNAL_RECORD_VERSION) {
+      safe_prefix_set_unsafe (&prefix,
+          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_VERSION,
+          offset, remaining, 0);
+      *out_prefix = prefix;
+      return TRUE;
+    }
+
+    event_len32 = read_u32_le (header + 12);
+    sequence = read_u64_le (header + 16);
+    payload_len64 = read_u64_le (header + 24);
+
+    if (sequence != expected_sequence) {
+      safe_prefix_set_unsafe (&prefix,
+          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_SEQUENCE,
+          offset, remaining, 0);
+      *out_prefix = prefix;
+      return TRUE;
+    }
+
+    if (payload_len64 > G_MAXSIZE || event_len32 > G_MAXSIZE) {
+      safe_prefix_set_unsafe (&prefix,
+          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_SIZE, offset, remaining, 0);
+      *out_prefix = prefix;
+      return TRUE;
+    }
+
+    event_type_len64 = event_len32;
+    if (event_type_len64 == 0) {
+      safe_prefix_set_unsafe (&prefix,
+          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_ZERO_EVENT_TYPE_LENGTH,
+          offset, remaining, 0);
+      *out_prefix = prefix;
+      return TRUE;
+    }
+
+    if (event_type_len64 >
+        G_MAXUINT64 - WYREBOX_JOURNAL_RECORD_HEADER_SIZE ||
+        payload_len64 >
+        G_MAXUINT64 - WYREBOX_JOURNAL_RECORD_HEADER_SIZE - event_type_len64) {
+      safe_prefix_set_unsafe (&prefix,
+          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_SIZE, offset, remaining, 0);
+      *out_prefix = prefix;
+      return TRUE;
+    }
+
+    record_size = WYREBOX_JOURNAL_RECORD_HEADER_SIZE +
+        event_type_len64 + payload_len64;
+    if (record_size > remaining) {
+      safe_prefix_set_unsafe (&prefix,
+          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_RECORD,
+          offset, remaining, record_size);
+      *out_prefix = prefix;
+      return TRUE;
+    }
+
+    if (event_type_len64 > max_event_len) {
+      safe_prefix_set_unsafe (&prefix,
+          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_UNKNOWN_EVENT_TYPE,
+          offset, record_size, 0);
+      *out_prefix = prefix;
+      return TRUE;
+    }
+
+    event_type_data = g_malloc0 ((gsize) event_type_len64);
+    if (!pread_exact (self->fd,
+            offset + WYREBOX_JOURNAL_RECORD_HEADER_SIZE,
+            event_type_data, (gsize) event_type_len64, error))
+      return FALSE;
+
+    if (!parse_event_type (event_type_data, (gsize) event_type_len64, NULL)) {
+      safe_prefix_set_unsafe (&prefix,
+          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_UNKNOWN_EVENT_TYPE,
+          offset, record_size, 0);
+      *out_prefix = prefix;
+      return TRUE;
+    }
+
+    checksum = g_checksum_new (G_CHECKSUM_SHA256);
+    g_checksum_update (checksum, header, 32);
+    g_checksum_update (checksum,
+        (const guchar *) event_type_data, (gssize) event_type_len64);
+
+    payload_offset = offset + WYREBOX_JOURNAL_RECORD_HEADER_SIZE +
+        event_type_len64;
+    payload_remaining = payload_len64;
+    while (payload_remaining > 0) {
+      guint8 payload_buffer[8192] = { 0 };
+      gsize read_size = payload_remaining > sizeof (payload_buffer) ?
+          sizeof (payload_buffer) : (gsize) payload_remaining;
+
+      if (!pread_exact (self->fd,
+              payload_offset, payload_buffer, read_size, error))
+        return FALSE;
+
+      g_checksum_update (checksum, payload_buffer, (gssize) read_size);
+      payload_offset += read_size;
+      payload_remaining -= read_size;
+    }
+
+    digest_len = checksum_len;
+    computed_checksum = g_malloc (checksum_len);
+    g_checksum_get_digest (checksum, computed_checksum, &digest_len);
+    if (digest_len != checksum_len) {
+      g_set_error (error,
+          G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "unsupported checksum length");
+      return FALSE;
+    }
+
+    if (memcmp (header + 32, computed_checksum, checksum_len) != 0) {
+      safe_prefix_set_unsafe (&prefix,
+          WYREBOX_JOURNAL_SAFE_PREFIX_STOP_CHECKSUM_MISMATCH,
+          offset, record_size, record_size);
+      *out_prefix = prefix;
+      return TRUE;
+    }
+
+    prefix.safe_end_offset = offset + record_size;
+    prefix.last_safe_sequence = sequence;
+    prefix.has_last_safe_sequence = TRUE;
+    offset += record_size;
+    expected_sequence++;
+  }
+
+  prefix.reached_eof = TRUE;
+  prefix.unsafe_suffix_found = FALSE;
+  prefix.stop_reason = WYREBOX_JOURNAL_SAFE_PREFIX_STOP_EOF;
+  *out_prefix = prefix;
 
   return TRUE;
 }
