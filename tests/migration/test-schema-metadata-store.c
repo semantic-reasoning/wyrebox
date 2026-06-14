@@ -617,7 +617,7 @@ test_memory_store_accepts_add_message_header_table_migration_operation (void)
 
   g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE,
-          2, wyrebox_schema_migration_get_current_schema_version (), &error));
+          2, 3, &error));
   g_assert_no_error (error);
 }
 
@@ -633,7 +633,23 @@ static void
 
   g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS,
-          3, wyrebox_schema_migration_get_current_schema_version (), &error));
+          3, 4, &error));
+  g_assert_no_error (error);
+}
+
+static void
+    test_memory_store_accepts_scope_derived_views_by_account_migration_operation
+    (void)
+{
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+
+  store = wyrebox_schema_metadata_store_new_memory ();
+  g_assert_nonnull (store);
+
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT,
+          4, wyrebox_schema_migration_get_current_schema_version (), &error));
   g_assert_no_error (error);
 }
 
@@ -757,11 +773,11 @@ test_duckdb_store_add_message_header_table_migration_operation (void)
 
   g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE,
-          2, wyrebox_schema_migration_get_current_schema_version (), &error));
+          2, 3, &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE,
-          2, wyrebox_schema_migration_get_current_schema_version (), &error));
+          2, 3, &error));
   g_assert_no_error (error);
 
   assert_message_header_table_exists (path);
@@ -1012,6 +1028,9 @@ main (int argc, char **argv)
   g_test_add_func ("/migration/schema-metadata-store/"
       "memory-store-accepts-add-derived-view-memberships-operation",
       test_memory_store_accepts_add_derived_view_memberships_migration_operation);
+  g_test_add_func ("/migration/schema-metadata-store/"
+      "memory-store-accepts-scope-derived-views-by-account-operation",
+      test_memory_store_accepts_scope_derived_views_by_account_migration_operation);
   g_test_add_func ("/migration/schema-metadata-store/"
       "memory-store-rejects-unknown-operation",
       test_memory_store_rejects_unknown_migration_operation);

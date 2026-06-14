@@ -12,7 +12,7 @@
  * Keep these small and explicit for fixture-backed deterministic transitions.
  */
 #define WYREBOX_SCHEMA_VERSION_FIRST 1
-#define WYREBOX_SCHEMA_VERSION_CURRENT 4
+#define WYREBOX_SCHEMA_VERSION_CURRENT 5
 #define WYREBOX_SCHEMA_VERSION_LEGACY_0 0
 
 typedef struct
@@ -95,9 +95,17 @@ static const WyreboxSchemaMigrationStep wyrebox_schema_migration_steps[] = {
         FALSE,
       WYREBOX_SCHEMA_MIGRATION_MATERIALIZATION_CHECKPOINT_INVALIDATE},
   {3,
-        WYREBOX_SCHEMA_VERSION_CURRENT,
+        4,
         "add-derived-view-memberships",
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS,
+        wyrebox_schema_migration_default_step_operation,
+        wyrebox_schema_migration_default_step_validation,
+        FALSE,
+      WYREBOX_SCHEMA_MIGRATION_MATERIALIZATION_CHECKPOINT_INVALIDATE},
+  {4,
+        WYREBOX_SCHEMA_VERSION_CURRENT,
+        "scope-derived-views-by-account",
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT,
         wyrebox_schema_migration_default_step_operation,
         wyrebox_schema_migration_default_step_validation,
         FALSE,
