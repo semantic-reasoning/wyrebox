@@ -489,6 +489,12 @@ query_count (const gchar *path, const gchar *table)
 }
 
 static guint64
+query_derived_view_count (const gchar *path)
+{
+  return query_count (path, "derived_views");
+}
+
+static guint64
 query_membership_count_where (const gchar *path, const gchar *where_clause)
 {
   TestDuckdbFixture fixture = { 0 };
@@ -502,6 +508,22 @@ query_membership_count_where (const gchar *path, const gchar *where_clause)
   close_duckdb_fixture (&fixture);
 
   return count;
+}
+
+static gchar *
+query_derived_view_imap_name (const gchar *path, const gchar *view_id)
+{
+  TestDuckdbFixture fixture = { 0 };
+  g_autofree gchar *sql = NULL;
+  gchar *imap_name = NULL;
+
+  open_duckdb_fixture (path, &fixture);
+  sql = g_strdup_printf ("SELECT imap_name FROM derived_views "
+      "WHERE view_id = '%s';", view_id);
+  imap_name = query_string (fixture.connection, sql);
+  close_duckdb_fixture (&fixture);
+
+  return imap_name;
 }
 
 static guint64
@@ -894,6 +916,68 @@ test_refresh_new_message_after_cleanup_uses_next_uid (void)
   g_assert_cmpuint (query_uid_for_message (path, "msg-3"), ==, 3);
   g_assert_cmpuint (query_membership_count_where (path,
           "message_id = 'msg-2' AND is_visible = FALSE"), ==, 1);
+
+  remove_catalog (path);
+}
+
+static void
+test_accepts_nested_imap_name (void)
+{
+  g_autofree gchar *path = create_catalog ();
+  g_autofree gchar *imap_name = NULL;
+  g_autoptr (GPtrArray) memberships = new_memberships ();
+  g_autoptr (GError) error = NULL;
+
+  seed_messages (path);
+  add_membership (memberships, "view-nested-projects", "msg-1");
+
+  g_assert_true (apply_memberships_for_view (path, "view-nested-projects",
+          "Virtual/Projects", "wirelog:nested-projects", memberships, &error));
+  g_assert_no_error (error);
+
+  imap_name = query_derived_view_imap_name (path, "view-nested-projects");
+  g_assert_cmpstr (imap_name, ==, "Virtual/Projects");
+
+  remove_catalog (path);
+}
+
+static void
+test_rejects_invalid_imap_names (void)
+{
+  static const gchar invalid_utf8[] = {
+    'P', 'r', 'o', 'j', (gchar) 0xff, '\0'
+  };
+  static const gchar control_character[] = {
+    'P', 'r', 'o', 'j', '\n', '\0'
+  };
+  static const gchar unicode_control_character[] = {
+    'P', 'r', 'o', 'j', (gchar) 0xc2, (gchar) 0x85, '\0'
+  };
+  const gchar *invalid_names[] = {
+    "",
+    "/Projects",
+    "Projects/",
+    "Projects//Alpha",
+    "Proj*",
+    "Proj%",
+    invalid_utf8,
+    control_character,
+    unicode_control_character,
+  };
+  g_autofree gchar *path = create_catalog ();
+  g_autoptr (GPtrArray) memberships = new_memberships ();
+
+  seed_messages (path);
+  add_membership (memberships, "view-invalid-name", "msg-1");
+
+  for (guint i = 0; i < G_N_ELEMENTS (invalid_names); i++) {
+    g_autoptr (GError) error = NULL;
+
+    g_assert_false (apply_memberships_for_view (path, "view-invalid-name",
+            invalid_names[i], "wirelog:invalid-name", memberships, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_assert_cmpuint (query_derived_view_count (path), ==, 0);
+  }
 
   remove_catalog (path);
 }
@@ -1594,6 +1678,10 @@ main (int argc, char **argv)
       test_later_append_allocates_next_uid);
   g_test_add_func ("/wirelog/derived-view-materializer/colon-collision",
       test_colon_join_collision_tuples_get_distinct_membership_ids);
+  g_test_add_func ("/wirelog/derived-view-materializer/nested-imap-name",
+      test_accepts_nested_imap_name);
+  g_test_add_func ("/wirelog/derived-view-materializer/invalid-imap-names",
+      test_rejects_invalid_imap_names);
   g_test_add_func ("/wirelog/derived-view-materializer/refresh-initial",
       test_refresh_initial_snapshot_inserts_two);
   g_test_add_func ("/wirelog/derived-view-materializer/refresh-removes-stale",
