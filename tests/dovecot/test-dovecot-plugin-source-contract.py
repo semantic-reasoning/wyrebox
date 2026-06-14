@@ -127,11 +127,22 @@ def main() -> None:
     )
     require(
         r"struct\s+wyrebox_dovecot_mail\s*\{\s*[\s\S]*?"
-        r"struct\s+mail\s+mail;\s*[\s\S]*?"
+        r"struct\s+mail_private\s+private;\s*[\s\S]*?"
         r"struct\s+istream\s+\*stream;\s*[\s\S]*?"
         r"}\s*;",
         text,
-        "wyrebox mail wrapper embeds cached stream state",
+        "wyrebox mail wrapper embeds mail_private prefix and cached stream",
+    )
+    forbid(
+        r"struct\s+wyrebox_dovecot_mail\s*\{[\s\S]*?"
+        r"struct\s+mail\s+mail;",
+        text,
+        "bare public struct mail wrapper",
+    )
+    forbid(
+        r"mail->v\b",
+        text,
+        "fake public mail vfunc dispatch",
     )
     require(
         r"wyrebox_dovecot_storage_alloc\s*\(\s*void\s*\)\s*\{[\s\S]*?"
@@ -379,6 +390,13 @@ def main() -> None:
         r"struct\s+mailbox_header_lookup_ctx\s+\*wanted_headers\s*\)",
         text,
         "mail allocator vfunc signature",
+    )
+    require(
+        r"wmail->private\.v\s*=\s*wyrebox_dovecot_mail_vfuncs;\s*"
+        r"[\s\S]*?wmail->private\.vlast\s*=\s*NULL;\s*"
+        r"[\s\S]*?return\s+&wmail->private\.mail;",
+        text,
+        "mail allocator initializes Dovecot mail_private prefix",
     )
     require(
         r"wyrebox_dovecot_mailbox_get_status\s*\(\s*struct\s+mailbox\s+\*box\s*,"

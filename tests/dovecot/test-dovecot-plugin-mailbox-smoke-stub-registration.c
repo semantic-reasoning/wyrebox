@@ -267,6 +267,33 @@ mail_storage_set_error (struct mail_storage *storage,
   (void) string;
 }
 
+int
+mail_get_stream (struct mail *mail, bool get_body,
+    struct message_size *hdr_size,
+    struct message_size *body_size, struct istream **stream)
+{
+  struct mail_private *private = (struct mail_private *) mail;
+
+  if (private == NULL || private->v.get_stream == NULL)
+    return -1;
+
+  return private->v.get_stream (mail, get_body, hdr_size, body_size, stream);
+}
+
+void
+mail_free (struct mail **mail)
+{
+  struct mail_private *private;
+
+  if (mail == NULL || *mail == NULL)
+    return;
+
+  private = (struct mail_private *) *mail;
+  if (private->v.free != NULL)
+    private->v.free (*mail);
+  *mail = NULL;
+}
+
 pool_t
 pool_alloconly_create (const char *name, size_t size)
 {

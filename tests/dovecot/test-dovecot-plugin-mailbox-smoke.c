@@ -726,7 +726,6 @@ alloc_test_mail (struct mailbox *box, unsigned int uid)
   g_assert_nonnull (mail);
   mail->box = box;
   mail->uid = uid;
-  mail->v = box->mail_vfuncs;
   return mail;
 }
 
@@ -739,12 +738,7 @@ close_free_test_mail (struct mail **mail)
     return;
   }
 
-  g_assert_nonnull ((*mail)->v);
-  g_assert_nonnull ((*mail)->v->close);
-  g_assert_nonnull ((*mail)->v->free);
-  (*mail)->v->close (*mail);
-  (*mail)->v->free (*mail);
-  *mail = NULL;
+  mail_free (mail);
 }
 
 static void
@@ -1755,8 +1749,8 @@ assert_virtual_uid_fetch_message_sizes (const guint8 *message_bytes,
   g_assert_nonnull (box->mail_vfuncs->get_stream);
 
   mail = alloc_test_mail (box, 42);
-  g_assert_cmpint (mail->v->get_stream (mail, true, &hdr_size, &body_size,
-          &stream), ==, 0);
+  g_assert_cmpint (mail_get_stream (mail, true, &hdr_size, &body_size, &stream),
+      ==, 0);
   g_assert_nonnull (stream);
   g_assert_cmpuint (stream->size, ==, message_size);
   g_assert_true (stream->owns_data);
@@ -1774,8 +1768,8 @@ assert_virtual_uid_fetch_message_sizes (const guint8 *message_bytes,
   stream = NULL;
   memset (&hdr_size, 0, sizeof (hdr_size));
   memset (&body_size, 0, sizeof (body_size));
-  g_assert_cmpint (mail->v->get_stream (mail, true, &hdr_size, &body_size,
-          &stream), ==, 0);
+  g_assert_cmpint (mail_get_stream (mail, true, &hdr_size, &body_size, &stream),
+      ==, 0);
   g_assert_nonnull (stream);
   g_assert_cmpuint (stream->size, ==, message_size);
   g_assert_true (stream->owns_data);
@@ -1860,8 +1854,7 @@ test_uid_fetch_unknown_uid_fails_without_daemon_fetch (void)
   istream_stub_reset_counts ();
 
   mail = alloc_test_mail (box, 999);
-  g_assert_cmpint (mail->v->get_stream (mail, true, NULL, NULL, &stream), ==,
-      -1);
+  g_assert_cmpint (mail_get_stream (mail, true, NULL, NULL, &stream), ==, -1);
   g_assert_null (stream);
   close_free_test_mail (&mail);
   g_assert_cmpuint (istream_stub_get_create_count (), ==, 0);
