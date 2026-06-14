@@ -966,6 +966,8 @@ wyrebox_dovecot_mail_set_seq (struct mail *mail, unsigned int seq, bool saving)
 
   wmail = wyrebox_dovecot_mail_from_mail (mail);
   wyrebox_dovecot_mail_clear_stream (wmail);
+  mail->uid = 0;
+  mail->seq = 0;
   wbox = (struct wyrebox_dovecot_mailbox *) mail->box;
   row = wyrebox_dovecot_mailbox_lookup_seq_uid_map_row (wbox, seq, &error);
   if (row == NULL) {
