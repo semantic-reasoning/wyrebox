@@ -465,7 +465,9 @@ static gboolean
       || operation ==
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE
       || operation ==
-      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS)
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS
+      || operation ==
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT)
     return TRUE;
 
   g_set_error (error,
@@ -632,6 +634,55 @@ duckdb_store_create_derived_view_memberships (WyreboxSchemaMetadataStoreDuckdb
       "materialized_at_unix_us UBIGINT NOT NULL,"
       "UNIQUE(account_id, view_id, uid),"
       "UNIQUE(account_id, view_id, message_id, rule_version_hash)" ");", error);
+}
+
+static gboolean
+duckdb_store_scope_derived_views_by_account (WyreboxSchemaMetadataStoreDuckdb
+    *self, GError **error)
+{
+  return duckdb_store_query (self,
+      "CREATE TABLE derived_views_replacement ("
+      "view_id VARCHAR NOT NULL,"
+      "account_id VARCHAR NOT NULL,"
+      "imap_name VARCHAR NOT NULL,"
+      "definition_ref VARCHAR NOT NULL,"
+      "is_selectable BOOLEAN NOT NULL,"
+      "is_visible BOOLEAN NOT NULL,"
+      "PRIMARY KEY(account_id, view_id),"
+      "UNIQUE(account_id, imap_name)" ");", error)
+      && duckdb_store_query (self,
+      "INSERT INTO derived_views_replacement ("
+      "view_id, account_id, imap_name, definition_ref, "
+      "is_selectable, is_visible"
+      ") SELECT view_id, account_id, imap_name, definition_ref, "
+      "is_selectable, is_visible FROM derived_views;", error)
+      && duckdb_store_query (self,
+      "CREATE TABLE derived_view_memberships_replacement ("
+      "membership_id VARCHAR PRIMARY KEY,"
+      "account_id VARCHAR NOT NULL,"
+      "view_id VARCHAR NOT NULL,"
+      "message_id VARCHAR NOT NULL,"
+      "uid UBIGINT NOT NULL CHECK(uid >= 1),"
+      "is_visible BOOLEAN NOT NULL,"
+      "rule_version_hash VARCHAR NOT NULL,"
+      "materialized_at_unix_us UBIGINT NOT NULL,"
+      "UNIQUE(account_id, view_id, uid),"
+      "UNIQUE(account_id, view_id, message_id, rule_version_hash)" ");", error)
+      && duckdb_store_query (self,
+      "INSERT INTO derived_view_memberships_replacement ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") SELECT membership_id, account_id, view_id, message_id, uid, "
+      "is_visible, rule_version_hash, materialized_at_unix_us "
+      "FROM derived_view_memberships;", error)
+      && duckdb_store_query (self,
+      "DROP TABLE derived_view_memberships;", error)
+      && duckdb_store_query (self, "DROP TABLE derived_views;", error)
+      && duckdb_store_query (self,
+      "ALTER TABLE derived_views_replacement RENAME TO derived_views;", error)
+      && duckdb_store_query (self,
+      "ALTER TABLE derived_view_memberships_replacement "
+      "RENAME TO derived_view_memberships;", error);
 }
 
 static gboolean
@@ -935,6 +986,7 @@ static gboolean
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES:
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE:
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS:
+    case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT:
       break;
     default:
       goto unsupported;
@@ -956,6 +1008,10 @@ static gboolean
           || (operation ==
               WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS
               && duckdb_store_create_derived_view_memberships (duckdb_store,
+                  error))
+          || (operation ==
+              WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT
+              && duckdb_store_scope_derived_views_by_account (duckdb_store,
                   error))) ||
       !duckdb_store_query (duckdb_store, "COMMIT;", error)) {
     duckdb_store_rollback_quietly (duckdb_store);

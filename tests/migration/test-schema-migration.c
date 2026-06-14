@@ -235,7 +235,7 @@ struct _TestSchemaMetadataStoreSpy
   gboolean save_called;
   gboolean observed_checkpoint_precondition_satisfied;
   guint migration_operation_call_count;
-  WyreboxSchemaMetadataStoreMigrationOperation observed_operations[4];
+  WyreboxSchemaMetadataStoreMigrationOperation observed_operations[5];
   gboolean fail_next_migration_operation;
   WyreboxSchemaMetadataStoreMigrationOperation observed_operation;
   guint64 observed_operation_source_version;
@@ -338,7 +338,9 @@ static gboolean
       || operation ==
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE
       || operation ==
-      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS;
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS
+      || operation ==
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT;
 }
 
 static void
@@ -568,10 +570,10 @@ static void
   g_assert_no_error (error);
   g_assert_true (spy->save_called);
   g_assert_cmpuint (spy->save_call_count, ==, 1);
-  g_assert_cmpuint (spy->migration_operation_call_count, ==, 4);
+  g_assert_cmpuint (spy->migration_operation_call_count, ==, 5);
   g_assert_cmpint (spy->observed_operation, ==,
-      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS);
-  g_assert_cmpuint (spy->observed_operation_source_version, ==, 3);
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT);
+  g_assert_cmpuint (spy->observed_operation_source_version, ==, 4);
   g_assert_cmpuint (spy->observed_operation_target_version, ==,
       wyrebox_schema_migration_get_current_schema_version ());
   g_assert_false (spy->observed_checkpoint_precondition_satisfied);
@@ -602,7 +604,7 @@ test_schema_migration_run_store_missing_metadata_applies_full_path (void)
   g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
           (WyreboxSchemaMetadataStore *) spy, FALSE, &error));
   g_assert_no_error (error);
-  g_assert_cmpuint (spy->migration_operation_call_count, ==, 4);
+  g_assert_cmpuint (spy->migration_operation_call_count, ==, 5);
   g_assert_cmpint (spy->observed_operations[0], ==,
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP);
   g_assert_cmpint (spy->observed_operations[1], ==,
@@ -611,6 +613,8 @@ test_schema_migration_run_store_missing_metadata_applies_full_path (void)
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE);
   g_assert_cmpint (spy->observed_operations[3], ==,
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS);
+  g_assert_cmpint (spy->observed_operations[4], ==,
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT);
   g_assert_cmpuint (spy->save_call_count, ==, 1);
 
   g_object_unref (spy);
@@ -1147,6 +1151,200 @@ assert_derived_view_memberships_table_exists (const gchar *path)
   (void) duckdb_close (&database);
 }
 
+static guint64
+query_uint64 (duckdb_connection connection, const gchar *query)
+{
+  duckdb_result result = { 0 };
+  guint64 value = 0;
+
+  g_assert_cmpint (duckdb_query (connection, query, &result), ==,
+      DuckDBSuccess);
+  g_assert_cmpuint (duckdb_column_count (&result), ==, 1);
+  g_assert_cmpuint (duckdb_row_count (&result), ==, 1);
+
+  value = (guint64) duckdb_value_uint64 (&result, 0, 0);
+  duckdb_destroy_result (&result);
+  return value;
+}
+
+static void
+create_old_v4_derived_view_identity_shape (const gchar *path)
+{
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  assert_bootstrap_query_succeeds (connection,
+      "DROP TABLE derived_view_memberships;");
+  assert_bootstrap_query_succeeds (connection, "DROP TABLE derived_views;");
+  assert_bootstrap_query_succeeds (connection,
+      "CREATE TABLE derived_views ("
+      "view_id VARCHAR PRIMARY KEY,"
+      "account_id VARCHAR NOT NULL,"
+      "imap_name VARCHAR NOT NULL,"
+      "definition_ref VARCHAR NOT NULL,"
+      "is_selectable BOOLEAN NOT NULL,"
+      "is_visible BOOLEAN NOT NULL," "UNIQUE(account_id, imap_name)" ");");
+  assert_bootstrap_query_succeeds (connection,
+      "CREATE TABLE derived_view_memberships ("
+      "membership_id VARCHAR PRIMARY KEY,"
+      "account_id VARCHAR NOT NULL,"
+      "view_id VARCHAR NOT NULL,"
+      "message_id VARCHAR NOT NULL,"
+      "uid UBIGINT NOT NULL CHECK(uid >= 1),"
+      "is_visible BOOLEAN NOT NULL,"
+      "rule_version_hash VARCHAR NOT NULL,"
+      "materialized_at_unix_us UBIGINT NOT NULL,"
+      "UNIQUE(view_id, uid),"
+      "UNIQUE(view_id, message_id, rule_version_hash)" ");");
+  assert_bootstrap_query_succeeds (connection,
+      "INSERT INTO derived_views ("
+      "view_id, account_id, imap_name, definition_ref, "
+      "is_selectable, is_visible"
+      ") VALUES ("
+      "'view-shared', 'account-1', 'Virtual/Important', "
+      "'wirelog:important', TRUE, TRUE" ");");
+  assert_bootstrap_query_succeeds (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-preserved', 'account-1', 'view-shared', "
+      "'message-shared', 7, TRUE, 'rule-hash-shared', 17000000" ");");
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
+}
+
+static void
+assert_derived_view_identity_migrated_to_account_scope (const gchar *path)
+{
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  g_assert_cmpuint (query_uint64 (connection,
+          "SELECT COUNT(*) FROM derived_views "
+          "WHERE account_id = 'account-1' AND view_id = 'view-shared' "
+          "AND imap_name = 'Virtual/Important' "
+          "AND definition_ref = 'wirelog:important' "
+          "AND is_selectable AND is_visible;"), ==, 1);
+  g_assert_cmpuint (query_uint64 (connection,
+          "SELECT COUNT(*) FROM derived_view_memberships "
+          "WHERE membership_id = 'derived-membership-preserved' "
+          "AND account_id = 'account-1' AND view_id = 'view-shared' "
+          "AND message_id = 'message-shared' AND uid = 7 "
+          "AND is_visible AND rule_version_hash = 'rule-hash-shared' "
+          "AND materialized_at_unix_us = 17000000;"), ==, 1);
+
+  assert_bootstrap_query_succeeds (connection,
+      "INSERT INTO derived_views ("
+      "view_id, account_id, imap_name, definition_ref, "
+      "is_selectable, is_visible"
+      ") VALUES ("
+      "'view-shared', 'account-2', 'Virtual/Important', "
+      "'wirelog:important-account-2', TRUE, TRUE" ");");
+  assert_bootstrap_query_succeeds (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-account-2', 'account-2', 'view-shared', "
+      "'message-shared', 7, TRUE, 'rule-hash-shared', 17000001" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO derived_views ("
+      "view_id, account_id, imap_name, definition_ref, "
+      "is_selectable, is_visible"
+      ") VALUES ("
+      "'view-shared', 'account-1', 'Virtual/Other', "
+      "'wirelog:other', TRUE, TRUE" ");");
+  assert_bootstrap_query_fails (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'derived-membership-duplicate-uid', 'account-1', 'view-shared', "
+      "'message-other', 7, TRUE, 'rule-hash-other', 17000002" ");");
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
+}
+
+static void
+    test_schema_migration_duckdb_run_store_v4_scopes_derived_view_identity
+    (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  base.schema_version_present = TRUE;
+  base.schema_version = 4;
+  test_schema_migration_set_materialization_checkpoint_fields (&base);
+  g_assert_true (wyrebox_schema_metadata_store_save (store, &base, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
+          0, wyrebox_schema_migration_get_first_supported_schema_version (),
+          &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES,
+          wyrebox_schema_migration_get_first_supported_schema_version (), 2,
+          &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE,
+          2, 3, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS,
+          3, 4, &error));
+  g_assert_no_error (error);
+  g_clear_object (&store);
+
+  create_old_v4_derived_view_identity_shape (path);
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
+          store, FALSE, &error));
+  g_assert_no_error (error);
+  g_clear_object (&store);
+
+  assert_derived_view_identity_migrated_to_account_scope (path);
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_metadata_store_load (store, &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==,
+      wyrebox_schema_migration_get_current_schema_version ());
+  g_assert_false (loaded.materialization_checkpoint_present);
+  g_assert_cmpuint (loaded.materialization_checkpoint_journal_offset, ==, 0);
+  g_assert_cmpuint (loaded.materialization_checkpoint_sequence, ==, 0);
+  g_assert_false (loaded.checkpoint_precondition_satisfied);
+
+  g_clear_object (&store);
+  remove_directory_tree (root);
+}
+
 static void
 test_schema_migration_duckdb_run_store_v3_adds_derived_view_memberships (void)
 {
@@ -1637,7 +1835,7 @@ test_missing_schema_metadata_runs_legacy_bootstrap_to_first_version (void)
 
   g_assert_false (metadata.schema_version_present);
   g_assert_cmpuint (first_version, ==, 1);
-  g_assert_cmpuint (current_version, ==, 4);
+  g_assert_cmpuint (current_version, ==, 5);
   g_assert_true (wyrebox_schema_migration_evaluate_to_version (migration,
           &metadata, first_version, &error));
   g_assert_no_error (error);
@@ -1773,8 +1971,8 @@ test_explicit_forward_path_succeeds_with_checkpoint_precondition (void)
   g_assert_true (wyrebox_schema_migration_evaluate_to_current (migration,
           &metadata, &error));
   g_assert_no_error (error);
-  g_assert_cmpuint (fixture_data.operation_call_count, ==, 4);
-  g_assert_cmpuint (fixture_data.validation_call_count, ==, 4);
+  g_assert_cmpuint (fixture_data.operation_call_count, ==, 5);
+  g_assert_cmpuint (fixture_data.validation_call_count, ==, 5);
   g_assert_cmpuint (metadata.schema_version, ==, current_version);
   g_assert_false (metadata.materialization_checkpoint_present);
   g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==, 0);
@@ -1862,7 +2060,7 @@ test_schema_version_constants_are_testable (void)
   g_assert_cmpuint (wyrebox_schema_migration_get_first_supported_schema_version
       (), ==, 1);
   g_assert_cmpuint (wyrebox_schema_migration_get_current_schema_version (),
-      ==, 4);
+      ==, 5);
 }
 
 int
@@ -1927,6 +2125,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/migration/schema/duckdb-run-store-v3-adds-derived-view-memberships",
       test_schema_migration_duckdb_run_store_v3_adds_derived_view_memberships);
+  g_test_add_func
+      ("/migration/schema/duckdb-run-store-v4-scopes-derived-view-identity",
+      test_schema_migration_duckdb_run_store_v4_scopes_derived_view_identity);
   g_test_add_func
       ("/migration/schema/duckdb-run-store-v2-adds-message-header-table-rejects-shape-mismatch",
       test_schema_migration_duckdb_run_store_v2_adds_message_header_table_rejects_shape_mismatch);
