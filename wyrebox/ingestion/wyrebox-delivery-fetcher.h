@@ -15,6 +15,12 @@ G_DECLARE_FINAL_TYPE (WyreboxDeliveryFetcher,
     DELIVERY_FETCHER,
     GObject)
 
+typedef enum
+{
+  WYREBOX_DELIVERY_FETCHER_NAMESPACE_MAILBOX,
+  WYREBOX_DELIVERY_FETCHER_NAMESPACE_DERIVED_VIEW,
+} WyreboxDeliveryFetcherNamespaceKind;
+
 /*
  * Construct a DuckDB-backed read-only delivery fetcher for @catalog_path.
  *
@@ -37,6 +43,20 @@ GBytes *wyrebox_delivery_fetcher_fetch_bytes (
     WyreboxDeliveryFetcher *self,
     const gchar *account_id,
     const gchar *mailbox_id,
+    guint64 uidvalidity,
+    guint64 uid,
+    GError **error);
+
+/*
+ * Resolve a visible namespace UID and return immutable raw RFC 5322 bytes.
+ *
+ * Returns: (transfer full): message bytes on success, or NULL with @error set.
+ */
+GBytes *wyrebox_delivery_fetcher_fetch_namespace_bytes (
+    WyreboxDeliveryFetcher *self,
+    const gchar *account_id,
+    WyreboxDeliveryFetcherNamespaceKind namespace_kind,
+    const gchar *namespace_id,
     guint64 uidvalidity,
     guint64 uid,
     GError **error);
