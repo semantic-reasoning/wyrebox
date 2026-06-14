@@ -1,9 +1,11 @@
 #include "wyrebox-journal-writer.h"
+#include "wyrebox-journal-reader.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 
 #include <glib.h>
@@ -153,6 +155,24 @@ fsync_journal_root_setup (const char *journal_root_dir, GError **error)
   return TRUE;
 }
 
+static gboolean
+lock_segment_for_writer (int fd, const char *segment_path, GError **error)
+{
+  if (flock (fd, LOCK_EX | LOCK_NB) == 0)
+    return TRUE;
+
+  int saved_errno = errno;
+  GIOErrorEnum code = saved_errno == EWOULDBLOCK || saved_errno == EAGAIN ?
+      G_IO_ERROR_BUSY : g_io_error_from_errno (saved_errno);
+
+  g_set_error (error,
+      G_IO_ERROR,
+      code,
+      "failed to acquire exclusive journal writer lock for %s: %s",
+      segment_path, g_strerror (saved_errno));
+  return FALSE;
+}
+
 static void
 wyrebox_journal_writer_finalize (GObject *object)
 {
@@ -184,12 +204,49 @@ wyrebox_journal_writer_init (WyreboxJournalWriter *self)
   g_mutex_init (&self->append_mutex);
 }
 
+static gboolean
+replay_existing_segment (const char *journal_root_dir,
+    guint64 *out_next_sequence, GError **error)
+{
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  guint64 last_sequence = 0;
+
+  reader = wyrebox_journal_reader_new (journal_root_dir, error);
+  if (reader == NULL)
+    return FALSE;
+
+  while (TRUE) {
+    g_auto (WyreboxJournalRecord) record = { 0 };
+    gboolean eof = FALSE;
+
+    if (!wyrebox_journal_reader_read_next (reader, &record, &eof, error)) {
+      if (eof)
+        break;
+
+      return FALSE;
+    }
+
+    last_sequence = record.sequence;
+  }
+
+  if (last_sequence == G_MAXUINT64) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA, "journal sequence space is exhausted");
+    return FALSE;
+  }
+
+  *out_next_sequence = last_sequence + 1;
+  return TRUE;
+}
+
 WyreboxJournalWriter *
 wyrebox_journal_writer_new (const char *journal_root_dir, GError **error)
 {
   g_autoptr (WyreboxJournalWriter) self = NULL;
   g_autofree char *segment_path = NULL;
   struct stat segment_stat = { 0 };
+  guint64 next_sequence = 1;
 
   g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
@@ -229,6 +286,11 @@ wyrebox_journal_writer_new (const char *journal_root_dir, GError **error)
     return NULL;
   }
 
+  if (!lock_segment_for_writer (fd, segment_path, error)) {
+    (void) close (fd);
+    return NULL;
+  }
+
   if (fstat (fd, &segment_stat) != 0) {
     int saved_errno = errno;
 
@@ -241,12 +303,9 @@ wyrebox_journal_writer_new (const char *journal_root_dir, GError **error)
     return NULL;
   }
 
-  if (segment_stat.st_size != 0) {
+  if (segment_stat.st_size != 0 &&
+      !replay_existing_segment (journal_root_dir, &next_sequence, error)) {
     (void) close (fd);
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_NOT_SUPPORTED,
-        "journal does not support rotated or non-empty segments");
     return NULL;
   }
 
@@ -259,6 +318,7 @@ wyrebox_journal_writer_new (const char *journal_root_dir, GError **error)
   self->journal_root_dir = g_strdup (journal_root_dir);
   self->segment_path = g_steal_pointer (&segment_path);
   self->fd = fd;
+  self->next_sequence = next_sequence;
 
   return g_steal_pointer (&self);
 }
