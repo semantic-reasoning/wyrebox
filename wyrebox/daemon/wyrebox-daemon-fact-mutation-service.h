@@ -28,6 +28,11 @@ gboolean wyrebox_daemon_fact_mutation_service_configure_wirelog_derived_view (
     const char *catalog_path,
     GError **error);
 
+gboolean wyrebox_daemon_fact_mutation_service_catch_up_wirelog_derived_view (
+    WyreboxDaemonFactMutationService *self,
+    const char *scope_id,
+    GError **error);
+
 gboolean wyrebox_daemon_fact_mutation_service_handle_identity (
     WyreboxDaemonFactMutationService *self,
     const WyreboxDaemonRequestIdentity *identity,

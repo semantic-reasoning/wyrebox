@@ -409,6 +409,34 @@ handle_authorized_fact_batch_import (WyreboxDaemonFactMutationService
 }
 
 gboolean
+    wyrebox_daemon_fact_mutation_service_catch_up_wirelog_derived_view
+    (WyreboxDaemonFactMutationService * self, const char *scope_id,
+    GError ** error)
+{
+  g_return_val_if_fail (WYREBOX_IS_DAEMON_FACT_MUTATION_SERVICE (self), FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (scope_id == NULL || *scope_id == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "derived view materialization scope_id is required");
+    return FALSE;
+  }
+
+  if (self->derived_view_journal_root_dir == NULL ||
+      self->derived_view_catalog_path == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "Wirelog derived view materialization is not configured");
+    return FALSE;
+  }
+
+  return materialize_configured_derived_view (self, scope_id, error);
+}
+
+gboolean
     wyrebox_daemon_fact_mutation_service_handle_identity
     (WyreboxDaemonFactMutationService * self,
     const WyreboxDaemonRequestIdentity * identity,

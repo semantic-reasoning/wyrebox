@@ -281,6 +281,85 @@ assert_journal_events_from_sequence (const char *root,
   g_assert_true (eof);
 }
 
+static guint64
+count_journal_event_type (const char *root, WyreboxJournalEventType event_type)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  guint64 count = 0;
+  gboolean eof = FALSE;
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_no_error (error);
+
+  for (;;) {
+    g_auto (WyreboxJournalRecord) record = { 0 };
+
+    if (!wyrebox_journal_reader_read_next (reader, &record, &eof, &error)) {
+      g_assert_no_error (error);
+      g_assert_true (eof);
+      break;
+    }
+
+    g_assert_no_error (error);
+    g_assert_false (eof);
+    if (record.event_type == event_type)
+      count++;
+  }
+
+  return count;
+}
+
+static void
+append_fact_journal_record (WyreboxJournalWriter *writer,
+    WyreboxDaemonFactMutationKind mutation_kind,
+    const char *scope_id, const char *message_id, guint64 *out_sequence)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonFactMutationRequest) mutation = { 0 };
+  guint64 journal_offset = 0;
+
+  g_assert_true (wyrebox_daemon_fact_mutation_request_init (&mutation,
+          mutation_kind,
+          "project_keyword", scope_id,
+          (const char *[]) { message_id, "view-projects", NULL }, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_fact_mutation_request_append_journal
+      (&mutation, writer, &journal_offset, out_sequence, &error));
+  g_assert_no_error (error);
+}
+
+static void
+assert_select_projects (const char *catalog_path,
+    const char *account_id,
+    guint64 expected_message_count,
+    guint64 expected_uid_next, guint64 *out_uid_validity)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonMailboxCatalogDuckDB) catalog = NULL;
+  g_auto (WyreboxDaemonMailboxSelectRequest) request = { 0 };
+  g_auto (WyreboxDaemonMailboxSelectResult) result = { 0 };
+
+  catalog = wyrebox_daemon_mailbox_catalog_duckdb_new (catalog_path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (catalog);
+  g_assert_true (wyrebox_daemon_mailbox_select_request_init (&request,
+          account_id, NULL, "Projects", &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_mailbox_catalog_duckdb_select (NULL, &request,
+          &result, catalog, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (result.kind, ==, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
+  g_assert_cmpstr (result.mailbox_id, ==, "view-projects");
+  g_assert_cmpstr (result.mailbox_name, ==, "Projects");
+  g_assert_cmpuint (result.message_count, ==, expected_message_count);
+  g_assert_cmpuint (result.uid_next, ==, expected_uid_next);
+  g_assert_cmpuint (result.uid_validity, !=, 0);
+
+  if (out_uid_validity != NULL)
+    *out_uid_validity = result.uid_validity;
+}
+
 static void
 test_fact_mutation_service_handles_request (void)
 {
@@ -645,6 +724,263 @@ test_fact_mutation_service_handles_identity (void)
 }
 
 static void
+test_fact_mutation_service_catches_up_configured_wirelog_view (void)
+{
+  const WyreboxJournalEventType expected[] = {
+    WYREBOX_JOURNAL_EVENT_FACT_INSERTED,
+    WYREBOX_JOURNAL_EVENT_DERIVED_VIEW_MEMBERSHIP_CHANGED,
+  };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-fact-mutation-service-XXXXXX", NULL);
+  g_autofree char *catalog_path = create_catalog_path ();
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxDaemonFactMutationService) service = NULL;
+  guint64 fact_sequence = 0;
+  guint64 uid_validity = 0;
+
+  g_assert_nonnull (root);
+  seed_materialization_catalog (catalog_path, "account-1");
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  append_fact_journal_record (writer, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+      "account-1", "mail-1", &fact_sequence);
+  g_assert_cmpuint (fact_sequence, ==, 1);
+  service = wyrebox_daemon_fact_mutation_service_new (writer);
+  g_assert_nonnull (service);
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_configure_wirelog_derived_view
+      (service, root, catalog_path, &error));
+  g_assert_no_error (error);
+
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_catch_up_wirelog_derived_view
+      (service, "account-1", &error));
+  g_assert_no_error (error);
+
+  assert_journal_events (root, expected, G_N_ELEMENTS (expected), NULL);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM derived_view_memberships "
+          "WHERE account_id = 'account-1' "
+          "AND view_id = 'view-projects' "
+          "AND message_id = 'mail-1' AND is_visible = TRUE;"), ==, 1);
+  assert_select_projects (catalog_path, "account-1", 1, 2, &uid_validity);
+  g_assert_cmpuint (uid_validity, !=, 0);
+
+  remove_tree (root);
+  remove_catalog_path (catalog_path);
+}
+
+static void
+test_fact_mutation_service_catch_up_is_idempotent (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-fact-mutation-service-XXXXXX", NULL);
+  g_autofree char *catalog_path = create_catalog_path ();
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxDaemonFactMutationService) service = NULL;
+  guint64 fact_sequence = 0;
+  guint64 first_uid_validity = 0;
+  guint64 second_uid_validity = 0;
+
+  g_assert_nonnull (root);
+  seed_materialization_catalog (catalog_path, "account-1");
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  append_fact_journal_record (writer, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+      "account-1", "mail-1", &fact_sequence);
+  service = wyrebox_daemon_fact_mutation_service_new (writer);
+  g_assert_nonnull (service);
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_configure_wirelog_derived_view
+      (service, root, catalog_path, &error));
+  g_assert_no_error (error);
+
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_catch_up_wirelog_derived_view
+      (service, "account-1", &error));
+  g_assert_no_error (error);
+  assert_select_projects (catalog_path, "account-1", 1, 2, &first_uid_validity);
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_catch_up_wirelog_derived_view
+      (service, "account-1", &error));
+  g_assert_no_error (error);
+  assert_select_projects (catalog_path, "account-1", 1, 2,
+      &second_uid_validity);
+
+  g_assert_cmpuint (first_uid_validity, ==, second_uid_validity);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM derived_view_memberships "
+          "WHERE account_id = 'account-1' "
+          "AND view_id = 'view-projects' "
+          "AND message_id = 'mail-1' AND is_visible = TRUE;"), ==, 1);
+  g_assert_cmpuint (count_journal_event_type (root,
+          WYREBOX_JOURNAL_EVENT_DERIVED_VIEW_MEMBERSHIP_CHANGED), ==, 1);
+
+  remove_tree (root);
+  remove_catalog_path (catalog_path);
+}
+
+static void
+test_fact_mutation_service_catch_up_applies_retract_history (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-fact-mutation-service-XXXXXX", NULL);
+  g_autofree char *catalog_path = create_catalog_path ();
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxDaemonFactMutationService) service = NULL;
+  guint64 sequence = 0;
+  guint64 insert_uid_validity = 0;
+  guint64 retract_uid_validity = 0;
+
+  g_assert_nonnull (root);
+  seed_materialization_catalog (catalog_path, "account-1");
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  service = wyrebox_daemon_fact_mutation_service_new (writer);
+  g_assert_nonnull (service);
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_configure_wirelog_derived_view
+      (service, root, catalog_path, &error));
+  g_assert_no_error (error);
+
+  append_fact_journal_record (writer, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+      "account-1", "mail-1", &sequence);
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_catch_up_wirelog_derived_view
+      (service, "account-1", &error));
+  g_assert_no_error (error);
+  assert_select_projects (catalog_path, "account-1", 1, 2,
+      &insert_uid_validity);
+
+  append_fact_journal_record (writer, WYREBOX_DAEMON_FACT_MUTATION_RETRACT,
+      "account-1", "mail-1", &sequence);
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_catch_up_wirelog_derived_view
+      (service, "account-1", &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM derived_view_memberships "
+          "WHERE account_id = 'account-1' "
+          "AND view_id = 'view-projects' "
+          "AND message_id = 'mail-1' AND is_visible = TRUE;"), ==, 0);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM derived_view_memberships "
+          "WHERE account_id = 'account-1' "
+          "AND view_id = 'view-projects' "
+          "AND message_id = 'mail-1' AND is_visible = FALSE;"), ==, 1);
+  assert_select_projects (catalog_path, "account-1", 0, 2,
+      &retract_uid_validity);
+  g_assert_cmpuint (insert_uid_validity, ==, retract_uid_validity);
+
+  remove_tree (root);
+  remove_catalog_path (catalog_path);
+}
+
+static void
+test_fact_mutation_service_catch_up_is_account_scoped (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-fact-mutation-service-XXXXXX", NULL);
+  g_autofree char *catalog_path = create_catalog_path ();
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxDaemonFactMutationService) service = NULL;
+  guint64 fact_sequence = 0;
+
+  g_assert_nonnull (root);
+  seed_materialization_catalog (catalog_path, "account-2");
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  append_fact_journal_record (writer, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+      "account-1", "mail-1", &fact_sequence);
+  service = wyrebox_daemon_fact_mutation_service_new (writer);
+  g_assert_nonnull (service);
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_configure_wirelog_derived_view
+      (service, root, catalog_path, &error));
+  g_assert_no_error (error);
+
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_catch_up_wirelog_derived_view
+      (service, "account-2", &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM derived_view_memberships "
+          "WHERE account_id = 'account-1';"), ==, 0);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM derived_view_memberships "
+          "WHERE account_id = 'account-2';"), ==, 0);
+  assert_select_projects (catalog_path, "account-2", 0, 1, NULL);
+
+  remove_tree (root);
+  remove_catalog_path (catalog_path);
+}
+
+static void
+test_fact_mutation_service_catch_up_requires_configuration (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-fact-mutation-service-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxDaemonFactMutationService) service = NULL;
+
+  g_assert_nonnull (root);
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  service = wyrebox_daemon_fact_mutation_service_new (writer);
+  g_assert_nonnull (service);
+
+  g_assert_false
+      (wyrebox_daemon_fact_mutation_service_catch_up_wirelog_derived_view
+      (service, "account-1", &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_nonnull (strstr (error->message, "not configured"));
+
+  remove_tree (root);
+}
+
+static void
+test_fact_mutation_service_catch_up_requires_scope_id (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-fact-mutation-service-XXXXXX", NULL);
+  g_autofree char *catalog_path = create_catalog_path ();
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxDaemonFactMutationService) service = NULL;
+
+  g_assert_nonnull (root);
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  service = wyrebox_daemon_fact_mutation_service_new (writer);
+  g_assert_nonnull (service);
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_configure_wirelog_derived_view
+      (service, root, catalog_path, &error));
+  g_assert_no_error (error);
+
+  g_assert_false
+      (wyrebox_daemon_fact_mutation_service_catch_up_wirelog_derived_view
+      (service, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_clear_error (&error);
+
+  g_assert_false
+      (wyrebox_daemon_fact_mutation_service_catch_up_wirelog_derived_view
+      (service, "", &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  remove_tree (root);
+  remove_catalog_path (catalog_path);
+}
+
+static void
 test_fact_mutation_service_materializes_configured_wirelog_view (void)
 {
   const WyreboxJournalEventType expected[] = {
@@ -1002,6 +1338,23 @@ main (int argc, char **argv)
       test_fact_mutation_service_rejects_null_identity_request);
   g_test_add_func ("/daemon-api/fact-mutation-service/handles-identity",
       test_fact_mutation_service_handles_identity);
+  g_test_add_func ("/daemon-api/fact-mutation-service/"
+      "catches-up-configured-wirelog-view",
+      test_fact_mutation_service_catches_up_configured_wirelog_view);
+  g_test_add_func ("/daemon-api/fact-mutation-service/catch-up-is-idempotent",
+      test_fact_mutation_service_catch_up_is_idempotent);
+  g_test_add_func ("/daemon-api/fact-mutation-service/"
+      "catch-up-applies-retract-history",
+      test_fact_mutation_service_catch_up_applies_retract_history);
+  g_test_add_func
+      ("/daemon-api/fact-mutation-service/catch-up-is-account-scoped",
+      test_fact_mutation_service_catch_up_is_account_scoped);
+  g_test_add_func ("/daemon-api/fact-mutation-service/"
+      "catch-up-requires-configuration",
+      test_fact_mutation_service_catch_up_requires_configuration);
+  g_test_add_func ("/daemon-api/fact-mutation-service/"
+      "catch-up-requires-scope-id",
+      test_fact_mutation_service_catch_up_requires_scope_id);
   g_test_add_func ("/daemon-api/fact-mutation-service/"
       "materializes-configured-wirelog-view",
       test_fact_mutation_service_materializes_configured_wirelog_view);
