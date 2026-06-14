@@ -15,9 +15,17 @@
 #include "wyrebox-daemon-mailbox-catalog-duckdb.h"
 #include "wyrebox-daemon-mailbox-list-result.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
+#include "wyrebox-daemon-message-fetch-service.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-response-frame.h"
+#include "wyrebox-delivery-catchup.h"
+#include "wyrebox-delivery-fetcher.h"
+#include "wyrebox-delivery-materializer.h"
 #include "wyrebox-derived-view-materializer-wirelog.h"
+#include "wyrebox-eml-ingestor.h"
+#include "wyrebox-journal-reader.h"
+#include "wyrebox-journal-writer.h"
+#include "wyrebox-local-object-store.h"
 #include "wyrebox-schema-migration.h"
 #include "wyrebox-schema-metadata-store.h"
 
@@ -307,6 +315,181 @@ refresh_virtual_mailbox_from_facts (const gchar *catalog_path,
       (materializer, "account-1", "view-projects", "Projects",
       "wirelog:projects", materialized_at_unix_us, project_membership_rules,
       facts, "show_in_virtual_folder", out_changes, error);
+}
+
+static GBytes *
+load_fixture_bytes (const char *name)
+{
+  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+  g_autoptr (GError) error = NULL;
+  g_autofree char *path = NULL;
+  g_autofree char *contents = NULL;
+  gsize length = 0;
+
+  g_assert_nonnull (fixture_dir);
+
+  path = g_build_filename (fixture_dir, name, NULL);
+  g_assert_true (g_file_get_contents (path, &contents, &length, &error));
+  g_assert_no_error (error);
+
+  return g_bytes_new_take (g_steal_pointer (&contents), length);
+}
+
+static void
+ingest_fixture_bytes (const gchar *object_root,
+    const gchar *journal_root, GBytes *bytes)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+  g_auto (WyreboxEmlIngestResult) result = { 0 };
+
+  object_store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (object_store);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+
+  ingestor = wyrebox_eml_ingestor_new_with_journal (object_store, writer);
+  g_assert_nonnull (ingestor);
+
+  g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, bytes,
+          &result, &error));
+  g_assert_no_error (error);
+  g_assert_nonnull (result.object_key);
+  g_assert_cmpuint (result.journal_sequence, ==, 1);
+}
+
+static void
+run_delivery_catchup (const gchar *catalog_path,
+    const gchar *object_root, const gchar *journal_root)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) metadata_store = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
+  g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+
+  metadata_store = wyrebox_schema_metadata_store_new_duckdb (catalog_path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (metadata_store);
+
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  object_store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (object_store);
+
+  materializer = wyrebox_delivery_materializer_new_duckdb (catalog_path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (materializer);
+
+  g_assert_true (wyrebox_delivery_catchup_materialize_inbox (metadata_store,
+          reader, object_store, materializer, "account-1", &error));
+  g_assert_no_error (error);
+}
+
+static void
+seed_projects_virtual_membership_from_inbox (const gchar *catalog_path)
+{
+  g_auto (duckdb_database) database = NULL;
+  g_auto (duckdb_connection) connection = NULL;
+
+  g_assert_cmpint (duckdb_open (catalog_path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  exec_sql (connection,
+      "INSERT INTO derived_views (view_id, account_id, imap_name, "
+      "definition_ref, is_selectable, is_visible) VALUES "
+      "('view-projects', 'account-1', 'Projects', 'rule:projects', TRUE, "
+      "TRUE);");
+  exec_sql (connection,
+      "INSERT INTO mailbox_uid_state (account_id, namespace_kind, "
+      "namespace_id, uidnext, uidvalidity) VALUES "
+      "('account-1', 'derived_view', 'view-projects', 2, 21);");
+  exec_sql (connection,
+      "INSERT INTO derived_view_memberships (membership_id, account_id, "
+      "view_id, message_id, uid, is_visible, rule_version_hash, "
+      "materialized_at_unix_us) "
+      "SELECT 'dvm-projects-1', account_id, 'view-projects', message_id, "
+      "1, TRUE, 'rule-hash-projects-1', 1 "
+      "FROM mailbox_memberships "
+      "WHERE account_id = 'account-1' "
+      "AND mailbox_id = 'mailbox-inbox' AND uid = 1;");
+}
+
+static gchar *
+query_single_string (const gchar *catalog_path, const gchar *sql)
+{
+  g_auto (duckdb_database) database = NULL;
+  g_auto (duckdb_connection) connection = NULL;
+  duckdb_result result = { 0 };
+  gchar *copy = NULL;
+
+  g_assert_cmpint (duckdb_open (catalog_path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_query (connection, sql, &result), ==, DuckDBSuccess);
+  g_assert_cmpuint (duckdb_row_count (&result), ==, 1);
+  g_assert_cmpuint (duckdb_column_count (&result), ==, 1);
+  g_assert_false (duckdb_value_is_null (&result, 0, 0));
+
+  {
+    char *value = duckdb_value_varchar (&result, 0, 0);
+
+    copy = g_strdup (value);
+    duckdb_free (value);
+  }
+
+  duckdb_destroy_result (&result);
+  return copy;
+}
+
+static guint64
+query_single_uint64 (const gchar *catalog_path, const gchar *sql)
+{
+  g_auto (duckdb_database) database = NULL;
+  g_auto (duckdb_connection) connection = NULL;
+  duckdb_result result = { 0 };
+  guint64 value = 0;
+
+  g_assert_cmpint (duckdb_open (catalog_path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_query (connection, sql, &result), ==, DuckDBSuccess);
+  g_assert_cmpuint (duckdb_row_count (&result), ==, 1);
+  g_assert_cmpuint (duckdb_column_count (&result), ==, 1);
+  g_assert_false (duckdb_value_is_null (&result, 0, 0));
+
+  value = (guint64) duckdb_value_uint64 (&result, 0, 0);
+  duckdb_destroy_result (&result);
+
+  return value;
+}
+
+static WyreboxDaemonMessageFetchService *
+create_message_fetch_service (const gchar *catalog_path,
+    const gchar *object_root)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
+  g_autoptr (WyreboxDeliveryFetcher) fetcher = NULL;
+
+  object_store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (object_store);
+
+  fetcher = wyrebox_delivery_fetcher_new_duckdb (catalog_path, object_store,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (fetcher);
+
+  return wyrebox_daemon_message_fetch_service_new_for_fetcher (fetcher);
 }
 
 static gboolean
@@ -2001,6 +2184,156 @@ test_real_daemon_virtual_mailbox_list_and_status (void)
 }
 
 static void
+test_real_daemon_virtual_mailbox_fetches_fixture_bytes (void)
+{
+  g_autofree char *socket_root = NULL;
+  g_autofree char *socket_path = NULL;
+  g_autofree char *catalog_path = NULL;
+  g_autofree char *object_root = NULL;
+  g_autofree char *journal_root = NULL;
+  g_autoptr (GBytes) input = NULL;
+  g_autofree gchar *ordinary_message_id = NULL;
+  g_autofree gchar *derived_message_id = NULL;
+  g_autofree gchar *ordinary_object_id = NULL;
+  g_autofree gchar *derived_object_id = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonMailboxListService) mailbox_list_service = NULL;
+  g_autoptr (WyreboxDaemonMailboxSelectService) mailbox_select_service = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) query_template_service =
+      NULL;
+  g_autoptr (WyreboxDaemonMessageFetchService) message_fetch_service = NULL;
+  g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+  g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
+  MainContextPump pump = { 0 };
+  struct mail_storage *storage_class = NULL;
+  struct mail_storage *storage = NULL;
+  struct mailbox *box = NULL;
+  g_autofree struct mailbox_transaction_context *transaction = NULL;
+  struct mail *mail = NULL;
+  struct istream *stream = NULL;
+  gsize input_size = 0;
+  const guint8 *input_data = NULL;
+
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
+  socket_path = make_socket_path (&socket_root);
+  catalog_path = g_build_filename (socket_root, "catalog.duckdb", NULL);
+  object_root = g_build_filename (socket_root, "object-root", NULL);
+  journal_root = g_build_filename (socket_root, "journal-root", NULL);
+
+  input = load_fixture_bytes ("simple-crlf.eml");
+  input_data = g_bytes_get_data (input, &input_size);
+  g_assert_nonnull (input_data);
+  g_assert_cmpuint (input_size, >, 0);
+
+  g_assert_true (bootstrap_current_catalog (catalog_path));
+  ingest_fixture_bytes (object_root, journal_root, input);
+  run_delivery_catchup (catalog_path, object_root, journal_root);
+  seed_projects_virtual_membership_from_inbox (catalog_path);
+
+  ordinary_message_id = query_single_string (catalog_path,
+      "SELECT message_id FROM mailbox_memberships "
+      "WHERE account_id = 'account-1' "
+      "AND mailbox_id = 'mailbox-inbox' AND uid = 1;");
+  derived_message_id = query_single_string (catalog_path,
+      "SELECT message_id FROM derived_view_memberships "
+      "WHERE account_id = 'account-1' "
+      "AND view_id = 'view-projects' AND uid = 1;");
+  ordinary_object_id = query_single_string (catalog_path,
+      "SELECT m.object_id FROM messages m "
+      "JOIN mailbox_memberships mm ON mm.message_id = m.message_id "
+      "WHERE mm.account_id = 'account-1' "
+      "AND mm.mailbox_id = 'mailbox-inbox' AND mm.uid = 1;");
+  derived_object_id = query_single_string (catalog_path,
+      "SELECT m.object_id FROM messages m "
+      "JOIN derived_view_memberships dvm ON dvm.message_id = m.message_id "
+      "WHERE dvm.account_id = 'account-1' "
+      "AND dvm.view_id = 'view-projects' AND dvm.uid = 1;");
+  g_assert_cmpstr (derived_message_id, ==, ordinary_message_id);
+  g_assert_cmpstr (derived_object_id, ==, ordinary_object_id);
+  g_assert_cmpuint (query_single_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM messages;"), ==, 1);
+  g_assert_cmpuint (query_single_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM objects;"), ==, 1);
+
+  mailbox_list_service =
+      wyrebox_daemon_mailbox_catalog_duckdb_new_list_service (catalog_path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (mailbox_list_service);
+
+  mailbox_select_service =
+      wyrebox_daemon_mailbox_catalog_duckdb_new_select_service (catalog_path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (mailbox_select_service);
+
+  query_template_service =
+      wyrebox_daemon_duckdb_query_template_service_new_duckdb (catalog_path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (query_template_service);
+
+  message_fetch_service = create_message_fetch_service (catalog_path,
+      object_root);
+  g_assert_nonnull (message_fetch_service);
+
+  adapter = wyrebox_daemon_request_adapter_new (NULL,
+      NULL,
+      mailbox_list_service,
+      mailbox_select_service,
+      message_fetch_service,
+      NULL,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_decode_request_frame,
+      NULL, NULL, wyrebox_daemon_capnp_codec_encode_response_frame, NULL, NULL);
+  g_assert_nonnull (adapter);
+  wyrebox_daemon_request_adapter_set_duckdb_query_template_service (adapter,
+      query_template_service);
+
+  server = wyrebox_daemon_connection_server_new (socket_path, adapter);
+  g_assert_nonnull (server);
+  g_assert_true (wyrebox_daemon_connection_server_start (server, &error));
+  g_assert_no_error (error);
+  main_context_pump_start (&pump);
+
+  wyrebox_dovecot_test_daemon_socket_path = socket_path;
+  storage_class = init_plugin_and_get_storage_class ();
+  load_box (storage_class, &storage, &box);
+  istream_stub_reset_counts ();
+
+  g_assert_cmpint (box->v.open (box), ==, 0);
+  transaction = alloc_test_transaction (box);
+  mail = alloc_test_mail (transaction);
+  g_assert_true (mail_set_uid (mail, 1));
+  g_assert_cmpuint (mail->uid, ==, 1);
+  g_assert_cmpuint (mail->seq, ==, 1);
+  g_assert_cmpint (mail_get_stream (mail, true, NULL, NULL, &stream), ==, 0);
+  g_assert_nonnull (stream);
+  g_assert_cmpuint (stream->size, ==, input_size);
+  g_assert_true (stream->owns_data);
+  g_assert_cmpmem (stream->data, stream->size, input_data, input_size);
+  g_assert_cmpuint (istream_stub_get_create_count (), ==, 1);
+  g_assert_cmpuint (istream_stub_get_unref_count (), ==, 0);
+  g_assert_cmpuint (istream_stub_get_live_count (), ==, 1);
+
+  close_free_test_mail (&mail);
+  stream = NULL;
+  g_assert_cmpuint (istream_stub_get_unref_count (), ==, 1);
+  g_assert_cmpuint (istream_stub_get_live_count (), ==, 0);
+
+  wyrebox_dovecot_test_daemon_socket_path = NULL;
+  close_unload_box_and_plugin (storage, box);
+  g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+  g_assert_no_error (error);
+  main_context_pump_stop (&pump);
+  remove_tree (socket_root);
+#else
+  g_test_skip ("CAPNP serialization is disabled");
+#endif
+}
+
+static void
 test_real_daemon_virtual_mailbox_wirelog_refresh_on_reopen (void)
 {
   const char *patterns[] = { "*", NULL };
@@ -2661,6 +2994,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/dovecot/plugin-mailbox-smoke/real-daemon-virtual-list-and-status",
       test_real_daemon_virtual_mailbox_list_and_status);
+  g_test_add_func
+      ("/dovecot/plugin-mailbox-smoke/real-daemon-virtual-fetch",
+      test_real_daemon_virtual_mailbox_fetches_fixture_bytes);
   g_test_add_func
       ("/dovecot/plugin-mailbox-smoke/"
       "real-daemon-virtual-wirelog-refresh-on-reopen",
