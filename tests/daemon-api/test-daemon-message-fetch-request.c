@@ -10,11 +10,14 @@ test_message_fetch_request_copies_fields (void)
   g_auto (WyreboxDaemonMessageFetchRequest) request = { 0 };
 
   g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-1", "mailbox-inbox", 77, 42, &error));
+          "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, &error));
   g_assert_no_error (error);
 
   g_assert_cmpstr (request.account_identity, ==, "account-1");
   g_assert_cmpstr (request.mailbox_id, ==, "mailbox-inbox");
+  g_assert_cmpint (request.namespace_kind, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
   g_assert_cmpuint (request.uid_validity, ==, 77);
   g_assert_cmpuint (request.mailbox_uid, ==, 42);
 }
@@ -26,16 +29,33 @@ test_message_fetch_request_reinitializes (void)
   g_auto (WyreboxDaemonMessageFetchRequest) request = { 0 };
 
   g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-1", "mailbox-inbox", 77, 42, &error));
+          "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-2", "mailbox-other", 99, 100, &error));
+          "account-2", "mailbox-other",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL, 99, 100, &error));
   g_assert_no_error (error);
 
   g_assert_cmpstr (request.account_identity, ==, "account-2");
   g_assert_cmpstr (request.mailbox_id, ==, "mailbox-other");
+  g_assert_cmpint (request.namespace_kind, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
   g_assert_cmpuint (request.uid_validity, ==, 99);
   g_assert_cmpuint (request.mailbox_uid, ==, 100);
+}
+
+static void
+test_message_fetch_request_rejects_unknown_namespace_kind (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonMessageFetchRequest) request = { 0 };
+
+  g_assert_false (wyrebox_daemon_message_fetch_request_init (&request,
+          "account-1", "mailbox-inbox",
+          (WyreboxDaemonMailboxListEntryKind) 99, 77, 42, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_null (request.account_identity);
 }
 
 static void
@@ -45,7 +65,8 @@ test_message_fetch_request_rejects_missing_account (void)
   g_auto (WyreboxDaemonMessageFetchRequest) request = { 0 };
 
   g_assert_false (wyrebox_daemon_message_fetch_request_init (&request,
-          "", "mailbox-inbox", 77, 42, &error));
+          "", "mailbox-inbox", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77,
+          42, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (request.account_identity);
 }
@@ -57,7 +78,8 @@ test_message_fetch_request_rejects_missing_mailbox_id (void)
   g_auto (WyreboxDaemonMessageFetchRequest) request = { 0 };
 
   g_assert_false (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-1", "", 77, 42, &error));
+          "account-1", "", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42,
+          &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (request.mailbox_id);
 }
@@ -69,7 +91,8 @@ test_message_fetch_request_rejects_zero_uid_validity (void)
   g_auto (WyreboxDaemonMessageFetchRequest) request = { 0 };
 
   g_assert_false (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-1", "mailbox-inbox", 0, 42, &error));
+          "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 0, 42, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (request.account_identity);
 }
@@ -81,7 +104,8 @@ test_message_fetch_request_rejects_zero_mailbox_uid (void)
   g_auto (WyreboxDaemonMessageFetchRequest) request = { 0 };
 
   g_assert_false (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-1", "mailbox-inbox", 77, 0, &error));
+          "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 0, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (request.account_identity);
 }
@@ -93,7 +117,8 @@ test_message_fetch_request_rejects_control_characters (void)
   g_auto (WyreboxDaemonMessageFetchRequest) request = { 0 };
 
   g_assert_false (wyrebox_daemon_message_fetch_request_init (&request,
-          "account\n1", "mailbox-inbox", 77, 42, &error));
+          "account\n1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_null (request.account_identity);
 }
@@ -119,6 +144,9 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/message-fetch-request/"
       "rejects-zero-mailbox-uid",
       test_message_fetch_request_rejects_zero_mailbox_uid);
+  g_test_add_func ("/daemon-api/message-fetch-request/"
+      "rejects-unknown-namespace-kind",
+      test_message_fetch_request_rejects_unknown_namespace_kind);
   g_test_add_func ("/daemon-api/message-fetch-request/"
       "rejects-control-characters",
       test_message_fetch_request_rejects_control_characters);

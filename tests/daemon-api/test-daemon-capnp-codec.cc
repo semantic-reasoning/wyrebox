@@ -200,7 +200,9 @@ static GBytes *
 build_message_fetch_request_bytes (const char *request_id,
     const char *identity_account,
     const char *message_fetch_account,
-    const char *mailbox_id, guint64 uid_validity, guint64 mailbox_uid)
+    const char *mailbox_id,
+    MailboxListEntryKind namespace_kind, guint64 uid_validity,
+    guint64 mailbox_uid)
 {
   capnp::MallocMessageBuilder request_builder;
   auto request_frame = request_builder.initRoot < RequestFrame > ();
@@ -217,6 +219,7 @@ build_message_fetch_request_bytes (const char *request_id,
   message_fetch_request.setMailboxId (mailbox_id);
   message_fetch_request.setUidValidity (uid_validity);
   message_fetch_request.setMailboxUid (mailbox_uid);
+  message_fetch_request.setNamespaceKind (namespace_kind);
 
   auto words = capnp::messageToFlatArray (request_builder);
   auto bytes = words.asBytes ();
@@ -999,7 +1002,9 @@ assert_mailbox_select_request_encoder_rejects_invalid_input (void)
 }
 
 static void
-assert_message_fetch_request_encoder_round_trip (void)
+assert_message_fetch_request_encoder_round_trip_for_kind (
+    WyreboxDaemonMailboxListEntryKind namespace_kind,
+    const char *mailbox_id)
 {
   g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
   g_auto (WyreboxDaemonMessageFetchRequest) request = { 0 };
@@ -1015,7 +1020,7 @@ assert_message_fetch_request_encoder_round_trip (void)
           "account-1", "dovecot-storage", "corr-message-fetch", &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-1", "mailbox-inbox", 77, 42, &error));
+          "account-1", mailbox_id, namespace_kind, 77, 42, &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_message_fetch_request (&identity,
@@ -1036,13 +1041,23 @@ assert_message_fetch_request_encoder_round_trip (void)
       ==, WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_FETCH);
   g_assert_nonnull (decoded.message_fetch);
   g_assert_cmpstr (decoded.message_fetch->account_identity, ==, "account-1");
-  g_assert_cmpstr (decoded.message_fetch->mailbox_id, ==, "mailbox-inbox");
+  g_assert_cmpstr (decoded.message_fetch->mailbox_id, ==, mailbox_id);
+  g_assert_cmpint (decoded.message_fetch->namespace_kind, ==, namespace_kind);
   g_assert_cmpuint (decoded.message_fetch->uid_validity, ==, 77);
   g_assert_cmpuint (decoded.message_fetch->mailbox_uid, ==, 42);
 
   g_assert_nonnull (decoded_state_clear);
   g_assert_nonnull (decoded_state);
   decoded_state_clear (decoded_state);
+}
+
+static void
+assert_message_fetch_request_encoder_round_trip (void)
+{
+  assert_message_fetch_request_encoder_round_trip_for_kind
+      (WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, "mailbox-inbox");
+  assert_message_fetch_request_encoder_round_trip_for_kind
+      (WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL, "view-projects");
 }
 
 static void
@@ -1060,7 +1075,8 @@ assert_message_fetch_request_encoder_rejects_invalid_input (void)
           "dovecot", "account-1", "dovecot-storage", NULL, &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-1", "mailbox-inbox", 77, 42, &error));
+          "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, &error));
   g_assert_no_error (error);
 
   encoded = wyrebox_daemon_capnp_codec_encode_message_fetch_request (NULL,
@@ -1083,6 +1099,7 @@ assert_message_fetch_request_encoder_rejects_invalid_input (void)
 
   invalid_request.account_identity = g_strdup ("");
   invalid_request.mailbox_id = g_strdup ("mailbox-inbox");
+  invalid_request.namespace_kind = WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
   invalid_request.uid_validity = 77;
   invalid_request.mailbox_uid = 42;
   encoded = wyrebox_daemon_capnp_codec_encode_message_fetch_request (&identity,
@@ -1126,7 +1143,7 @@ assert_request_bytes_decode_message_fetch (void)
 {
   g_autoptr (GBytes) request =
       build_message_fetch_request_bytes ("request-fetch", "account-1",
-      "account-1", "mailbox-inbox", 77, 42);
+      "account-1", "view-projects", MailboxListEntryKind::VIRTUAL, 77, 42);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
@@ -1145,7 +1162,9 @@ assert_request_bytes_decode_message_fetch (void)
       WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_FETCH);
   g_assert_nonnull (decoded.message_fetch);
   g_assert_cmpstr (decoded.message_fetch->account_identity, ==, "account-1");
-  g_assert_cmpstr (decoded.message_fetch->mailbox_id, ==, "mailbox-inbox");
+  g_assert_cmpstr (decoded.message_fetch->mailbox_id, ==, "view-projects");
+  g_assert_cmpint (decoded.message_fetch->namespace_kind, ==,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
   g_assert_cmpuint (decoded.message_fetch->uid_validity, ==, 77);
   g_assert_cmpuint (decoded.message_fetch->mailbox_uid, ==, 42);
   g_assert_null (decoded.mailbox_list);
@@ -2366,7 +2385,8 @@ assert_request_bytes_rejects_message_fetch_missing_account_identity (void)
 {
   g_autoptr (GBytes) request =
       build_message_fetch_request_bytes ("request-fetch-missing-account",
-      "account-1", "", "mailbox-inbox", 77, 42);
+      "account-1", "", "mailbox-inbox", MailboxListEntryKind::ORDINARY, 77,
+      42);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
@@ -2385,7 +2405,7 @@ assert_request_bytes_rejects_message_fetch_missing_mailbox_id (void)
 {
   g_autoptr (GBytes) request =
       build_message_fetch_request_bytes ("request-fetch-missing-mailbox",
-      "account-1", "account-1", "", 77, 42);
+      "account-1", "account-1", "", MailboxListEntryKind::ORDINARY, 77, 42);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
@@ -2404,7 +2424,8 @@ assert_request_bytes_rejects_message_fetch_zero_uid_validity (void)
 {
   g_autoptr (GBytes) request =
       build_message_fetch_request_bytes ("request-fetch-zero-uid-validity",
-      "account-1", "account-1", "mailbox-inbox", 0, 42);
+      "account-1", "account-1", "mailbox-inbox",
+      MailboxListEntryKind::ORDINARY, 0, 42);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
@@ -2423,7 +2444,8 @@ assert_request_bytes_rejects_message_fetch_zero_mailbox_uid (void)
 {
   g_autoptr (GBytes) request =
       build_message_fetch_request_bytes ("request-fetch-zero-mailbox-uid",
-      "account-1", "account-1", "mailbox-inbox", 77, 0);
+      "account-1", "account-1", "mailbox-inbox",
+      MailboxListEntryKind::ORDINARY, 77, 0);
   g_autoptr (GError) error = NULL;
   WyreboxDaemonDecodedRequestFrame decoded = { 0 };
   gpointer decoded_state = NULL;
@@ -3831,7 +3853,8 @@ assert_request_adapter_routes_message_fetch (void)
   g_assert_nonnull (adapter);
 
   request = build_message_fetch_request_bytes ("request-fetch-route",
-      "account-1", "account-1", "mailbox-inbox", 77, 42);
+      "account-1", "account-1", "mailbox-inbox",
+      MailboxListEntryKind::ORDINARY, 77, 42);
   const WyreboxDaemonPeerCredentials peer_credentials = {
     .uid = 100,
     .gid = 101,

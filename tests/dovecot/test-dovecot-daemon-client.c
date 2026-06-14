@@ -43,6 +43,7 @@ typedef struct
   WyreboxDaemonMailboxListEntryKind expected_uid_map_kind;
   const char *expected_fetch_account_id;
   const char *expected_fetch_mailbox_id;
+  WyreboxDaemonMailboxListEntryKind expected_fetch_kind;
   guint64 expected_fetch_uid_validity;
   guint64 expected_fetch_mailbox_uid;
   const char *message_fetch_response_message_id;
@@ -277,6 +278,7 @@ assert_decoded_list_request (GBytes *request,
 static char *
 assert_decoded_message_fetch_request (GBytes *request,
     const char *expected_mailbox_id,
+    WyreboxDaemonMailboxListEntryKind expected_kind,
     guint64 expected_uid_validity,
     guint64 expected_mailbox_uid, const char *expected_account_id)
 {
@@ -300,6 +302,7 @@ assert_decoded_message_fetch_request (GBytes *request,
   g_assert_cmpstr (decoded.message_fetch->account_identity,
       ==, expected_account_id);
   g_assert_cmpstr (decoded.message_fetch->mailbox_id, ==, expected_mailbox_id);
+  g_assert_cmpint (decoded.message_fetch->namespace_kind, ==, expected_kind);
   g_assert_cmpuint (decoded.message_fetch->uid_validity, ==,
       expected_uid_validity);
   g_assert_cmpuint (decoded.message_fetch->mailbox_uid, ==,
@@ -417,6 +420,7 @@ fake_server_thread_main (gpointer user_data)
         assert_decoded_message_fetch_request (request,
         server->expected_fetch_mailbox_id != NULL
         ? server->expected_fetch_mailbox_id : "mailbox-inbox",
+        server->expected_fetch_kind,
         server->expected_fetch_uid_validity != 0
         ? server->expected_fetch_uid_validity : 77,
         server->expected_fetch_mailbox_uid != 0
@@ -950,13 +954,40 @@ test_dovecot_daemon_client_fetch_message_bytes_succeeds (void)
   server.message_fetch_response_payload_size = strlen (payload_text);
 
   payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
-      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+      "account-1", "mailbox-inbox", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+      77, 42, "message-1", &error);
 
   g_assert_nonnull (payload);
   g_assert_no_error (error);
   payload_data = g_bytes_get_data (payload, &payload_size);
   g_assert_cmpuint (payload_size, ==, strlen (payload_text));
   g_assert_cmpmem (payload_data, payload_size, payload_text, payload_size);
+
+  fake_server_join (&server);
+  remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_fetch_message_bytes_sends_virtual_kind (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = make_socket_path (&root);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  FakeServer server = { 0 };
+
+  fake_server_start (&server, socket_path, FAKE_SERVER_MESSAGE_FETCH_RESPONSE,
+      NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+  server.expect_message_fetch_request = TRUE;
+  server.expected_fetch_mailbox_id = "view-projects";
+  server.expected_fetch_kind = WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL;
+
+  payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
+      "account-1", "view-projects", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL,
+      77, 42, "message-1", &error);
+
+  g_assert_nonnull (payload);
+  g_assert_no_error (error);
 
   fake_server_join (&server);
   remove_tree (root);
@@ -978,7 +1009,8 @@ test_dovecot_daemon_client_fetch_message_bytes_rejects_bad_request_id (void)
   server.expect_message_fetch_request = TRUE;
 
   payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
-      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+      "account-1", "mailbox-inbox", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+      77, 42, "message-1", &error);
   g_assert_null (payload);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
 
@@ -1002,7 +1034,8 @@ static void
   server.expect_message_fetch_request = TRUE;
 
   payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
-      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+      "account-1", "mailbox-inbox", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+      77, 42, "message-1", &error);
   g_assert_null (payload);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
 
@@ -1026,7 +1059,8 @@ test_dovecot_daemon_client_fetch_message_bytes_rejects_query_id (void)
   server.expect_message_fetch_request = TRUE;
 
   payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
-      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+      "account-1", "mailbox-inbox", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+      77, 42, "message-1", &error);
   g_assert_null (payload);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
 
@@ -1050,7 +1084,8 @@ static void
   server.expect_message_fetch_request = TRUE;
 
   payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
-      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+      "account-1", "mailbox-inbox", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+      77, 42, "message-1", &error);
   g_assert_null (payload);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
 
@@ -1073,7 +1108,8 @@ test_dovecot_daemon_client_fetch_message_bytes_rejects_partial_chunk (void)
   server.expect_message_fetch_request = TRUE;
 
   payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
-      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+      "account-1", "mailbox-inbox", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+      77, 42, "message-1", &error);
   g_assert_null (payload);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
 
@@ -1098,7 +1134,8 @@ test_dovecot_daemon_client_fetch_message_bytes_rejects_empty_payload (void)
   server.expect_message_fetch_request = TRUE;
 
   payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
-      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+      "account-1", "mailbox-inbox", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+      77, 42, "message-1", &error);
   g_assert_null (payload);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
 
@@ -1120,7 +1157,8 @@ test_dovecot_daemon_client_fetch_message_bytes_returns_daemon_error (void)
   server.expect_message_fetch_request = TRUE;
 
   payload = wyrebox_dovecot_daemon_client_fetch_message_bytes (socket_path,
-      "account-1", "mailbox-inbox", 77, 42, "message-1", &error);
+      "account-1", "mailbox-inbox", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+      77, 42, "message-1", &error);
   g_assert_null (payload);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
   g_assert_nonnull (g_strstr_len (error->message, -1, "mailbox not found"));
@@ -1540,8 +1578,9 @@ test_dovecot_daemon_client_capnp_disabled_is_not_supported (void)
 
   g_clear_error (&error);
   g_assert_false (wyrebox_dovecot_daemon_client_fetch_message_bytes
-      ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox", 77, 42,
-          "message-1", &error));
+      ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, "message-1",
+          &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
 }
 
@@ -1652,29 +1691,43 @@ test_dovecot_daemon_client_invalid_inputs_fail_cleanly (void)
 
   g_clear_error (&error);
   g_assert_null (wyrebox_dovecot_daemon_client_fetch_message_bytes
-      ("/tmp/wyrebox.sock", "", "mailbox-inbox", 77, 42, "message-1", &error));
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
-
-  g_clear_error (&error);
-  g_assert_null (wyrebox_dovecot_daemon_client_fetch_message_bytes
-      ("/tmp/wyrebox.sock", "account-1", "", 77, 42, "message-1", &error));
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
-
-  g_clear_error (&error);
-  g_assert_null (wyrebox_dovecot_daemon_client_fetch_message_bytes
-      ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox", 0, 42, "message-1",
+      ("/tmp/wyrebox.sock", "", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, "message-1",
           &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 
   g_clear_error (&error);
   g_assert_null (wyrebox_dovecot_daemon_client_fetch_message_bytes
-      ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox", 77, 0, "message-1",
+      ("/tmp/wyrebox.sock", "account-1", "",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, "message-1",
           &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 
   g_clear_error (&error);
   g_assert_null (wyrebox_dovecot_daemon_client_fetch_message_bytes
-      ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox", 77, 42, "", &error));
+      ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox",
+          (WyreboxDaemonMailboxListEntryKind) 9999,
+          77, 42, "message-1", &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  g_clear_error (&error);
+  g_assert_null (wyrebox_dovecot_daemon_client_fetch_message_bytes
+      ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 0, 42, "message-1",
+          &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  g_clear_error (&error);
+  g_assert_null (wyrebox_dovecot_daemon_client_fetch_message_bytes
+      ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 0, "message-1",
+          &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  g_clear_error (&error);
+  g_assert_null (wyrebox_dovecot_daemon_client_fetch_message_bytes
+      ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, "", &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
 #endif
 }
@@ -1701,6 +1754,9 @@ main (int argc, char **argv)
       test_dovecot_daemon_client_daemon_error_fails_cleanly);
   g_test_add_func ("/dovecot/daemon-client/fetch-message-bytes-succeeds",
       test_dovecot_daemon_client_fetch_message_bytes_succeeds);
+  g_test_add_func
+      ("/dovecot/daemon-client/fetch-message-bytes-sends-virtual-kind",
+      test_dovecot_daemon_client_fetch_message_bytes_sends_virtual_kind);
   g_test_add_func
       ("/dovecot/daemon-client/fetch-message-bytes-rejects-bad-request-id",
       test_dovecot_daemon_client_fetch_message_bytes_rejects_bad_request_id);

@@ -26,6 +26,23 @@ validate_text (const char *value, const char *field_name, GError **error)
   return TRUE;
 }
 
+static gboolean
+validate_namespace_kind (WyreboxDaemonMailboxListEntryKind namespace_kind,
+    GError **error)
+{
+  switch (namespace_kind) {
+    case WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY:
+    case WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL:
+      return TRUE;
+    default:
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "message FETCH namespace_kind is unknown");
+      return FALSE;
+  }
+}
+
 void
 wyrebox_daemon_message_fetch_request_clear (WyreboxDaemonMessageFetchRequest
     *request)
@@ -35,6 +52,7 @@ wyrebox_daemon_message_fetch_request_clear (WyreboxDaemonMessageFetchRequest
 
   g_clear_pointer (&request->account_identity, g_free);
   g_clear_pointer (&request->mailbox_id, g_free);
+  request->namespace_kind = WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
   request->uid_validity = 0;
   request->mailbox_uid = 0;
 }
@@ -42,7 +60,8 @@ wyrebox_daemon_message_fetch_request_clear (WyreboxDaemonMessageFetchRequest
 gboolean
 wyrebox_daemon_message_fetch_request_init (WyreboxDaemonMessageFetchRequest
     *request, const char *account_identity, const char *mailbox_id,
-    guint64 uid_validity, guint64 mailbox_uid, GError **error)
+    WyreboxDaemonMailboxListEntryKind namespace_kind, guint64 uid_validity,
+    guint64 mailbox_uid, GError **error)
 {
   g_auto (WyreboxDaemonMessageFetchRequest) next = { 0 };
 
@@ -53,6 +72,9 @@ wyrebox_daemon_message_fetch_request_init (WyreboxDaemonMessageFetchRequest
     return FALSE;
 
   if (!validate_text (mailbox_id, "mailbox_id", error))
+    return FALSE;
+
+  if (!validate_namespace_kind (namespace_kind, error))
     return FALSE;
 
   if (uid_validity == 0) {
@@ -71,6 +93,7 @@ wyrebox_daemon_message_fetch_request_init (WyreboxDaemonMessageFetchRequest
 
   next.account_identity = g_strdup (account_identity);
   next.mailbox_id = g_strdup (mailbox_id);
+  next.namespace_kind = namespace_kind;
   next.uid_validity = uid_validity;
   next.mailbox_uid = mailbox_uid;
 

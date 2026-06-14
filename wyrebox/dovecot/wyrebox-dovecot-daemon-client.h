@@ -65,6 +65,7 @@ GBytes *wyrebox_dovecot_daemon_client_fetch_message_bytes (
     const char *socket_path,
     const char *account_identity,
     const char *mailbox_id,
+    WyreboxDaemonMailboxListEntryKind kind,
     guint64 uid_validity,
     guint64 mailbox_uid,
     const char *expected_message_id,

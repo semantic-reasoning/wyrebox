@@ -101,7 +101,8 @@ assert_bad_fetch_chunk_becomes_error_frame (BadFetchChunkMode mode)
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
 
   g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-1", "mailbox-inbox", 77, 42, &error));
+          "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, &error));
   g_assert_no_error (error);
 
   service = wyrebox_daemon_message_fetch_service_new (fetch_bad_chunk_fixture,
@@ -129,7 +130,8 @@ test_message_fetch_dispatcher_handles_valid_envelope (void)
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
 
   g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-1", "mailbox-inbox", 77, 42, &error));
+          "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, &error));
   g_assert_no_error (error);
 
   service = wyrebox_daemon_message_fetch_service_new (fetch_message_fixture,
@@ -162,7 +164,8 @@ static void
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
 
   g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-1", "mailbox-inbox", 77, 42, &error));
+          "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, &error));
   g_assert_no_error (error);
 
   service = wyrebox_daemon_message_fetch_service_new (fetch_message_fixture,
@@ -191,7 +194,8 @@ test_message_fetch_dispatcher_rejects_account_mismatch_with_error_frame (void)
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
 
   g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-2", "mailbox-inbox", 77, 42, &error));
+          "account-2", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, &error));
   g_assert_no_error (error);
 
   service = wyrebox_daemon_message_fetch_service_new (fetch_message_fixture,
@@ -220,7 +224,8 @@ test_message_fetch_dispatcher_rejects_missing_request_id_before_service (void)
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
 
   g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-1", "mailbox-inbox", 77, 42, &error));
+          "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, &error));
   g_assert_no_error (error);
 
   service = wyrebox_daemon_message_fetch_service_new (fetch_message_fixture,
@@ -247,7 +252,8 @@ test_message_fetch_dispatcher_converts_silent_failure_to_error_frame (void)
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
 
   g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-1", "mailbox-inbox", 77, 42, &error));
+          "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, &error));
   g_assert_no_error (error);
 
   service = wyrebox_daemon_message_fetch_service_new (fail_fetch_without_error,
@@ -281,7 +287,8 @@ test_message_fetch_service_sets_error_on_silent_failure (void)
           "dovecot", "account-1", "dovecot-storage", "imap-fetch-1", &error));
   g_assert_no_error (error);
   g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
-          "account-1", "mailbox-inbox", 77, 42, &error));
+          "account-1", "mailbox-inbox",
+          WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, &error));
   g_assert_no_error (error);
 
   service = wyrebox_daemon_message_fetch_service_new (fail_fetch_without_error,

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "wyrebox-daemon-mailbox-list-result.h"
+
 #include <glib-object.h>
 
 /* *INDENT-OFF* */
@@ -12,6 +14,7 @@ typedef struct
    */
   char *account_identity;
   char *mailbox_id;
+  WyreboxDaemonMailboxListEntryKind namespace_kind;
   guint64 uid_validity;
   guint64 mailbox_uid;
 } WyreboxDaemonMessageFetchRequest;
@@ -26,6 +29,7 @@ gboolean wyrebox_daemon_message_fetch_request_init (
     WyreboxDaemonMessageFetchRequest *request,
     const char *account_identity,
     const char *mailbox_id,
+    WyreboxDaemonMailboxListEntryKind namespace_kind,
     guint64 uid_validity,
     guint64 mailbox_uid,
     GError **error);
