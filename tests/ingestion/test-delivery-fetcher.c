@@ -272,17 +272,21 @@ fetch_reopened_namespace (const gchar *catalog_path,
 }
 
 static void
-seed_visible_derived_view_for_inbox_uid (const gchar *catalog_path)
+seed_derived_view_for_inbox_uid (const gchar *catalog_path,
+    gboolean is_selectable, gboolean is_visible)
 {
   g_auto (TestDuckdb) duckdb = open_test_catalog (catalog_path);
+  g_autofree gchar *view_sql = NULL;
 
-  exec_catalog_sql (&duckdb,
-      "INSERT INTO derived_views ("
+  view_sql = g_strdup_printf ("INSERT INTO derived_views ("
       "view_id, account_id, imap_name, definition_ref, "
       "is_selectable, is_visible"
       ") VALUES ("
       "'view-important', 'account-1', 'Important', "
-      "'rule:important', TRUE, TRUE" ");");
+      "'rule:important', %s, %s" ");",
+      is_selectable ? "TRUE" : "FALSE", is_visible ? "TRUE" : "FALSE");
+  exec_catalog_sql (&duckdb, view_sql);
+
   exec_catalog_sql (&duckdb,
       "INSERT INTO mailbox_uid_state ("
       "account_id, namespace_kind, namespace_id, uidnext, uidvalidity"
@@ -307,6 +311,42 @@ seed_visible_derived_view_for_inbox_uid (const gchar *catalog_path)
       "FROM mailbox_memberships "
       "WHERE account_id = 'account-1' "
       "AND mailbox_id = 'mailbox-inbox' " "AND uid = 1;");
+}
+
+static void
+seed_visible_derived_view_for_inbox_uid (const gchar *catalog_path)
+{
+  seed_derived_view_for_inbox_uid (catalog_path, TRUE, TRUE);
+}
+
+static void
+seed_cross_account_derived_view_conflict (const gchar *catalog_path)
+{
+  g_auto (TestDuckdb) duckdb = open_test_catalog (catalog_path);
+
+  exec_catalog_sql (&duckdb,
+      "INSERT INTO messages ("
+      "message_id, account_id, object_id, journal_offset, journal_sequence"
+      ") "
+      "SELECT 'account-2-message', 'account-2', m.object_id, "
+      "m.journal_offset + 1000, m.journal_sequence + 1000 "
+      "FROM mailbox_memberships mm "
+      "JOIN messages m ON m.account_id = mm.account_id "
+      "AND m.message_id = mm.message_id "
+      "WHERE mm.account_id = 'account-1' "
+      "AND mm.mailbox_id = 'mailbox-inbox' " "AND mm.uid = 2;");
+  exec_catalog_sql (&duckdb,
+      "INSERT INTO mailbox_uid_state ("
+      "account_id, namespace_kind, namespace_id, uidnext, uidvalidity"
+      ") VALUES ("
+      "'account-2', 'derived_view', 'view-important', 100, 21" ");");
+  exec_catalog_sql (&duckdb,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES ("
+      "'dvm-account-2-conflict', 'account-2', 'view-important', "
+      "'account-2-message', 99, TRUE, 'hash-account-2', 99" ");");
 }
 
 static void
@@ -388,6 +428,129 @@ test_fetcher_fetches_ordinary_and_derived_memberships_as_same_bytes (void)
       objects_before);
   g_assert_cmpuint (query_catalog_count (catalog_path, "messages"), ==,
       messages_before);
+
+  remove_tree (object_root);
+  remove_tree (journal_root);
+  remove_catalog (catalog_path);
+}
+
+static void
+test_fetcher_rejects_invisible_derived_view (void)
+{
+  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+  g_autofree gchar *catalog_path = create_bootstrap_catalog ();
+  g_autofree gchar *object_root =
+      g_dir_make_tmp ("wyrebox-delivery-fetcher-objects-XXXXXX", NULL);
+  g_autofree gchar *journal_root =
+      g_dir_make_tmp ("wyrebox-delivery-fetcher-journal-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) input = NULL;
+  g_autoptr (GBytes) fetched = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+
+  g_assert_nonnull (fixture_dir);
+  g_assert_nonnull (object_root);
+  g_assert_nonnull (journal_root);
+
+  input = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
+  ingestor = create_ingestor (object_root, journal_root);
+  ingest_bytes (ingestor, input);
+  run_catchup (catalog_path, object_root, journal_root);
+  seed_derived_view_for_inbox_uid (catalog_path, TRUE, FALSE);
+
+  g_clear_object (&ingestor);
+  fetched = fetch_reopened_namespace (catalog_path, object_root,
+      WYREBOX_DELIVERY_FETCHER_NAMESPACE_DERIVED_VIEW, "view-important", 21, 1,
+      &error);
+  g_assert_null (fetched);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_clear_error (&error);
+
+  remove_tree (object_root);
+  remove_tree (journal_root);
+  remove_catalog (catalog_path);
+}
+
+static void
+test_fetcher_rejects_unselectable_derived_view (void)
+{
+  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+  g_autofree gchar *catalog_path = create_bootstrap_catalog ();
+  g_autofree gchar *object_root =
+      g_dir_make_tmp ("wyrebox-delivery-fetcher-objects-XXXXXX", NULL);
+  g_autofree gchar *journal_root =
+      g_dir_make_tmp ("wyrebox-delivery-fetcher-journal-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) input = NULL;
+  g_autoptr (GBytes) fetched = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+
+  g_assert_nonnull (fixture_dir);
+  g_assert_nonnull (object_root);
+  g_assert_nonnull (journal_root);
+
+  input = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
+  ingestor = create_ingestor (object_root, journal_root);
+  ingest_bytes (ingestor, input);
+  run_catchup (catalog_path, object_root, journal_root);
+  seed_derived_view_for_inbox_uid (catalog_path, FALSE, TRUE);
+
+  g_clear_object (&ingestor);
+  fetched = fetch_reopened_namespace (catalog_path, object_root,
+      WYREBOX_DELIVERY_FETCHER_NAMESPACE_DERIVED_VIEW, "view-important", 21, 1,
+      &error);
+  g_assert_null (fetched);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_clear_error (&error);
+
+  remove_tree (object_root);
+  remove_tree (journal_root);
+  remove_catalog (catalog_path);
+}
+
+static void
+test_fetcher_rejects_cross_account_derived_view_conflict (void)
+{
+  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+  g_autofree gchar *catalog_path = create_bootstrap_catalog ();
+  g_autofree gchar *object_root =
+      g_dir_make_tmp ("wyrebox-delivery-fetcher-objects-XXXXXX", NULL);
+  g_autofree gchar *journal_root =
+      g_dir_make_tmp ("wyrebox-delivery-fetcher-journal-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) first_input = NULL;
+  g_autoptr (GBytes) second_input = NULL;
+  g_autoptr (GBytes) fetched = NULL;
+  g_autoptr (GBytes) missing = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+
+  g_assert_nonnull (fixture_dir);
+  g_assert_nonnull (object_root);
+  g_assert_nonnull (journal_root);
+
+  first_input = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
+  second_input = load_fixture_bytes (fixture_dir, "html-message.eml");
+  ingestor = create_ingestor (object_root, journal_root);
+  ingest_bytes (ingestor, first_input);
+  ingest_bytes (ingestor, second_input);
+  run_catchup (catalog_path, object_root, journal_root);
+  seed_visible_derived_view_for_inbox_uid (catalog_path);
+  seed_cross_account_derived_view_conflict (catalog_path);
+
+  g_clear_object (&ingestor);
+  missing = fetch_reopened_namespace (catalog_path, object_root,
+      WYREBOX_DELIVERY_FETCHER_NAMESPACE_DERIVED_VIEW, "view-important", 21, 99,
+      &error);
+  g_assert_null (missing);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_clear_error (&error);
+
+  fetched = fetch_reopened_namespace (catalog_path, object_root,
+      WYREBOX_DELIVERY_FETCHER_NAMESPACE_DERIVED_VIEW, "view-important", 21, 1,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (fetched);
+  assert_bytes_equal (fetched, first_input);
 
   remove_tree (object_root);
   remove_tree (journal_root);
@@ -585,6 +748,14 @@ main (int argc, char **argv)
       test_fetcher_fetches_materialized_inbox_uid_after_reopen);
   g_test_add_func ("/ingestion/delivery-fetcher/fetches-derived-view-uid",
       test_fetcher_fetches_ordinary_and_derived_memberships_as_same_bytes);
+  g_test_add_func ("/ingestion/delivery-fetcher/rejects-invisible-derived-view",
+      test_fetcher_rejects_invisible_derived_view);
+  g_test_add_func
+      ("/ingestion/delivery-fetcher/rejects-unselectable-derived-view",
+      test_fetcher_rejects_unselectable_derived_view);
+  g_test_add_func
+      ("/ingestion/delivery-fetcher/rejects-cross-account-derived-conflict",
+      test_fetcher_rejects_cross_account_derived_view_conflict);
   g_test_add_func ("/ingestion/delivery-fetcher/rejects-derived-uidvalidity",
       test_fetcher_rejects_derived_uidvalidity_mismatch);
   g_test_add_func ("/ingestion/delivery-fetcher/rejects-hidden-derived-uid",
