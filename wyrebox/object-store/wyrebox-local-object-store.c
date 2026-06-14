@@ -97,6 +97,46 @@ checksum_bytes (GBytes *bytes)
   return g_strdup (g_checksum_get_string (checksum));
 }
 
+static char *
+checksum_data (const guint8 *data, gsize size)
+{
+  g_autoptr (GChecksum) checksum = g_checksum_new (G_CHECKSUM_SHA256);
+
+  g_checksum_update (checksum, data, size);
+
+  return g_strdup (g_checksum_get_string (checksum));
+}
+
+static gboolean
+verify_object_contents (const char *path,
+    const char *expected_hex, const guint8 *data, gsize size, GError **error)
+{
+  g_autofree char *actual_hex = checksum_data (data, size);
+
+  if (g_strcmp0 (actual_hex, expected_hex) == 0)
+    return TRUE;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_INVALID_DATA,
+      "object %s failed SHA-256 verification: expected %s, got %s",
+      path, expected_hex, actual_hex);
+  return FALSE;
+}
+
+static gboolean
+verify_object_file (const char *path, const char *expected_hex, GError **error)
+{
+  g_autofree char *contents = NULL;
+  gsize length = 0;
+
+  if (!g_file_get_contents (path, &contents, &length, error))
+    return FALSE;
+
+  return verify_object_contents (path,
+      expected_hex, (const guint8 *) contents, length, error);
+}
+
 static gboolean
 write_all (int fd, const guint8 *data, gsize size, GError **error)
 {
@@ -257,6 +297,9 @@ wyrebox_local_object_store_put_bytes (WyreboxLocalObjectStore *self,
     return FALSE;
 
   if (g_file_test (path, G_FILE_TEST_EXISTS)) {
+    if (!verify_object_file (path, hex, error))
+      return FALSE;
+
     if (!fsync_directory_path (parent_dir, error))
       return FALSE;
 
@@ -317,6 +360,9 @@ wyrebox_local_object_store_put_bytes (WyreboxLocalObjectStore *self,
     fsync_directory_path_best_effort (parent_dir);
 
     if (saved_errno == EEXIST) {
+      if (!verify_object_file (path, hex, error))
+        return FALSE;
+
       if (!fsync_directory_path (parent_dir, error))
         return FALSE;
 
@@ -356,6 +402,10 @@ wyrebox_local_object_store_get_bytes (WyreboxLocalObjectStore *self,
 
   path = build_object_path (self, hex);
   if (!g_file_get_contents (path, &contents, &length, error))
+    return NULL;
+
+  if (!verify_object_contents (path,
+          hex, (const guint8 *) contents, length, error))
     return NULL;
 
   return g_bytes_new_take (g_steal_pointer (&contents), length);

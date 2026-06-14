@@ -610,12 +610,13 @@ test_size_mismatch_clears_partial_projection (void)
   g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
   g_autoptr (WyreboxJournalReader) reader = NULL;
   g_autoptr (WyreboxDeliveryProjection) projection = NULL;
+  g_autoptr (GBytes) mismatched_payload = NULL;
   g_auto (WyreboxDeliveryProjectionList) list = { 0 };
   g_auto (WyreboxEmlIngestResult) first_result = { 0 };
   g_auto (WyreboxEmlIngestResult) second_result = { 0 };
   gsize second_size = 0;
-  const guint8 *second_data = NULL;
-  g_autofree guint8 *truncated = NULL;
+  guint64 offset = 0;
+  guint64 sequence = 0;
 
   g_assert_nonnull (fixture_dir);
   g_assert_nonnull (object_root);
@@ -643,14 +644,18 @@ test_size_mismatch_clears_partial_projection (void)
   g_assert_no_error (error);
   g_assert_cmpuint (second_result.journal_sequence, ==, 2);
 
-  second_data = g_bytes_get_data (second_input, &second_size);
+  (void) g_bytes_get_data (second_input, &second_size);
   g_assert_cmpuint (second_size, >, 1);
-  truncated = g_memdup2 (second_data, second_size - 1);
-  g_assert_nonnull (truncated);
 
-  overwrite_object (object_root, second_result.object_key, truncated,
-      second_size - 1, &error);
+  mismatched_payload = wyrebox_message_delivered_payload_encode
+      (second_result.object_key, second_size - 1, &error);
   g_assert_no_error (error);
+  g_assert_nonnull (mismatched_payload);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          mismatched_payload, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (sequence, ==, 3);
 
   reader = wyrebox_journal_reader_new (journal_root, &error);
   g_assert_no_error (error);
@@ -662,7 +667,7 @@ test_size_mismatch_clears_partial_projection (void)
   g_assert_false (wyrebox_delivery_projection_replay_all (projection, &list,
           &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
-  g_assert_nonnull (g_strstr_len (error->message, -1, "sequence 2"));
+  g_assert_nonnull (g_strstr_len (error->message, -1, "sequence 3"));
   g_assert_nonnull (g_strstr_len (error->message, -1, "size"));
   g_assert_null (list.records);
 

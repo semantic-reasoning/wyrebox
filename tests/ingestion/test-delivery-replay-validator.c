@@ -193,22 +193,19 @@ test_message_delivered_size_mismatch_fails_validation (void)
   g_autoptr (WyreboxJournalReader) reader = NULL;
   g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
   g_autoptr (WyreboxDeliveryReplayValidator) validator = NULL;
+  g_autoptr (GBytes) mismatched_payload = NULL;
   g_auto (WyreboxEmlIngestResult) result = { 0 };
   gsize input_size = 0;
-  gsize truncated_size = 0;
-  const guint8 *input_data = NULL;
-  g_autofree guint8 *truncated = NULL;
+  guint64 offset = 0;
+  guint64 sequence = 0;
 
   g_assert_nonnull (fixture_dir);
   g_assert_nonnull (object_root);
   g_assert_nonnull (journal_root);
 
   input = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
-  input_data = g_bytes_get_data (input, &input_size);
+  (void) g_bytes_get_data (input, &input_size);
   g_assert_cmpuint (input_size, >, 0);
-  truncated_size = input_size - 1;
-  truncated = g_memdup2 (input_data, truncated_size);
-  g_assert_nonnull (truncated);
 
   store = wyrebox_local_object_store_new (object_root, &error);
   g_assert_no_error (error);
@@ -224,9 +221,15 @@ test_message_delivered_size_mismatch_fails_validation (void)
           &result, &error));
   g_assert_no_error (error);
 
-  overwrite_object (object_root, result.object_key, truncated, truncated_size,
-      &error);
+  mismatched_payload = wyrebox_message_delivered_payload_encode
+      (result.object_key, input_size - 1, &error);
   g_assert_no_error (error);
+  g_assert_nonnull (mismatched_payload);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+          mismatched_payload, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (sequence, ==, 2);
 
   reader = wyrebox_journal_reader_new (journal_root, &error);
   g_assert_no_error (error);
@@ -237,7 +240,7 @@ test_message_delivered_size_mismatch_fails_validation (void)
   g_assert_false (wyrebox_delivery_replay_validator_validate_all (validator,
           &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
-  g_assert_nonnull (g_strstr_len (error->message, -1, "sequence 1"));
+  g_assert_nonnull (g_strstr_len (error->message, -1, "sequence 2"));
   g_assert_nonnull (g_strstr_len (error->message, -1, "size"));
   g_clear_error (&error);
 
