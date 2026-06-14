@@ -325,3 +325,37 @@ p_array_init (array_t *array, pool_t pool, unsigned int count)
   (void) count;
   array->dummy = NULL;
 }
+
+struct istream *
+i_stream_create_from_data (const void *data, size_t size)
+{
+  struct istream *stream;
+
+  if (data == NULL || size == 0)
+    return NULL;
+
+  stream = calloc (1, sizeof (*stream));
+  if (stream == NULL)
+    return NULL;
+
+  stream->data = malloc (size);
+  if (stream->data == NULL) {
+    free (stream);
+    return NULL;
+  }
+
+  memcpy (stream->data, data, size);
+  stream->size = size;
+  return stream;
+}
+
+void
+i_stream_unref (struct istream **stream)
+{
+  if (stream == NULL || *stream == NULL)
+    return;
+
+  free ((*stream)->data);
+  free (*stream);
+  *stream = NULL;
+}

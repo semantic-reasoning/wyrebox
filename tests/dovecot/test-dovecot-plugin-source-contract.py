@@ -360,7 +360,7 @@ def main() -> None:
         r"->mailbox\.vname\s*=\s*p_strdup\s*\(\s*pool,\s*vname\s*\);\s*[\s\S]*?"
         r"->mailbox\.name\s*=\s*p_strdup\s*\(\s*pool,\s*name\s*\);\s*[\s\S]*?"
         r"->mailbox\.event\s*=\s*event_create\s*\(\s*storage->event\s*\);\s*[\s\S]*?"
-        r"->mailbox\.mail_vfuncs\s*=\s*NULL;\s*[\s\S]*?"
+        r"->mailbox\.mail_vfuncs\s*=\s*&wyrebox_dovecot_mail_vfuncs;\s*[\s\S]*?"
         r"->mailbox\.vlast\s*=\s*NULL;",
         text,
         "mailbox allocator sets required base fields",

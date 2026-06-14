@@ -189,9 +189,19 @@ struct mailbox
   pool_t pool;
 };
 
+struct istream
+{
+  void *data;
+  unsigned int size;
+};
+
 struct mail
 {
+  struct mailbox *box;
+  unsigned int uid;
   const struct mail_vfuncs *v;
 };
+
+void i_stream_unref (struct istream **stream);
 
 #endif
