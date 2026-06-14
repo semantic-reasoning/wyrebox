@@ -32,6 +32,12 @@ struct wyrebox_dovecot_mailbox
   WyreboxDovecotMailboxUidMapSnapshot uid_map_snapshot;
 };
 
+struct wyrebox_dovecot_mail
+{
+  struct mail mail;
+  struct istream *stream;
+};
+
 typedef struct
 {
   struct mailbox_list_vfuncs previous_vfuncs;
@@ -70,6 +76,7 @@ extern const char *wyrebox_dovecot_test_daemon_socket_path
     __attribute__((weak));
 
 struct istream *i_stream_create_copy_from_data (const void *data, size_t size);
+void i_stream_unref (struct istream **stream);
 
 static gboolean
 wyrebox_dovecot_map_mailbox_list_child_state (WyreboxDaemonMailboxListChildState
@@ -840,11 +847,35 @@ wyrebox_dovecot_mailbox_lookup_uid_map_row (struct wyrebox_dovecot_mailbox
   return NULL;
 }
 
+static void
+wyrebox_dovecot_mail_clear_stream (struct wyrebox_dovecot_mail *wmail)
+{
+  i_stream_unref (&wmail->stream);
+}
+
+static void
+wyrebox_dovecot_mail_close (struct mail *mail)
+{
+  struct wyrebox_dovecot_mail *wmail = (struct wyrebox_dovecot_mail *) mail;
+
+  wyrebox_dovecot_mail_clear_stream (wmail);
+}
+
+static void
+wyrebox_dovecot_mail_free (struct mail *mail)
+{
+  struct wyrebox_dovecot_mail *wmail = (struct wyrebox_dovecot_mail *) mail;
+
+  wyrebox_dovecot_mail_clear_stream (wmail);
+  free (wmail);
+}
+
 static int
 wyrebox_dovecot_mail_get_stream (struct mail *mail, bool get_body,
     struct message_size *hdr_size,
     struct message_size *body_size, struct istream **stream)
 {
+  struct wyrebox_dovecot_mail *wmail;
   struct mailbox *box;
   struct wyrebox_dovecot_mailbox *wbox;
   struct wyrebox_dovecot_storage *storage;
@@ -866,9 +897,11 @@ wyrebox_dovecot_mail_get_stream (struct mail *mail, bool get_body,
     return -1;
   }
 
+  wmail = (struct wyrebox_dovecot_mail *) mail;
   box = mail->box;
   wbox = (struct wyrebox_dovecot_mailbox *) box;
   storage = (struct wyrebox_dovecot_storage *) box->storage;
+  wyrebox_dovecot_mail_clear_stream (wmail);
 
   row = wyrebox_dovecot_mailbox_lookup_uid_map_row (wbox, mail->uid, &error);
   if (row == NULL) {
@@ -898,14 +931,37 @@ wyrebox_dovecot_mail_get_stream (struct mail *mail, bool get_body,
 
   wyrebox_dovecot_message_size_scan (data, size, hdr_size, body_size);
 
-  *stream = i_stream_create_copy_from_data (data, size);
-  if (*stream == NULL) {
+  wmail->stream = i_stream_create_copy_from_data (data, size);
+  if (wmail->stream == NULL) {
     mail_storage_set_error (box->storage, MAIL_ERROR_NOTPOSSIBLE,
         "WyreBox Dovecot plugin failed to create message stream");
     return -1;
   }
 
+  *stream = wmail->stream;
   return 0;
+}
+
+static struct mail *
+wyrebox_dovecot_mail_alloc (struct mailbox_transaction_context *transaction,
+    enum mail_fetch_field wanted_fields,
+    struct mailbox_header_lookup_ctx *wanted_headers)
+{
+  struct wyrebox_dovecot_mail *wmail;
+
+  wmail = calloc (1, sizeof (*wmail));
+  if (wmail == NULL) {
+    return NULL;
+  }
+
+  if (transaction != NULL) {
+    wmail->mail.box = transaction->box;
+    wmail->mail.transaction = transaction;
+  }
+
+  (void) wanted_fields;
+  (void) wanted_headers;
+  return &wmail->mail;
 }
 
 static struct mailbox *
@@ -940,6 +996,7 @@ wyrebox_dovecot_mailbox_alloc (struct mail_storage *storage,
   wbox->mailbox.v.sync_init = wyrebox_dovecot_mailbox_sync_init;
   wbox->mailbox.v.sync_next = wyrebox_dovecot_mailbox_sync_next;
   wbox->mailbox.v.sync_deinit = wyrebox_dovecot_mailbox_sync_deinit;
+  wbox->mailbox.v.mail_alloc = wyrebox_dovecot_mail_alloc;
   wbox->mailbox.opened = FALSE;
   wbox->mailbox.enabled_features = 0;
   wyrebox_daemon_mailbox_select_result_clear (&wbox->select_result);
@@ -968,6 +1025,8 @@ wyrebox_dovecot_storage_alloc (void)
 }
 
 static const struct mail_vfuncs wyrebox_dovecot_mail_vfuncs = {
+  .close = wyrebox_dovecot_mail_close,
+  .free = wyrebox_dovecot_mail_free,
   .get_stream = wyrebox_dovecot_mail_get_stream,
 };
 

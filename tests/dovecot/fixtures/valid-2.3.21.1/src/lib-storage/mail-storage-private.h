@@ -59,6 +59,11 @@ enum mailbox_sync_type
   MAILBOX_SYNC_TYPE_MODSEQ = 0x04,
 };
 
+enum mail_fetch_field
+{
+  MAIL_FETCH_FIELD_NONE = 0,
+};
+
 enum mailbox_list_child_state
 {
   MAILBOX_LIST_CHILD_STATE_UNKNOWN = 0,
@@ -92,6 +97,11 @@ struct mailbox_sync_context
   struct mailbox *box;
   enum mailbox_sync_flags flags;
   bool open_failed;
+};
+
+struct mailbox_transaction_context
+{
+  struct mailbox *box;
 };
 
 const char *mailbox_list_get_storage_name (struct mailbox_list *list,
@@ -144,6 +154,9 @@ struct mailbox_vfuncs
       struct mailbox_sync_rec * sync_rec_r);
   int (*sync_deinit) (struct mailbox_sync_context * ctx,
       struct mailbox_sync_status * status_r);
+  struct mail *(*mail_alloc) (struct mailbox_transaction_context * transaction,
+      enum mail_fetch_field wanted_fields,
+      struct mailbox_header_lookup_ctx * wanted_headers);
   struct mail_search_context *(*search_init) (struct mailbox_transaction_context
       * transaction, struct mail_search_args * args, const int *sort,
       int fields, struct mailbox_header_lookup_ctx * headers);
@@ -151,6 +164,8 @@ struct mailbox_vfuncs
 
 struct mail_vfuncs
 {
+  void (*close) (struct mail * mail);
+  void (*free) (struct mail * mail);
   int (*get_stream) (struct mail * mail, bool get_body,
       struct message_size * hdr_size,
       struct message_size * body_size, struct istream ** stream);
@@ -204,6 +219,7 @@ struct istream
 struct mail
 {
   struct mailbox *box;
+  struct mailbox_transaction_context *transaction;
   unsigned int uid;
   const struct mail_vfuncs *v;
 };
