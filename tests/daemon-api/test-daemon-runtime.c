@@ -2,7 +2,9 @@
 #include "wyrebox-daemon-fact-mutation-request.h"
 #include "wyrebox-daemon-fact-mutation-service.h"
 #include "wyrebox-daemon-mailbox-catalog-duckdb.h"
+#include "wyrebox-eml-ingestor.h"
 #include "wyrebox-journal-writer.h"
+#include "wyrebox-local-object-store.h"
 #include "wyrebox-schema-metadata-store.h"
 #include "wyrebox-schema-migration.h"
 
@@ -10,6 +12,7 @@
 #include <gio/gio.h>
 #include <glib.h>
 #include <glib/gstdio.h>
+#include <unistd.h>
 
 static void
 remove_tree (const char *path)
@@ -201,6 +204,54 @@ remove_catalog_path (const char *catalog_path)
   remove_tree (catalog_dir);
 }
 
+static char *
+object_path_for_key (const char *root_dir, const char *object_key)
+{
+  const char *hex = object_key + strlen ("sha256:");
+  g_autofree char *prefix = g_strndup (hex, 2);
+  g_autofree char *filename = g_strdup_printf ("%s.eml", hex);
+
+  return g_build_filename (root_dir,
+      "objects", "sha256", prefix, filename, NULL);
+}
+
+static char *
+journal_segment_path (const char *journal_root)
+{
+  return g_build_filename (journal_root, "00000000000000000000.wbj", NULL);
+}
+
+static void
+ingest_runtime_preflight_message (const char *journal_root,
+    const char *object_root, WyreboxEmlIngestResult *out_result)
+{
+  static const guint8 message[] =
+      "From: sender@example.test\r\n"
+      "To: recipient@example.test\r\n"
+      "Subject: Runtime preflight\r\n"
+      "Message-ID: <runtime-preflight@example.test>\r\n"
+      "Date: Fri, 12 Jun 2026 10:00:00 +0000\r\n" "\r\n" "body\r\n";
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) input = g_bytes_new_static (message, sizeof (message) - 1);
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+
+  store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+
+  ingestor = wyrebox_eml_ingestor_new_with_journal (store, writer);
+  g_assert_nonnull (ingestor);
+  g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, input,
+          out_result, &error));
+  g_assert_no_error (error);
+}
+
 static void
 append_fact_journal_record (WyreboxJournalWriter *writer,
     const char *scope_id, const char *message_id)
@@ -218,6 +269,161 @@ append_fact_journal_record (WyreboxJournalWriter *writer,
   g_assert_true (wyrebox_daemon_fact_mutation_request_append_journal
       (&mutation, writer, &journal_offset, &journal_sequence, &error));
   g_assert_no_error (error);
+}
+
+static void
+test_runtime_validate_delivery_storage_accepts_valid_delivery (void)
+{
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+  g_auto (WyreboxEmlIngestResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_nonnull (journal_root);
+  g_assert_nonnull (object_root);
+  ingest_runtime_preflight_message (journal_root, object_root, &result);
+
+  g_assert_true (wyrebox_daemon_runtime_validate_delivery_storage
+      (journal_root, object_root, &error));
+  g_assert_no_error (error);
+
+  remove_tree (journal_root);
+  remove_tree (object_root);
+}
+
+static void
+test_runtime_validate_delivery_storage_accepts_missing_journal (void)
+{
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+
+  g_assert_nonnull (journal_root);
+  g_assert_nonnull (object_root);
+
+  g_assert_true (wyrebox_daemon_runtime_validate_delivery_storage
+      (journal_root, object_root, &error));
+  g_assert_no_error (error);
+
+  remove_tree (journal_root);
+  remove_tree (object_root);
+}
+
+static void
+test_runtime_validate_delivery_storage_rejects_missing_object (void)
+{
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+  g_auto (WyreboxEmlIngestResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autofree char *object_path = NULL;
+
+  g_assert_nonnull (journal_root);
+  g_assert_nonnull (object_root);
+  ingest_runtime_preflight_message (journal_root, object_root, &result);
+  object_path = object_path_for_key (object_root, result.object_key);
+  g_assert_cmpint (g_remove (object_path), ==, 0);
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage
+      (journal_root, object_root, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_nonnull (strstr (error->message, "startup delivery storage"));
+  g_assert_nonnull (strstr (error->message, result.object_key));
+
+  remove_tree (journal_root);
+  remove_tree (object_root);
+}
+
+static void
+test_runtime_validate_delivery_storage_rejects_corrupt_object (void)
+{
+  static const char corrupt[] = "corrupt object bytes";
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+  g_auto (WyreboxEmlIngestResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autofree char *object_path = NULL;
+
+  g_assert_nonnull (journal_root);
+  g_assert_nonnull (object_root);
+  ingest_runtime_preflight_message (journal_root, object_root, &result);
+  object_path = object_path_for_key (object_root, result.object_key);
+  g_assert_true (g_file_set_contents (object_path, corrupt, strlen (corrupt),
+          &error));
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage
+      (journal_root, object_root, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_nonnull (strstr (error->message, "startup delivery storage"));
+  g_assert_nonnull (strstr (error->message, "SHA-256"));
+
+  remove_tree (journal_root);
+  remove_tree (object_root);
+}
+
+static void
+test_runtime_validate_delivery_storage_rejects_unsafe_journal_suffix (void)
+{
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+  g_auto (WyreboxEmlIngestResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autofree char *segment_path = NULL;
+
+  g_assert_nonnull (journal_root);
+  g_assert_nonnull (object_root);
+  ingest_runtime_preflight_message (journal_root, object_root, &result);
+  segment_path = journal_segment_path (journal_root);
+  g_assert_cmpint (truncate (segment_path, 17), ==, 0);
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage
+      (journal_root, object_root, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_nonnull (strstr (error->message, "unsafe suffix"));
+  g_assert_nonnull (strstr (error->message, "startup delivery storage"));
+
+  remove_tree (journal_root);
+  remove_tree (object_root);
+}
+
+static void
+test_runtime_validate_delivery_storage_rejects_invalid_args (void)
+{
+  g_autoptr (GError) error = NULL;
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage
+      (NULL, "/tmp", &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_nonnull (strstr (error->message, "journal root"));
+  g_clear_error (&error);
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage
+      ("", "/tmp", &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_nonnull (strstr (error->message, "journal root"));
+  g_clear_error (&error);
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage
+      ("/tmp", NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_nonnull (strstr (error->message, "object root"));
+  g_clear_error (&error);
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage
+      ("/tmp", "", &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_nonnull (strstr (error->message, "object root"));
 }
 
 static void
@@ -680,6 +886,24 @@ main (int argc, char **argv)
       test_runtime_prepare_catalog_migrates_legacy_with_checkpoint);
   g_test_add_func ("/daemon-api/runtime/prepare-catalog/invalid-args",
       test_runtime_prepare_catalog_rejects_invalid_args);
+  g_test_add_func
+      ("/daemon-api/runtime/validate-delivery-storage/valid-delivery",
+      test_runtime_validate_delivery_storage_accepts_valid_delivery);
+  g_test_add_func
+      ("/daemon-api/runtime/validate-delivery-storage/missing-journal",
+      test_runtime_validate_delivery_storage_accepts_missing_journal);
+  g_test_add_func
+      ("/daemon-api/runtime/validate-delivery-storage/missing-object",
+      test_runtime_validate_delivery_storage_rejects_missing_object);
+  g_test_add_func
+      ("/daemon-api/runtime/validate-delivery-storage/corrupt-object",
+      test_runtime_validate_delivery_storage_rejects_corrupt_object);
+  g_test_add_func
+      ("/daemon-api/runtime/validate-delivery-storage/unsafe-journal-suffix",
+      test_runtime_validate_delivery_storage_rejects_unsafe_journal_suffix);
+  g_test_add_func
+      ("/daemon-api/runtime/validate-delivery-storage/invalid-args",
+      test_runtime_validate_delivery_storage_rejects_invalid_args);
   g_test_add_func ("/daemon-api/runtime/catch-up-configured-wirelog-views",
       test_runtime_catch_up_configured_wirelog_views_for_catalog_accounts);
   g_test_add_func

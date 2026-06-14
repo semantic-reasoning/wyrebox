@@ -1,6 +1,9 @@
 #include "wyrebox-daemon-runtime.h"
 
 #include "wyrebox-daemon-fact-mutation-service.h"
+#include "wyrebox-delivery-replay-validator.h"
+#include "wyrebox-journal-reader.h"
+#include "wyrebox-local-object-store.h"
 #include "wyrebox-schema-metadata-store.h"
 #include "wyrebox-schema-migration.h"
 
@@ -72,6 +75,134 @@ GFile *
 wyrebox_daemon_runtime_get_default_fact_dump_file (void)
 {
   return g_file_new_for_path (WYREBOX_DAEMON_DEFAULT_FACT_DUMP_DIR);
+}
+
+static const gchar *
+runtime_safe_prefix_stop_reason_to_string (WyreboxJournalSafePrefixStopReason
+    reason)
+{
+  switch (reason) {
+    case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_EOF:
+      return "eof";
+    case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_MISSING_SEGMENT:
+      return "missing-segment";
+    case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_EMPTY_SEGMENT:
+      return "empty-segment";
+    case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_HEADER:
+      return "partial-header";
+    case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_RECORD:
+      return "partial-record";
+    case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_MAGIC:
+      return "invalid-magic";
+    case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_HEADER_SIZE:
+      return "invalid-header-size";
+    case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_VERSION:
+      return "invalid-version";
+    case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_SEQUENCE:
+      return "invalid-sequence";
+    case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_SIZE:
+      return "invalid-size";
+    case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_ZERO_EVENT_TYPE_LENGTH:
+      return "zero-event-type-length";
+    case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_UNKNOWN_EVENT_TYPE:
+      return "unknown-event-type";
+    case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_CHECKSUM_MISMATCH:
+      return "checksum-mismatch";
+    default:
+      return "unknown";
+  }
+}
+
+static gboolean
+runtime_fail_if_journal_has_unsafe_suffix (WyreboxJournalReader *journal_reader,
+    GError **error)
+{
+  WyreboxJournalSafePrefix prefix = { 0 };
+  const gchar *stop_reason = NULL;
+
+  if (!wyrebox_journal_reader_scan_safe_prefix (journal_reader, &prefix, error))
+    return FALSE;
+
+  if (!prefix.unsafe_suffix_found)
+    return TRUE;
+
+  stop_reason = runtime_safe_prefix_stop_reason_to_string (prefix.stop_reason);
+  if (prefix.has_last_safe_sequence) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "startup delivery storage validation failed: journal unsafe suffix "
+        "found, stop reason %s, unsafe offset %" G_GUINT64_FORMAT
+        ", safe end offset %" G_GUINT64_FORMAT ", last safe sequence %"
+        G_GUINT64_FORMAT ", available size %" G_GUINT64_FORMAT
+        ", required size %" G_GUINT64_FORMAT,
+        stop_reason, prefix.unsafe_offset, prefix.safe_end_offset,
+        prefix.last_safe_sequence, prefix.unsafe_available_size,
+        prefix.unsafe_required_size);
+  } else {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "startup delivery storage validation failed: journal unsafe suffix "
+        "found, stop reason %s, unsafe offset %" G_GUINT64_FORMAT
+        ", safe end offset %" G_GUINT64_FORMAT ", last safe sequence none, "
+        "available size %" G_GUINT64_FORMAT ", required size %"
+        G_GUINT64_FORMAT,
+        stop_reason, prefix.unsafe_offset, prefix.safe_end_offset,
+        prefix.unsafe_available_size, prefix.unsafe_required_size);
+  }
+
+  return FALSE;
+}
+
+gboolean
+wyrebox_daemon_runtime_validate_delivery_storage (const char *journal_root_dir,
+    const char *object_root_dir, GError **error)
+{
+  g_autoptr (WyreboxJournalReader) journal_reader = NULL;
+  g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
+  g_autoptr (WyreboxDeliveryReplayValidator) validator = NULL;
+  g_autoptr (GError) local_error = NULL;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (journal_root_dir == NULL || *journal_root_dir == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "journal root directory is required");
+    return FALSE;
+  }
+
+  if (object_root_dir == NULL || *object_root_dir == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "object root directory is required");
+    return FALSE;
+  }
+
+  journal_reader = wyrebox_journal_reader_new (journal_root_dir, error);
+  if (journal_reader == NULL)
+    return FALSE;
+
+  object_store = wyrebox_local_object_store_new (object_root_dir, error);
+  if (object_store == NULL)
+    return FALSE;
+
+  if (!runtime_fail_if_journal_has_unsafe_suffix (journal_reader, error))
+    return FALSE;
+
+  validator = wyrebox_delivery_replay_validator_new (journal_reader,
+      object_store);
+  if (validator == NULL)
+    return FALSE;
+
+  if (!wyrebox_delivery_replay_validator_validate_all (validator, &local_error)) {
+    g_propagate_prefixed_error (error, g_steal_pointer (&local_error),
+        "startup delivery storage validation failed: ");
+    return FALSE;
+  }
+
+  return TRUE;
 }
 
 gboolean
