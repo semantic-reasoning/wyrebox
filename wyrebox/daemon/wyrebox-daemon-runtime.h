@@ -22,6 +22,15 @@ const char *wyrebox_daemon_runtime_get_default_fact_dump_dir (void);
  */
 GFile *wyrebox_daemon_runtime_get_default_fact_dump_file (void);
 
+/*
+ * Validates the delivery journal and immutable raw object store before the
+ * daemon serves requests.
+ */
+gboolean wyrebox_daemon_runtime_validate_delivery_storage (
+    const char *journal_root_dir,
+    const char *object_root_dir,
+    GError **error);
+
 gboolean wyrebox_daemon_runtime_prepare_catalog (
     const char *catalog_path,
     gboolean checkpoint_precondition_satisfied,
