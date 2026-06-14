@@ -104,6 +104,20 @@ def run_checker_with_private_header_mutation(
         return run_checker(source_dir, expect_success=False)
 
 
+def run_checker_with_storage_header_mutation(
+    old: str,
+    new: str,
+) -> subprocess.CompletedProcess:
+    with tempfile.TemporaryDirectory() as tempdir:
+        source_dir = Path(tempdir) / "dovecot-source"
+        shutil.copytree(FIXTURES_DIR / "valid-2.3.21.1", source_dir)
+        storage_header = source_dir / "src/lib-storage/mail-storage.h"
+        text = storage_header.read_text(encoding="utf-8")
+        assert old in text, f"mutation target not found: {old!r}"
+        storage_header.write_text(text.replace(old, new, 1), encoding="utf-8")
+        return run_checker(source_dir, expect_success=False)
+
+
 def test_dovecot_source_contract_happy_path() -> None:
     run_checker(FIXTURES_DIR / "valid-2.3.21.1")
 
@@ -148,6 +162,15 @@ def test_dovecot_source_contract_missing_mailbox_allocation_contract() -> None:
         "missing-mailbox-allocation",
         ["struct mailbox missing name"],
     )
+
+
+def test_dovecot_source_contract_missing_mail_uid_contract() -> None:
+    result = run_checker_with_storage_header_mutation(
+        "unsigned int uid;",
+        "unsigned int removed_uid;",
+    )
+    output = result.stdout + result.stderr
+    assert "mail-storage.h: struct mail missing uid" in output
 
 
 def test_dovecot_source_contract_missing_list_contract() -> None:
@@ -235,6 +258,7 @@ def main() -> None:
         test_dovecot_source_contract_wrong_abi_template,
         test_dovecot_source_contract_missing_vfunc_contract,
         test_dovecot_source_contract_missing_mailbox_allocation_contract,
+        test_dovecot_source_contract_missing_mail_uid_contract,
         test_dovecot_source_contract_missing_list_contract,
         test_dovecot_source_contract_list_iterator_iter_init_signature,
         test_dovecot_source_contract_list_iterator_iter_next_signature,

@@ -219,14 +219,6 @@ struct istream
   bool owns_data;
 };
 
-struct mail
-{
-  struct mailbox *box;
-  struct mailbox_transaction_context *transaction;
-  unsigned int seq;
-  unsigned int uid;
-};
-
 struct mail_private
 {
   struct mail mail;

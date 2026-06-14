@@ -6,6 +6,7 @@ struct message_size;
 struct mailbox;
 struct mail;
 struct mail_storage;
+struct mailbox_transaction_context;
 
 enum mailbox_flags {
   MAILBOX_FLAG_READONLY = 0x01,
@@ -27,6 +28,14 @@ struct mailbox_status {
   unsigned int messages;
   unsigned int uidvalidity;
   unsigned int uidnext;
+};
+
+struct mail
+{
+  struct mailbox *box;
+  struct mailbox_transaction_context *transaction;
+  unsigned int seq;
+  unsigned int uid;
 };
 
 void mail_storage_class_register(struct mail_storage *storage_class);
