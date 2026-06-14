@@ -301,13 +301,41 @@ test_runtime_validate_delivery_storage_accepts_missing_journal (void)
   g_autofree char *object_root =
       g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
   g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
 
   g_assert_nonnull (journal_root);
   g_assert_nonnull (object_root);
+  store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
 
   g_assert_true (wyrebox_daemon_runtime_validate_delivery_storage
       (journal_root, object_root, &error));
   g_assert_no_error (error);
+
+  remove_tree (journal_root);
+  remove_tree (object_root);
+}
+
+static void
+test_runtime_validate_delivery_storage_rejects_uninitialized_object_root (void)
+{
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+  g_autofree char *objects_dir = NULL;
+  g_autoptr (GError) error = NULL;
+
+  g_assert_nonnull (journal_root);
+  g_assert_nonnull (object_root);
+  objects_dir = g_build_filename (object_root, "objects", "sha256", NULL);
+  g_assert_false (g_file_test (objects_dir, G_FILE_TEST_EXISTS));
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage
+      (journal_root, object_root, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_assert_false (g_file_test (objects_dir, G_FILE_TEST_EXISTS));
 
   remove_tree (journal_root);
   remove_tree (object_root);
@@ -892,6 +920,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/runtime/validate-delivery-storage/missing-journal",
       test_runtime_validate_delivery_storage_accepts_missing_journal);
+  g_test_add_func
+      ("/daemon-api/runtime/validate-delivery-storage/uninitialized-object-root",
+      test_runtime_validate_delivery_storage_rejects_uninitialized_object_root);
   g_test_add_func
       ("/daemon-api/runtime/validate-delivery-storage/missing-object",
       test_runtime_validate_delivery_storage_rejects_missing_object);

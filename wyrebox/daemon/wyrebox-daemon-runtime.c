@@ -184,7 +184,8 @@ wyrebox_daemon_runtime_validate_delivery_storage (const char *journal_root_dir,
   if (journal_reader == NULL)
     return FALSE;
 
-  object_store = wyrebox_local_object_store_new (object_root_dir, error);
+  object_store = wyrebox_local_object_store_open_existing (object_root_dir,
+      error);
   if (object_store == NULL)
     return FALSE;
 

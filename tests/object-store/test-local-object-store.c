@@ -17,6 +17,18 @@ object_path_for_key (const char *root_dir, const char *object_key)
       "objects", "sha256", prefix, filename, NULL);
 }
 
+static char *
+object_path_for_bytes (const char *root_dir, GBytes *bytes)
+{
+  gsize size = 0;
+  const guint8 *data = g_bytes_get_data (bytes, &size);
+  g_autofree char *hex =
+      g_compute_checksum_for_data (G_CHECKSUM_SHA256, data, size);
+  g_autofree char *key = g_strdup_printf ("sha256:%s", hex);
+
+  return object_path_for_key (root_dir, key);
+}
+
 static void
 remove_tree (const char *path)
 {
@@ -225,6 +237,95 @@ test_missing_valid_key_fails (void)
 }
 
 static void
+test_open_existing_reads_initialized_store (void)
+{
+  const guint8 message[] = "Subject: existing\r\n\r\nstored bytes\r\n";
+  g_autofree char *root = g_dir_make_tmp ("wyrebox-object-store-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxLocalObjectStore) writer = NULL;
+  g_autoptr (WyreboxLocalObjectStore) reader = NULL;
+  g_autoptr (GBytes) input = g_bytes_new_static (message, sizeof (message) - 1);
+  g_autofree char *key = NULL;
+  g_autoptr (GBytes) output = NULL;
+
+  g_assert_nonnull (root);
+  writer = wyrebox_local_object_store_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+  g_assert_true (wyrebox_local_object_store_put_bytes (writer, input, &key,
+          &error));
+  g_assert_no_error (error);
+
+  reader = wyrebox_local_object_store_open_existing (root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  output = wyrebox_local_object_store_get_bytes (reader, key, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (output);
+  assert_bytes_equal (output, message, sizeof (message) - 1);
+
+  remove_tree (root);
+}
+
+static void
+test_open_existing_rejects_uninitialized_store_without_creating_dirs (void)
+{
+  g_autofree char *root = g_dir_make_tmp ("wyrebox-object-store-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autofree char *objects_dir = NULL;
+
+  g_assert_nonnull (root);
+  objects_dir = g_build_filename (root, "objects", "sha256", NULL);
+  g_assert_false (g_file_test (objects_dir, G_FILE_TEST_EXISTS));
+
+  store = wyrebox_local_object_store_open_existing (root, &error);
+  g_assert_null (store);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_assert_false (g_file_test (objects_dir, G_FILE_TEST_EXISTS));
+
+  remove_tree (root);
+}
+
+static void
+test_open_existing_rejects_put_without_creating_object (void)
+{
+  const guint8 message[] = "Subject: read-only\r\n\r\nmust not store\r\n";
+  g_autofree char *root = g_dir_make_tmp ("wyrebox-object-store-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxLocalObjectStore) writer = NULL;
+  g_autoptr (WyreboxLocalObjectStore) reader = NULL;
+  g_autoptr (GBytes) input = g_bytes_new_static (message, sizeof (message) - 1);
+  g_autofree char *key = g_strdup ("unchanged");
+  g_autofree char *path = NULL;
+  g_autofree char *parent_dir = NULL;
+
+  g_assert_nonnull (root);
+  writer = wyrebox_local_object_store_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+
+  path = object_path_for_bytes (root, input);
+  parent_dir = g_path_get_dirname (path);
+  g_assert_false (g_file_test (parent_dir, G_FILE_TEST_EXISTS));
+  g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
+
+  reader = wyrebox_local_object_store_open_existing (root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  g_assert_false (wyrebox_local_object_store_put_bytes (reader, input, &key,
+          &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
+  g_assert_cmpstr (key, ==, "unchanged");
+  g_assert_false (g_file_test (parent_dir, G_FILE_TEST_EXISTS));
+  g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
+
+  remove_tree (root);
+}
+
+static void
 test_fetch_rejects_corrupted_object (void)
 {
   const guint8 message[] = "Subject: integrity\r\n\r\noriginal bytes\r\n";
@@ -341,6 +442,14 @@ main (int argc, char **argv)
   g_test_add_func ("/object-store/invalid-key-fails", test_invalid_key_fails);
   g_test_add_func ("/object-store/missing-valid-key-fails",
       test_missing_valid_key_fails);
+  g_test_add_func ("/object-store/open-existing-reads-initialized-store",
+      test_open_existing_reads_initialized_store);
+  g_test_add_func
+      ("/object-store/open-existing-rejects-uninitialized-without-creating-dirs",
+      test_open_existing_rejects_uninitialized_store_without_creating_dirs);
+  g_test_add_func
+      ("/object-store/open-existing-rejects-put-without-creating-object",
+      test_open_existing_rejects_put_without_creating_object);
   g_test_add_func ("/object-store/fetch-rejects-corrupted-object",
       test_fetch_rejects_corrupted_object);
   g_test_add_func ("/object-store/fetch-rejects-truncated-object",

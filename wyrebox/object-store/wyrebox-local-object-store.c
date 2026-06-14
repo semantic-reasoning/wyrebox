@@ -12,6 +12,7 @@ struct _WyreboxLocalObjectStore
 {
   GObject parent_instance;
   char *root_dir;
+  gboolean writable;
 };
 
 G_DEFINE_TYPE (WyreboxLocalObjectStore,
@@ -223,6 +224,18 @@ fsync_object_root_setup (const char *root_dir,
   return TRUE;
 }
 
+static WyreboxLocalObjectStore *
+local_object_store_alloc (const char *root_dir, gboolean writable)
+{
+  WyreboxLocalObjectStore *self = NULL;
+
+  self = g_object_new (WYREBOX_TYPE_LOCAL_OBJECT_STORE, NULL);
+  self->root_dir = g_strdup (root_dir);
+  self->writable = writable;
+
+  return self;
+}
+
 WyreboxLocalObjectStore *
 wyrebox_local_object_store_new (const char *root_dir, GError **error)
 {
@@ -252,8 +265,35 @@ wyrebox_local_object_store_new (const char *root_dir, GError **error)
   if (!fsync_object_root_setup (root_dir, objects_dir, error))
     return NULL;
 
-  self = g_object_new (WYREBOX_TYPE_LOCAL_OBJECT_STORE, NULL);
-  self->root_dir = g_strdup (root_dir);
+  self = local_object_store_alloc (root_dir, TRUE);
+
+  return g_steal_pointer (&self);
+}
+
+WyreboxLocalObjectStore *
+wyrebox_local_object_store_open_existing (const char *root_dir, GError **error)
+{
+  g_autoptr (WyreboxLocalObjectStore) self = NULL;
+  g_autofree char *objects_dir = NULL;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  if (root_dir == NULL || *root_dir == '\0') {
+    g_set_error (error,
+        G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "root directory is required");
+    return NULL;
+  }
+
+  objects_dir = g_build_filename (root_dir, "objects", "sha256", NULL);
+  if (!g_file_test (objects_dir, G_FILE_TEST_IS_DIR)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_NOT_FOUND,
+        "object store root %s does not exist", objects_dir);
+    return NULL;
+  }
+
+  self = local_object_store_alloc (root_dir, FALSE);
 
   return g_steal_pointer (&self);
 }
@@ -275,6 +315,13 @@ wyrebox_local_object_store_put_bytes (WyreboxLocalObjectStore *self,
   g_return_val_if_fail (bytes != NULL, FALSE);
   g_return_val_if_fail (out_object_key != NULL, FALSE);
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (!self->writable) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_PERMISSION_DENIED, "object store was opened read-only");
+    return FALSE;
+  }
 
   *out_object_key = NULL;
   hex = checksum_bytes (bytes);
