@@ -303,6 +303,21 @@ materialize_configured_derived_view (WyreboxDaemonFactMutationService *self,
       self->journal_writer, error);
 }
 
+static void
+log_materialization_failure_if_needed (WyreboxDaemonFactMutationService *self,
+    const char *scope_id, const char *operation_name)
+{
+  g_autoptr (GError) materialize_error = NULL;
+
+  if (self->derived_view_materializer == NULL)
+    return;
+
+  if (!materialize_configured_derived_view (self, scope_id, &materialize_error)) {
+    g_debug ("%s materialization failed after durable commit: %s",
+        operation_name, materialize_error->message);
+  }
+}
+
 static gboolean
 handle_authorized_fact_mutation (WyreboxDaemonFactMutationService
     *self, const WyreboxDaemonRequestIdentity *identity,
@@ -330,6 +345,9 @@ handle_authorized_fact_mutation (WyreboxDaemonFactMutationService
           request->scope_id, 1, request->predicate_id, journal_offset,
           journal_sequence, error))
     return FALSE;
+
+  log_materialization_failure_if_needed (self, request->scope_id,
+      "fact mutation");
 
   return wyrebox_daemon_response_frame_init_fact_mutation_success (out_frame,
       identity->request_id, identity->correlation_id, request, journal_offset,
@@ -374,17 +392,9 @@ handle_authorized_fact_batch_import (WyreboxDaemonFactMutationService
           n_entries, NULL, journal_offset, journal_sequence, error))
     return FALSE;
 
-  if (self->derived_view_materializer != NULL) {
-    g_autoptr (GError) materialize_error = NULL;
-    const char *scope_id =
-        wyrebox_daemon_fact_batch_import_request_get_scope_id (request);
-
-    if (!materialize_configured_derived_view (self, scope_id,
-            &materialize_error)) {
-      g_debug ("fact batch import materialization failed after durable "
-          "commit: %s", materialize_error->message);
-    }
-  }
+  log_materialization_failure_if_needed (self,
+      wyrebox_daemon_fact_batch_import_request_get_scope_id (request),
+      "fact batch import");
 
   return wyrebox_daemon_response_frame_init_fact_batch_import_success
       (out_frame, identity->request_id, identity->correlation_id, request,
