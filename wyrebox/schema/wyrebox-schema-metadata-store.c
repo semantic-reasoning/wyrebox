@@ -6,6 +6,7 @@
 
 #include <duckdb.h>
 #include <glib.h>
+#include <string.h>
 
 typedef struct
 {
@@ -381,6 +382,35 @@ static gboolean
     {"duplicate_message_id_count", "UBIGINT", TRUE},
     {"subject", "VARCHAR", FALSE},
     {"from_addr", "VARCHAR", FALSE},
+    {"sender_domain", "VARCHAR", FALSE},
+    {"to_addr", "VARCHAR", FALSE},
+    {"cc_addr", "VARCHAR", FALSE},
+    {"bcc_addr", "VARCHAR", FALSE},
+    {"date_raw", "VARCHAR", FALSE},
+    {"journal_offset", "UBIGINT", TRUE},
+    {"journal_sequence", "UBIGINT", TRUE},
+  };
+  static const gchar *message_headers_primary_key_columns[] = {
+    "message_id",
+  };
+
+  return duckdb_store_validate_table_columns (self, "message_headers",
+      message_headers_columns, G_N_ELEMENTS (message_headers_columns), error)
+      && duckdb_store_validate_primary_key (self, "message_headers",
+      message_headers_primary_key_columns,
+      G_N_ELEMENTS (message_headers_primary_key_columns), error);
+}
+
+static gboolean
+    duckdb_store_validate_message_header_table_v3
+    (WyreboxSchemaMetadataStoreDuckdb * self, GError ** error)
+{
+  static const WyreboxDuckdbColumnSpec message_headers_columns[] = {
+    {"message_id", "VARCHAR", TRUE},
+    {"rfc_message_id", "VARCHAR", FALSE},
+    {"duplicate_message_id_count", "UBIGINT", TRUE},
+    {"subject", "VARCHAR", FALSE},
+    {"from_addr", "VARCHAR", FALSE},
     {"to_addr", "VARCHAR", FALSE},
     {"cc_addr", "VARCHAR", FALSE},
     {"bcc_addr", "VARCHAR", FALSE},
@@ -467,7 +497,9 @@ static gboolean
       || operation ==
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS
       || operation ==
-      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT)
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT
+      || operation ==
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN)
     return TRUE;
 
   g_set_error (error,
@@ -558,6 +590,110 @@ duckdb_store_execute_prepared (duckdb_prepared_statement statement,
 }
 
 static gboolean
+duckdb_store_bind_varchar (duckdb_prepared_statement statement, idx_t index,
+    const gchar *value, GError **error)
+{
+  if (duckdb_bind_varchar (statement, index, value) == DuckDBSuccess)
+    return TRUE;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_FAILED,
+      "DuckDB schema metadata string bind failed at index %" G_GUINT64_FORMAT,
+      (guint64) index);
+  return FALSE;
+}
+
+static gboolean
+duckdb_store_bind_nullable_varchar (duckdb_prepared_statement statement,
+    idx_t index, const gchar *value, GError **error)
+{
+  if (value == NULL) {
+    if (duckdb_bind_null (statement, index) == DuckDBSuccess)
+      return TRUE;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB schema metadata NULL bind failed at index %" G_GUINT64_FORMAT,
+        (guint64) index);
+    return FALSE;
+  }
+
+  return duckdb_store_bind_varchar (statement, index, value, error);
+}
+
+static gboolean
+duckdb_store_bind_uint64 (duckdb_prepared_statement statement, idx_t index,
+    guint64 value, GError **error)
+{
+  if (duckdb_bind_uint64 (statement, index, (uint64_t) value) == DuckDBSuccess)
+    return TRUE;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_FAILED,
+      "DuckDB schema metadata uint64 bind failed at index %" G_GUINT64_FORMAT,
+      (guint64) index);
+  return FALSE;
+}
+
+static char *
+extract_sender_domain_from_from_addr (const char *value)
+{
+  const char *at = NULL;
+  const char *domain_start = NULL;
+  const char *domain_end = NULL;
+
+  if (value == NULL)
+    return NULL;
+
+  at = strrchr (value, '@');
+  if (at == NULL || at[1] == '\0')
+    return NULL;
+
+  domain_start = at + 1;
+  domain_end = domain_start;
+  while (*domain_end != '\0' &&
+      *domain_end != '>' &&
+      *domain_end != ',' && !g_ascii_isspace (*domain_end)) {
+    domain_end++;
+  }
+
+  if (domain_end == domain_start)
+    return NULL;
+
+  return g_ascii_strdown (domain_start, domain_end - domain_start);
+}
+
+static gchar *
+duckdb_store_dup_nullable_varchar (duckdb_result *result, idx_t column,
+    idx_t row)
+{
+  g_auto (WyreboxDuckdbOwnedString) value = NULL;
+
+  if (duckdb_value_is_null (result, column, row))
+    return NULL;
+
+  value = duckdb_value_varchar (result, column, row);
+  return g_strdup (value);
+}
+
+static gboolean
+duckdb_store_require_nonnull_column (duckdb_result *result, idx_t column,
+    idx_t row, const gchar *column_name, GError **error)
+{
+  if (!duckdb_value_is_null (result, column, row))
+    return TRUE;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_INVALID_DATA,
+      "DuckDB message_headers row has NULL %s during migration", column_name);
+  return FALSE;
+}
+
+static gboolean
 duckdb_store_create_schema (WyreboxSchemaMetadataStoreDuckdb *self,
     GError **error)
 {
@@ -599,7 +735,7 @@ static gboolean
 }
 
 static gboolean
-    duckdb_store_create_message_header_table
+    duckdb_store_create_message_header_table_v3
     (WyreboxSchemaMetadataStoreDuckdb * self, GError ** error)
 {
   return duckdb_store_query (self,
@@ -615,6 +751,130 @@ static gboolean
       "date_raw VARCHAR,"
       "journal_offset UBIGINT NOT NULL,"
       "journal_sequence UBIGINT NOT NULL" ");", error)
+      && duckdb_store_validate_message_header_table_v3 (self, error);
+}
+
+static gboolean
+    duckdb_store_copy_message_headers_with_sender_domain
+    (WyreboxSchemaMetadataStoreDuckdb * self, GError ** error)
+{
+  g_auto (duckdb_result) result = { 0 };
+  g_auto (duckdb_prepared_statement) statement = NULL;
+
+  if (duckdb_query (self->connection,
+          "SELECT message_id, rfc_message_id, duplicate_message_id_count, "
+          "subject, from_addr, to_addr, cc_addr, bcc_addr, date_raw, "
+          "journal_offset, journal_sequence FROM message_headers;",
+          &result) != DuckDBSuccess) {
+    const char *detail = duckdb_result_error (&result);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB message_headers migration select failed: %s",
+        detail != NULL ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  if (duckdb_column_count (&result) != 11) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "DuckDB message_headers migration select returned unexpected shape");
+    return FALSE;
+  }
+
+  if (!duckdb_store_prepare (self,
+          "INSERT INTO message_headers_replacement ("
+          "message_id, rfc_message_id, duplicate_message_id_count, subject, "
+          "from_addr, sender_domain, to_addr, cc_addr, bcc_addr, date_raw, "
+          "journal_offset, journal_sequence"
+          ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);", &statement, error))
+    return FALSE;
+
+  for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+    g_autofree gchar *message_id = NULL;
+    g_autofree gchar *rfc_message_id = NULL;
+    g_autofree gchar *subject = NULL;
+    g_autofree gchar *from_addr = NULL;
+    g_autofree gchar *sender_domain = NULL;
+    g_autofree gchar *to_addr = NULL;
+    g_autofree gchar *cc_addr = NULL;
+    g_autofree gchar *bcc_addr = NULL;
+    g_autofree gchar *date_raw = NULL;
+    guint64 duplicate_message_id_count = 0;
+    guint64 journal_offset = 0;
+    guint64 journal_sequence = 0;
+
+    if (!duckdb_store_require_nonnull_column (&result, 0, row,
+            "message_id", error) ||
+        !duckdb_store_require_nonnull_column (&result, 2, row,
+            "duplicate_message_id_count", error) ||
+        !duckdb_store_require_nonnull_column (&result, 9, row,
+            "journal_offset", error) ||
+        !duckdb_store_require_nonnull_column (&result, 10, row,
+            "journal_sequence", error))
+      return FALSE;
+
+    message_id = duckdb_store_dup_nullable_varchar (&result, 0, row);
+    rfc_message_id = duckdb_store_dup_nullable_varchar (&result, 1, row);
+    duplicate_message_id_count =
+        (guint64) duckdb_value_uint64 (&result, 2, row);
+    subject = duckdb_store_dup_nullable_varchar (&result, 3, row);
+    from_addr = duckdb_store_dup_nullable_varchar (&result, 4, row);
+    sender_domain = extract_sender_domain_from_from_addr (from_addr);
+    to_addr = duckdb_store_dup_nullable_varchar (&result, 5, row);
+    cc_addr = duckdb_store_dup_nullable_varchar (&result, 6, row);
+    bcc_addr = duckdb_store_dup_nullable_varchar (&result, 7, row);
+    date_raw = duckdb_store_dup_nullable_varchar (&result, 8, row);
+    journal_offset = (guint64) duckdb_value_uint64 (&result, 9, row);
+    journal_sequence = (guint64) duckdb_value_uint64 (&result, 10, row);
+
+    if (!duckdb_store_bind_varchar (statement, 1, message_id, error) ||
+        !duckdb_store_bind_nullable_varchar (statement, 2, rfc_message_id,
+            error) ||
+        !duckdb_store_bind_uint64 (statement, 3,
+            duplicate_message_id_count, error) ||
+        !duckdb_store_bind_nullable_varchar (statement, 4, subject, error) ||
+        !duckdb_store_bind_nullable_varchar (statement, 5, from_addr, error) ||
+        !duckdb_store_bind_nullable_varchar (statement, 6, sender_domain,
+            error) ||
+        !duckdb_store_bind_nullable_varchar (statement, 7, to_addr, error) ||
+        !duckdb_store_bind_nullable_varchar (statement, 8, cc_addr, error) ||
+        !duckdb_store_bind_nullable_varchar (statement, 9, bcc_addr, error) ||
+        !duckdb_store_bind_nullable_varchar (statement, 10, date_raw, error) ||
+        !duckdb_store_bind_uint64 (statement, 11, journal_offset, error) ||
+        !duckdb_store_bind_uint64 (statement, 12, journal_sequence, error) ||
+        !duckdb_store_execute_prepared (statement, error))
+      return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
+duckdb_store_add_message_header_sender_domain (WyreboxSchemaMetadataStoreDuckdb
+    *self, GError **error)
+{
+  return duckdb_store_query (self,
+      "CREATE TABLE message_headers_replacement ("
+      "message_id VARCHAR PRIMARY KEY,"
+      "rfc_message_id VARCHAR,"
+      "duplicate_message_id_count UBIGINT NOT NULL,"
+      "subject VARCHAR,"
+      "from_addr VARCHAR,"
+      "sender_domain VARCHAR,"
+      "to_addr VARCHAR,"
+      "cc_addr VARCHAR,"
+      "bcc_addr VARCHAR,"
+      "date_raw VARCHAR,"
+      "journal_offset UBIGINT NOT NULL,"
+      "journal_sequence UBIGINT NOT NULL" ");", error)
+      && duckdb_store_copy_message_headers_with_sender_domain (self, error)
+      && duckdb_store_query (self, "DROP TABLE message_headers;", error)
+      && duckdb_store_query (self,
+      "ALTER TABLE message_headers_replacement RENAME TO message_headers;",
+      error)
       && duckdb_store_validate_message_header_table (self, error);
 }
 
@@ -987,6 +1247,7 @@ static gboolean
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE:
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS:
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT:
+    case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN:
       break;
     default:
       goto unsupported;
@@ -1004,7 +1265,8 @@ static gboolean
                   error))
           || (operation ==
               WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_TABLE
-              && duckdb_store_create_message_header_table (duckdb_store, error))
+              && duckdb_store_create_message_header_table_v3 (duckdb_store,
+                  error))
           || (operation ==
               WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_MEMBERSHIPS
               && duckdb_store_create_derived_view_memberships (duckdb_store,
@@ -1012,6 +1274,10 @@ static gboolean
           || (operation ==
               WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT
               && duckdb_store_scope_derived_views_by_account (duckdb_store,
+                  error))
+          || (operation ==
+              WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN
+              && duckdb_store_add_message_header_sender_domain (duckdb_store,
                   error))) ||
       !duckdb_store_query (duckdb_store, "COMMIT;", error)) {
     duckdb_store_rollback_quietly (duckdb_store);
