@@ -49,6 +49,19 @@ typedef struct
 } TestDuckdbFixture;
 
 static char *
+create_unprepared_catalog_path (void)
+{
+  g_autofree char *dir = NULL;
+  g_autoptr (GError) error = NULL;
+
+  dir = g_dir_make_tmp ("wyrebox-daemon-runtime-catalog-XXXXXX", &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (dir);
+
+  return g_build_filename (dir, "catalog.duckdb", NULL);
+}
+
+static char *
 create_catalog_path (void)
 {
   g_autofree char *dir = NULL;
@@ -72,6 +85,43 @@ create_catalog_path (void)
   g_assert_no_error (error);
 
   return g_steal_pointer (&path);
+}
+
+static void
+    runtime_set_materialization_checkpoint_fields
+    (WyreboxSchemaMigrationMetadataState * state)
+{
+  state->materialization_checkpoint_present = TRUE;
+  state->materialization_checkpoint_journal_offset = 4096;
+  state->materialization_checkpoint_sequence = 2048;
+}
+
+static void
+save_catalog_schema_state (const char *path,
+    const WyreboxSchemaMigrationMetadataState *state)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_metadata_store_save (store, state, &error));
+  g_assert_no_error (error);
+}
+
+static void
+load_catalog_schema_state (const char *path,
+    WyreboxSchemaMigrationMetadataState *out_state)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_metadata_store_load (store, out_state, &error));
+  g_assert_no_error (error);
 }
 
 static void
@@ -258,6 +308,151 @@ test_default_runtime_paths_share_runtime_root (void)
       wyrebox_daemon_runtime_get_default_runtime_dir ());
   g_assert_cmpstr (fact_dump_parent, ==,
       wyrebox_daemon_runtime_get_default_runtime_dir ());
+}
+
+static void
+test_runtime_prepare_catalog_bootstraps_missing_metadata (void)
+{
+  g_autofree char *catalog_path = create_unprepared_catalog_path ();
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_runtime_prepare_catalog (catalog_path, FALSE,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT schema_version FROM schema_metadata "
+          "WHERE schema_key = 'schema';"), ==,
+      wyrebox_schema_migration_get_current_schema_version ());
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM accounts;"), ==, 0);
+
+  remove_catalog_path (catalog_path);
+}
+
+static void
+test_runtime_prepare_catalog_preserves_current_checkpoint (void)
+{
+  g_autofree char *catalog_path = create_unprepared_catalog_path ();
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  base.schema_version_present = TRUE;
+  base.schema_version = wyrebox_schema_migration_get_current_schema_version ();
+  runtime_set_materialization_checkpoint_fields (&base);
+  save_catalog_schema_state (catalog_path, &base);
+
+  g_assert_true (wyrebox_daemon_runtime_prepare_catalog (catalog_path, FALSE,
+          &error));
+  g_assert_no_error (error);
+
+  load_catalog_schema_state (catalog_path, &loaded);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==, base.schema_version);
+  g_assert_true (loaded.materialization_checkpoint_present);
+  g_assert_cmpuint (loaded.materialization_checkpoint_journal_offset, ==,
+      base.materialization_checkpoint_journal_offset);
+  g_assert_cmpuint (loaded.materialization_checkpoint_sequence, ==,
+      base.materialization_checkpoint_sequence);
+  g_assert_false (loaded.checkpoint_precondition_satisfied);
+
+  remove_catalog_path (catalog_path);
+}
+
+static void
+test_runtime_prepare_catalog_rejects_future_version (void)
+{
+  g_autofree char *catalog_path = create_unprepared_catalog_path ();
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  base.schema_version_present = TRUE;
+  base.schema_version = wyrebox_schema_migration_get_current_schema_version ()
+      + 1;
+  runtime_set_materialization_checkpoint_fields (&base);
+  save_catalog_schema_state (catalog_path, &base);
+
+  g_assert_false (wyrebox_daemon_runtime_prepare_catalog (catalog_path, TRUE,
+          &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
+
+  load_catalog_schema_state (catalog_path, &loaded);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==, base.schema_version);
+  g_assert_true (loaded.materialization_checkpoint_present);
+
+  remove_catalog_path (catalog_path);
+}
+
+static void
+test_runtime_prepare_catalog_rejects_legacy_without_checkpoint (void)
+{
+  g_autofree char *catalog_path = create_unprepared_catalog_path ();
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  base.schema_version_present = TRUE;
+  base.schema_version = 0;
+  runtime_set_materialization_checkpoint_fields (&base);
+  save_catalog_schema_state (catalog_path, &base);
+
+  g_assert_false (wyrebox_daemon_runtime_prepare_catalog (catalog_path, FALSE,
+          &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+  g_assert_nonnull (strstr (error->message, "checkpoint precondition"));
+
+  load_catalog_schema_state (catalog_path, &loaded);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==, base.schema_version);
+  g_assert_true (loaded.materialization_checkpoint_present);
+
+  remove_catalog_path (catalog_path);
+}
+
+static void
+test_runtime_prepare_catalog_migrates_legacy_with_checkpoint (void)
+{
+  g_autofree char *catalog_path = create_unprepared_catalog_path ();
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  base.schema_version_present = TRUE;
+  base.schema_version = 0;
+  runtime_set_materialization_checkpoint_fields (&base);
+  save_catalog_schema_state (catalog_path, &base);
+
+  g_assert_true (wyrebox_daemon_runtime_prepare_catalog (catalog_path, TRUE,
+          &error));
+  g_assert_no_error (error);
+
+  load_catalog_schema_state (catalog_path, &loaded);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==,
+      wyrebox_schema_migration_get_current_schema_version ());
+  g_assert_false (loaded.materialization_checkpoint_present);
+  g_assert_false (loaded.checkpoint_precondition_satisfied);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM accounts;"), ==, 0);
+
+  remove_catalog_path (catalog_path);
+}
+
+static void
+test_runtime_prepare_catalog_rejects_invalid_args (void)
+{
+  g_autoptr (GError) error = NULL;
+
+  g_assert_false (wyrebox_daemon_runtime_prepare_catalog (NULL, FALSE, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_nonnull (strstr (error->message, "catalog path"));
+  g_clear_error (&error);
+
+  g_assert_false (wyrebox_daemon_runtime_prepare_catalog ("", FALSE, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_nonnull (strstr (error->message, "catalog path"));
 }
 
 static void
@@ -471,6 +666,20 @@ main (int argc, char **argv)
       test_default_fact_dump_file_is_owned_gfile);
   g_test_add_func ("/daemon-api/runtime/default-paths-share-root",
       test_default_runtime_paths_share_runtime_root);
+  g_test_add_func ("/daemon-api/runtime/prepare-catalog/missing-metadata",
+      test_runtime_prepare_catalog_bootstraps_missing_metadata);
+  g_test_add_func ("/daemon-api/runtime/prepare-catalog/current-checkpoint",
+      test_runtime_prepare_catalog_preserves_current_checkpoint);
+  g_test_add_func ("/daemon-api/runtime/prepare-catalog/future-version",
+      test_runtime_prepare_catalog_rejects_future_version);
+  g_test_add_func
+      ("/daemon-api/runtime/prepare-catalog/legacy-without-checkpoint",
+      test_runtime_prepare_catalog_rejects_legacy_without_checkpoint);
+  g_test_add_func
+      ("/daemon-api/runtime/prepare-catalog/legacy-with-checkpoint",
+      test_runtime_prepare_catalog_migrates_legacy_with_checkpoint);
+  g_test_add_func ("/daemon-api/runtime/prepare-catalog/invalid-args",
+      test_runtime_prepare_catalog_rejects_invalid_args);
   g_test_add_func ("/daemon-api/runtime/catch-up-configured-wirelog-views",
       test_runtime_catch_up_configured_wirelog_views_for_catalog_accounts);
   g_test_add_func
