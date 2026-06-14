@@ -9,6 +9,7 @@ import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PLUGIN_SOURCE = REPO_ROOT / "wyrebox" / "dovecot" / "wyrebox-dovecot-plugin.c"
+SMOKE_SOURCE = REPO_ROOT / "tests" / "dovecot" / "test-dovecot-plugin-mailbox-smoke.c"
 
 
 def read_text(path: Path) -> str:
@@ -53,8 +54,11 @@ def function_body(name: str, text: str) -> str:
 def main() -> None:
     if not PLUGIN_SOURCE.is_file():
         raise SystemExit(f"plugin source not found: {PLUGIN_SOURCE}")
+    if not SMOKE_SOURCE.is_file():
+        raise SystemExit(f"plugin smoke source not found: {SMOKE_SOURCE}")
 
     text = read_text(PLUGIN_SOURCE)
+    smoke_text = read_text(SMOKE_SOURCE)
 
     forbid(
         r"\bmailbox_list_sink_\w+\b",
@@ -547,9 +551,19 @@ def main() -> None:
         r"static\s+const\s+struct\s+mail_vfuncs\s+wyrebox_dovecot_mail_vfuncs"
         r"\s*=\s*\{[\s\S]*?\.close\s*=\s*wyrebox_dovecot_mail_close,"
         r"[\s\S]*?\.free\s*=\s*wyrebox_dovecot_mail_free,"
+        r"[\s\S]*?\.set_seq\s*=\s*wyrebox_dovecot_mail_set_seq,"
+        r"[\s\S]*?\.set_uid\s*=\s*wyrebox_dovecot_mail_set_uid,"
+        r"[\s\S]*?\.set_uid_cache_updates\s*=\s*"
+        r"wyrebox_dovecot_mail_set_uid_cache_updates,"
         r"[\s\S]*?\.get_stream\s*=\s*wyrebox_dovecot_mail_get_stream,",
         text,
-        "mail lifecycle and fetch vfuncs wired",
+        "mail lifecycle, selection, and fetch vfuncs wired",
+    )
+    fetch_helper_body = function_body("alloc_test_mail", smoke_text)
+    forbid(
+        r"\bmail->uid\s*=",
+        fetch_helper_body,
+        "direct UID assignment in smoke fetch helper",
     )
     require(
         r"->mailbox\.opened\s*=\s*FALSE;",

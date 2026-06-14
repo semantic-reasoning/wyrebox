@@ -280,6 +280,28 @@ mail_get_stream (struct mail *mail, bool get_body,
   return private->v.get_stream (mail, get_body, hdr_size, body_size, stream);
 }
 
+bool
+mail_set_uid (struct mail *mail, unsigned int uid)
+{
+  struct mail_private *private = (struct mail_private *) mail;
+
+  if (private == NULL || private->v.set_uid == NULL)
+    return false;
+
+  return private->v.set_uid (mail, uid);
+}
+
+void
+mail_set_seq (struct mail *mail, unsigned int seq)
+{
+  struct mail_private *private = (struct mail_private *) mail;
+
+  if (private == NULL || private->v.set_seq == NULL)
+    return;
+
+  private->v.set_seq (mail, seq, false);
+}
+
 void
 mail_free (struct mail **mail)
 {
