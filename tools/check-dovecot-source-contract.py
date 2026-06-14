@@ -85,6 +85,9 @@ REQUIRED_PRIVATE_STRUCT_FIELDS = {
         "opened",
         "enabled_features",
     ],
+}
+
+REQUIRED_MAIL_STRUCT_FIELDS = {
     "mail": [
         "seq",
         "uid",
@@ -436,6 +439,10 @@ def validate_source(source_dir: Path) -> list[ContractIssue]:
     for struct_name, fields in REQUIRED_PRIVATE_STRUCT_FIELDS.items():
         issues.extend(
             find_issues_for_struct_fields(storage_private, struct_name, fields),
+        )
+    for struct_name, fields in REQUIRED_MAIL_STRUCT_FIELDS.items():
+        issues.extend(
+            find_issues_for_struct_fields(storage, struct_name, fields),
         )
 
     issues.extend(
