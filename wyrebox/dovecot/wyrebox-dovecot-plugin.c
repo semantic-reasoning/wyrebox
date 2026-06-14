@@ -9,6 +9,7 @@
 #include "mail-storage.h"
 #include "mail-storage-private.h"
 #include "mail-user.h"
+#include "mailbox-list-private.h"
 #include "module-dir.h"
 #include "wyrebox-daemon-mailbox-list-result.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
@@ -31,6 +32,12 @@ struct wyrebox_dovecot_mailbox
   WyreboxDovecotMailboxUidMapSnapshot uid_map_snapshot;
 };
 
+typedef struct
+{
+  struct mailbox_list_vfuncs previous_vfuncs;
+  struct mailbox_list_vfuncs *previous_vlast;
+} WyreboxDovecotMailboxListHookContext;
+
 typedef gboolean (*WyreboxDovecotMailboxListPublishFunc) (struct mailbox_list
     * list, const char *name, char hierarchy_delimiter, gboolean selectable,
     enum mailbox_list_child_state child_state, const char *special_use,
@@ -46,6 +53,7 @@ typedef struct
 } WyreboxDovecotMailboxListMappedEntry;
 
 static struct mail_storage wyrebox_mail_storage_class;
+static GHashTable *wyrebox_dovecot_mailbox_list_hook_contexts;
 
 extern const char *wyrebox_dovecot_test_daemon_socket_path
     __attribute__((weak));
@@ -60,6 +68,106 @@ wyrebox_dovecot_socket_path (void)
   }
 
   return "/run/wyrebox/wyrebox.sock";
+}
+
+static WyreboxDovecotMailboxListHookContext *
+wyrebox_dovecot_mailbox_list_hook_context_lookup (struct mailbox_list *list)
+{
+  if (wyrebox_dovecot_mailbox_list_hook_contexts == NULL) {
+    return NULL;
+  }
+
+  return g_hash_table_lookup (wyrebox_dovecot_mailbox_list_hook_contexts, list);
+}
+
+static struct mailbox_list_vfuncs *
+wyrebox_dovecot_mailbox_list_previous_vfuncs (struct mailbox_list *list)
+{
+  WyreboxDovecotMailboxListHookContext *context;
+
+  if (list == NULL) {
+    return NULL;
+  }
+
+  context = wyrebox_dovecot_mailbox_list_hook_context_lookup (list);
+  if (context != NULL) {
+    return &context->previous_vfuncs;
+  }
+
+  return NULL;
+}
+
+static struct mailbox_list_iterate_context *
+wyrebox_dovecot_mailbox_list_iter_init (struct mailbox_list *list,
+    const char *const *patterns, enum mailbox_list_iter_flags flags)
+{
+  struct mailbox_list_vfuncs *previous_vfuncs;
+
+  previous_vfuncs = wyrebox_dovecot_mailbox_list_previous_vfuncs (list);
+  if (previous_vfuncs == NULL || previous_vfuncs->iter_init == NULL) {
+    return NULL;
+  }
+
+  return previous_vfuncs->iter_init (list, patterns, flags);
+}
+
+static const struct mailbox_info *
+wyrebox_dovecot_mailbox_list_iter_next (struct
+    mailbox_list_iterate_context *ctx)
+{
+  struct mailbox_list_vfuncs *previous_vfuncs;
+
+  if (ctx == NULL) {
+    return NULL;
+  }
+
+  previous_vfuncs = wyrebox_dovecot_mailbox_list_previous_vfuncs (ctx->list);
+  if (previous_vfuncs == NULL || previous_vfuncs->iter_next == NULL) {
+    return NULL;
+  }
+
+  return previous_vfuncs->iter_next (ctx);
+}
+
+static int
+wyrebox_dovecot_mailbox_list_iter_deinit (struct
+    mailbox_list_iterate_context *ctx)
+{
+  struct mailbox_list_vfuncs *previous_vfuncs;
+
+  if (ctx == NULL) {
+    return 0;
+  }
+
+  previous_vfuncs = wyrebox_dovecot_mailbox_list_previous_vfuncs (ctx->list);
+  if (previous_vfuncs == NULL || previous_vfuncs->iter_deinit == NULL) {
+    return 0;
+  }
+
+  return previous_vfuncs->iter_deinit (ctx);
+}
+
+static void
+wyrebox_dovecot_mailbox_list_deinit (struct mailbox_list *list)
+{
+  WyreboxDovecotMailboxListHookContext *context;
+  struct mailbox_list_vfuncs previous_vfuncs;
+  struct mailbox_list_vfuncs *previous_vlast;
+
+  context = wyrebox_dovecot_mailbox_list_hook_context_lookup (list);
+  if (context == NULL) {
+    return;
+  }
+
+  previous_vfuncs = context->previous_vfuncs;
+  previous_vlast = context->previous_vlast;
+  list->v = previous_vfuncs;
+  list->vlast = previous_vlast;
+  g_hash_table_remove (wyrebox_dovecot_mailbox_list_hook_contexts, list);
+
+  if (previous_vfuncs.deinit != NULL) {
+    previous_vfuncs.deinit (list);
+  }
 }
 
 static gboolean
@@ -465,6 +573,41 @@ wyrebox_dovecot_storage_destroy (struct mail_storage *storage)
   wstorage->account_identity = NULL;
 }
 
+static void
+wyrebox_dovecot_storage_add_list (struct mail_storage *storage,
+    struct mailbox_list *list)
+{
+  WyreboxDovecotMailboxListHookContext *context;
+
+  (void) storage;
+
+  if (list == NULL) {
+    return;
+  }
+
+  if (wyrebox_dovecot_mailbox_list_hook_context_lookup (list) != NULL) {
+    return;
+  }
+
+  context = g_new0 (WyreboxDovecotMailboxListHookContext, 1);
+  context->previous_vfuncs = list->v;
+  context->previous_vlast = list->vlast;
+
+  if (wyrebox_dovecot_mailbox_list_hook_contexts == NULL) {
+    wyrebox_dovecot_mailbox_list_hook_contexts =
+        g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
+  }
+
+  g_hash_table_insert (wyrebox_dovecot_mailbox_list_hook_contexts, list,
+      context);
+
+  list->vlast = &context->previous_vfuncs;
+  list->v.deinit = wyrebox_dovecot_mailbox_list_deinit;
+  list->v.iter_init = wyrebox_dovecot_mailbox_list_iter_init;
+  list->v.iter_next = wyrebox_dovecot_mailbox_list_iter_next;
+  list->v.iter_deinit = wyrebox_dovecot_mailbox_list_iter_deinit;
+}
+
 static struct mail_storage wyrebox_mail_storage_class = {
   .name = "wyrebox",
   .class_flags = 0,
@@ -472,7 +615,7 @@ static struct mail_storage wyrebox_mail_storage_class = {
         .alloc = wyrebox_dovecot_storage_alloc,
         .create = wyrebox_dovecot_storage_create,
         .destroy = wyrebox_dovecot_storage_destroy,
-        .add_list = NULL,
+        .add_list = wyrebox_dovecot_storage_add_list,
         .mailbox_alloc = wyrebox_dovecot_mailbox_alloc,
       },
 };
@@ -492,5 +635,7 @@ wyrebox_plugin_init (struct module *module)
 WYREBOX_DOVECOT_PLUGIN_EXPORT void
 wyrebox_plugin_deinit (void)
 {
+  g_clear_pointer (&wyrebox_dovecot_mailbox_list_hook_contexts,
+      g_hash_table_unref);
   mail_storage_class_unregister (&wyrebox_mail_storage_class);
 }

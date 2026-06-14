@@ -102,6 +102,14 @@ bool mailbox_list_sink_publish_entry (struct mailbox_list *list,
 unsigned int mailbox_list_sink_get_count (const struct mailbox_list *list);
 const struct mailbox_list_sink_entry *mailbox_list_sink_get_entry (const struct
     mailbox_list *list, unsigned int index);
+unsigned int mailbox_list_sink_get_original_iter_init_calls (const struct
+    mailbox_list *list);
+unsigned int mailbox_list_sink_get_original_iter_next_calls (const struct
+    mailbox_list *list);
+unsigned int mailbox_list_sink_get_original_iter_deinit_calls (const struct
+    mailbox_list *list);
+unsigned int mailbox_list_sink_get_original_deinit_calls (const struct
+    mailbox_list *list);
 void mail_storage_set_error (struct mail_storage *storage,
     enum mail_error error, const char *string);
 
