@@ -1861,6 +1861,9 @@ test_uid_fetch_unknown_uid_fails_without_daemon_fetch (void)
   istream_stub_reset_counts ();
 
   mail = alloc_test_mail (box);
+  g_assert_true (mail_set_uid (mail, 42));
+  g_assert_cmpuint (mail->uid, ==, 42);
+  g_assert_cmpuint (mail->seq, ==, 1);
   g_assert_false (mail_set_uid (mail, 999));
   g_assert_cmpuint (mail->uid, ==, 0);
   g_assert_cmpuint (mail->seq, ==, 0);

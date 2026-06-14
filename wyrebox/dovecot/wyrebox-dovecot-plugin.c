@@ -927,6 +927,8 @@ wyrebox_dovecot_mail_set_uid (struct mail *mail, unsigned int uid)
 
   wmail = wyrebox_dovecot_mail_from_mail (mail);
   wyrebox_dovecot_mail_clear_stream (wmail);
+  mail->uid = 0;
+  mail->seq = 0;
   if (uid == 0) {
     return false;
   }
