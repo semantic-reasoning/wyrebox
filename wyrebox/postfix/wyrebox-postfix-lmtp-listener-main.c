@@ -34,7 +34,7 @@ typedef struct
   gboolean seen_lhlo;
   gboolean seen_mail;
   char *sender;
-  char *recipient;
+  GPtrArray *recipients;
   GByteArray *message;
 } ListenerTransaction;
 
@@ -61,7 +61,7 @@ listener_transaction_clear (ListenerTransaction *transaction)
     return;
 
   g_clear_pointer (&transaction->sender, g_free);
-  g_clear_pointer (&transaction->recipient, g_free);
+  g_clear_pointer (&transaction->recipients, g_ptr_array_unref);
   g_clear_pointer (&transaction->message, g_byte_array_unref);
 }
 
@@ -287,9 +287,13 @@ build_delivery_request (const ListenerOptions *options,
 {
   g_autofree char *request_id = NULL;
   g_autoptr (GBytes) message_bytes = NULL;
-  const gchar *recipients[] = { NULL, NULL };
+  g_auto (GStrv) recipients = NULL;
+  guint recipient_count = 0;
 
-  if (transaction->sender == NULL || transaction->recipient == NULL ||
+  if (transaction->recipients != NULL)
+    recipient_count = transaction->recipients->len;
+
+  if (transaction->sender == NULL || recipient_count == 0 ||
       transaction->message == NULL || transaction->message->len == 0) {
     g_set_error (error,
         G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
@@ -307,25 +311,56 @@ build_delivery_request (const ListenerOptions *options,
 
   message_bytes =
       g_byte_array_free_to_bytes (g_steal_pointer (&transaction->message));
-  recipients[0] = transaction->recipient;
+  recipients = g_new0 (gchar *, recipient_count + 1);
+  for (guint i = 0; i < recipient_count; i++)
+    recipients[i] = g_strdup (g_ptr_array_index (transaction->recipients, i));
 
   if (!wyrebox_daemon_delivery_ingestion_request_init (request,
           options->delivery_id,
-          NULL, transaction->sender, recipients, message_bytes, error))
+          NULL, transaction->sender, (const gchar * const *) recipients,
+          message_bytes, error))
     return FALSE;
 
   bridge_options->socket_path = g_strdup (options->daemon_socket_path);
   return TRUE;
 }
 
+static guint
+transaction_recipient_count (const ListenerTransaction *transaction)
+{
+  if (transaction->recipients == NULL)
+    return 0;
+
+  return transaction->recipients->len;
+}
+
+static gboolean
+write_line_for_each_recipient (GOutputStream *output,
+    const ListenerTransaction *transaction, const char *line, GError **error)
+{
+  guint recipient_count = transaction_recipient_count (transaction);
+
+  for (guint i = 0; i < recipient_count; i++) {
+    if (!write_line (output, line, error))
+      return FALSE;
+  }
+
+  return TRUE;
+}
+
 static gboolean
 write_local_temporary_failure (GOutputStream *output, const GError *cause,
-    GError **error)
+    const ListenerTransaction *transaction, GError **error)
 {
   g_printerr ("postfix_lmtp_listener outcome=temporary_failure "
       "failure_source=local local_error_domain=%s local_error_code=%d\n",
       cause != NULL ? g_quark_to_string (cause->domain) : "none",
       cause != NULL ? cause->code : 0);
+
+  if (transaction_recipient_count (transaction) > 0) {
+    return write_line_for_each_recipient (output,
+        transaction, "451 4.3.0 Temporary local delivery failure", error);
+  }
 
   return write_line (output,
       "451 4.3.0 Temporary local delivery failure", error);
@@ -344,16 +379,18 @@ deliver_transaction (const ListenerOptions *options,
 
   if (!build_delivery_request (options, transaction, &bridge_options,
           &identity, &request, &local_error))
-    return write_local_temporary_failure (output, local_error, error);
+    return write_local_temporary_failure (output, local_error, transaction,
+        error);
 
   if (!wyrebox_postfix_lmtp_delivery_bridge_deliver (&bridge_options,
           &identity, &request, &reply, &local_error))
-    return write_local_temporary_failure (output, local_error, error);
+    return write_local_temporary_failure (output, local_error, transaction,
+        error);
 
   reply_line = g_strdup_printf ("%d %s %s",
       reply.reply_code, reply.enhanced_status, reply.reply_text);
   g_printerr ("%s\n", reply.log_message);
-  return write_line (output, reply_line, error);
+  return write_line_for_each_recipient (output, transaction, reply_line, error);
 }
 
 static gboolean
@@ -366,7 +403,8 @@ static void
 reset_transaction (ListenerTransaction *transaction)
 {
   g_clear_pointer (&transaction->sender, g_free);
-  g_clear_pointer (&transaction->recipient, g_free);
+  if (transaction->recipients != NULL)
+    g_ptr_array_set_size (transaction->recipients, 0);
   g_clear_pointer (&transaction->message, g_byte_array_unref);
   transaction->seen_mail = FALSE;
 }
@@ -435,12 +473,6 @@ handle_connection (const ListenerOptions *options,
         continue;
       }
 
-      if (transaction.recipient != NULL) {
-        if (!write_line (output, "550 5.5.3 Single recipient only", error))
-          return FALSE;
-        continue;
-      }
-
       recipient = extract_path_argument (line, "RCPT TO:");
       if (recipient == NULL) {
         if (!write_line (output, "501 5.5.4 Bad recipient address", error))
@@ -448,14 +480,16 @@ handle_connection (const ListenerOptions *options,
         continue;
       }
 
-      transaction.recipient = g_steal_pointer (&recipient);
+      if (transaction.recipients == NULL)
+        transaction.recipients = g_ptr_array_new_with_free_func (g_free);
+      g_ptr_array_add (transaction.recipients, g_steal_pointer (&recipient));
       if (!write_line (output, "250 2.1.5 Recipient accepted", error))
         return FALSE;
       continue;
     }
 
     if (g_ascii_strcasecmp (line, "DATA") == 0) {
-      if (transaction.recipient == NULL) {
+      if (transaction_recipient_count (&transaction) == 0) {
         if (!write_line (output, "503 5.5.1 Bad command sequence", error))
           return FALSE;
         continue;
@@ -475,8 +509,8 @@ handle_connection (const ListenerOptions *options,
         if (!append_data_line (&transaction,
                 raw_line->data,
                 raw_line->len, (guint64) options->max_message_bytes, error)) {
-          if (!write_line (output, "552 5.3.4 Message size exceeds limit",
-                  error))
+          if (!write_line_for_each_recipient (output,
+                  &transaction, "552 5.3.4 Message size exceeds limit", error))
             return FALSE;
           return finish_after_transaction (output, error);
         }
