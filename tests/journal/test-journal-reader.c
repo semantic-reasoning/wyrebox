@@ -142,6 +142,246 @@ append_three_records (const char *root,
 }
 
 static void
+scan_safe_prefix (const char *root, WyreboxJournalSafePrefix *prefix)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+
+  reader = wyrebox_journal_reader_new (root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  g_assert_true (wyrebox_journal_reader_scan_safe_prefix (reader,
+          prefix, &error));
+  g_assert_no_error (error);
+}
+
+static void
+test_scan_safe_prefix_empty_or_missing_segment (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (GError) error = NULL;
+  WyreboxJournalSafePrefix prefix = { 0 };
+
+  g_assert_nonnull (root);
+
+  scan_safe_prefix (root, &prefix);
+  g_assert_cmpuint (prefix.safe_end_offset, ==, 0);
+  g_assert_false (prefix.has_last_safe_sequence);
+  g_assert_true (prefix.reached_eof);
+  g_assert_false (prefix.unsafe_suffix_found);
+  g_assert_cmpint (prefix.stop_reason,
+      ==, WYREBOX_JOURNAL_SAFE_PREFIX_STOP_MISSING_SEGMENT);
+
+  segment_path = segment_path_for_root (root);
+  g_assert_true (g_file_set_contents (segment_path, "", -1, &error));
+  g_assert_no_error (error);
+
+  scan_safe_prefix (root, &prefix);
+  g_assert_cmpuint (prefix.safe_end_offset, ==, 0);
+  g_assert_false (prefix.has_last_safe_sequence);
+  g_assert_true (prefix.reached_eof);
+  g_assert_false (prefix.unsafe_suffix_found);
+  g_assert_cmpint (prefix.stop_reason,
+      ==, WYREBOX_JOURNAL_SAFE_PREFIX_STOP_EMPTY_SEGMENT);
+
+  remove_tree (root);
+}
+
+static void
+test_scan_safe_prefix_valid_segment (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autofree guint8 *segment = NULL;
+  g_autoptr (GError) error = NULL;
+  WyreboxJournalSafePrefix prefix = { 0 };
+  guint64 offsets[3] = { 0 };
+  guint64 sequences[3] = { 0 };
+  gsize segment_size = 0;
+
+  g_assert_nonnull (root);
+  append_three_records (root, offsets, sequences, &error);
+  g_assert_no_error (error);
+
+  segment_path = segment_path_for_root (root);
+  read_segment (segment_path, &segment, &segment_size);
+  scan_safe_prefix (root, &prefix);
+
+  g_assert_cmpuint (prefix.safe_end_offset, ==, segment_size);
+  g_assert_true (prefix.has_last_safe_sequence);
+  g_assert_cmpuint (prefix.last_safe_sequence, ==, sequences[2]);
+  g_assert_true (prefix.reached_eof);
+  g_assert_false (prefix.unsafe_suffix_found);
+  g_assert_cmpint (prefix.stop_reason,
+      ==, WYREBOX_JOURNAL_SAFE_PREFIX_STOP_EOF);
+
+  remove_tree (root);
+}
+
+static void
+test_scan_safe_prefix_partial_header_after_valid_record (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autofree guint8 *segment = NULL;
+  g_autoptr (GError) error = NULL;
+  WyreboxJournalSafePrefix prefix = { 0 };
+  guint64 offsets[3] = { 0 };
+  guint64 sequences[3] = { 0 };
+  gsize segment_size = 0;
+  gsize partial_size = 0;
+
+  g_assert_nonnull (root);
+  append_three_records (root, offsets, sequences, &error);
+  g_assert_no_error (error);
+
+  segment_path = segment_path_for_root (root);
+  read_segment (segment_path, &segment, &segment_size);
+  partial_size = (gsize) offsets[1] + 17;
+  g_assert_cmpuint (segment_size, >, partial_size);
+  overwrite_segment (segment_path, segment, partial_size);
+
+  scan_safe_prefix (root, &prefix);
+  g_assert_cmpuint (prefix.safe_end_offset, ==, offsets[1]);
+  g_assert_true (prefix.has_last_safe_sequence);
+  g_assert_cmpuint (prefix.last_safe_sequence, ==, sequences[0]);
+  g_assert_false (prefix.reached_eof);
+  g_assert_true (prefix.unsafe_suffix_found);
+  g_assert_cmpint (prefix.stop_reason,
+      ==, WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_HEADER);
+  g_assert_cmpuint (prefix.unsafe_offset, ==, offsets[1]);
+  g_assert_cmpuint (prefix.unsafe_available_size, ==, 17);
+  g_assert_cmpuint (prefix.unsafe_required_size, ==, 64);
+
+  remove_tree (root);
+}
+
+static void
+test_scan_safe_prefix_partial_payload_after_valid_record (void)
+{
+  const char *event_type =
+      wyrebox_journal_event_type_to_string
+      (WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED);
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autofree guint8 *segment = NULL;
+  g_autoptr (GError) error = NULL;
+  WyreboxJournalSafePrefix prefix = { 0 };
+  guint64 offsets[3] = { 0 };
+  guint64 sequences[3] = { 0 };
+  gsize segment_size = 0;
+  gsize partial_size = 0;
+  guint64 second_record_size = 0;
+
+  g_assert_nonnull (root);
+  append_three_records (root, offsets, sequences, &error);
+  g_assert_no_error (error);
+
+  segment_path = segment_path_for_root (root);
+  read_segment (segment_path, &segment, &segment_size);
+  second_record_size = offsets[2] - offsets[1];
+  partial_size = (gsize) offsets[1] + 64 + strlen (event_type) + 1;
+  g_assert_cmpuint (segment_size, >, partial_size);
+  overwrite_segment (segment_path, segment, partial_size);
+
+  scan_safe_prefix (root, &prefix);
+  g_assert_cmpuint (prefix.safe_end_offset, ==, offsets[1]);
+  g_assert_true (prefix.has_last_safe_sequence);
+  g_assert_cmpuint (prefix.last_safe_sequence, ==, sequences[0]);
+  g_assert_false (prefix.reached_eof);
+  g_assert_true (prefix.unsafe_suffix_found);
+  g_assert_cmpint (prefix.stop_reason,
+      ==, WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_RECORD);
+  g_assert_cmpuint (prefix.unsafe_offset, ==, offsets[1]);
+  g_assert_cmpuint (prefix.unsafe_available_size, ==,
+      partial_size - offsets[1]);
+  g_assert_cmpuint (prefix.unsafe_required_size, ==, second_record_size);
+
+  remove_tree (root);
+}
+
+static void
+test_scan_safe_prefix_checksum_mismatch_after_valid_record (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autofree guint8 *segment = NULL;
+  g_autoptr (GError) error = NULL;
+  WyreboxJournalSafePrefix prefix = { 0 };
+  guint64 offsets[3] = { 0 };
+  guint64 sequences[3] = { 0 };
+  gsize segment_size = 0;
+  guint64 second_record_size = 0;
+
+  g_assert_nonnull (root);
+  append_three_records (root, offsets, sequences, &error);
+  g_assert_no_error (error);
+
+  segment_path = segment_path_for_root (root);
+  read_segment (segment_path, &segment, &segment_size);
+  second_record_size = offsets[2] - offsets[1];
+  g_assert_cmpuint (segment_size, >, offsets[1] + 32);
+  segment[offsets[1] + 32] ^= 0x01;
+  overwrite_segment (segment_path, segment, segment_size);
+
+  scan_safe_prefix (root, &prefix);
+  g_assert_cmpuint (prefix.safe_end_offset, ==, offsets[1]);
+  g_assert_true (prefix.has_last_safe_sequence);
+  g_assert_cmpuint (prefix.last_safe_sequence, ==, sequences[0]);
+  g_assert_false (prefix.reached_eof);
+  g_assert_true (prefix.unsafe_suffix_found);
+  g_assert_cmpint (prefix.stop_reason,
+      ==, WYREBOX_JOURNAL_SAFE_PREFIX_STOP_CHECKSUM_MISMATCH);
+  g_assert_cmpuint (prefix.unsafe_offset, ==, offsets[1]);
+  g_assert_cmpuint (prefix.unsafe_available_size, ==, second_record_size);
+  g_assert_cmpuint (prefix.unsafe_required_size, ==, second_record_size);
+
+  remove_tree (root);
+}
+
+static void
+test_scan_safe_prefix_first_record_corruption (void)
+{
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autofree guint8 *segment = NULL;
+  g_autoptr (GError) error = NULL;
+  WyreboxJournalSafePrefix prefix = { 0 };
+  guint64 offsets[3] = { 0 };
+  guint64 sequences[3] = { 0 };
+  gsize segment_size = 0;
+
+  g_assert_nonnull (root);
+  append_three_records (root, offsets, sequences, &error);
+  g_assert_no_error (error);
+
+  segment_path = segment_path_for_root (root);
+  read_segment (segment_path, &segment, &segment_size);
+  g_assert_cmpuint (segment_size, >, 32);
+  segment[32] ^= 0x01;
+  overwrite_segment (segment_path, segment, segment_size);
+
+  scan_safe_prefix (root, &prefix);
+  g_assert_cmpuint (prefix.safe_end_offset, ==, 0);
+  g_assert_false (prefix.has_last_safe_sequence);
+  g_assert_false (prefix.reached_eof);
+  g_assert_true (prefix.unsafe_suffix_found);
+  g_assert_cmpint (prefix.stop_reason,
+      ==, WYREBOX_JOURNAL_SAFE_PREFIX_STOP_CHECKSUM_MISMATCH);
+  g_assert_cmpuint (prefix.unsafe_offset, ==, 0);
+
+  remove_tree (root);
+}
+
+static void
 test_reads_one_record (void)
 {
   const guint8 payload[] = { 0x68, 0x69, 0x0a };
@@ -936,6 +1176,21 @@ main (int argc, char **argv)
       test_reads_multiple_records_and_second_offset);
   g_test_add_func ("/journal-reader/clean-eof-on-empty-root-or-segment",
       test_clean_eof_on_empty_root_or_segment);
+  g_test_add_func ("/journal-reader/scan-safe-prefix/empty-or-missing-segment",
+      test_scan_safe_prefix_empty_or_missing_segment);
+  g_test_add_func ("/journal-reader/scan-safe-prefix/valid-segment",
+      test_scan_safe_prefix_valid_segment);
+  g_test_add_func
+      ("/journal-reader/scan-safe-prefix/partial-header-after-valid-record",
+      test_scan_safe_prefix_partial_header_after_valid_record);
+  g_test_add_func
+      ("/journal-reader/scan-safe-prefix/partial-payload-after-valid-record",
+      test_scan_safe_prefix_partial_payload_after_valid_record);
+  g_test_add_func
+      ("/journal-reader/scan-safe-prefix/checksum-mismatch-after-valid-record",
+      test_scan_safe_prefix_checksum_mismatch_after_valid_record);
+  g_test_add_func ("/journal-reader/scan-safe-prefix/first-record-corruption",
+      test_scan_safe_prefix_first_record_corruption);
   g_test_add_func ("/journal-reader/rejects-invalid-magic",
       test_rejects_invalid_magic);
   g_test_add_func ("/journal-reader/rejects-invalid-checksum",
