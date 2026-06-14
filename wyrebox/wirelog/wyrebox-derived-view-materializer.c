@@ -1,5 +1,6 @@
 #include "wyrebox-derived-view-materializer.h"
 
+#include "wyrebox-derived-view-imap-name.h"
 #include "wyrebox-derived-view-membership-changed-payload.h"
 
 #include <duckdb.h>
@@ -1058,11 +1059,8 @@ materializer_validate_inputs (const gchar *account_id,
     return FALSE;
   }
 
-  if (!is_non_empty (imap_name)) {
-    g_set_error (error,
-        G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "imap_name is required");
+  if (!wyrebox_derived_view_imap_name_validate_stored (imap_name, error))
     return FALSE;
-  }
 
   if (!is_non_empty (definition_ref)) {
     g_set_error (error,
