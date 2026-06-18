@@ -74,7 +74,10 @@ static void
 assert_delivery_record_fields (const WyreboxDeliveryProjectionRecord *record,
     const char *object_key, guint64 sequence, guint64 size_bytes,
     const char *message_id, const char *subject, const char *from,
-    const char *to, const char *date_raw, guint duplicate_message_id_count)
+    const char *to, const char *date_raw, guint duplicate_message_id_count,
+    gboolean message_id_span_valid, guint64 message_id_span_start,
+    guint64 message_id_span_end, gboolean subject_span_valid,
+    guint64 subject_span_start, guint64 subject_span_end)
 {
   g_assert_nonnull (record);
   g_assert_cmpuint (record->journal_sequence, ==, sequence);
@@ -88,6 +91,12 @@ assert_delivery_record_fields (const WyreboxDeliveryProjectionRecord *record,
   g_assert_cmpstr (record->date_raw, ==, date_raw);
   g_assert_cmpuint (record->duplicate_message_id_count, ==,
       duplicate_message_id_count);
+  g_assert_cmpint (record->message_id_span_valid, ==, message_id_span_valid);
+  g_assert_cmpuint (record->message_id_span_start, ==, message_id_span_start);
+  g_assert_cmpuint (record->message_id_span_end, ==, message_id_span_end);
+  g_assert_cmpint (record->subject_span_valid, ==, subject_span_valid);
+  g_assert_cmpuint (record->subject_span_start, ==, subject_span_start);
+  g_assert_cmpuint (record->subject_span_end, ==, subject_span_end);
 }
 
 static void
@@ -282,12 +291,33 @@ test_replay_preserves_metadata (void)
   g_autoptr (WyreboxJournalReader) reader = NULL;
   g_autoptr (WyreboxDeliveryProjection) projection = NULL;
   g_auto (WyreboxDeliveryProjectionList) list = { 0 };
+  gsize input_size = 0;
+  const char *input_data = NULL;
+  const char *message_id = NULL;
+  const char *subject = NULL;
+  guint64 message_id_span_start = 0;
+  guint64 message_id_span_end = 0;
+  guint64 subject_span_start = 0;
+  guint64 subject_span_end = 0;
 
   g_assert_nonnull (fixture_dir);
   g_assert_nonnull (object_root);
   g_assert_nonnull (journal_root);
 
   input = load_fixture_bytes (fixture_dir, "duplicate-message-id.eml");
+  input_data = g_bytes_get_data (input, &input_size);
+  message_id = g_strstr_len (input_data, input_size,
+      "Message-ID: <duplicate-message-id@example.test>\r\n");
+  g_assert_nonnull (message_id);
+  subject = g_strstr_len (input_data, input_size,
+      "Subject: Duplicate Message-ID fixture\r\n");
+  g_assert_nonnull (subject);
+  message_id_span_start = (guint64) (message_id - input_data);
+  message_id_span_end = message_id_span_start +
+      (guint64) strlen ("Message-ID: <duplicate-message-id@example.test>");
+  subject_span_start = (guint64) (subject - input_data);
+  subject_span_end = subject_span_start +
+      (guint64) strlen ("Subject: Duplicate Message-ID fixture");
 
   store = wyrebox_local_object_store_new (object_root, &error);
   g_assert_no_error (error);
@@ -324,7 +354,9 @@ test_replay_preserves_metadata (void)
       "<duplicate-message-id@example.test>",
       "Duplicate Message-ID fixture",
       "Duplicate ID <duplicate@example.test>",
-      "Intake <intake@example.test>", "Mon, 08 Jun 2026 14:05:00 +0000", 1);
+      "Intake <intake@example.test>", "Mon, 08 Jun 2026 14:05:00 +0000", 1,
+      TRUE, message_id_span_start, message_id_span_end, TRUE,
+      subject_span_start, subject_span_end);
 
   remove_tree (object_root);
   remove_tree (journal_root);
