@@ -36,6 +36,20 @@ remove_tree (const char *path)
   (void) g_rmdir (path);
 }
 
+static GBytes *
+load_fixture_bytes (const char *fixture_dir, const char *name)
+{
+  g_autoptr (GError) error = NULL;
+  g_autofree char *path = g_build_filename (fixture_dir, name, NULL);
+  g_autofree char *contents = NULL;
+  gsize length = 0;
+
+  g_assert_true (g_file_get_contents (path, &contents, &length, &error));
+  g_assert_no_error (error);
+
+  return g_bytes_new_take (g_steal_pointer (&contents), length);
+}
+
 static void
 duckdb_result_clear (duckdb_result *result)
 {
@@ -92,7 +106,7 @@ append_projection_record (WyreboxDeliveryProjectionList *projection,
   return record;
 }
 
-static void
+static WyreboxDeliveryProjectionRecord *
 append_projection_record_with_headers (WyreboxDeliveryProjectionList
     *projection, const gchar *object_key, guint64 size_bytes,
     guint64 internal_date_unix_us, guint64 journal_offset,
@@ -113,6 +127,33 @@ append_projection_record_with_headers (WyreboxDeliveryProjectionList
   record->cc = g_strdup (cc_addr);
   record->bcc = g_strdup (bcc_addr);
   record->date_raw = g_strdup (date_raw);
+  return record;
+}
+
+static void
+append_projection_record_with_headers_and_spans (WyreboxDeliveryProjectionList
+    *projection, const gchar *object_key, guint64 size_bytes,
+    guint64 internal_date_unix_us, guint64 journal_offset,
+    guint64 journal_sequence, const gchar *rfc_message_id,
+    guint duplicate_message_id_count, const gchar *subject,
+    const gchar *from_addr, const gchar *to_addr, const gchar *cc_addr,
+    const gchar *bcc_addr, const gchar *date_raw,
+    gboolean has_message_id_span, guint64 message_id_span_start,
+    guint64 message_id_span_end, gboolean has_subject_span,
+    guint64 subject_span_start, guint64 subject_span_end)
+{
+  WyreboxDeliveryProjectionRecord *record = NULL;
+
+  record = append_projection_record_with_headers (projection, object_key,
+      size_bytes, internal_date_unix_us, journal_offset, journal_sequence,
+      rfc_message_id, duplicate_message_id_count, subject, from_addr, to_addr,
+      cc_addr, bcc_addr, date_raw);
+  record->message_id_span_valid = has_message_id_span;
+  record->message_id_span_start = message_id_span_start;
+  record->message_id_span_end = message_id_span_end;
+  record->subject_span_valid = has_subject_span;
+  record->subject_span_start = subject_span_start;
+  record->subject_span_end = subject_span_end;
 }
 
 static gchar *
@@ -151,6 +192,10 @@ create_bootstrap_catalog (void)
   g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US,
           6, wyrebox_schema_migration_get_current_schema_version (), &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_PROVENANCE_SPANS,
+          8, wyrebox_schema_migration_get_current_schema_version (), &error));
   g_assert_no_error (error);
 
   return g_steal_pointer (&path);
@@ -753,6 +798,75 @@ test_sender_domain_is_materialized_from_from_addr (void)
 }
 
 static void
+test_header_spans_are_materialized (void)
+{
+  const gchar *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+  g_autofree gchar *path = create_bootstrap_catalog ();
+  g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+  g_autoptr (GBytes) input = NULL;
+  TestDuckdbFixture duckdb = { 0 };
+  gsize input_size = 0;
+  const char *input_data = NULL;
+  const char *message_id = NULL;
+  const char *subject = NULL;
+  guint64 message_id_span_start = 0;
+  guint64 message_id_span_end = 0;
+  guint64 subject_span_start = 0;
+  guint64 subject_span_end = 0;
+
+  g_assert_nonnull (fixture_dir);
+  input = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
+  input_data = g_bytes_get_data (input, &input_size);
+  message_id = g_strstr_len (input_data, input_size,
+      "Message-ID: <simple-crlf@example.test>\r\n");
+  g_assert_nonnull (message_id);
+  subject = g_strstr_len (input_data, input_size, "Subject: CRLF fixture\r\n");
+  g_assert_nonnull (subject);
+  message_id_span_start = (guint64) (message_id - input_data);
+  message_id_span_end = message_id_span_start +
+      (guint64) strlen ("Message-ID: <simple-crlf@example.test>");
+  subject_span_start = (guint64) (subject - input_data);
+  subject_span_end = subject_span_start +
+      (guint64) strlen ("Subject: CRLF fixture");
+
+  append_projection_record_with_headers_and_spans (&projection,
+      "sha256:first", 101, 1001, 11, 1, "<first@example.test>", 0,
+      "First subject", "Sender <sender@example.test>", "to@example.test",
+      NULL, NULL, "Fri, 12 Jun 2026 10:00:00 +0000", TRUE,
+      message_id_span_start, message_id_span_end, TRUE, subject_span_start,
+      subject_span_end);
+  append_projection_record_with_headers (&projection, "sha256:second", 202,
+      1002, 22, 2, "<second@example.test>", 0, "Second subject",
+      "Sender <sender@example.test>", "to@example.test", NULL, NULL,
+      "Fri, 12 Jun 2026 10:01:00 +0000");
+
+  apply_projection_to_inbox (path, &projection);
+
+  open_duckdb_fixture (path, &duckdb);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT message_id_span_start FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"), ==, message_id_span_start);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT message_id_span_end FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"), ==, message_id_span_end);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT subject_span_start FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"), ==, subject_span_start);
+  g_assert_cmpuint (query_uint64 (duckdb.connection,
+          "SELECT subject_span_end FROM message_headers WHERE "
+          "message_id = 'journal:11:1';"), ==, subject_span_end);
+  g_assert_true (query_is_null (duckdb.connection,
+          "SELECT message_id_span_start FROM message_headers WHERE "
+          "message_id = 'journal:22:2';"));
+  g_assert_true (query_is_null (duckdb.connection,
+          "SELECT subject_span_start FROM message_headers WHERE "
+          "message_id = 'journal:22:2';"));
+  close_duckdb_fixture (&duckdb);
+
+  remove_catalog (path);
+}
+
+static void
 test_duplicate_object_materializes_distinct_messages (void)
 {
   g_autofree gchar *path = create_bootstrap_catalog ();
@@ -1150,6 +1264,8 @@ main (int argc, char **argv)
       test_happy_path_materializes_inbox);
   g_test_add_func ("/ingestion/delivery-materializer/sender-domain",
       test_sender_domain_is_materialized_from_from_addr);
+  g_test_add_func ("/ingestion/delivery-materializer/header-spans",
+      test_header_spans_are_materialized);
   g_test_add_func ("/ingestion/delivery-materializer/duplicate-object",
       test_duplicate_object_materializes_distinct_messages);
   g_test_add_func ("/ingestion/delivery-materializer/date-unix-us",
