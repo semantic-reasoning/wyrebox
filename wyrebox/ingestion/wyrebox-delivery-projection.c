@@ -70,6 +70,12 @@ wyrebox_delivery_projection_record_clear (WyreboxDeliveryProjectionRecord
   g_clear_pointer (&record->cc, g_free);
   g_clear_pointer (&record->bcc, g_free);
   g_clear_pointer (&record->date_raw, g_free);
+  record->message_id_span_valid = FALSE;
+  record->message_id_span_start = 0;
+  record->message_id_span_end = 0;
+  record->subject_span_valid = FALSE;
+  record->subject_span_start = 0;
+  record->subject_span_end = 0;
   record->size_bytes = 0;
   record->internal_date_unix_us = 0;
   record->duplicate_message_id_count = 0;
@@ -124,6 +130,12 @@ append_delivered_record (WyreboxDeliveryProjectionList *out_projection,
   projection.cc = g_steal_pointer (&payload->cc);
   projection.bcc = g_steal_pointer (&payload->bcc);
   projection.date_raw = g_steal_pointer (&payload->date);
+  projection.message_id_span_valid = payload->message_id_span_valid;
+  projection.message_id_span_start = payload->message_id_span_start;
+  projection.message_id_span_end = payload->message_id_span_end;
+  projection.subject_span_valid = payload->subject_span_valid;
+  projection.subject_span_start = payload->subject_span_start;
+  projection.subject_span_end = payload->subject_span_end;
 
   entry = g_new0 (WyreboxDeliveryProjectionRecord, 1);
   *entry = projection;

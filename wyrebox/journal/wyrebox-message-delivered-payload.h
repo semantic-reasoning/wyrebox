@@ -38,6 +38,22 @@ typedef struct
   char *date;
 
   /*
+   * Optional raw byte span for the first canonical Message-ID header within
+   * the RFC 5322 header block.
+   */
+  gboolean message_id_span_valid;
+  guint64 message_id_span_start;
+  guint64 message_id_span_end;
+
+  /*
+   * Optional raw byte span for the first canonical Subject header within the
+   * RFC 5322 header block.
+   */
+  gboolean subject_span_valid;
+  guint64 subject_span_start;
+  guint64 subject_span_end;
+
+  /*
    * Number of additional Message-ID headers after the first canonical value.
    */
   guint duplicate_message_id_count;

@@ -93,6 +93,8 @@ test_round_trip_full_metadata (void)
   g_assert_cmpstr (decoded.date, ==, metadata.date);
   g_assert_cmpuint (decoded.duplicate_message_id_count, ==, 2);
   assert_no_delivery_identity (&decoded);
+  g_assert_false (decoded.message_id_span_valid);
+  g_assert_false (decoded.subject_span_valid);
 
   reencoded = wyrebox_message_delivered_payload_encode_full
       (decoded.object_key, decoded.size_bytes, &metadata,
@@ -158,6 +160,49 @@ test_round_trip_v3_identity_preserves_recipients (void)
       (const gchar * const *) decoded.recipients, &error);
   g_assert_no_error (error);
   g_assert_true (g_bytes_equal (encoded, reencoded));
+}
+
+static void
+test_round_trip_v4_span_provenance (void)
+{
+  WyreboxEmlMetadata metadata = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) encoded = NULL;
+  g_auto (WyreboxMessageDeliveredPayload) decoded = { 0 };
+  const guint8 *encoded_data = NULL;
+  gsize encoded_size = 0;
+
+  init_full_metadata (&metadata);
+  metadata.message_id_span_valid = TRUE;
+  metadata.message_id_span_start = 10;
+  metadata.message_id_span_end = 42;
+  metadata.subject_span_valid = TRUE;
+  metadata.subject_span_start = 48;
+  metadata.subject_span_end = 81;
+
+  encoded = wyrebox_message_delivered_payload_encode_with_identity
+      (valid_object_key, 12345, &metadata, 1700000000123456,
+      "delivery-123", "queue-1", "account-1", "sender@example.test",
+      NULL, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  encoded_data = g_bytes_get_data (encoded, &encoded_size);
+  g_assert_cmpuint (encoded_size, >, 8);
+  g_assert_cmpmem (encoded_data, 8, "WYREMDP4", 8);
+
+  g_assert_true (wyrebox_message_delivered_payload_decode (encoded,
+          &decoded, &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (decoded.object_key, ==, valid_object_key);
+  g_assert_cmpstr (decoded.message_id, ==, metadata.message_id);
+  g_assert_true (decoded.message_id_span_valid);
+  g_assert_cmpuint (decoded.message_id_span_start, ==, 10);
+  g_assert_cmpuint (decoded.message_id_span_end, ==, 42);
+  g_assert_true (decoded.subject_span_valid);
+  g_assert_cmpuint (decoded.subject_span_start, ==, 48);
+  g_assert_cmpuint (decoded.subject_span_end, ==, 81);
+  g_assert_cmpstr (decoded.delivery_id, ==, "delivery-123");
 }
 
 static void
@@ -247,6 +292,8 @@ test_wrapper_encodes_empty_metadata (void)
   g_assert_null (decoded.date);
   g_assert_cmpuint (decoded.duplicate_message_id_count, ==, 0);
   assert_no_delivery_identity (&decoded);
+  g_assert_false (decoded.message_id_span_valid);
+  g_assert_false (decoded.subject_span_valid);
 }
 
 static void
@@ -272,6 +319,8 @@ test_decodes_golden_v1_payload (void)
   g_assert_null (decoded.date);
   g_assert_cmpuint (decoded.duplicate_message_id_count, ==, 0);
   assert_no_delivery_identity (&decoded);
+  g_assert_false (decoded.message_id_span_valid);
+  g_assert_false (decoded.subject_span_valid);
 }
 
 static void
@@ -567,6 +616,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/message-delivered-payload/round-trip-v3-identity-preserves-recipients",
       test_round_trip_v3_identity_preserves_recipients);
+  g_test_add_func
+      ("/message-delivered-payload/round-trip-v4-span-provenance",
+      test_round_trip_v4_span_provenance);
   g_test_add_func
       ("/message-delivered-payload/encoded-format-matches-golden-v2",
       test_encoded_format_matches_golden_v2);
