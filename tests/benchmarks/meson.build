@@ -38,3 +38,14 @@ benchmark(
     'WYREBOX_BENCHMARK_FIXTURE_DIR': benchmark_fixture_dir,
   },
 )
+
+object_store_get_benchmark = executable(
+  'wyrebox-benchmark-object-store-get',
+  'wyrebox-benchmark-object-store-get.c',
+  dependencies: [wyrebox_dep],
+)
+
+benchmark(
+  'object store get microbenchmark',
+  object_store_get_benchmark,
+)
