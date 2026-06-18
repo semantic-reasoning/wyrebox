@@ -4,6 +4,7 @@
 
 #include "wyrebox-schema-migration.h"
 #include "wyrebox-schema-metadata-store.h"
+#include "wyrebox-journal-reader.h"
 
 #include <glib.h>
 #include <string.h>
@@ -38,6 +39,39 @@ struct _WyreboxSchemaMigration
 };
 
 G_DEFINE_TYPE (WyreboxSchemaMigration, wyrebox_schema_migration, G_TYPE_OBJECT);
+
+gboolean
+    wyrebox_schema_migration_validate_materialization_checkpoint
+    (WyreboxJournalReader * journal_reader,
+    const WyreboxSchemaMigrationMetadataState * state, GError ** error)
+{
+  WyreboxJournalSafePrefix prefix = { 0 };
+
+  g_return_val_if_fail (WYREBOX_IS_JOURNAL_READER (journal_reader), FALSE);
+  g_return_val_if_fail (state != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (!wyrebox_journal_reader_scan_safe_prefix (journal_reader, &prefix, error))
+    return FALSE;
+
+  if (prefix.unsafe_suffix_found) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "journal unsafe suffix found before checkpoint validation");
+    return FALSE;
+  }
+
+  if (!state->materialization_checkpoint_present)
+    return TRUE;
+
+  if (!wyrebox_journal_reader_seek_after_checkpoint (journal_reader,
+          state->materialization_checkpoint_journal_offset,
+          state->materialization_checkpoint_sequence, error))
+    return FALSE;
+
+  return TRUE;
+}
 
 static gboolean
 wyrebox_schema_migration_default_step_operation (guint64 source_version,

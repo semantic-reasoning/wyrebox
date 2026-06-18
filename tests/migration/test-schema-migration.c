@@ -4,6 +4,8 @@
 
 #include "wyrebox-schema-migration.h"
 #include "wyrebox-schema-metadata-store.h"
+#include "wyrebox-journal-reader.h"
+#include "wyrebox-journal-writer.h"
 
 #include <duckdb.h>
 #include <glib.h>
@@ -68,6 +70,68 @@ make_duckdb_path (char **out_root)
 
   *out_root = g_steal_pointer (&root);
   return g_build_filename (*out_root, "schema.duckdb", NULL);
+}
+
+static char *
+journal_segment_path (const char *root)
+{
+  return g_build_filename (root, "00000000000000000000.wbj", NULL);
+}
+
+static void
+read_journal_segment (const char *journal_root, guint8 **out_data,
+    gsize *out_size)
+{
+  g_autofree char *segment_path = journal_segment_path (journal_root);
+  g_autofree gchar *contents = NULL;
+
+  g_assert_true (g_file_get_contents (segment_path, &contents, out_size, NULL));
+  g_assert_nonnull (contents);
+  *out_data = (guint8 *) g_steal_pointer (&contents);
+}
+
+static void
+write_journal_segment (const char *journal_root, const guint8 *data, gsize size)
+{
+  g_autoptr (GError) error = NULL;
+  g_autofree char *segment_path = journal_segment_path (journal_root);
+
+  g_assert_true (g_file_set_contents (segment_path, (const gchar *) data,
+          (gssize) size, &error));
+  g_assert_no_error (error);
+}
+
+static void
+corrupt_journal_checksum (const char *journal_root, guint64 record_offset)
+{
+  g_autofree guint8 *segment = NULL;
+  gsize segment_size = 0;
+
+  read_journal_segment (journal_root, &segment, &segment_size);
+  g_assert_cmpuint (segment_size, >, record_offset + 32);
+  segment[record_offset + 32] ^= 0x01;
+  write_journal_segment (journal_root, segment, segment_size);
+}
+
+static void
+append_single_journal_record (const char *journal_root,
+    guint64 *out_offset, guint64 *out_sequence)
+{
+  static const guint8 payload[] = { 0x70, 0x72, 0x65, 0x66, 0x6c, 0x69, 0x67,
+    0x68, 0x74
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) payload_bytes =
+      g_bytes_new_static (payload, sizeof (payload));
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED, payload_bytes,
+          out_offset, out_sequence, &error));
+  g_assert_no_error (error);
 }
 
 static void
@@ -2510,6 +2574,160 @@ test_materialization_checkpoint_missing_blocks_checkpointed_migration (void)
 }
 
 static void
+test_materialization_checkpoint_validation_accepts_clean_journal (void)
+{
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-schema-migration-journal-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) metadata = { 0 };
+  guint64 checkpoint_offset = 0;
+  guint64 checkpoint_sequence = 0;
+
+  g_assert_nonnull (journal_root);
+  append_single_journal_record (journal_root, &checkpoint_offset,
+      &checkpoint_sequence);
+
+  metadata.materialization_checkpoint_present = TRUE;
+  metadata.materialization_checkpoint_journal_offset = checkpoint_offset;
+  metadata.materialization_checkpoint_sequence = checkpoint_sequence;
+
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  g_assert_true (wyrebox_schema_migration_validate_materialization_checkpoint
+      (reader, &metadata, &error));
+  g_assert_no_error (error);
+
+  remove_directory_tree (journal_root);
+}
+
+static void
+test_materialization_checkpoint_validation_rejects_checksum_corruption (void)
+{
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-schema-migration-journal-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) metadata = { 0 };
+  guint64 checkpoint_offset = 0;
+  guint64 checkpoint_sequence = 0;
+
+  g_assert_nonnull (journal_root);
+  append_single_journal_record (journal_root, &checkpoint_offset,
+      &checkpoint_sequence);
+  corrupt_journal_checksum (journal_root, checkpoint_offset);
+
+  metadata.materialization_checkpoint_present = TRUE;
+  metadata.materialization_checkpoint_journal_offset = checkpoint_offset;
+  metadata.materialization_checkpoint_sequence = checkpoint_sequence;
+
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  g_assert_false (wyrebox_schema_migration_validate_materialization_checkpoint
+      (reader, &metadata, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_clear_error (&error);
+
+  remove_directory_tree (journal_root);
+}
+
+static void
+test_materialization_checkpoint_validation_rejects_sequence_mismatch (void)
+{
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-schema-migration-journal-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) metadata = { 0 };
+  guint64 checkpoint_offset = 0;
+  guint64 checkpoint_sequence = 0;
+
+  g_assert_nonnull (journal_root);
+  append_single_journal_record (journal_root, &checkpoint_offset,
+      &checkpoint_sequence);
+
+  metadata.materialization_checkpoint_present = TRUE;
+  metadata.materialization_checkpoint_journal_offset = checkpoint_offset;
+  metadata.materialization_checkpoint_sequence = checkpoint_sequence + 1;
+
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  g_assert_false (wyrebox_schema_migration_validate_materialization_checkpoint
+      (reader, &metadata, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_clear_error (&error);
+
+  remove_directory_tree (journal_root);
+}
+
+static void
+test_materialization_checkpoint_validation_rejects_unsafe_suffix (void)
+{
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-schema-migration-journal-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) metadata = { 0 };
+  guint64 checkpoint_offset = 0;
+  guint64 checkpoint_sequence = 0;
+
+  g_assert_nonnull (journal_root);
+  append_single_journal_record (journal_root, &checkpoint_offset,
+      &checkpoint_sequence);
+  segment_path = journal_segment_path (journal_root);
+  g_assert_cmpint (truncate (segment_path, 17), ==, 0);
+
+  metadata.materialization_checkpoint_present = TRUE;
+  metadata.materialization_checkpoint_journal_offset = checkpoint_offset;
+  metadata.materialization_checkpoint_sequence = checkpoint_sequence;
+
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  g_assert_false (wyrebox_schema_migration_validate_materialization_checkpoint
+      (reader, &metadata, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_nonnull (strstr (error->message, "unsafe suffix"));
+  g_clear_error (&error);
+
+  remove_directory_tree (journal_root);
+}
+
+static void
+test_materialization_checkpoint_validation_rejects_missing_journal (void)
+{
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-schema-migration-journal-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) metadata = { 0 };
+
+  g_assert_nonnull (journal_root);
+
+  metadata.materialization_checkpoint_present = TRUE;
+  metadata.materialization_checkpoint_journal_offset = 0;
+  metadata.materialization_checkpoint_sequence = 1;
+
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  g_assert_false (wyrebox_schema_migration_validate_materialization_checkpoint
+      (reader, &metadata, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+  remove_directory_tree (journal_root);
+}
+
+static void
 test_destructive_forward_path_without_checkpoint_precondition_fails (void)
 {
   g_autoptr (WyreboxSchemaMigration) migration = NULL;
@@ -3001,6 +3219,21 @@ main (int argc, char **argv)
   g_test_add_func
       ("/migration/schema/legacy-forward-path-without-materialization-checkpoint-fails",
       test_materialization_checkpoint_missing_blocks_checkpointed_migration);
+  g_test_add_func
+      ("/migration/schema/materialization-checkpoint-validation/accepts-clean-journal",
+      test_materialization_checkpoint_validation_accepts_clean_journal);
+  g_test_add_func
+      ("/migration/schema/materialization-checkpoint-validation/rejects-checksum-corruption",
+      test_materialization_checkpoint_validation_rejects_checksum_corruption);
+  g_test_add_func
+      ("/migration/schema/materialization-checkpoint-validation/rejects-sequence-mismatch",
+      test_materialization_checkpoint_validation_rejects_sequence_mismatch);
+  g_test_add_func
+      ("/migration/schema/materialization-checkpoint-validation/rejects-unsafe-suffix",
+      test_materialization_checkpoint_validation_rejects_unsafe_suffix);
+  g_test_add_func
+      ("/migration/schema/materialization-checkpoint-validation/rejects-missing-journal",
+      test_materialization_checkpoint_validation_rejects_missing_journal);
   g_test_add_func
       ("/migration/schema/destructive-forward-path-without-checkpoint-precondition-fails",
       test_destructive_forward_path_without_checkpoint_precondition_fails);
