@@ -116,6 +116,21 @@ test_daemon_config_rejects_relative_socket_path (void)
 }
 
 static void
+test_daemon_config_rejects_non_canonical_absolute_socket_path (void)
+{
+  g_autofree char *dir = create_config_fixture_dir ();
+  g_autofree char *config_path = write_config_fixture (dir,
+      "[daemon]\n" "socket_path=/tmp/wyrebox.sock\n",
+      0600);
+  g_autoptr (GError) error = NULL;
+
+  g_assert_null (wyrebox_daemon_config_new_from_file (config_path, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_nonnull (strstr (error->message,
+          "must be /run/wyrebox/wyrebox.sock"));
+}
+
+static void
 test_daemon_config_rejects_unknown_keys (void)
 {
   g_autofree char *dir = create_config_fixture_dir ();
@@ -188,6 +203,9 @@ main (int argc, char **argv)
       test_daemon_config_rejects_empty_socket_path);
   g_test_add_func ("/daemon-api/config/rejects-relative-socket-path",
       test_daemon_config_rejects_relative_socket_path);
+  g_test_add_func
+      ("/daemon-api/config/rejects-non-canonical-absolute-socket-path",
+      test_daemon_config_rejects_non_canonical_absolute_socket_path);
   g_test_add_func ("/daemon-api/config/rejects-unknown-keys",
       test_daemon_config_rejects_unknown_keys);
   g_test_add_func ("/daemon-api/config/rejects-missing-socket-path",
