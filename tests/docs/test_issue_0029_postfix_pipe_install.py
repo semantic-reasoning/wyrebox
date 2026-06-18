@@ -8,7 +8,31 @@ import tempfile
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BUILD_ROOT = Path(os.environ.get("MESON_BUILD_ROOT", REPO_ROOT / "build"))
+BUILD_ROOT_CANDIDATES = [
+    Path(os.environ["MESON_BUILD_ROOT"])
+    if "MESON_BUILD_ROOT" in os.environ
+    else None,
+    Path.cwd(),
+    REPO_ROOT / "_build",
+    REPO_ROOT / "build",
+    REPO_ROOT / "builddir",
+]
+
+
+def detect_build_root() -> Path:
+    for candidate in BUILD_ROOT_CANDIDATES:
+        if candidate is None:
+            continue
+
+        if (candidate / "meson-info" / "intro-buildoptions.json").is_file():
+            return candidate
+
+    raise AssertionError(
+        "could not locate a meson build root with intro-buildoptions.json"
+    )
+
+
+BUILD_ROOT = detect_build_root()
 INTRO_BUILD_OPTIONS_PATH = BUILD_ROOT / "meson-info" / "intro-buildoptions.json"
 
 EXAMPLE_INSTALL_RELATIVE_DIR = Path("share") / "doc" / "wyrebox" / "examples" / "postfix"
@@ -34,8 +58,7 @@ def read_prefix() -> str:
 
 def install_to(destdir: Path) -> None:
     subprocess.run(
-        ["meson", "install", "-C", str(BUILD_ROOT), "--destdir", str(destdir),
-         "--no-rebuild"],
+        ["meson", "install", "-C", str(BUILD_ROOT), "--destdir", str(destdir)],
         check=True,
         text=True,
     )
