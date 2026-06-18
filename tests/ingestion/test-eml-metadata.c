@@ -135,6 +135,42 @@ test_unfolds_header_continuations (void)
 }
 
 static void
+test_records_subject_span_for_folded_header (void)
+{
+  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) bytes = NULL;
+  g_auto (WyreboxEmlMetadata) metadata = { 0 };
+  gsize size = 0;
+  const char *data = NULL;
+  const char *subject = NULL;
+  const char *date_separator = NULL;
+  guint64 expected_start = 0;
+  guint64 expected_end = 0;
+
+  g_assert_nonnull (fixture_dir);
+
+  bytes = load_fixture_bytes (fixture_dir, "folded-subject.eml");
+  data = g_bytes_get_data (bytes, &size);
+
+  subject = g_strstr_len (data, size, "Subject: First line\r\n");
+  g_assert_nonnull (subject);
+  date_separator = g_strstr_len (subject, size - (subject - data),
+      "\r\nDate: Thu, 11 Jun 2026 00:00:00 +0000\r\n");
+  g_assert_nonnull (date_separator);
+
+  expected_start = (guint64) (subject - data);
+  expected_end = (guint64) (date_separator - data);
+
+  g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (metadata.subject, ==, "First line second line");
+  g_assert_true (metadata.subject_span_valid);
+  g_assert_cmpuint (metadata.subject_span_start, ==, expected_start);
+  g_assert_cmpuint (metadata.subject_span_end, ==, expected_end);
+}
+
+static void
 test_preserves_thread_reference_headers (void)
 {
   static const char raw[] =
@@ -226,6 +262,8 @@ main (int argc, char **argv)
       test_non_ascii_headers_preserve_rfc2047_values);
   g_test_add_func ("/ingestion/eml-metadata/header-continuations",
       test_unfolds_header_continuations);
+  g_test_add_func ("/ingestion/eml-metadata/subject-span-folded-header",
+      test_records_subject_span_for_folded_header);
   g_test_add_func ("/ingestion/eml-metadata/thread-reference-headers",
       test_preserves_thread_reference_headers);
   g_test_add_func ("/ingestion/eml-metadata/final-selected-header-byte",
