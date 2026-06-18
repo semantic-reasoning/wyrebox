@@ -37,6 +37,16 @@ typedef struct
   char *references;
 
   /*
+   * Raw byte span for the first canonical Subject header within the RFC 5322
+   * header block. The start is inclusive and the end is exclusive. When the
+   * Subject header is absent, subject_span_valid is FALSE and the offsets are
+   * zero.
+   */
+  gboolean subject_span_valid;
+  guint64 subject_span_start;
+  guint64 subject_span_end;
+
+  /*
    * Size of the raw RFC 5322 message bytes supplied to the parser.
    */
   guint64 size_bytes;

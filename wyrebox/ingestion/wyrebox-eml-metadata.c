@@ -19,6 +19,9 @@ wyrebox_eml_metadata_clear (WyreboxEmlMetadata *metadata)
   g_clear_pointer (&metadata->date, g_free);
   g_clear_pointer (&metadata->in_reply_to, g_free);
   g_clear_pointer (&metadata->references, g_free);
+  metadata->subject_span_valid = FALSE;
+  metadata->subject_span_start = 0;
+  metadata->subject_span_end = 0;
   metadata->size_bytes = 0;
   metadata->duplicate_message_id_count = 0;
 }
@@ -57,7 +60,8 @@ clear_g_string (GString **string)
 }
 
 static void
-commit_header (WyreboxEmlMetadata *metadata, const char *name, GString *value)
+commit_header (WyreboxEmlMetadata *metadata, const char *name, GString *value,
+    gboolean span_valid, guint64 span_start, guint64 span_end)
 {
   if (name == NULL || value == NULL)
     return;
@@ -69,6 +73,11 @@ commit_header (WyreboxEmlMetadata *metadata, const char *name, GString *value)
       metadata->duplicate_message_id_count++;
   } else if (g_ascii_strcasecmp (name, "Subject") == 0) {
     set_first_value (&metadata->subject, value);
+    if (!metadata->subject_span_valid && span_valid) {
+      metadata->subject_span_valid = TRUE;
+      metadata->subject_span_start = span_start;
+      metadata->subject_span_end = span_end;
+    }
   } else if (g_ascii_strcasecmp (name, "From") == 0) {
     set_first_value (&metadata->from, value);
   } else if (g_ascii_strcasecmp (name, "To") == 0) {
@@ -129,6 +138,9 @@ wyrebox_eml_metadata_parse_bytes (GBytes *bytes,
   g_auto (WyreboxEmlMetadata) metadata = { 0 };
   g_autofree char *current_name = NULL;
   g_autoptr (GString) current_value = NULL;
+  guint64 current_span_start = 0;
+  guint64 current_span_end = 0;
+  gboolean current_span_valid = FALSE;
   const guint8 *data = NULL;
   const guint8 *separator = NULL;
   gsize size = 0;
@@ -177,15 +189,24 @@ wyrebox_eml_metadata_parse_bytes (GBytes *bytes,
     if (line_len > 0 &&
         (line[0] == ' ' || line[0] == '\t') && current_value != NULL) {
       append_continuation (current_value, line, line_len);
+      current_span_end = line_end;
     } else {
-      commit_header (&metadata, current_name, current_value);
+      commit_header (&metadata, current_name, current_value,
+          current_span_valid, current_span_start, current_span_end);
       g_clear_pointer (&current_name, g_free);
       clear_g_string (&current_value);
+      current_span_start = 0;
+      current_span_end = 0;
+      current_span_valid = FALSE;
 
       colon = memchr (line, ':', line_len);
-      if (colon != NULL)
+      if (colon != NULL) {
         replace_current_header (&current_name, &current_value,
             line, line_len, colon);
+        current_span_start = (guint64) line_start;
+        current_span_end = (guint64) line_end;
+        current_span_valid = TRUE;
+      }
     }
 
     if (has_line_terminator)
@@ -194,7 +215,8 @@ wyrebox_eml_metadata_parse_bytes (GBytes *bytes,
       offset = header_len;
   }
 
-  commit_header (&metadata, current_name, current_value);
+  commit_header (&metadata, current_name, current_value, current_span_valid,
+      current_span_start, current_span_end);
 
   *out_metadata = metadata;
   metadata.message_id = NULL;
@@ -206,6 +228,9 @@ wyrebox_eml_metadata_parse_bytes (GBytes *bytes,
   metadata.date = NULL;
   metadata.in_reply_to = NULL;
   metadata.references = NULL;
+  metadata.subject_span_valid = FALSE;
+  metadata.subject_span_start = 0;
+  metadata.subject_span_end = 0;
   metadata.size_bytes = 0;
   metadata.duplicate_message_id_count = 0;
 
