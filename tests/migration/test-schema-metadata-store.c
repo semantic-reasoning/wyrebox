@@ -255,7 +255,8 @@ query_is_null (duckdb_connection connection, const gchar *sql)
 
 static void
 assert_object_reachability_row (duckdb_connection connection,
-    const gchar *object_id, guint64 expected_visible_mailbox_membership_count,
+    const gchar *object_id, guint64 expected_message_reference_count,
+    guint64 expected_visible_mailbox_membership_count,
     guint64 expected_visible_derived_view_membership_count,
     gboolean expected_gc_reachable, gboolean expected_gc_candidate)
 {
@@ -264,22 +265,24 @@ assert_object_reachability_row (duckdb_connection connection,
 
   query =
       g_strdup_printf
-      ("SELECT visible_mailbox_membership_count, "
+      ("SELECT message_reference_count, visible_mailbox_membership_count, "
       "visible_derived_view_membership_count, is_gc_reachable, "
       "is_gc_candidate FROM object_reachability WHERE object_id = '%s';",
       object_id);
   g_assert_cmpint (duckdb_query (connection, query, &result), ==,
       DuckDBSuccess);
-  g_assert_cmpuint (duckdb_column_count (&result), ==, 4);
+  g_assert_cmpuint (duckdb_column_count (&result), ==, 5);
   g_assert_cmpuint (duckdb_row_count (&result), ==, 1);
 
   g_assert_cmpuint (duckdb_value_uint64 (&result, 0, 0), ==,
-      expected_visible_mailbox_membership_count);
+      expected_message_reference_count);
   g_assert_cmpuint (duckdb_value_uint64 (&result, 1, 0), ==,
+      expected_visible_mailbox_membership_count);
+  g_assert_cmpuint (duckdb_value_uint64 (&result, 2, 0), ==,
       expected_visible_derived_view_membership_count);
-  g_assert_cmpint (duckdb_value_boolean (&result, 2, 0) ? TRUE : FALSE, ==,
-      expected_gc_reachable ? TRUE : FALSE);
   g_assert_cmpint (duckdb_value_boolean (&result, 3, 0) ? TRUE : FALSE, ==,
+      expected_gc_reachable ? TRUE : FALSE);
+  g_assert_cmpint (duckdb_value_boolean (&result, 4, 0) ? TRUE : FALSE, ==,
       expected_gc_candidate ? TRUE : FALSE);
 }
 
@@ -460,7 +463,8 @@ seed_object_reachability_fixture (duckdb_connection connection)
       "('message-hidden', 'account-1', 'sha256:hidden', 12, 2),"
       "('message-shared-hidden', 'account-1', 'sha256:shared', 13, 3),"
       "('message-shared-visible', 'account-1', 'sha256:shared', 14, 4),"
-      "('message-visible', 'account-1', 'sha256:visible', 15, 5);");
+      "('message-visible', 'account-1', 'sha256:visible', 15, 5),"
+      "('message-orphan', 'account-1', 'sha256:orphan', 16, 6);");
   assert_bootstrap_query_succeeds (connection,
       "INSERT INTO mailbox_memberships ("
       "membership_id, account_id, mailbox_id, message_id, uid, "
@@ -1113,6 +1117,11 @@ test_duckdb_store_add_object_reachability_view_migration_operation (void)
           wyrebox_schema_migration_get_current_schema_version () - 1,
           wyrebox_schema_migration_get_current_schema_version (), &error));
   g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW,
+          wyrebox_schema_migration_get_current_schema_version () - 1,
+          wyrebox_schema_migration_get_current_schema_version (), &error));
+  g_assert_no_error (error);
 
   g_clear_object (&store);
   g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
@@ -1120,15 +1129,15 @@ test_duckdb_store_add_object_reachability_view_migration_operation (void)
 
   g_assert_true (duckdb_view_exists (connection, "object_reachability"));
   assert_object_reachability_view_schema (connection);
-  assert_object_reachability_row (connection, "sha256:visible", 1, 0,
+  assert_object_reachability_row (connection, "sha256:visible", 1, 1, 0,
       TRUE, FALSE);
-  assert_object_reachability_row (connection, "sha256:hidden", 0, 0,
+  assert_object_reachability_row (connection, "sha256:hidden", 1, 0, 0,
       FALSE, TRUE);
-  assert_object_reachability_row (connection, "sha256:derived", 0, 1,
+  assert_object_reachability_row (connection, "sha256:derived", 1, 0, 1,
       FALSE, TRUE);
-  assert_object_reachability_row (connection, "sha256:shared", 1, 0,
+  assert_object_reachability_row (connection, "sha256:shared", 2, 1, 0,
       TRUE, FALSE);
-  assert_object_reachability_row (connection, "sha256:orphan", 0, 0,
+  assert_object_reachability_row (connection, "sha256:orphan", 1, 0, 0,
       FALSE, TRUE);
 
   (void) duckdb_disconnect (&connection);

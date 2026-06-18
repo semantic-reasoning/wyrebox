@@ -1170,9 +1170,10 @@ duckdb_store_create_object_reachability_view (WyreboxSchemaMetadataStoreDuckdb
     *self, GError **error)
 {
   return duckdb_store_query (self,
+      "DROP VIEW IF EXISTS object_reachability;"
       "CREATE VIEW object_reachability AS "
       "SELECT o.object_id, o.size_bytes, "
-      "CAST(COALESCE(ordinary.message_reference_count, 0) AS UBIGINT) "
+      "CAST(COALESCE(message_refs.message_reference_count, 0) AS UBIGINT) "
       "AS message_reference_count, "
       "CAST(COALESCE(ordinary.visible_mailbox_membership_count, 0) AS UBIGINT) "
       "AS visible_mailbox_membership_count, "
@@ -1183,6 +1184,11 @@ duckdb_store_create_object_reachability_view (WyreboxSchemaMetadataStoreDuckdb
       "COALESCE(ordinary.visible_mailbox_membership_count, 0) = 0 "
       "AS is_gc_candidate "
       "FROM objects o "
+      "LEFT JOIN ("
+      "SELECT object_id, COUNT(*) AS message_reference_count "
+      "FROM messages "
+      "GROUP BY object_id"
+      ") message_refs ON message_refs.object_id = o.object_id "
       "LEFT JOIN ("
       "SELECT m.object_id, COUNT(*) AS message_reference_count, "
       "CAST(SUM(CASE WHEN mm.is_visible THEN 1 ELSE 0 END) AS UBIGINT) "
