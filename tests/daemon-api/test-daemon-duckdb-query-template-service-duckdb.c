@@ -1738,6 +1738,12 @@ test_duckdb_service_messages_subject_contains_keeps_non_ascii_literal (void)
           "message-contains-decoded-rfc2047") != NULL);
 
   g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_subject_contains_csv (path, "account-1", "CAFé",
+      "100", "0");
+  g_assert_true (g_strstr_len (csv, -1,
+          "message-contains-decoded-rfc2047") != NULL);
+
+  g_clear_pointer (&csv, g_free);
   csv = dispatch_messages_subject_contains_csv (path, "account-1", "CAFÉ",
       "100", "0");
   g_assert_false (g_strstr_len (csv, -1,
