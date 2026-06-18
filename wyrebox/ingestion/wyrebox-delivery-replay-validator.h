@@ -17,6 +17,18 @@ G_DECLARE_FINAL_TYPE (WyreboxDeliveryReplayValidator,
     DELIVERY_REPLAY_VALIDATOR,
     GObject)
 
+typedef enum {
+  WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_INVALID_RECORD,
+  WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_MISSING_OBJECT,
+  WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_SIZE_MISMATCH,
+  WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_HASH_MISMATCH,
+} WyreboxDeliveryReplayValidatorError;
+
+#define WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR \
+  (wyrebox_delivery_replay_validator_error_quark ())
+
+GQuark wyrebox_delivery_replay_validator_error_quark (void);
+
 /*
  * @journal_reader: (transfer none): replay reader to consume from its current
  *   position through EOF.

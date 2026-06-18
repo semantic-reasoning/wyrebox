@@ -141,21 +141,23 @@ static WyreboxDaemonDeliveryStorageValidationFailureCategory
     runtime_delivery_storage_failure_category_for_replay_error
     (const GError * error)
 {
-  const char *message = NULL;
-
   if (error == NULL || error->message == NULL)
     return
         WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED;
 
-  message = error->message;
-  if (strstr (message, "mismatched size") != NULL)
+  if (g_error_matches (error,
+          WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+          WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_SIZE_MISMATCH))
     return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_SIZE_MISMATCH;
 
-  if (strstr (message, "SHA-256 mismatch") != NULL ||
-      strstr (message, "failed SHA-256 verification") != NULL)
+  if (g_error_matches (error,
+          WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+          WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_HASH_MISMATCH))
     return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_HASH_MISMATCH;
 
-  if (strstr (message, "references unavailable raw object") != NULL)
+  if (g_error_matches (error,
+          WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+          WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_MISSING_OBJECT))
     return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_MISSING_OBJECT;
 
   return
@@ -293,10 +295,57 @@ gboolean
 wyrebox_daemon_runtime_validate_delivery_storage (const char *journal_root_dir,
     const char *object_root_dir, GError **error)
 {
+  g_autoptr (WyreboxJournalReader) journal_reader = NULL;
+  g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
+  g_autoptr (WyreboxDeliveryReplayValidator) validator = NULL;
+  g_autoptr (GError) local_error = NULL;
   WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
 
-  return wyrebox_daemon_runtime_validate_delivery_storage_report
-      (journal_root_dir, object_root_dir, &report, error);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (journal_root_dir == NULL || *journal_root_dir == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "journal root directory is required");
+    return FALSE;
+  }
+
+  if (object_root_dir == NULL || *object_root_dir == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "object root directory is required");
+    return FALSE;
+  }
+
+  journal_reader = wyrebox_journal_reader_new (journal_root_dir, error);
+  if (journal_reader == NULL)
+    return FALSE;
+
+  object_store = wyrebox_local_object_store_open_existing (object_root_dir,
+      error);
+  if (object_store == NULL)
+    return FALSE;
+
+  if (!runtime_scan_journal_safe_prefix_for_delivery_storage (journal_reader,
+          &report, error))
+    return FALSE;
+
+  validator = wyrebox_delivery_replay_validator_new (journal_reader,
+      object_store);
+  if (validator == NULL)
+    return FALSE;
+
+  if (!wyrebox_delivery_replay_validator_validate_all (validator, &local_error)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "startup delivery storage validation failed: %s",
+        local_error != NULL && local_error->message != NULL ?
+        local_error->message : "unknown error");
+    return FALSE;
+  }
+
+  return TRUE;
 }
 
 gboolean

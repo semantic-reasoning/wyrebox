@@ -3,6 +3,7 @@
 #include "wyrebox-daemon-fact-mutation-service.h"
 #include "wyrebox-daemon-mailbox-catalog-duckdb.h"
 #include "wyrebox-eml-ingestor.h"
+#include "wyrebox-delivery-replay-validator.h"
 #include "wyrebox-journal-writer.h"
 #include "wyrebox-local-object-store.h"
 #include "wyrebox-message-delivered-payload.h"
@@ -431,7 +432,8 @@ test_runtime_validate_delivery_storage_rejects_missing_object (void)
 
   g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage_report
       (journal_root, object_root, &report, &error));
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+      WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_MISSING_OBJECT);
   g_assert_cmpint (report.status, ==,
       WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID);
   g_assert_cmpint (report.failure_category, ==,
@@ -493,7 +495,8 @@ test_runtime_validate_delivery_storage_rejects_size_mismatch (void)
 
   g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage_report
       (journal_root, object_root, &report, &error));
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+      WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_SIZE_MISMATCH);
   g_assert_cmpint (report.status, ==,
       WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID);
   g_assert_cmpint (report.failure_category, ==,
@@ -540,7 +543,8 @@ test_runtime_validate_delivery_storage_rejects_hash_mismatch (void)
 
   g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage_report
       (journal_root, object_root, &report, &error));
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+      WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_HASH_MISMATCH);
   g_assert_cmpint (report.status, ==,
       WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID);
   g_assert_cmpint (report.failure_category, ==,
@@ -595,6 +599,43 @@ test_runtime_validate_delivery_storage_rejects_unsafe_journal_suffix (void)
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
   g_assert_nonnull (strstr (error->message, "unsafe suffix"));
   g_assert_nonnull (strstr (error->message, "startup delivery storage"));
+
+  remove_tree (journal_root);
+  remove_tree (object_root);
+}
+
+static void
+    test_runtime_validate_delivery_storage_prefers_object_root_failure_over_unsafe_journal_suffix
+    (void)
+{
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+  WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autofree char *segment_path = NULL;
+  guint64 journal_offset = 0;
+  guint64 journal_sequence = 0;
+
+  g_assert_nonnull (journal_root);
+  g_assert_nonnull (object_root);
+  append_runtime_journal_record (journal_root, &journal_offset,
+      &journal_sequence);
+  segment_path = journal_segment_path (journal_root);
+  g_assert_cmpint (truncate (segment_path, 17), ==, 0);
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage_report
+      (journal_root, object_root, &report, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_cmpint (report.failure_category, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_UNSAFE_JOURNAL_SUFFIX);
+  g_clear_error (&error);
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage
+      (journal_root, object_root, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_assert_nonnull (strstr (error->message, "object store root"));
 
   remove_tree (journal_root);
   remove_tree (object_root);
@@ -1197,6 +1238,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/runtime/validate-delivery-storage/unsafe-journal-suffix",
       test_runtime_validate_delivery_storage_rejects_unsafe_journal_suffix);
+  g_test_add_func
+      ("/daemon-api/runtime/validate-delivery-storage/prefers-object-root-failure-over-unsafe-journal-suffix",
+      test_runtime_validate_delivery_storage_prefers_object_root_failure_over_unsafe_journal_suffix);
   g_test_add_func
       ("/daemon-api/runtime/validate-delivery-storage/invalid-args",
       test_runtime_validate_delivery_storage_rejects_invalid_args);
