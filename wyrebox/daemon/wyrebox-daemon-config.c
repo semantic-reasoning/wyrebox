@@ -152,32 +152,6 @@ parse_daemon_config_file (const char *config_path, const char *contents,
         goto out;
       }
 
-      if (value == NULL || *value == '\0') {
-        g_set_error (error,
-            G_IO_ERROR,
-            G_IO_ERROR_INVALID_ARGUMENT,
-            "daemon config '%s' socket_path is required", config_path);
-        goto out;
-      }
-
-      if (!g_path_is_absolute (value)) {
-        g_set_error (error,
-            G_IO_ERROR,
-            G_IO_ERROR_INVALID_DATA,
-            "daemon config '%s' socket_path must be absolute: %s",
-            config_path, value);
-        goto out;
-      }
-
-      if (g_strcmp0 (value, WYREBOX_DAEMON_DEFAULT_SOCKET_PATH) != 0) {
-        g_set_error (error,
-            G_IO_ERROR,
-            G_IO_ERROR_INVALID_DATA,
-            "daemon config '%s' socket_path must be %s, not %s",
-            config_path, WYREBOX_DAEMON_DEFAULT_SOCKET_PATH, value);
-        goto out;
-      }
-
       socket_path = g_strdup (value);
       seen_socket_path = TRUE;
       continue;
@@ -230,6 +204,39 @@ wyrebox_daemon_config_init (WyreboxDaemonConfig *self)
 {
 }
 
+gboolean
+wyrebox_daemon_config_validate_for_startup (const WyreboxDaemonConfig *self,
+    GError **error)
+{
+  const char *socket_path = NULL;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (self == NULL) {
+    g_set_error (error,
+        G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "daemon config is required");
+    return FALSE;
+  }
+
+  socket_path = self->socket_path;
+  if (socket_path == NULL || *socket_path == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA, "daemon config socket_path is required");
+    return FALSE;
+  }
+
+  if (!g_path_is_absolute (socket_path)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon config socket_path must be absolute: %s", socket_path);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
 WyreboxDaemonConfig *
 wyrebox_daemon_config_new_from_file (const char *config_path, GError **error)
 {
@@ -266,6 +273,11 @@ wyrebox_daemon_config_new_from_file (const char *config_path, GError **error)
   self = g_object_new (WYREBOX_TYPE_DAEMON_CONFIG, NULL);
   self->config_path = g_strdup (config_path);
   self->socket_path = g_steal_pointer (&socket_path);
+
+  if (!wyrebox_daemon_config_validate_for_startup (self, error)) {
+    g_clear_object (&self);
+    return NULL;
+  }
 
   return self;
 }
