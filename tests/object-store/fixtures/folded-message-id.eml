@@ -1,0 +1,8 @@
+From: Folded <folded@example.test>
+To: Target <target@example.test>
+Message-ID: <folded-message-id@
+ example.test>
+Subject: Folded Message-ID fixture
+Date: Thu, 11 Jun 2026 00:00:00 +0000
+
+Body.

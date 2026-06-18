@@ -82,6 +82,10 @@ test_duplicate_message_id_keeps_first_and_counts_extra (void)
   g_assert_cmpstr (metadata.message_id, ==,
       "<duplicate-message-id@example.test>");
   g_assert_cmpuint (metadata.duplicate_message_id_count, ==, 1);
+  g_assert_true (metadata.message_id_span_valid);
+  g_assert_cmpuint (metadata.message_id_span_start, >, 0);
+  g_assert_cmpuint (metadata.message_id_span_end,
+      >, metadata.message_id_span_start);
 }
 
 static void
@@ -168,6 +172,43 @@ test_records_subject_span_for_folded_header (void)
   g_assert_true (metadata.subject_span_valid);
   g_assert_cmpuint (metadata.subject_span_start, ==, expected_start);
   g_assert_cmpuint (metadata.subject_span_end, ==, expected_end);
+}
+
+static void
+test_records_message_id_span_for_folded_header (void)
+{
+  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) bytes = NULL;
+  g_auto (WyreboxEmlMetadata) metadata = { 0 };
+  gsize size = 0;
+  const char *data = NULL;
+  const char *message_id = NULL;
+  const char *subject = NULL;
+  guint64 expected_start = 0;
+  guint64 expected_end = 0;
+
+  g_assert_nonnull (fixture_dir);
+
+  bytes = load_fixture_bytes (fixture_dir, "folded-message-id.eml");
+  data = g_bytes_get_data (bytes, &size);
+
+  message_id = g_strstr_len (data, size, "Message-ID: <folded-message-id@\r\n");
+  g_assert_nonnull (message_id);
+  subject = g_strstr_len (message_id, size - (message_id - data),
+      "\r\nSubject: Folded Message-ID fixture\r\n");
+  g_assert_nonnull (subject);
+
+  expected_start = (guint64) (message_id - data);
+  expected_end = (guint64) (subject - data);
+
+  g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (metadata.message_id, ==,
+      "<folded-message-id@ example.test>");
+  g_assert_true (metadata.message_id_span_valid);
+  g_assert_cmpuint (metadata.message_id_span_start, ==, expected_start);
+  g_assert_cmpuint (metadata.message_id_span_end, ==, expected_end);
 }
 
 static void
@@ -264,6 +305,8 @@ main (int argc, char **argv)
       test_unfolds_header_continuations);
   g_test_add_func ("/ingestion/eml-metadata/subject-span-folded-header",
       test_records_subject_span_for_folded_header);
+  g_test_add_func ("/ingestion/eml-metadata/message-id-span-folded-header",
+      test_records_message_id_span_for_folded_header);
   g_test_add_func ("/ingestion/eml-metadata/thread-reference-headers",
       test_preserves_thread_reference_headers);
   g_test_add_func ("/ingestion/eml-metadata/final-selected-header-byte",
