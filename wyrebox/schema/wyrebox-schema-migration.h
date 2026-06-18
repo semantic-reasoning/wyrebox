@@ -7,6 +7,7 @@
 #include <glib-object.h>
 #include <gio/gio.h>
 
+typedef struct _WyreboxJournalReader WyreboxJournalReader;
 typedef struct _WyreboxSchemaMetadataStore WyreboxSchemaMetadataStore;
 
 /* *INDENT-OFF* */
@@ -131,6 +132,23 @@ void wyrebox_schema_migration_metadata_state_clear (
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (
     WyreboxSchemaMigrationMetadataState,
     wyrebox_schema_migration_metadata_state_clear)
+
+/*
+ * Validate that the journal state is compatible with the migration metadata
+ * checkpoint, if one is present.
+ *
+ * When @state->materialization_checkpoint_present is TRUE, the helper validates
+ * that the journal has a safe prefix and that the checkpoint offset/sequence
+ * still point at a readable record. The reader position is consumed by the
+ * checkpoint seek and should be discarded by the caller after use.
+ *
+ * When no materialization checkpoint is recorded, the helper still validates
+ * the journal prefix and returns success.
+ */
+gboolean wyrebox_schema_migration_validate_materialization_checkpoint (
+    WyreboxJournalReader *journal_reader,
+    const WyreboxSchemaMigrationMetadataState *state,
+    GError **error);
 
 /*
  * Returns the first supported schema version (small integer for fixture-safe
