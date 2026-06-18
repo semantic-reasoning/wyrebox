@@ -2728,6 +2728,67 @@ test_materialization_checkpoint_validation_rejects_missing_journal (void)
 }
 
 static void
+test_run_store_to_current_with_journal_rejects_corrupt_checkpoint (void)
+{
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-schema-migration-journal-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  TestSchemaMetadataStoreSpy *spy = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+  guint64 checkpoint_offset = 0;
+  guint64 checkpoint_sequence = 0;
+
+  g_assert_nonnull (journal_root);
+  append_single_journal_record (journal_root, &checkpoint_offset,
+      &checkpoint_sequence);
+  corrupt_journal_checksum (journal_root, checkpoint_offset);
+
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
+  migration = wyrebox_schema_migration_new ();
+  spy = test_schema_metadata_store_spy_new ();
+
+  base.schema_version_present = TRUE;
+  base.schema_version = 0;
+  test_schema_migration_set_materialization_checkpoint_fields (&base);
+
+  g_assert_true (wyrebox_schema_metadata_store_save ((WyreboxSchemaMetadataStore
+              *) spy, &base, &error));
+  g_assert_no_error (error);
+  spy->save_called = FALSE;
+  spy->save_call_count = 0;
+  spy->migration_operation_call_count = 0;
+
+  g_assert_false
+      (wyrebox_schema_migration_run_store_to_current_with_journal
+      (migration, (WyreboxSchemaMetadataStore *) spy, reader, TRUE, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_clear_error (&error);
+  g_assert_cmpuint (spy->migration_operation_call_count, ==, 0);
+  g_assert_cmpuint (spy->save_call_count, ==, 0);
+  g_assert_false (spy->save_called);
+
+  g_assert_true (wyrebox_schema_metadata_store_load (
+          (WyreboxSchemaMetadataStore *) spy, &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==, base.schema_version);
+  g_assert_true (loaded.materialization_checkpoint_present);
+  g_assert_cmpuint (loaded.materialization_checkpoint_journal_offset, ==,
+      base.materialization_checkpoint_journal_offset);
+  g_assert_cmpuint (loaded.materialization_checkpoint_sequence, ==,
+      base.materialization_checkpoint_sequence);
+
+  g_object_unref (spy);
+  remove_directory_tree (journal_root);
+}
+
+static void
 test_destructive_forward_path_without_checkpoint_precondition_fails (void)
 {
   g_autoptr (WyreboxSchemaMigration) migration = NULL;
@@ -3234,6 +3295,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/migration/schema/materialization-checkpoint-validation/rejects-missing-journal",
       test_materialization_checkpoint_validation_rejects_missing_journal);
+  g_test_add_func
+      ("/migration/schema/run-store-to-current-with-journal/rejects-corrupt-checkpoint",
+      test_run_store_to_current_with_journal_rejects_corrupt_checkpoint);
   g_test_add_func
       ("/migration/schema/destructive-forward-path-without-checkpoint-precondition-fails",
       test_destructive_forward_path_without_checkpoint_precondition_fails);
