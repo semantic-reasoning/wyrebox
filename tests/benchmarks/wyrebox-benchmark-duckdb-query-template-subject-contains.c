@@ -67,11 +67,46 @@ remove_tree (const char *path)
   (void) g_rmdir (path);
 }
 
+typedef struct
+{
+  gchar *path;
+} TempCatalogRoot;
+
+static void
+temp_catalog_root_clear (TempCatalogRoot *root)
+{
+  if (root == NULL)
+    return;
+
+  if (root->path != NULL)
+    remove_tree (root->path);
+  g_clear_pointer (&root->path, g_free);
+}
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (TempCatalogRoot, temp_catalog_root_clear)
+/* *INDENT-ON* */
+
 static gchar *
 create_temp_catalog_root (void)
 {
   return g_dir_make_tmp ("wyrebox-benchmark-duckdb-query-template-XXXXXX",
       NULL);
+}
+
+static gsize
+count_substring (const gchar *haystack, const gchar *needle)
+{
+  gsize count = 0;
+  gsize needle_length = strlen (needle);
+  const gchar *cursor = haystack;
+
+  while ((cursor = g_strstr_len (cursor, -1, needle)) != NULL) {
+    count++;
+    cursor += needle_length;
+  }
+
+  return count;
 }
 
 static void
@@ -146,6 +181,33 @@ seed_catalog (const gchar *path)
         i, i, i, i, (guint64) 2000 + i, (guint64) 2000 + i);
     exec_sql (connection, sql->str);
   }
+
+  exec_sql (connection,
+      "INSERT INTO messages (message_id, account_id, object_id, "
+      "journal_offset, journal_sequence) VALUES "
+      "('message-cross-account', 'account-2', 'object-cross-account', "
+      "3000, 3000),"
+      "('message-nonmatching', 'account-1', 'object-nonmatching', "
+      "3001, 3001),"
+      "('message-null-subject', 'account-1', 'object-null-subject', "
+      "3002, 3002);");
+  exec_sql (connection,
+      "INSERT INTO message_headers ("
+      "message_id, rfc_message_id, duplicate_message_id_count, subject, "
+      "from_addr, to_addr, cc_addr, bcc_addr, date_raw, journal_offset, "
+      "journal_sequence) VALUES "
+      "('message-cross-account', '<message-cross-account@example.test>', 0, "
+      "'High Volume Subject', 'Sender 900 <sender900@example.test>', "
+      "'Bob <bob@example.test>', NULL, NULL, "
+      "'Mon, 01 Jan 2024 00:00:00 +0000', 4000, 4000),"
+      "('message-nonmatching', '<message-nonmatching@example.test>', 0, "
+      "'High Noise Subject', 'Sender 901 <sender901@example.test>', "
+      "'Bob <bob@example.test>', NULL, NULL, "
+      "'Mon, 01 Jan 2024 00:00:00 +0000', 4001, 4001),"
+      "('message-null-subject', '<message-null-subject@example.test>', 0, "
+      "NULL, 'Sender 902 <sender902@example.test>', "
+      "'Bob <bob@example.test>', NULL, NULL, "
+      "'Mon, 01 Jan 2024 00:00:00 +0000', 4002, 4002);");
 }
 
 static void
@@ -165,8 +227,8 @@ init_messages_subject_contains_request (WyreboxDaemonDuckDBQueryTemplateRequest
 static void
 run_microbenchmark (void)
 {
-  g_autofree char *root = NULL;
   g_autofree char *catalog_path = NULL;
+  g_auto (TempCatalogRoot) temp_root = { 0 };
   g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
   g_autoptr (GError) error = NULL;
@@ -176,10 +238,11 @@ run_microbenchmark (void)
   gint64 start_us = 0;
   gint64 end_us = 0;
   gint64 elapsed_us = 0;
+  g_autofree gchar *csv = NULL;
 
-  root = create_temp_catalog_root ();
-  g_assert_nonnull (root);
-  catalog_path = g_build_filename (root, "catalog.duckdb", NULL);
+  temp_root.path = create_temp_catalog_root ();
+  g_assert_nonnull (temp_root.path);
+  catalog_path = g_build_filename (temp_root.path, "catalog.duckdb", NULL);
 
   bootstrap_catalog (catalog_path);
   seed_catalog (catalog_path);
@@ -189,8 +252,8 @@ run_microbenchmark (void)
   g_assert_no_error (error);
   g_assert_nonnull (service);
 
-  init_messages_subject_contains_request (&request, "account-1", "subject",
-      "100", "0");
+  init_messages_subject_contains_request (&request, "account-1", "volume",
+      "10", "95");
 
   start_us = g_get_monotonic_time ();
   g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
@@ -207,9 +270,18 @@ run_microbenchmark (void)
 
   data = g_bytes_get_data (frame.stream_chunk.bytes, &size);
   g_assert_cmpuint (size, >, 0);
-  g_assert_true (g_str_has_prefix ((const gchar *) data,
+  csv = g_strndup (data, size);
+  g_assert_nonnull (csv);
+  g_assert_true (g_str_has_prefix (csv,
           "account_id,message_id,object_id,message_journal_offset,"));
-  g_assert_nonnull (g_strstr_len (data, size, "message-volume-000"));
+  g_assert_cmpuint (count_substring (csv, "object-volume-"), ==, 10);
+  g_assert_nonnull (g_strstr_len (csv, -1, "message-volume-095"));
+  g_assert_nonnull (g_strstr_len (csv, -1, "message-volume-104"));
+  g_assert_null (g_strstr_len (csv, -1, "message-volume-094"));
+  g_assert_null (g_strstr_len (csv, -1, "message-volume-105"));
+  g_assert_null (g_strstr_len (csv, -1, "message-cross-account"));
+  g_assert_null (g_strstr_len (csv, -1, "message-nonmatching"));
+  g_assert_null (g_strstr_len (csv, -1, "message-null-subject"));
 
   g_print ("{\"schema\":\"wyrebox-benchmark-report/v1\",");
   g_print ("\"suite\":\"duckdb-query-template\",");
@@ -217,8 +289,6 @@ run_microbenchmark (void)
   g_print ("\"metric\":\"elapsed_us\",");
   g_print ("\"value\":%" G_GINT64_FORMAT ",", elapsed_us);
   g_print ("\"status\":\"ok\"}\n");
-
-  remove_tree (root);
 }
 
 int

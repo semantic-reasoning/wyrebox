@@ -33,8 +33,15 @@ def main() -> None:
         source_text
     )
     assert "messages.subject_contains.v1" in source_text
-    assert "High Volume Subject" in source_text
-    assert "message-volume-000" in source_text
+    assert 'init_messages_subject_contains_request (&request, "account-1",' in (
+        source_text
+    )
+    assert "count_substring (csv, \"object-volume-\")" in source_text
+    assert "message-volume-095" in source_text
+    assert "message-volume-104" in source_text
+    assert "message-cross-account" in source_text
+    assert "message-nonmatching" in source_text
+    assert "message-null-subject" in source_text
     assert 'g_print ("{\\"schema\\":\\"wyrebox-benchmark-report/v1\\",")' in (
         source_text
     )
