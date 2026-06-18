@@ -4,7 +4,6 @@ from pathlib import Path
 import json
 import os
 import subprocess
-import tempfile
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -33,7 +32,6 @@ def detect_build_root() -> Path:
 
 
 BUILD_ROOT = detect_build_root()
-INTRO_BUILD_OPTIONS_PATH = BUILD_ROOT / "meson-info" / "intro-buildoptions.json"
 
 EXAMPLE_INSTALL_RELATIVE_DIR = Path("share") / "doc" / "wyrebox" / "examples" / "postfix"
 EXAMPLE_INSTALL_FILES = [
@@ -43,41 +41,42 @@ EXAMPLE_INSTALL_FILES = [
 ]
 
 
-def read_prefix() -> str:
-    assert INTRO_BUILD_OPTIONS_PATH.is_file(), (
-        f"missing build introspection file: {INTRO_BUILD_OPTIONS_PATH}"
-    )
-
-    build_options = json.loads(INTRO_BUILD_OPTIONS_PATH.read_text(encoding="utf-8"))
-    for option in build_options:
-        if option.get("name") == "prefix":
-            return option["value"]
-
-    raise AssertionError("build introspection file does not define prefix")
-
-
-def install_to(destdir: Path) -> None:
-    subprocess.run(
-        ["meson", "install", "-C", str(BUILD_ROOT), "--destdir", str(destdir)],
+def load_install_plan() -> dict[str, dict[str, dict[str, object]]]:
+    result = subprocess.run(
+        ["meson", "introspect", str(BUILD_ROOT), "--install-plan"],
         check=True,
         text=True,
+        capture_output=True,
     )
 
+    return json.loads(result.stdout)
 
-def assert_expected_example_files(installed_root: Path) -> None:
-    example_root = installed_root / read_prefix().lstrip("/") / EXAMPLE_INSTALL_RELATIVE_DIR
-    assert example_root.is_dir(), f"missing installed example directory: {example_root}"
+
+def assert_expected_example_files(plan: dict[str, dict[str, dict[str, object]]]) -> None:
+    data = plan["data"]
 
     for filename in EXAMPLE_INSTALL_FILES:
-        path = example_root / filename
-        assert path.is_file(), f"missing installed example file: {path}"
+        suffix = f"examples/postfix/{filename}"
+        matching_paths = [
+            source_path for source_path in data if source_path.endswith(suffix)
+        ]
+        assert matching_paths, f"missing install plan entry: {suffix}"
+        assert len(matching_paths) == 1, (
+            f"ambiguous install plan entry for {suffix}: {matching_paths}"
+        )
+        source_path = matching_paths[0]
+
+        expected_destination = (
+            "{datadir}/doc/wyrebox/examples/postfix/" + filename
+        )
+        assert data[source_path]["destination"] == expected_destination, (
+            f"unexpected install destination for {source_path}: "
+            f"{data[source_path]['destination']}"
+        )
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="wyrebox-install-smoke-") as tempdir:
-        install_root = Path(tempdir)
-        install_to(install_root)
-        assert_expected_example_files(install_root)
+    assert_expected_example_files(load_install_plan())
 
 
 if __name__ == "__main__":
