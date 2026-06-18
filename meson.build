@@ -606,6 +606,12 @@ test(
 )
 
 test(
+  'docs issue 0028 object store get benchmark scaffold',
+  python,
+  args: files('tests/benchmarks/test_issue_0028_object_store_get_benchmark_scaffold.py'),
+)
+
+test(
   'docs issue 0029 postfix pipe install',
   python,
   args: files('tests/docs/test_issue_0029_postfix_pipe_install.py'),
