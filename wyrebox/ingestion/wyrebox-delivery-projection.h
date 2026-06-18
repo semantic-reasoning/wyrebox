@@ -47,6 +47,12 @@ typedef struct
   char *cc;
   char *bcc;
   char *date_raw;
+  gboolean message_id_span_valid;
+  guint64 message_id_span_start;
+  guint64 message_id_span_end;
+  gboolean subject_span_valid;
+  guint64 subject_span_start;
+  guint64 subject_span_end;
 } WyreboxDeliveryProjectionRecord;
 
 /*

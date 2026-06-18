@@ -7,6 +7,7 @@
 #include <gio/gio.h>
 #include <glib.h>
 #include <glib/gstdio.h>
+#include <string.h>
 
 static void
 remove_tree (const char *path)
@@ -249,6 +250,13 @@ test_ingests_raw_fixture_and_appends_message_delivered_journal (void)
   gint64 before_ingest_us = 0;
   gint64 after_ingest_us = 0;
   gsize input_size = 0;
+  const char *input_data = NULL;
+  const char *message_id = NULL;
+  const char *subject = NULL;
+  guint64 message_id_span_start = 0;
+  guint64 message_id_span_end = 0;
+  guint64 subject_span_start = 0;
+  guint64 subject_span_end = 0;
 
   g_assert_nonnull (fixture_dir);
   g_assert_nonnull (object_root);
@@ -256,6 +264,18 @@ test_ingests_raw_fixture_and_appends_message_delivered_journal (void)
 
   input = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
   input_size = g_bytes_get_size (input);
+  input_data = g_bytes_get_data (input, &input_size);
+  message_id = g_strstr_len (input_data, input_size,
+      "Message-ID: <simple-crlf@example.test>\r\n");
+  g_assert_nonnull (message_id);
+  subject = g_strstr_len (input_data, input_size, "Subject: CRLF fixture\r\n");
+  g_assert_nonnull (subject);
+  message_id_span_start = (guint64) (message_id - input_data);
+  message_id_span_end = message_id_span_start +
+      (guint64) strlen ("Message-ID: <simple-crlf@example.test>");
+  subject_span_start = (guint64) (subject - input_data);
+  subject_span_end = subject_span_start +
+      (guint64) strlen ("Subject: CRLF fixture");
   store = wyrebox_local_object_store_new (object_root, &error);
   g_assert_no_error (error);
   g_assert_nonnull (store);
@@ -297,6 +317,7 @@ test_ingests_raw_fixture_and_appends_message_delivered_journal (void)
       ==, WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED);
   g_assert_cmpuint (record.offset, ==, result.journal_offset);
   g_assert_cmpuint (record.sequence, ==, result.journal_sequence);
+  g_assert_cmpmem (g_bytes_get_data (record.payload, NULL), 8, "WYREMDP4", 8);
 
   g_assert_true (wyrebox_message_delivered_payload_decode (record.payload,
           &decoded, &error));
@@ -313,6 +334,12 @@ test_ingests_raw_fixture_and_appends_message_delivered_journal (void)
   g_assert_cmpstr (decoded.to, ==, "Bob <bob@example.test>");
   g_assert_cmpstr (decoded.date, ==, "Tue, 02 Jun 2026 12:34:56 +0000");
   g_assert_cmpuint (decoded.duplicate_message_id_count, ==, 0);
+  g_assert_true (decoded.message_id_span_valid);
+  g_assert_cmpuint (decoded.message_id_span_start, ==, message_id_span_start);
+  g_assert_cmpuint (decoded.message_id_span_end, ==, message_id_span_end);
+  g_assert_true (decoded.subject_span_valid);
+  g_assert_cmpuint (decoded.subject_span_start, ==, subject_span_start);
+  g_assert_cmpuint (decoded.subject_span_end, ==, subject_span_end);
 
   g_assert_false (wyrebox_journal_reader_read_next (reader,
           &record, &eof, &error));
