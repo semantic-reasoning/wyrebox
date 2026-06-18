@@ -227,5 +227,24 @@ gboolean wyrebox_schema_migration_run_store_to_current (
     gboolean checkpoint_precondition_satisfied,
     GError **error);
 
+/*
+ * Load schema metadata from @metadata_store, validate the supplied journal
+ * against any recorded materialization checkpoint, apply the same transient
+ * checkpoint precondition used by the basic helper, and persist updated
+ * metadata only when evaluation succeeds with durable-state changes.
+ *
+ * Ownership:
+ * - @self, @metadata_store, and @journal_reader are non-floating references
+ *   owned by the caller.
+ * - @error, when set, is a caller-owned GError; callers should clear it with
+ *   g_clear_error() or use g_autoptr(GError).
+ */
+gboolean wyrebox_schema_migration_run_store_to_current_with_journal (
+    WyreboxSchemaMigration *self,
+    WyreboxSchemaMetadataStore *metadata_store,
+    WyreboxJournalReader *journal_reader,
+    gboolean checkpoint_precondition_satisfied,
+    GError **error);
+
 G_END_DECLS
 /* *INDENT-ON* */

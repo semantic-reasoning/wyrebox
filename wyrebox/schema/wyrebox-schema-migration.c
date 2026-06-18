@@ -513,10 +513,10 @@ wyrebox_schema_migration_state_matches_persisted_metadata (const
 }
 
 gboolean
-wyrebox_schema_migration_run_store_to_current (WyreboxSchemaMigration *self,
-    WyreboxSchemaMetadataStore *metadata_store,
-    gboolean checkpoint_precondition_satisfied, GError **error)
-{
+    wyrebox_schema_migration_run_store_to_current_with_journal
+    (WyreboxSchemaMigration * self, WyreboxSchemaMetadataStore * metadata_store,
+    WyreboxJournalReader * journal_reader,
+    gboolean checkpoint_precondition_satisfied, GError ** error) {
   g_auto (WyreboxSchemaMigrationMetadataState) state = { 0 };
   g_auto (WyreboxSchemaMigrationMetadataState) persisted_state = { 0 };
 
@@ -531,6 +531,11 @@ wyrebox_schema_migration_run_store_to_current (WyreboxSchemaMigration *self,
   persisted_state = state;
   state.checkpoint_precondition_satisfied = checkpoint_precondition_satisfied;
 
+  if (journal_reader != NULL &&
+      !wyrebox_schema_migration_validate_materialization_checkpoint
+      (journal_reader, &state, error))
+    return FALSE;
+
   if (!wyrebox_schema_migration_evaluate_to_version_internal (self,
           metadata_store,
           &state,
@@ -543,4 +548,13 @@ wyrebox_schema_migration_run_store_to_current (WyreboxSchemaMigration *self,
 
   state.checkpoint_precondition_satisfied = FALSE;
   return wyrebox_schema_metadata_store_save (metadata_store, &state, error);
+}
+
+gboolean
+wyrebox_schema_migration_run_store_to_current (WyreboxSchemaMigration *self,
+    WyreboxSchemaMetadataStore *metadata_store,
+    gboolean checkpoint_precondition_satisfied, GError **error)
+{
+  return wyrebox_schema_migration_run_store_to_current_with_journal (self,
+      metadata_store, NULL, checkpoint_precondition_satisfied, error);
 }
