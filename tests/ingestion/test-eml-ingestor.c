@@ -128,6 +128,28 @@ typedef struct
   GError *error;
 } DeliveryIngestThreadContext;
 
+typedef struct
+{
+  GMutex mutex;
+  GCond cond;
+  gboolean start;
+} ConcurrentDeliveryStartGate;
+
+typedef struct
+{
+  WyreboxEmlIngestor *ingestor;
+  GBytes *bytes;
+  const char *delivery_id;
+  const char *queue_id;
+  const char *account_identity;
+  const char *envelope_sender;
+  const gchar *const *recipients;
+  ConcurrentDeliveryStartGate *start_gate;
+  WyreboxEmlIngestResult result;
+  gboolean success;
+  GError *error;
+} ConcurrentDeliveryIngestThreadContext;
+
 static gboolean
 append_message_delivered_after_release (const char *journal_root_dir,
     gpointer user_data, GBytes **out_payload, guint64 *out_offset,
@@ -175,6 +197,24 @@ static gpointer
 delivery_ingest_thread (gpointer user_data)
 {
   DeliveryIngestThreadContext *context = user_data;
+
+  context->success = wyrebox_eml_ingestor_ingest_delivery_bytes
+      (context->ingestor, context->bytes, context->delivery_id,
+      context->queue_id, context->account_identity, context->envelope_sender,
+      context->recipients, &context->result, &context->error);
+
+  return NULL;
+}
+
+static gpointer
+concurrent_delivery_ingest_thread (gpointer user_data)
+{
+  ConcurrentDeliveryIngestThreadContext *context = user_data;
+
+  g_mutex_lock (&context->start_gate->mutex);
+  while (!context->start_gate->start)
+    g_cond_wait (&context->start_gate->cond, &context->start_gate->mutex);
+  g_mutex_unlock (&context->start_gate->mutex);
 
   context->success = wyrebox_eml_ingestor_ingest_delivery_bytes
       (context->ingestor, context->bytes, context->delivery_id,
@@ -699,6 +739,105 @@ test_same_bytes_different_delivery_id_appends_distinct_delivery (void)
 }
 
 static void
+test_concurrent_same_bytes_different_delivery_ids_are_serialized (void)
+{
+  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-eml-ingestor-objects-XXXXXX", NULL);
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-eml-ingestor-journal-XXXXXX", NULL);
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) input = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+  g_autoptr (GThread) first_thread = NULL;
+  g_autoptr (GThread) second_thread = NULL;
+  ConcurrentDeliveryStartGate start_gate = { 0 };
+  ConcurrentDeliveryIngestThreadContext first = { 0 };
+  ConcurrentDeliveryIngestThreadContext second = { 0 };
+  WyreboxEmlIngestResult *earlier_result = NULL;
+  WyreboxEmlIngestResult *later_result = NULL;
+  const char *recipients[] = { "alice@example.test", NULL };
+
+  g_assert_nonnull (fixture_dir);
+  g_assert_nonnull (object_root);
+  g_assert_nonnull (journal_root);
+
+  input = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
+  store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+
+  ingestor = wyrebox_eml_ingestor_new_with_journal (store, writer);
+  g_assert_nonnull (ingestor);
+
+  first.ingestor = ingestor;
+  first.bytes = input;
+  first.delivery_id = "delivery-123";
+  first.queue_id = "queue-1";
+  first.account_identity = "account-1";
+  first.envelope_sender = "sender@example.test";
+  first.recipients = recipients;
+  first.start_gate = &start_gate;
+  g_mutex_init (&start_gate.mutex);
+  g_cond_init (&start_gate.cond);
+
+  second = first;
+  second.delivery_id = "delivery-456";
+
+  first_thread = g_thread_new ("eml-ingest-concurrent-first",
+      concurrent_delivery_ingest_thread, &first);
+  second_thread = g_thread_new ("eml-ingest-concurrent-second",
+      concurrent_delivery_ingest_thread, &second);
+
+  g_mutex_lock (&start_gate.mutex);
+  start_gate.start = TRUE;
+  g_cond_broadcast (&start_gate.cond);
+  g_mutex_unlock (&start_gate.mutex);
+
+  g_thread_join (g_steal_pointer (&first_thread));
+  g_thread_join (g_steal_pointer (&second_thread));
+
+  g_assert_true (first.success);
+  g_assert_no_error (first.error);
+  g_assert_true (second.success);
+  g_assert_no_error (second.error);
+  g_assert_nonnull (first.result.object_key);
+  g_assert_nonnull (second.result.object_key);
+  g_assert_cmpstr (first.result.object_key, ==, second.result.object_key);
+  g_assert_cmpuint (first.result.size_bytes, ==, second.result.size_bytes);
+  g_assert_cmpuint (count_message_delivered_records (journal_root), ==, 2);
+
+  if (first.result.journal_sequence < second.result.journal_sequence) {
+    earlier_result = &first.result;
+    later_result = &second.result;
+  } else {
+    earlier_result = &second.result;
+    later_result = &first.result;
+  }
+
+  g_assert_cmpuint (earlier_result->journal_sequence, ==, 1);
+  g_assert_cmpuint (later_result->journal_sequence, ==, 2);
+  g_assert_cmpuint (earlier_result->journal_offset, ==, 0);
+  g_assert_cmpuint (later_result->journal_offset, >,
+      earlier_result->journal_offset);
+
+  wyrebox_eml_ingest_result_clear (&first.result);
+  wyrebox_eml_ingest_result_clear (&second.result);
+  g_clear_error (&first.error);
+  g_clear_error (&second.error);
+  g_cond_clear (&start_gate.cond);
+  g_mutex_clear (&start_gate.mutex);
+  remove_tree (object_root);
+  remove_tree (journal_root);
+}
+
+static void
 test_delivery_retry_scan_and_append_are_guarded (void)
 {
   const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
@@ -933,6 +1072,9 @@ main (int argc, char **argv)
   g_test_add_func ("/ingestion/eml-ingestor/"
       "same-bytes-different-delivery-id-appends-distinct-delivery",
       test_same_bytes_different_delivery_id_appends_distinct_delivery);
+  g_test_add_func ("/ingestion/eml-ingestor/"
+      "concurrent-same-bytes-different-delivery-ids-are-serialized",
+      test_concurrent_same_bytes_different_delivery_ids_are_serialized);
   g_test_add_func ("/ingestion/eml-ingestor/"
       "delivery-retry-scan-and-append-are-guarded",
       test_delivery_retry_scan_and_append_are_guarded);
