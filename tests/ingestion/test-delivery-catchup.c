@@ -254,6 +254,10 @@ create_bootstrap_catalog (void)
           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US,
           6, wyrebox_schema_migration_get_current_schema_version (), &error));
   g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_PROVENANCE_SPANS,
+          8, wyrebox_schema_migration_get_current_schema_version (), &error));
+  g_assert_no_error (error);
 
   return g_steal_pointer (&path);
 }

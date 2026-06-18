@@ -12,6 +12,8 @@ static const char *const message_facts_by_message_id_parameters[] =
     { "message_id", NULL };
 static const char *const facts_by_source_parameters[] = { "source", NULL };
 static const char *const facts_by_fact_id_parameters[] = { "fact_id", NULL };
+static const char *const facts_by_fact_id_with_provenance_parameters[] =
+    { "fact_id", NULL };
 static const char *const messages_by_from_addr_parameters[] =
     { "from_addr", "limit", "offset", NULL };
 static const char *const messages_by_sender_domain_parameters[] =
@@ -66,6 +68,13 @@ static const WyreboxDaemonDuckDBQueryTemplateDescriptor catalog[] = {
         "stream-chunk.duckdb-template.facts-by-fact-id.v1",
         1,
       facts_by_fact_id_parameters},
+  {
+        "facts.by_fact_id_with_provenance.v1",
+        "facts by fact id with provenance",
+        "account_id",
+        "stream-chunk.duckdb-template.facts-by-fact-id-with-provenance.v1",
+        1,
+      facts_by_fact_id_with_provenance_parameters},
   {
         "messages.by_from_addr.v1",
         "messages by from address",

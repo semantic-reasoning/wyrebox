@@ -81,6 +81,10 @@ bootstrap_catalog (const gchar *path)
           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US,
           6, wyrebox_schema_migration_get_current_schema_version (), &error));
   g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_PROVENANCE_SPANS,
+          8, wyrebox_schema_migration_get_current_schema_version (), &error));
+  g_assert_no_error (error);
 }
 
 static void
@@ -211,11 +215,12 @@ seed_message_header (const gchar *path)
       "INSERT INTO message_headers ("
       "message_id, rfc_message_id, duplicate_message_id_count, subject, "
       "from_addr, to_addr, cc_addr, bcc_addr, date_raw, journal_offset, "
-      "journal_sequence) VALUES "
+      "journal_sequence, message_id_span_start, message_id_span_end, "
+      "subject_span_start, subject_span_end) VALUES "
       "('message-a', '<message-a@example.test>', 0, 'Subject A', "
       "'Alice <alice@example.test>', 'Bob <bob@example.test>', "
       "'Carol <carol@example.test>', 'Blind <blind@example.test>', "
-      "'Mon, 01 Jan 2024 00:00:00 +0000', 20, 21);");
+      "'Mon, 01 Jan 2024 00:00:00 +0000', 20, 21, 101, 109, 10, 18);");
 }
 
 static void
@@ -240,6 +245,24 @@ seed_message_facts (const gchar *path)
       "('fact-other-account', 'account-2', 'message-other-account', "
       "'object-other-account', 'mention', '[\"Project B\"]', 'rule', "
       "870000, 2000, 0, 24, 25);");
+}
+
+static void
+seed_message_facts_with_provenance (const gchar *path)
+{
+  g_auto (duckdb_database) database = NULL;
+  g_auto (duckdb_connection) connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  exec_sql (connection,
+      "INSERT INTO message_facts (fact_id, account_id, message_id, "
+      "object_id, predicate, args_json, source, confidence_ppm, "
+      "created_at_unix_us, retracted_at_unix_us, journal_offset, "
+      "journal_sequence) VALUES "
+      "('fact-provenance', 'account-1', 'message-a', 'object-a', 'mention', "
+      "'[\"Subject A\"]', 'header:subject', 980000, 950, 0, 23, 24);");
 }
 
 static void
@@ -663,6 +686,15 @@ init_facts_by_fact_id_request (WyreboxDaemonDuckDBQueryTemplateRequest *request,
 }
 
 static void
+    init_facts_by_fact_id_with_provenance_request
+    (WyreboxDaemonDuckDBQueryTemplateRequest * request,
+    const gchar * account_id, const gchar * fact_id)
+{
+  init_request_with_template (request, "facts.by_fact_id_with_provenance.v1",
+      account_id, fact_id);
+}
+
+static void
 init_messages_by_from_addr_request (WyreboxDaemonDuckDBQueryTemplateRequest
     *request, const gchar *account_id, const gchar *from_addr)
 {
@@ -941,6 +973,36 @@ dispatch_facts_by_fact_id_csv (const gchar *path, const gchar *account_id,
   g_assert_nonnull (service);
 
   init_facts_by_fact_id_request (&request, account_id, fact_id);
+  g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
+          "request-1", "admin-cli", account_id, "duckdb-tool",
+          "correlation-1", &request, &frame, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpuint (frame.stream_chunk.chunk_index, ==, 0);
+  g_assert_true (frame.stream_chunk.end_of_stream);
+
+  data = g_bytes_get_data (frame.stream_chunk.bytes, &size);
+  return g_strndup (data, size);
+}
+
+static gchar *
+dispatch_facts_by_fact_id_with_provenance_csv (const gchar *path,
+    const gchar *account_id, const gchar *fact_id)
+{
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  gconstpointer data = NULL;
+  gsize size = 0;
+
+  service = wyrebox_daemon_duckdb_query_template_service_new_duckdb (path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (service);
+
+  init_facts_by_fact_id_with_provenance_request (&request, account_id, fact_id);
   g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
           "request-1", "admin-cli", account_id, "duckdb-tool",
           "correlation-1", &request, &frame, &error));
@@ -1496,6 +1558,29 @@ test_duckdb_service_returns_facts_by_fact_id_csv (void)
       "account-1,message-a,object-a,fact-a,sender,"
       "\"[\"\"Alice\"\", \"\"Alice <alice@example.test>\"\"]\",rule,"
       "990000,900,0,21,22\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_returns_facts_by_fact_id_with_provenance_csv (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+  seed_message_header (path);
+  seed_message_facts (path);
+  seed_message_facts_with_provenance (path);
+
+  csv = dispatch_facts_by_fact_id_with_provenance_csv (path, "account-1",
+      "fact-provenance");
+  g_assert_cmpstr (csv, ==,
+      "account_id,message_id,object_id,fact_id,predicate,args_json,source,"
+      "source_span_start,source_span_end,confidence_ppm,created_at_unix_us,"
+      "retracted_at_unix_us,journal_offset,journal_sequence\n"
+      "account-1,message-a,object-a,fact-provenance,mention,"
+      "\"[\"\"Subject A\"\"]\",header:subject,10,18,980000,950,0,23,24\n");
   (void) g_remove (path);
 }
 
@@ -2394,6 +2479,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/facts-by-fact-id-csv",
       test_duckdb_service_returns_facts_by_fact_id_csv);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/facts-by-fact-id-with-provenance-csv",
+      test_duckdb_service_returns_facts_by_fact_id_with_provenance_csv);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/facts-by-fact-id-cross-account-isolation",
       test_duckdb_service_facts_by_fact_id_isolates_cross_account_rows);
