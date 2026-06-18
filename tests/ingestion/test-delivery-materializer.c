@@ -209,6 +209,14 @@ query_string (duckdb_connection connection, const gchar *sql)
   return g_strdup (value);
 }
 
+static void
+assert_query_string (duckdb_connection connection, const gchar *sql,
+    const gchar *expected)
+{
+  g_autofree gchar *actual = query_string (connection, sql);
+  g_assert_cmpstr (actual, ==, expected);
+}
+
 static gboolean
 query_is_null (duckdb_connection connection, const gchar *sql)
 {
@@ -309,9 +317,9 @@ test_divergent_mailbox_conflict_rolls_back (void)
   assert_table_count (duckdb.connection, "messages", 0);
   assert_table_count (duckdb.connection, "message_headers", 0);
   assert_table_count (duckdb.connection, "mailbox_memberships", 0);
-  g_assert_cmpstr (query_string (duckdb.connection,
-          "SELECT mailbox_id FROM mailboxes WHERE account_id = 'account-1' "
-          "AND imap_name = 'INBOX';"), ==, "mailbox-other");
+  assert_query_string (duckdb.connection,
+      "SELECT mailbox_id FROM mailboxes WHERE account_id = 'account-1' "
+      "AND imap_name = 'INBOX';", "mailbox-other");
   close_duckdb_fixture (&duckdb);
 
   remove_catalog (path);
@@ -377,9 +385,9 @@ test_divergent_message_conflict_rolls_back (void)
   assert_table_count (duckdb.connection, "objects", 1);
   assert_table_count (duckdb.connection, "messages", 1);
   assert_table_count (duckdb.connection, "mailbox_memberships", 0);
-  g_assert_cmpstr (query_string (duckdb.connection,
-          "SELECT object_id FROM messages WHERE message_id = 'journal:11:1';"),
-      ==, "sha256:wrong");
+  assert_query_string (duckdb.connection,
+      "SELECT object_id FROM messages WHERE message_id = 'journal:11:1';",
+      "sha256:wrong");
   close_duckdb_fixture (&duckdb);
 
   remove_catalog (path);
@@ -424,9 +432,9 @@ test_divergent_message_headers_conflict_rolls_back (void)
   assert_table_count (duckdb.connection, "messages", 1);
   assert_table_count (duckdb.connection, "message_headers", 1);
   assert_table_count (duckdb.connection, "mailbox_memberships", 0);
-  g_assert_cmpstr (query_string (duckdb.connection,
-          "SELECT subject FROM message_headers WHERE "
-          "message_id = 'journal:11:1';"), ==, "Wrong subject");
+  assert_query_string (duckdb.connection,
+      "SELECT subject FROM message_headers WHERE "
+      "message_id = 'journal:11:1';", "Wrong subject");
   close_duckdb_fixture (&duckdb);
 
   remove_catalog (path);
@@ -659,28 +667,27 @@ test_happy_path_materializes_inbox (void)
   g_assert_cmpuint (query_uint64 (duckdb.connection,
           "SELECT uid FROM mailbox_memberships WHERE "
           "membership_id = 'mailbox:mailbox-inbox:journal:22:2';"), ==, 2);
-  g_assert_cmpstr (query_string (duckdb.connection,
-          "SELECT subject FROM message_headers WHERE "
-          "message_id = 'journal:11:1';"), ==, "First subject");
-  g_assert_cmpstr (query_string (duckdb.connection,
-          "SELECT from_addr FROM message_headers WHERE "
-          "message_id = 'journal:11:1';"), ==, "sender@example.test");
-  g_assert_cmpstr (query_string (duckdb.connection,
-          "SELECT to_addr FROM message_headers WHERE "
-          "message_id = 'journal:11:1';"), ==, "to@example.test");
-  g_assert_cmpstr (query_string (duckdb.connection,
-          "SELECT cc_addr FROM message_headers WHERE "
-          "message_id = 'journal:11:1';"), ==, "cc@example.test");
-  g_assert_cmpstr (query_string (duckdb.connection,
-          "SELECT bcc_addr FROM message_headers WHERE "
-          "message_id = 'journal:11:1';"), ==, "bcc@example.test");
-  g_assert_cmpstr (query_string (duckdb.connection,
-          "SELECT date_raw FROM message_headers WHERE "
-          "message_id = 'journal:11:1';"), ==,
-      "Fri, 12 Jun 2026 10:00:00 +0000");
-  g_assert_cmpstr (query_string (duckdb.connection,
-          "SELECT rfc_message_id FROM message_headers WHERE "
-          "message_id = 'journal:11:1';"), ==, "<first@example.test>");
+  assert_query_string (duckdb.connection,
+      "SELECT subject FROM message_headers WHERE "
+      "message_id = 'journal:11:1';", "First subject");
+  assert_query_string (duckdb.connection,
+      "SELECT from_addr FROM message_headers WHERE "
+      "message_id = 'journal:11:1';", "sender@example.test");
+  assert_query_string (duckdb.connection,
+      "SELECT to_addr FROM message_headers WHERE "
+      "message_id = 'journal:11:1';", "to@example.test");
+  assert_query_string (duckdb.connection,
+      "SELECT cc_addr FROM message_headers WHERE "
+      "message_id = 'journal:11:1';", "cc@example.test");
+  assert_query_string (duckdb.connection,
+      "SELECT bcc_addr FROM message_headers WHERE "
+      "message_id = 'journal:11:1';", "bcc@example.test");
+  assert_query_string (duckdb.connection,
+      "SELECT date_raw FROM message_headers WHERE "
+      "message_id = 'journal:11:1';", "Fri, 12 Jun 2026 10:00:00 +0000");
+  assert_query_string (duckdb.connection,
+      "SELECT rfc_message_id FROM message_headers WHERE "
+      "message_id = 'journal:11:1';", "<first@example.test>");
   g_assert_true (query_is_null (duckdb.connection,
           "SELECT rfc_message_id FROM message_headers WHERE "
           "message_id = 'journal:22:2';"));
@@ -731,9 +738,9 @@ test_sender_domain_is_materialized_from_from_addr (void)
   apply_projection_to_inbox (path, &projection);
 
   open_duckdb_fixture (path, &duckdb);
-  g_assert_cmpstr (query_string (duckdb.connection,
-          "SELECT sender_domain FROM message_headers WHERE "
-          "message_id = 'journal:11:1';"), ==, "example.test");
+  assert_query_string (duckdb.connection,
+      "SELECT sender_domain FROM message_headers WHERE "
+      "message_id = 'journal:11:1';", "example.test");
   g_assert_true (query_is_null (duckdb.connection,
           "SELECT sender_domain FROM message_headers WHERE "
           "message_id = 'journal:22:2';"));

@@ -45,12 +45,15 @@ create_socket_connection_pair (GSocketConnection **server_connection,
   server_socket = socket_from_fd_for_test (socket_fds[0]);
   client_socket = socket_from_fd_for_test (socket_fds[1]);
 
+  /*
+   * g_socket_connection_factory_create_connection() takes its own reference on
+   * the socket (transfer none), so the local autoptr references are released
+   * here rather than stolen, leaving the connection as the sole owner.
+   */
   *server_connection =
-      g_socket_connection_factory_create_connection (g_steal_pointer
-      (&server_socket));
+      g_socket_connection_factory_create_connection (server_socket);
   *client_connection =
-      g_socket_connection_factory_create_connection (g_steal_pointer
-      (&client_socket));
+      g_socket_connection_factory_create_connection (client_socket);
 }
 
 static void

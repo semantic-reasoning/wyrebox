@@ -66,6 +66,13 @@ gboolean wyrebox_derived_view_materializer_apply_memberships (
     GPtrArray *memberships,
     GError **error);
 
+/*
+ * The @out_changes families below treat @out_changes as an owned in/out slot:
+ * it must point to a valid #GPtrArray pointer (%NULL or owned), and any existing
+ * value is unreffed and cleared before the operation. On success it receives a
+ * caller-owned change array; on failure or EOF it is left %NULL so stale changes
+ * never survive a failed refresh.
+ */
 gboolean wyrebox_derived_view_materializer_apply_memberships_with_changes (
     WyreboxDerivedViewMaterializer *self,
     const gchar *account_id,

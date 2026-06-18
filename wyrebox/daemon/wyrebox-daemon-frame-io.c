@@ -121,7 +121,7 @@ wyrebox_daemon_frame_io_read_payload_or_eof (GInputStream *stream,
 
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
   g_return_val_if_fail (out_payload != NULL, FALSE);
-  *out_payload = NULL;
+  g_clear_pointer (out_payload, g_bytes_unref);
   if (out_eof != NULL)
     *out_eof = FALSE;
 
