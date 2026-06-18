@@ -80,3 +80,40 @@ jobs:
       - name: Test
         run: |
           meson test -C _build --print-errorlogs
+
+  pr-sanitize:
+    name: PR sanitize
+    runs-on: ubuntu-24.04
+    needs: pr-build
+
+    env:
+      ASAN_OPTIONS: "abort_on_error=1:halt_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1"
+      UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            libglib2.0-dev \
+            meson \
+            ninja-build \
+            pkg-config \
+            unzip
+
+      - name: Configure
+        run: |
+          meson setup _build -Db_sanitize=address,undefined -Db_lundef=false
+
+      - name: Build
+        run: |
+          meson compile -C _build
+
+      - name: Test
+        run: |
+          meson test -C _build --print-errorlogs
