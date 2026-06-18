@@ -31,7 +31,12 @@ gboolean wyrebox_daemon_runtime_validate_delivery_storage (
     const char *object_root_dir,
     GError **error);
 
+/*
+ * Prepare a DuckDB catalog for serving, validating the journal state against
+ * any recorded materialization checkpoint before applying migrations.
+ */
 gboolean wyrebox_daemon_runtime_prepare_catalog (
+    const char *journal_root_dir,
     const char *catalog_path,
     gboolean checkpoint_precondition_satisfied,
     GError **error);
