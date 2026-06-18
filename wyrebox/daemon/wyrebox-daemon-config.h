@@ -20,6 +20,12 @@ WyreboxDaemonConfig *wyrebox_daemon_config_new_from_file (const char
     *config_path, GError **error);
 
 /*
+ * Returns: whether @self satisfies daemon startup invariants.
+ */
+gboolean wyrebox_daemon_config_validate_for_startup (const WyreboxDaemonConfig
+    *self, GError **error);
+
+/*
  * Returns: (transfer none): the validated socket path.
  */
 const char *wyrebox_daemon_config_get_socket_path (WyreboxDaemonConfig *self);
