@@ -14,3 +14,13 @@ benchmark(
   },
 )
 
+journal_writer_microbenchmark = executable(
+  'wyrebox-benchmark-journal-writer',
+  'wyrebox-benchmark-journal-writer.c',
+  dependencies: [wyrebox_dep],
+)
+
+benchmark(
+  'journal writer microbenchmark',
+  journal_writer_microbenchmark,
+)
