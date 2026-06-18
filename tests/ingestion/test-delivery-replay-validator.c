@@ -72,6 +72,14 @@ overwrite_object (const char *object_root, const char *object_key,
 }
 
 static void
+test_error_domain_string_is_stable (void)
+{
+  g_assert_cmpstr (g_quark_to_string
+      (WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR),
+      ==, "wyrebox-delivery-replay-validator-error");
+}
+
+static void
 test_journaled_ingest_validates_delivered_object_reference (void)
 {
   const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
@@ -372,6 +380,8 @@ main (int argc, char **argv)
 {
   g_test_init (&argc, &argv, NULL);
 
+  g_test_add_func ("/ingestion/delivery-replay-validator/"
+      "error-domain-string-is-stable", test_error_domain_string_is_stable);
   g_test_add_func ("/ingestion/delivery-replay-validator/"
       "journaled-ingest-validates-delivered-object-reference",
       test_journaled_ingest_validates_delivered_object_reference);

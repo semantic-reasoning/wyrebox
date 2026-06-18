@@ -61,6 +61,13 @@ assert_bytes_equal (GBytes *actual, const guint8 *expected, gsize expected_size)
 }
 
 static void
+test_error_domain_string_is_stable (void)
+{
+  g_assert_cmpstr (g_quark_to_string (WYREBOX_LOCAL_OBJECT_STORE_ERROR),
+      ==, "wyrebox-local-object-store-error");
+}
+
+static void
 test_round_trip_preserves_bytes (void)
 {
   const guint8 message[] = "From: a@example.test\r\n\r\nhello\r\n";
@@ -435,6 +442,8 @@ main (int argc, char **argv)
 
   g_test_add_func ("/object-store/round-trip-preserves-bytes",
       test_round_trip_preserves_bytes);
+  g_test_add_func ("/object-store/error-domain-string-is-stable",
+      test_error_domain_string_is_stable);
   g_test_add_func ("/object-store/duplicate-put-is-idempotent",
       test_duplicate_put_is_idempotent_and_does_not_rewrite);
   g_test_add_func

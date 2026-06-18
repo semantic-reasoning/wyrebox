@@ -8,8 +8,10 @@
 
 #define WYREBOX_SHA256_OBJECT_KEY_PREFIX_LEN 7
 
+/* *INDENT-OFF* */
 G_DEFINE_QUARK (wyrebox-delivery-replay-validator-error,
-    wyrebox_delivery_replay_validator_error)
+    wyrebox_delivery_replay_validator_error);
+/* *INDENT-ON* */
 
 struct _WyreboxDeliveryReplayValidator
 {
@@ -36,8 +38,8 @@ wyrebox_delivery_replay_validator_finalize (GObject *object)
 }
 
 static void
-wyrebox_delivery_replay_validator_class_init (
-    WyreboxDeliveryReplayValidatorClass *klass)
+    wyrebox_delivery_replay_validator_class_init
+    (WyreboxDeliveryReplayValidatorClass * klass)
 {
   GObjectClass *object_class = G_OBJECT_CLASS (klass);
 
