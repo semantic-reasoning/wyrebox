@@ -187,4 +187,19 @@ if capnp_serialization_found
     dependencies: [wyrebox_dep],
     install: true,
   )
+
+  install_data(
+    files(
+      '../examples/postfix/README.md',
+      '../examples/postfix/master.cf.wyrebox-pipe',
+      '../examples/postfix/transport.wyrebox-pipe',
+    ),
+    install_dir: join_paths(
+      get_option('datadir'),
+      'doc',
+      meson.project_name(),
+      'examples',
+      'postfix',
+    ),
+  )
 endif

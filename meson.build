@@ -588,6 +588,12 @@ test(
 )
 
 test(
+  'docs issue 0029 postfix pipe install',
+  python,
+  args: files('tests/docs/test_issue_0029_postfix_pipe_install.py'),
+)
+
+test(
   'docs issue 0011 postfix lmtp examples',
   python,
   args: files('tests/docs/test_issue_0011_postfix_lmtp_examples.py'),
