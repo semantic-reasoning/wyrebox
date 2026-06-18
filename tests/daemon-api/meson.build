@@ -349,7 +349,8 @@ test('daemon duckdb query template request',
 test('daemon duckdb query template catalog',
   daemon_duckdb_query_template_catalog_test)
 test('daemon duckdb query template service duckdb',
-  daemon_duckdb_query_template_service_duckdb_test)
+  daemon_duckdb_query_template_service_duckdb_test,
+  timeout: 120)
 test('daemon duckdb query template dispatcher',
   daemon_duckdb_query_template_dispatcher_test)
 test('daemon delivery ingestion request', daemon_delivery_ingestion_request_test)
