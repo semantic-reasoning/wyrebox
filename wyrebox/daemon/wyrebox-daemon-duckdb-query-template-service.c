@@ -233,6 +233,26 @@ duckdb_query_template_parse_uint64 (const gchar *value,
   return TRUE;
 }
 
+static gchar
+duckdb_query_template_ascii_casefold_byte (gchar byte)
+{
+  if (((guchar) byte) < 0x80)
+    return g_ascii_tolower (byte);
+
+  return byte;
+}
+
+static gboolean
+duckdb_query_template_term_is_ascii (const gchar *term)
+{
+  for (const guchar * cursor = (const guchar *)term; *cursor != '\0'; cursor++) {
+    if (*cursor >= 0x80)
+      return FALSE;
+  }
+
+  return TRUE;
+}
+
 static gchar *
 duckdb_query_template_make_contains_like_pattern (const gchar *term)
 {
@@ -250,6 +270,43 @@ duckdb_query_template_make_contains_like_pattern (const gchar *term)
 
   g_string_append_c (pattern, '%');
   return g_string_free (g_steal_pointer (&pattern), FALSE);
+}
+
+static gboolean
+duckdb_query_template_subject_contains_literal (const gchar *subject,
+    const gchar *term)
+{
+  gsize subject_len = 0;
+  gsize term_len = 0;
+
+  if (subject == NULL || term == NULL)
+    return FALSE;
+
+  subject_len = strlen (subject);
+  term_len = strlen (term);
+
+  if (term_len == 0 || subject_len < term_len)
+    return FALSE;
+
+  for (gsize offset = 0; offset <= subject_len - term_len; offset++) {
+    gboolean matched = TRUE;
+
+    for (gsize index = 0; index < term_len; index++) {
+      gchar subject_byte = subject[offset + index];
+      gchar term_byte = term[index];
+
+      if (duckdb_query_template_ascii_casefold_byte (subject_byte) !=
+          duckdb_query_template_ascii_casefold_byte (term_byte)) {
+        matched = FALSE;
+        break;
+      }
+    }
+
+    if (matched)
+      return TRUE;
+  }
+
+  return FALSE;
 }
 
 static void
@@ -861,6 +918,81 @@ static gboolean
     const WyreboxDaemonDuckDBQueryTemplateRequest * request,
     WyreboxDaemonStreamChunkFrame * out_chunk, GError ** error)
 {
+  const gchar *subject_term = request->parameters[0];
+  g_autofree gchar *subject_pattern = NULL;
+
+  if (duckdb_query_template_term_is_ascii (subject_term)) {
+    static const gchar *sql =
+        "SELECT m.account_id, m.message_id, m.object_id, "
+        "m.journal_offset, m.journal_sequence, mh.rfc_message_id, "
+        "mh.subject, mh.from_addr, mh.to_addr, mh.cc_addr, mh.bcc_addr, "
+        "mh.date_raw, mh.journal_offset, mh.journal_sequence "
+        "FROM messages m "
+        "JOIN message_headers mh ON mh.message_id = m.message_id "
+        "WHERE m.account_id = ? "
+        "AND mh.subject IS NOT NULL "
+        "AND lower(mh.subject) LIKE ? ESCAPE '\\' "
+        "ORDER BY m.journal_sequence ASC, m.message_id ASC "
+        "LIMIT ? OFFSET ?;";
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    g_auto (duckdb_result) result = { 0 };
+    g_autoptr (GString) csv = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    guint64 limit = 0;
+    guint64 offset = 0;
+
+    subject_pattern =
+        duckdb_query_template_make_contains_like_pattern (subject_term);
+
+    if (!duckdb_query_template_parse_uint64 (request->parameters[1], "limit",
+            &limit, error) ||
+        !duckdb_query_template_parse_uint64 (request->parameters[2], "offset",
+            &offset, error) ||
+        !duckdb_query_template_prepare (executor, sql, &statement, error) ||
+        !duckdb_query_template_bind_varchar (statement, 1, request->scope_id,
+            error) ||
+        !duckdb_query_template_bind_varchar (statement, 2, subject_pattern,
+            error) ||
+        !duckdb_query_template_bind_uint64 (statement, 3, limit, error) ||
+        !duckdb_query_template_bind_uint64 (statement, 4, offset, error))
+      return FALSE;
+
+    if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+      const char *detail = duckdb_result_error (&result);
+
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_FAILED,
+          "DuckDB query template execution failed: %s",
+          detail != NULL ? detail : "unknown DuckDB error");
+      return FALSE;
+    }
+
+    csv = g_string_new
+        ("account_id,message_id,object_id,message_journal_offset,"
+        "message_journal_sequence,rfc_message_id,subject,from_addr,to_addr,"
+        "cc_addr,bcc_addr,date_raw,header_journal_offset,"
+        "header_journal_sequence\n");
+
+    for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+      if (!duckdb_query_template_append_message_by_id_row (csv, &result, row,
+              error))
+        return FALSE;
+    }
+
+    {
+      gsize csv_len = csv->len;
+      gchar *csv_data = g_string_free (g_steal_pointer (&csv), FALSE);
+
+      bytes = g_bytes_new_take (csv_data, csv_len);
+    }
+
+    return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+        identity->request_id,
+        NULL, request->query_id, identity->correlation_id, 0, bytes, TRUE,
+        error);
+  }
+
   static const gchar *sql =
       "SELECT m.account_id, m.message_id, m.object_id, "
       "m.journal_offset, m.journal_sequence, mh.rfc_message_id, "
@@ -870,18 +1002,15 @@ static gboolean
       "JOIN message_headers mh ON mh.message_id = m.message_id "
       "WHERE m.account_id = ? "
       "AND mh.subject IS NOT NULL "
-      "AND lower(mh.subject) LIKE ? ESCAPE '\\' "
-      "ORDER BY m.journal_sequence ASC, m.message_id ASC " "LIMIT ? OFFSET ?;";
+      "ORDER BY m.journal_sequence ASC, m.message_id ASC;";
   g_auto (duckdb_prepared_statement) statement = NULL;
   g_auto (duckdb_result) result = { 0 };
   g_autoptr (GString) csv = NULL;
   g_autoptr (GBytes) bytes = NULL;
-  g_autofree gchar *subject_pattern = NULL;
   guint64 limit = 0;
   guint64 offset = 0;
-
-  subject_pattern =
-      duckdb_query_template_make_contains_like_pattern (request->parameters[0]);
+  guint64 matched_count = 0;
+  guint64 emitted_count = 0;
 
   if (!duckdb_query_template_parse_uint64 (request->parameters[1], "limit",
           &limit, error) ||
@@ -889,11 +1018,7 @@ static gboolean
           &offset, error) ||
       !duckdb_query_template_prepare (executor, sql, &statement, error) ||
       !duckdb_query_template_bind_varchar (statement, 1, request->scope_id,
-          error) ||
-      !duckdb_query_template_bind_varchar (statement, 2, subject_pattern,
-          error) ||
-      !duckdb_query_template_bind_uint64 (statement, 3, limit, error) ||
-      !duckdb_query_template_bind_uint64 (statement, 4, offset, error))
+          error))
     return FALSE;
 
   if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
@@ -914,9 +1039,23 @@ static gboolean
       "header_journal_sequence\n");
 
   for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+    g_auto (DuckDBOwnedString) subject = NULL;
+
+    subject = duckdb_value_varchar (&result, 6, row);
+    if (!duckdb_query_template_subject_contains_literal (subject, subject_term))
+      continue;
+
+    if (matched_count++ < offset)
+      continue;
+
+    if (emitted_count >= limit)
+      break;
+
     if (!duckdb_query_template_append_message_by_id_row (csv, &result, row,
             error))
       return FALSE;
+
+    emitted_count++;
   }
 
   {

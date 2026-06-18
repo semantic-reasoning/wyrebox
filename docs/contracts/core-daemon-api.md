@@ -563,6 +563,8 @@ scoped:
   case-sensitive match against decoded subject metadata.
 - `messages.subject_contains.v1(subject_term, limit, offset)` performs an
   ASCII case-insensitive substring match against decoded subject metadata.
+  Non-ASCII letters are compared literally; the template does not attempt
+  Unicode case folding or locale-specific matching.
   Search wildcard characters `%`, `_`, and `\` are treated as literal input,
   not as pattern controls.
 - `messages.by_date_range.v1(start_unix_us, end_unix_us, limit, offset)`

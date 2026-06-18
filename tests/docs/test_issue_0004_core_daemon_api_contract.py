@@ -1662,6 +1662,7 @@ def main() -> None:
         r"sender-domain metadata.*normalized to lowercase ASCII",
         r"`messages\.by_subject\.v1\(subject, limit, offset\)` performs an exact, case-sensitive match",
         r"`messages\.subject_contains\.v1\(subject_term, limit, offset\)` performs an ASCII case-insensitive substring match",
+        r"Non-ASCII letters are compared literally; the template does not attempt Unicode case folding or locale-specific matching",
         r"Search wildcard characters `%`, `_`, and `\\` are treated as literal input",
         r"`messages\.by_date_range\.v1\(start_unix_us, end_unix_us, limit, offset\)`",
         r"half-open range.*start_unix_us, end_unix_us",
