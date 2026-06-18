@@ -89,6 +89,9 @@ test_catalog_resolves_allowlisted_templates (void)
   assert_template_resolves ("facts.by_source.v1", "rule",
       "facts by source", "source",
       "stream-chunk.duckdb-template.facts-by-source.v1");
+  assert_template_resolves ("facts.by_fact_id.v1", "fact-a",
+      "facts by fact id", "fact_id",
+      "stream-chunk.duckdb-template.facts-by-fact-id.v1");
   assert_metadata_template_resolves ("messages.by_from_addr.v1",
       "Alice <alice@example.test>", "messages by from address", "from_addr",
       "stream-chunk.duckdb-template.messages-by-from-addr.v1");
@@ -223,6 +226,15 @@ test_catalog_rejects_dovecot_for_fact_provenance_templates (void)
 
   init_request (&request, "facts.by_source.v1", parameters);
 
+  g_assert_false (wyrebox_daemon_duckdb_query_template_catalog_validate
+      (WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN, "account-1", &request,
+          &descriptor, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
+  g_assert_null (descriptor);
+
+  init_request (&request, "facts.by_fact_id.v1", parameters);
+
+  g_clear_error (&error);
   g_assert_false (wyrebox_daemon_duckdb_query_template_catalog_validate
       (WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN, "account-1", &request,
           &descriptor, &error));
