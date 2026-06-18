@@ -234,6 +234,15 @@ wyrebox_daemon_config_validate_for_startup (const WyreboxDaemonConfig *self,
     return FALSE;
   }
 
+  if (g_strcmp0 (socket_path, WYREBOX_DAEMON_DEFAULT_SOCKET_PATH) != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon config socket_path must be %s, not %s",
+        WYREBOX_DAEMON_DEFAULT_SOCKET_PATH, socket_path);
+    return FALSE;
+  }
+
   return TRUE;
 }
 
