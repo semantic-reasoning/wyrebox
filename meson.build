@@ -593,6 +593,14 @@ test(
   args: files('tests/docs/test_issue_0029_postfix_pipe_install.py'),
 )
 
+if capnp_serialization_found
+  test(
+    'docs issue 0029 postfix pipe install smoke',
+    python,
+    args: files('tests/docs/test_issue_0029_postfix_pipe_install_smoke.py'),
+  )
+endif
+
 test(
   'docs issue 0011 postfix lmtp examples',
   python,

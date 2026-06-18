@@ -1,0 +1,10 @@
+# Installed Postfix master.cf service for WyreBox pipe delivery.
+#
+# The helper path is configured at build time from the Meson prefix and bindir.
+wyrebox-pipe unix  -       n       n       -       -       pipe
+  flags=q user=wyrebox argv=@WYREBOX_POSTFIX_PIPE@
+  --account-id example-account
+  --delivery-id ${queue_id}:${recipient}
+  --queue-id ${queue_id}
+  --sender ${sender}
+  --recipient ${recipient}

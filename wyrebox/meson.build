@@ -188,12 +188,25 @@ if capnp_serialization_found
     install: true,
   )
 
+  wyrebox_postfix_pipe_master_cf_config = configuration_data()
+  wyrebox_postfix_pipe_master_cf_config.set(
+    'WYREBOX_POSTFIX_PIPE',
+    join_paths(get_option('prefix'), get_option('bindir'),
+      'wyrebox-postfix-pipe'),
+  )
+
+  wyrebox_postfix_pipe_master_cf = configure_file(
+    input: '../examples/postfix/master.cf.wyrebox-pipe.in',
+    output: 'master.cf.wyrebox-pipe',
+    configuration: wyrebox_postfix_pipe_master_cf_config,
+  )
+
   install_data(
     files(
       '../examples/postfix/README.md',
-      '../examples/postfix/master.cf.wyrebox-pipe',
       '../examples/postfix/transport.wyrebox-pipe',
     ),
+    wyrebox_postfix_pipe_master_cf,
     install_dir: join_paths(
       get_option('datadir'),
       'doc',
