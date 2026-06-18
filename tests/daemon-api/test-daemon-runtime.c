@@ -65,13 +65,49 @@ create_unprepared_catalog_path (void)
 }
 
 static char *
+create_journal_root (void)
+{
+  g_autofree char *dir = NULL;
+  g_autoptr (GError) error = NULL;
+
+  dir = g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (dir);
+
+  return g_steal_pointer (&dir);
+}
+
+static void
+append_runtime_journal_record (const char *journal_root,
+    guint64 *out_offset, guint64 *out_sequence)
+{
+  static const guint8 payload[] = { 0x72, 0x75, 0x6e, 0x74, 0x69, 0x6d,
+    0x65
+  };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) payload_bytes =
+      g_bytes_new_static (payload, sizeof (payload));
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED, payload_bytes,
+          out_offset, out_sequence, &error));
+  g_assert_no_error (error);
+}
+
+static char *
 create_catalog_path (void)
 {
   g_autofree char *dir = NULL;
   g_autofree char *path = NULL;
   g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
   g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
   g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  g_autofree char *journal_root = create_journal_root ();
 
   dir = g_dir_make_tmp ("wyrebox-daemon-runtime-catalog-XXXXXX", &error);
   g_assert_no_error (error);
@@ -82,9 +118,13 @@ create_catalog_path (void)
   g_assert_no_error (error);
   g_assert_nonnull (store);
 
+  reader = wyrebox_journal_reader_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (reader);
+
   migration = wyrebox_schema_migration_new ();
-  g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
-          store, FALSE, &error));
+  g_assert_true (wyrebox_schema_migration_run_store_to_current_with_journal
+      (migration, store, reader, FALSE, &error));
   g_assert_no_error (error);
 
   return g_steal_pointer (&path);
@@ -92,11 +132,12 @@ create_catalog_path (void)
 
 static void
     runtime_set_materialization_checkpoint_fields
-    (WyreboxSchemaMigrationMetadataState * state)
+    (WyreboxSchemaMigrationMetadataState * state, guint64 journal_offset,
+    guint64 journal_sequence)
 {
   state->materialization_checkpoint_present = TRUE;
-  state->materialization_checkpoint_journal_offset = 4096;
-  state->materialization_checkpoint_sequence = 2048;
+  state->materialization_checkpoint_journal_offset = journal_offset;
+  state->materialization_checkpoint_sequence = journal_sequence;
 }
 
 static void
@@ -547,11 +588,12 @@ test_default_runtime_paths_share_runtime_root (void)
 static void
 test_runtime_prepare_catalog_bootstraps_missing_metadata (void)
 {
+  g_autofree char *journal_root = create_journal_root ();
   g_autofree char *catalog_path = create_unprepared_catalog_path ();
   g_autoptr (GError) error = NULL;
 
-  g_assert_true (wyrebox_daemon_runtime_prepare_catalog (catalog_path, FALSE,
-          &error));
+  g_assert_true (wyrebox_daemon_runtime_prepare_catalog (journal_root,
+          catalog_path, FALSE, &error));
   g_assert_no_error (error);
   g_assert_cmpuint (query_catalog_uint64 (catalog_path,
           "SELECT schema_version FROM schema_metadata "
@@ -566,18 +608,24 @@ test_runtime_prepare_catalog_bootstraps_missing_metadata (void)
 static void
 test_runtime_prepare_catalog_preserves_current_checkpoint (void)
 {
+  g_autofree char *journal_root = create_journal_root ();
   g_autofree char *catalog_path = create_unprepared_catalog_path ();
   g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
   g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
   g_autoptr (GError) error = NULL;
+  guint64 journal_offset = 0;
+  guint64 journal_sequence = 0;
 
   base.schema_version_present = TRUE;
   base.schema_version = wyrebox_schema_migration_get_current_schema_version ();
-  runtime_set_materialization_checkpoint_fields (&base);
+  append_runtime_journal_record (journal_root, &journal_offset,
+      &journal_sequence);
+  runtime_set_materialization_checkpoint_fields (&base, journal_offset,
+      journal_sequence);
   save_catalog_schema_state (catalog_path, &base);
 
-  g_assert_true (wyrebox_daemon_runtime_prepare_catalog (catalog_path, FALSE,
-          &error));
+  g_assert_true (wyrebox_daemon_runtime_prepare_catalog (journal_root,
+          catalog_path, FALSE, &error));
   g_assert_no_error (error);
 
   load_catalog_schema_state (catalog_path, &loaded);
@@ -596,19 +644,25 @@ test_runtime_prepare_catalog_preserves_current_checkpoint (void)
 static void
 test_runtime_prepare_catalog_rejects_future_version (void)
 {
+  g_autofree char *journal_root = create_journal_root ();
   g_autofree char *catalog_path = create_unprepared_catalog_path ();
   g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
   g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
   g_autoptr (GError) error = NULL;
+  guint64 journal_offset = 0;
+  guint64 journal_sequence = 0;
 
   base.schema_version_present = TRUE;
   base.schema_version = wyrebox_schema_migration_get_current_schema_version ()
       + 1;
-  runtime_set_materialization_checkpoint_fields (&base);
+  append_runtime_journal_record (journal_root, &journal_offset,
+      &journal_sequence);
+  runtime_set_materialization_checkpoint_fields (&base, journal_offset,
+      journal_sequence);
   save_catalog_schema_state (catalog_path, &base);
 
-  g_assert_false (wyrebox_daemon_runtime_prepare_catalog (catalog_path, TRUE,
-          &error));
+  g_assert_false (wyrebox_daemon_runtime_prepare_catalog (journal_root,
+          catalog_path, TRUE, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
 
   load_catalog_schema_state (catalog_path, &loaded);
@@ -622,18 +676,24 @@ test_runtime_prepare_catalog_rejects_future_version (void)
 static void
 test_runtime_prepare_catalog_rejects_legacy_without_checkpoint (void)
 {
+  g_autofree char *journal_root = create_journal_root ();
   g_autofree char *catalog_path = create_unprepared_catalog_path ();
   g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
   g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
   g_autoptr (GError) error = NULL;
+  guint64 journal_offset = 0;
+  guint64 journal_sequence = 0;
 
   base.schema_version_present = TRUE;
   base.schema_version = 0;
-  runtime_set_materialization_checkpoint_fields (&base);
+  append_runtime_journal_record (journal_root, &journal_offset,
+      &journal_sequence);
+  runtime_set_materialization_checkpoint_fields (&base, journal_offset,
+      journal_sequence);
   save_catalog_schema_state (catalog_path, &base);
 
-  g_assert_false (wyrebox_daemon_runtime_prepare_catalog (catalog_path, FALSE,
-          &error));
+  g_assert_false (wyrebox_daemon_runtime_prepare_catalog (journal_root,
+          catalog_path, FALSE, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
   g_assert_nonnull (strstr (error->message, "checkpoint precondition"));
 
@@ -648,18 +708,24 @@ test_runtime_prepare_catalog_rejects_legacy_without_checkpoint (void)
 static void
 test_runtime_prepare_catalog_migrates_legacy_with_checkpoint (void)
 {
+  g_autofree char *journal_root = create_journal_root ();
   g_autofree char *catalog_path = create_unprepared_catalog_path ();
   g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
   g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
   g_autoptr (GError) error = NULL;
+  guint64 journal_offset = 0;
+  guint64 journal_sequence = 0;
 
   base.schema_version_present = TRUE;
   base.schema_version = 0;
-  runtime_set_materialization_checkpoint_fields (&base);
+  append_runtime_journal_record (journal_root, &journal_offset,
+      &journal_sequence);
+  runtime_set_materialization_checkpoint_fields (&base, journal_offset,
+      journal_sequence);
   save_catalog_schema_state (catalog_path, &base);
 
-  g_assert_true (wyrebox_daemon_runtime_prepare_catalog (catalog_path, TRUE,
-          &error));
+  g_assert_true (wyrebox_daemon_runtime_prepare_catalog (journal_root,
+          catalog_path, TRUE, &error));
   g_assert_no_error (error);
 
   load_catalog_schema_state (catalog_path, &loaded);
@@ -679,14 +745,16 @@ test_runtime_prepare_catalog_rejects_invalid_args (void)
 {
   g_autoptr (GError) error = NULL;
 
-  g_assert_false (wyrebox_daemon_runtime_prepare_catalog (NULL, FALSE, &error));
+  g_assert_false (wyrebox_daemon_runtime_prepare_catalog (NULL, NULL, FALSE,
+          &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
-  g_assert_nonnull (strstr (error->message, "catalog path"));
+  g_assert_nonnull (strstr (error->message, "journal root"));
   g_clear_error (&error);
 
-  g_assert_false (wyrebox_daemon_runtime_prepare_catalog ("", FALSE, &error));
+  g_assert_false (wyrebox_daemon_runtime_prepare_catalog ("", "", FALSE,
+          &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
-  g_assert_nonnull (strstr (error->message, "catalog path"));
+  g_assert_nonnull (strstr (error->message, "journal root"));
 }
 
 static void

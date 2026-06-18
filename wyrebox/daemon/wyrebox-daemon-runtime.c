@@ -207,13 +207,22 @@ wyrebox_daemon_runtime_validate_delivery_storage (const char *journal_root_dir,
 }
 
 gboolean
-wyrebox_daemon_runtime_prepare_catalog (const char *catalog_path,
+wyrebox_daemon_runtime_prepare_catalog (const char *journal_root_dir,
+    const char *catalog_path,
     gboolean checkpoint_precondition_satisfied, GError **error)
 {
   g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (WyreboxJournalReader) journal_reader = NULL;
   g_autoptr (WyreboxSchemaMigration) migration = NULL;
 
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (journal_root_dir == NULL || *journal_root_dir == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "journal root directory is required");
+    return FALSE;
+  }
 
   if (catalog_path == NULL || *catalog_path == '\0') {
     g_set_error (error,
@@ -226,9 +235,13 @@ wyrebox_daemon_runtime_prepare_catalog (const char *catalog_path,
   if (store == NULL)
     return FALSE;
 
+  journal_reader = wyrebox_journal_reader_new (journal_root_dir, error);
+  if (journal_reader == NULL)
+    return FALSE;
+
   migration = wyrebox_schema_migration_new ();
-  return wyrebox_schema_migration_run_store_to_current (migration,
-      store, checkpoint_precondition_satisfied, error);
+  return wyrebox_schema_migration_run_store_to_current_with_journal (migration,
+      store, journal_reader, checkpoint_precondition_satisfied, error);
 }
 
 static gboolean
