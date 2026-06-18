@@ -9,6 +9,8 @@
 
 #include <duckdb.h>
 
+#include <string.h>
+
 typedef char *duckdb_owned_string;
 
 static void
@@ -113,9 +115,57 @@ runtime_safe_prefix_stop_reason_to_string (WyreboxJournalSafePrefixStopReason
   }
 }
 
+static void
+    runtime_delivery_storage_report_init
+    (WyreboxDaemonDeliveryStorageValidationReport * report)
+{
+  memset (report, 0, sizeof (*report));
+  report->status = WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID;
+  report->failure_category =
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED;
+}
+
+static void
+    runtime_delivery_storage_report_apply_safe_prefix
+    (WyreboxDaemonDeliveryStorageValidationReport * report,
+    const WyreboxJournalSafePrefix * prefix)
+{
+  report->safe_end_offset = prefix->safe_end_offset;
+  report->has_last_safe_sequence = prefix->has_last_safe_sequence;
+  report->last_safe_sequence = prefix->last_safe_sequence;
+  report->has_unsafe_offset = prefix->unsafe_suffix_found;
+  report->unsafe_offset = prefix->unsafe_offset;
+}
+
+static WyreboxDaemonDeliveryStorageValidationFailureCategory
+    runtime_delivery_storage_failure_category_for_replay_error
+    (const GError * error)
+{
+  const char *message = NULL;
+
+  if (error == NULL || error->message == NULL)
+    return
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED;
+
+  message = error->message;
+  if (strstr (message, "mismatched size") != NULL)
+    return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_SIZE_MISMATCH;
+
+  if (strstr (message, "SHA-256 mismatch") != NULL ||
+      strstr (message, "failed SHA-256 verification") != NULL)
+    return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_HASH_MISMATCH;
+
+  if (strstr (message, "references unavailable raw object") != NULL)
+    return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_MISSING_OBJECT;
+
+  return
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED;
+}
+
 static gboolean
-runtime_fail_if_journal_has_unsafe_suffix (WyreboxJournalReader *journal_reader,
-    GError **error)
+    runtime_scan_journal_safe_prefix_for_delivery_storage
+    (WyreboxJournalReader * journal_reader,
+    WyreboxDaemonDeliveryStorageValidationReport * report, GError ** error)
 {
   WyreboxJournalSafePrefix prefix = { 0 };
   const gchar *stop_reason = NULL;
@@ -123,8 +173,13 @@ runtime_fail_if_journal_has_unsafe_suffix (WyreboxJournalReader *journal_reader,
   if (!wyrebox_journal_reader_scan_safe_prefix (journal_reader, &prefix, error))
     return FALSE;
 
+  runtime_delivery_storage_report_apply_safe_prefix (report, &prefix);
   if (!prefix.unsafe_suffix_found)
     return TRUE;
+
+  report->status = WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID;
+  report->failure_category =
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_UNSAFE_JOURNAL_SUFFIX;
 
   stop_reason = runtime_safe_prefix_stop_reason_to_string (prefix.stop_reason);
   if (prefix.has_last_safe_sequence) {
@@ -156,8 +211,9 @@ runtime_fail_if_journal_has_unsafe_suffix (WyreboxJournalReader *journal_reader,
 }
 
 gboolean
-wyrebox_daemon_runtime_validate_delivery_storage (const char *journal_root_dir,
-    const char *object_root_dir, GError **error)
+wyrebox_daemon_runtime_validate_delivery_storage_report (const char
+    *journal_root_dir, const char *object_root_dir,
+    WyreboxDaemonDeliveryStorageValidationReport *out_report, GError **error)
 {
   g_autoptr (WyreboxJournalReader) journal_reader = NULL;
   g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
@@ -165,8 +221,13 @@ wyrebox_daemon_runtime_validate_delivery_storage (const char *journal_root_dir,
   g_autoptr (GError) local_error = NULL;
 
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+  g_return_val_if_fail (out_report != NULL, FALSE);
+
+  runtime_delivery_storage_report_init (out_report);
 
   if (journal_root_dir == NULL || *journal_root_dir == '\0') {
+    out_report->failure_category =
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_INVALID_ARGUMENT;
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_ARGUMENT, "journal root directory is required");
@@ -174,6 +235,8 @@ wyrebox_daemon_runtime_validate_delivery_storage (const char *journal_root_dir,
   }
 
   if (object_root_dir == NULL || *object_root_dir == '\0') {
+    out_report->failure_category =
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_INVALID_ARGUMENT;
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_ARGUMENT, "object root directory is required");
@@ -181,16 +244,30 @@ wyrebox_daemon_runtime_validate_delivery_storage (const char *journal_root_dir,
   }
 
   journal_reader = wyrebox_journal_reader_new (journal_root_dir, error);
-  if (journal_reader == NULL)
+  if (journal_reader == NULL) {
+    out_report->failure_category =
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_JOURNAL_UNAVAILABLE;
     return FALSE;
+  }
+
+  if (!runtime_scan_journal_safe_prefix_for_delivery_storage (journal_reader,
+          out_report, error)) {
+    if (out_report->failure_category ==
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED)
+    {
+      out_report->failure_category =
+          WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_JOURNAL_UNAVAILABLE;
+    }
+    return FALSE;
+  }
 
   object_store = wyrebox_local_object_store_open_existing (object_root_dir,
       error);
-  if (object_store == NULL)
+  if (object_store == NULL) {
+    out_report->failure_category =
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_OBJECT_STORE_UNAVAILABLE;
     return FALSE;
-
-  if (!runtime_fail_if_journal_has_unsafe_suffix (journal_reader, error))
-    return FALSE;
+  }
 
   validator = wyrebox_delivery_replay_validator_new (journal_reader,
       object_store);
@@ -198,12 +275,28 @@ wyrebox_daemon_runtime_validate_delivery_storage (const char *journal_root_dir,
     return FALSE;
 
   if (!wyrebox_delivery_replay_validator_validate_all (validator, &local_error)) {
+    out_report->failure_category =
+        runtime_delivery_storage_failure_category_for_replay_error
+        (local_error);
     g_propagate_prefixed_error (error, g_steal_pointer (&local_error),
         "startup delivery storage validation failed: ");
     return FALSE;
   }
 
+  out_report->status = WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_VALID;
+  out_report->failure_category =
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_NONE;
   return TRUE;
+}
+
+gboolean
+wyrebox_daemon_runtime_validate_delivery_storage (const char *journal_root_dir,
+    const char *object_root_dir, GError **error)
+{
+  WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
+
+  return wyrebox_daemon_runtime_validate_delivery_storage_report
+      (journal_root_dir, object_root_dir, &report, error);
 }
 
 gboolean
