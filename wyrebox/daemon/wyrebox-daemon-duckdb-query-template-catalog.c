@@ -8,6 +8,8 @@ static const char *const mailbox_uid_map_parameters[] = { "mailbox_id", NULL };
 static const char *const derived_view_uid_map_parameters[] =
     { "view_id", NULL };
 static const char *const message_by_id_parameters[] = { "message_id", NULL };
+static const char *const message_facts_by_message_id_parameters[] =
+    { "message_id", NULL };
 static const char *const messages_by_from_addr_parameters[] =
     { "from_addr", "limit", "offset", NULL };
 static const char *const messages_by_sender_domain_parameters[] =
@@ -41,6 +43,13 @@ static const WyreboxDaemonDuckDBQueryTemplateDescriptor catalog[] = {
         "stream-chunk.duckdb-template.message-by-id.v1",
         1,
       message_by_id_parameters},
+  {
+        "message.facts_by_message_id.v1",
+        "message facts by message id",
+        "account_id",
+        "stream-chunk.duckdb-template.message-facts-by-message-id.v1",
+        1,
+      message_facts_by_message_id_parameters},
   {
         "messages.by_from_addr.v1",
         "messages by from address",

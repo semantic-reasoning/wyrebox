@@ -374,6 +374,35 @@ static gboolean
 }
 
 static gboolean
+    duckdb_store_validate_message_fact_table
+    (WyreboxSchemaMetadataStoreDuckdb * self, GError ** error)
+{
+  static const WyreboxDuckdbColumnSpec message_facts_columns[] = {
+    {"fact_id", "VARCHAR", TRUE},
+    {"account_id", "VARCHAR", TRUE},
+    {"message_id", "VARCHAR", TRUE},
+    {"object_id", "VARCHAR", TRUE},
+    {"predicate", "VARCHAR", TRUE},
+    {"args_json", "VARCHAR", TRUE},
+    {"source", "VARCHAR", TRUE},
+    {"confidence_ppm", "UBIGINT", TRUE},
+    {"created_at_unix_us", "UBIGINT", TRUE},
+    {"retracted_at_unix_us", "UBIGINT", TRUE},
+    {"journal_offset", "UBIGINT", TRUE},
+    {"journal_sequence", "UBIGINT", TRUE},
+  };
+  static const gchar *message_facts_primary_key_columns[] = {
+    "fact_id",
+  };
+
+  return duckdb_store_validate_table_columns (self, "message_facts",
+      message_facts_columns, G_N_ELEMENTS (message_facts_columns), error)
+      && duckdb_store_validate_primary_key (self, "message_facts",
+      message_facts_primary_key_columns,
+      G_N_ELEMENTS (message_facts_primary_key_columns), error);
+}
+
+static gboolean
     duckdb_store_validate_message_header_table
     (WyreboxSchemaMetadataStoreDuckdb * self, GError ** error)
 {
@@ -1225,6 +1254,21 @@ duckdb_store_create_bootstrap_catalog (WyreboxSchemaMetadataStoreDuckdb *self,
       "object_id VARCHAR NOT NULL,"
       "journal_offset UBIGINT NOT NULL,"
       "journal_sequence UBIGINT NOT NULL" ");", error)
+      && duckdb_store_query (self,
+      "CREATE TABLE IF NOT EXISTS message_facts ("
+      "fact_id VARCHAR PRIMARY KEY,"
+      "account_id VARCHAR NOT NULL,"
+      "message_id VARCHAR NOT NULL,"
+      "object_id VARCHAR NOT NULL,"
+      "predicate VARCHAR NOT NULL,"
+      "args_json VARCHAR NOT NULL,"
+      "source VARCHAR NOT NULL,"
+      "confidence_ppm UBIGINT NOT NULL,"
+      "created_at_unix_us UBIGINT NOT NULL,"
+      "retracted_at_unix_us UBIGINT NOT NULL,"
+      "journal_offset UBIGINT NOT NULL,"
+      "journal_sequence UBIGINT NOT NULL" ");", error)
+      && duckdb_store_validate_message_fact_table (self, error)
       && duckdb_store_query (self,
       "CREATE TABLE IF NOT EXISTS mailboxes ("
       "mailbox_id VARCHAR PRIMARY KEY,"

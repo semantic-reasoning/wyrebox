@@ -113,6 +113,20 @@ assert_bootstrap_catalog_schema (const gchar *path)
     {"journal_offset", "UBIGINT", TRUE},
     {"journal_sequence", "UBIGINT", TRUE},
   };
+  static const TestDuckdbBootstrapColumn message_facts_columns[] = {
+    {"fact_id", "VARCHAR", TRUE},
+    {"account_id", "VARCHAR", TRUE},
+    {"message_id", "VARCHAR", TRUE},
+    {"object_id", "VARCHAR", TRUE},
+    {"predicate", "VARCHAR", TRUE},
+    {"args_json", "VARCHAR", TRUE},
+    {"source", "VARCHAR", TRUE},
+    {"confidence_ppm", "UBIGINT", TRUE},
+    {"created_at_unix_us", "UBIGINT", TRUE},
+    {"retracted_at_unix_us", "UBIGINT", TRUE},
+    {"journal_offset", "UBIGINT", TRUE},
+    {"journal_sequence", "UBIGINT", TRUE},
+  };
   static const TestDuckdbBootstrapColumn mailboxes_columns[] = {
     {"mailbox_id", "VARCHAR", TRUE},
     {"account_id", "VARCHAR", TRUE},
@@ -166,6 +180,8 @@ assert_bootstrap_catalog_schema (const gchar *path)
       objects_columns, G_N_ELEMENTS (objects_columns));
   assert_bootstrap_table_schema (connection, "messages",
       messages_columns, G_N_ELEMENTS (messages_columns));
+  assert_bootstrap_table_schema (connection, "message_facts",
+      message_facts_columns, G_N_ELEMENTS (message_facts_columns));
   assert_bootstrap_table_schema (connection, "mailboxes",
       mailboxes_columns, G_N_ELEMENTS (mailboxes_columns));
   assert_bootstrap_table_schema (connection, "mailbox_memberships",
