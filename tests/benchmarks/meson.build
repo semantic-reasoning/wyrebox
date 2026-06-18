@@ -49,3 +49,14 @@ benchmark(
   'object store get microbenchmark',
   object_store_get_benchmark,
 )
+
+duckdb_query_template_subject_contains_benchmark = executable(
+  'wyrebox-benchmark-duckdb-query-template-subject-contains',
+  'wyrebox-benchmark-duckdb-query-template-subject-contains.c',
+  dependencies: [wyrebox_dep],
+)
+
+benchmark(
+  'duckdb query template subject contains microbenchmark',
+  duckdb_query_template_subject_contains_benchmark,
+)
