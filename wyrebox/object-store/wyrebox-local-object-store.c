@@ -8,8 +8,10 @@
 #include <glib/gstdio.h>
 #include <gio/gio.h>
 
+/* *INDENT-OFF* */
 G_DEFINE_QUARK (wyrebox-local-object-store-error,
-    wyrebox_local_object_store_error)
+    wyrebox_local_object_store_error);
+/* *INDENT-ON* */
 
 struct _WyreboxLocalObjectStore
 {
