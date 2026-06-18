@@ -68,6 +68,7 @@ wyrebox_sources = files(
   'ingestion/wyrebox-eml-ingestor.c',
   'ingestion/wyrebox-eml-metadata.c',
   'maildir/wyrebox-maildir-scanner.c',
+  'maildir/wyrebox-maildir-import-plan.c',
   'journal/wyrebox-daemon-audit-payload.c',
   'journal/wyrebox-message-delivered-payload.c',
   'journal/wyrebox-derived-view-membership-changed-payload.c',
