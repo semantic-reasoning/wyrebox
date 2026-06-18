@@ -44,7 +44,7 @@ WyreBox provides:
 - Postfix ingress strategy:
   - First: `pipe(8)` delivery helper.
   - Later: LMTP ingress as an additive production-oriented path.
-- Licensing model: GPL-3.0-or-later or commercial dual license.
+- Licensing model: MPL-2.0.
 
 ## Implementation Guidelines
 

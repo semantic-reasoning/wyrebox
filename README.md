@@ -25,4 +25,4 @@ standard IMAP protocol — including virtual mailboxes derived from message fact
 
 ## License
 
-GPL-3.0-or-later, or a commercial dual license.
+Mozilla Public License 2.0 (MPL-2.0).
