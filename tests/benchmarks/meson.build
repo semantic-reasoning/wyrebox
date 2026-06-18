@@ -24,3 +24,17 @@ benchmark(
   'journal writer microbenchmark',
   journal_writer_microbenchmark,
 )
+
+object_store_benchmark = executable(
+  'wyrebox-benchmark-object-store',
+  'wyrebox-benchmark-object-store.c',
+  dependencies: [wyrebox_dep],
+)
+
+benchmark(
+  'object store put microbenchmark',
+  object_store_benchmark,
+  env: {
+    'WYREBOX_BENCHMARK_FIXTURE_DIR': benchmark_fixture_dir,
+  },
+)
