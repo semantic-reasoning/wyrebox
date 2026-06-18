@@ -27,6 +27,8 @@ wyrebox_maildir_scan_entry_clear (WyreboxMaildirScanEntry *entry)
 
   g_clear_pointer (&entry->mailbox_path, g_free);
   g_clear_pointer (&entry->source_path, g_free);
+  g_clear_pointer (&entry->maildir_flag_suffix, g_free);
+  entry->maildir_flags = 0;
   entry->kind = 0;
 }
 
@@ -66,15 +68,78 @@ scan_entry_array_new (void)
 
 static WyreboxMaildirScanEntry *
 scan_entry_new (WyreboxMaildirScanEntryKind kind,
-    gchar *mailbox_path, gchar *source_path)
+    gchar *mailbox_path, gchar *source_path, gchar *maildir_flag_suffix,
+    guint maildir_flags)
 {
   WyreboxMaildirScanEntry *entry = g_new0 (WyreboxMaildirScanEntry, 1);
 
   entry->kind = kind;
   entry->mailbox_path = mailbox_path != NULL ? mailbox_path : g_strdup ("");
   entry->source_path = source_path != NULL ? source_path : g_strdup ("");
+  entry->maildir_flag_suffix = maildir_flag_suffix;
+  entry->maildir_flags = maildir_flags;
 
   return entry;
+}
+
+static guint
+maildir_message_flags_from_suffix (const gchar *maildir_flag_suffix)
+{
+  guint flags = 0;
+
+  if (maildir_flag_suffix == NULL)
+    return 0;
+
+  for (const gchar * cursor = maildir_flag_suffix; *cursor != '\0'; cursor++) {
+    switch (*cursor) {
+      case 'S':
+        flags |= WYREBOX_MAILDIR_MESSAGE_FLAG_SEEN;
+        break;
+      case 'R':
+        flags |= WYREBOX_MAILDIR_MESSAGE_FLAG_REPLIED;
+        break;
+      case 'F':
+        flags |= WYREBOX_MAILDIR_MESSAGE_FLAG_FLAGGED;
+        break;
+      case 'T':
+        flags |= WYREBOX_MAILDIR_MESSAGE_FLAG_TRASHED;
+        break;
+      case 'D':
+        flags |= WYREBOX_MAILDIR_MESSAGE_FLAG_DRAFT;
+        break;
+      case 'P':
+        flags |= WYREBOX_MAILDIR_MESSAGE_FLAG_PASSED;
+        break;
+      default:
+        break;
+    }
+  }
+
+  return flags;
+}
+
+static void
+parse_maildir_message_flags (const gchar *entry_name,
+    gchar **out_maildir_flag_suffix, guint *out_maildir_flags)
+{
+  const gchar *suffix = NULL;
+
+  g_return_if_fail (out_maildir_flag_suffix != NULL);
+  g_return_if_fail (out_maildir_flags != NULL);
+
+  *out_maildir_flag_suffix = NULL;
+  *out_maildir_flags = 0;
+
+  if (entry_name == NULL)
+    return;
+
+  suffix = g_strrstr (entry_name, ":2,");
+  if (suffix == NULL)
+    return;
+
+  suffix += 3;
+  *out_maildir_flag_suffix = g_strdup (suffix);
+  *out_maildir_flags = maildir_message_flags_from_suffix (suffix);
 }
 
 static gint
@@ -233,19 +298,24 @@ scan_message_dir (const gchar *root_path, const gchar *relative_dir,
     g_autofree gchar *entry_path = NULL;
     g_autofree gchar *mailbox_path = NULL;
     g_autofree gchar *source_path = NULL;
+    g_autofree gchar *maildir_flag_suffix = NULL;
     const gchar *entry_name = g_ptr_array_index (names, index);
+    guint maildir_flags = 0;
 
     entry_path = g_build_filename (message_dir_path, entry_name, NULL);
     if (!g_file_test (entry_path, G_FILE_TEST_IS_REGULAR))
       continue;
 
+    parse_maildir_message_flags (entry_name, &maildir_flag_suffix,
+        &maildir_flags);
     source_path = build_source_path (relative_dir, message_dir_name);
     g_autofree gchar *source_leaf = g_build_filename (source_path, entry_name,
         NULL);
     mailbox_path = normalize_mailbox_path_from_relative_dir (relative_dir);
     g_ptr_array_add (entries,
         scan_entry_new (WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE,
-            g_steal_pointer (&mailbox_path), g_steal_pointer (&source_leaf)));
+            g_steal_pointer (&mailbox_path), g_steal_pointer (&source_leaf),
+            g_steal_pointer (&maildir_flag_suffix), maildir_flags));
   }
 
   return TRUE;
@@ -282,7 +352,7 @@ scan_maildir_root (const gchar *root_path, const gchar *relative_dir,
   g_ptr_array_add (entries, scan_entry_new (WYREBOX_MAILDIR_SCAN_ENTRY_MAILBOX,
           g_steal_pointer (&mailbox_path),
           relative_dir == NULL || relative_dir[0] == '\0' ? g_strdup (".") :
-          g_strdup (relative_dir)));
+          g_strdup (relative_dir), NULL, 0));
 
   if (!scan_message_dir (root_path, relative_dir, "cur", entries, error))
     return FALSE;

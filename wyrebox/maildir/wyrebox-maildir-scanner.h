@@ -12,6 +12,16 @@ typedef enum
   WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE,
 } WyreboxMaildirScanEntryKind;
 
+typedef enum
+{
+  WYREBOX_MAILDIR_MESSAGE_FLAG_SEEN = 1u << 0,
+  WYREBOX_MAILDIR_MESSAGE_FLAG_REPLIED = 1u << 1,
+  WYREBOX_MAILDIR_MESSAGE_FLAG_FLAGGED = 1u << 2,
+  WYREBOX_MAILDIR_MESSAGE_FLAG_TRASHED = 1u << 3,
+  WYREBOX_MAILDIR_MESSAGE_FLAG_DRAFT = 1u << 4,
+  WYREBOX_MAILDIR_MESSAGE_FLAG_PASSED = 1u << 5,
+} WyreboxMaildirMessageFlags;
+
 typedef struct
 {
   /*
@@ -25,6 +35,18 @@ typedef struct
    * Relative source path within the scanned tree.
    */
   gchar *source_path;
+
+  /*
+   * Raw Maildir filename flag suffix, without the leading ":2," prefix.
+   * NULL when the source filename does not use the Maildir suffix.
+   */
+  gchar *maildir_flag_suffix;
+
+  /*
+   * Bitmask of standardized Maildir filename flags derived from
+   * maildir_flag_suffix.
+   */
+  guint maildir_flags;
 
   WyreboxMaildirScanEntryKind kind;
 } WyreboxMaildirScanEntry;

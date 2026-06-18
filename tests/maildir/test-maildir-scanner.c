@@ -5,12 +5,28 @@
 
 static void
 assert_entry (WyreboxMaildirScanEntry *entry, WyreboxMaildirScanEntryKind kind,
-    const char *mailbox_path, const char *source_path)
+    const char *mailbox_path, const char *source_path,
+    const char *maildir_flag_suffix, guint maildir_flags)
 {
   g_assert_nonnull (entry);
   g_assert_cmpint (entry->kind, ==, kind);
   g_assert_cmpstr (entry->mailbox_path, ==, mailbox_path);
   g_assert_cmpstr (entry->source_path, ==, source_path);
+  g_assert_cmpstr (entry->maildir_flag_suffix, ==, maildir_flag_suffix);
+  g_assert_cmpuint (entry->maildir_flags, ==, maildir_flags);
+}
+
+static WyreboxMaildirScanEntry *
+find_entry_by_source_path (GPtrArray *entries, const char *source_path)
+{
+  for (guint index = 0; index < entries->len; index++) {
+    WyreboxMaildirScanEntry *entry = g_ptr_array_index (entries, index);
+
+    if (g_strcmp0 (entry->source_path, source_path) == 0)
+      return entry;
+  }
+
+  return NULL;
 }
 
 static void
@@ -19,36 +35,84 @@ assert_plan_matches_fixture (GPtrArray *entries)
   g_assert_cmpuint (entries->len, ==, 12);
 
   assert_entry (g_ptr_array_index (entries, 0),
-      WYREBOX_MAILDIR_SCAN_ENTRY_MAILBOX, "", ".");
+      WYREBOX_MAILDIR_SCAN_ENTRY_MAILBOX, "", ".", NULL, 0);
   assert_entry (g_ptr_array_index (entries, 1),
-      WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE, "", "cur/inbox-old:2,S");
+      WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE, "", "cur/inbox-old:2,S", "S",
+      WYREBOX_MAILDIR_MESSAGE_FLAG_SEEN);
   assert_entry (g_ptr_array_index (entries, 2),
-      WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE, "", "new/inbox-new:2,RS");
+      WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE, "", "new/inbox-new:2,RS", "RS",
+      WYREBOX_MAILDIR_MESSAGE_FLAG_SEEN | WYREBOX_MAILDIR_MESSAGE_FLAG_REPLIED);
   assert_entry (g_ptr_array_index (entries, 3),
-      WYREBOX_MAILDIR_SCAN_ENTRY_MAILBOX, "Projects", ".Projects");
+      WYREBOX_MAILDIR_SCAN_ENTRY_MAILBOX, "Projects", ".Projects", NULL, 0);
   assert_entry (g_ptr_array_index (entries, 4),
       WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE, "Projects",
-      ".Projects/cur/project-old:2,FS");
+      ".Projects/cur/project-old:2,FS", "FS",
+      WYREBOX_MAILDIR_MESSAGE_FLAG_FLAGGED | WYREBOX_MAILDIR_MESSAGE_FLAG_SEEN);
   assert_entry (g_ptr_array_index (entries, 5),
       WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE, "Projects",
-      ".Projects/new/project-new");
+      ".Projects/new/project-new", NULL, 0);
   assert_entry (g_ptr_array_index (entries, 6),
       WYREBOX_MAILDIR_SCAN_ENTRY_MAILBOX, "Projects/Archive",
-      ".Projects/.Archive");
+      ".Projects/.Archive", NULL, 0);
   assert_entry (g_ptr_array_index (entries, 7),
       WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE, "Projects/Archive",
-      ".Projects/.Archive/cur/archive-old");
+      ".Projects/.Archive/cur/archive-old", NULL, 0);
   assert_entry (g_ptr_array_index (entries, 8),
       WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE, "Projects/Archive",
-      ".Projects/.Archive/new/archive-new");
+      ".Projects/.Archive/new/archive-new", NULL, 0);
   assert_entry (g_ptr_array_index (entries, 9),
-      WYREBOX_MAILDIR_SCAN_ENTRY_MAILBOX, "Team/Support", ".Team.Support");
+      WYREBOX_MAILDIR_SCAN_ENTRY_MAILBOX, "Team/Support", ".Team.Support",
+      NULL, 0);
   assert_entry (g_ptr_array_index (entries, 10),
       WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE, "Team/Support",
-      ".Team.Support/cur/team-old");
+      ".Team.Support/cur/team-old", NULL, 0);
   assert_entry (g_ptr_array_index (entries, 11),
       WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE, "Team/Support",
-      ".Team.Support/new/team-new");
+      ".Team.Support/new/team-new", NULL, 0);
+}
+
+static void
+test_scanner_parses_maildir_filename_flags (void)
+{
+  const char *fixture_root = g_getenv ("WYREBOX_MAILDIR_FIXTURE_DIR");
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxMaildirScanner) scanner = NULL;
+  g_autoptr (GPtrArray) entries = NULL;
+  WyreboxMaildirScanEntry *entry = NULL;
+
+  g_assert_nonnull (fixture_root);
+  scanner = wyrebox_maildir_scanner_new ();
+  g_assert_true (wyrebox_maildir_scanner_scan (scanner, fixture_root, &entries,
+          &error));
+  g_assert_no_error (error);
+
+  entry = find_entry_by_source_path (entries, "cur/inbox-old:2,S");
+  g_assert_nonnull (entry);
+  g_assert_cmpstr (entry->maildir_flag_suffix, ==, "S");
+  g_assert_cmpuint (entry->maildir_flags, ==,
+      WYREBOX_MAILDIR_MESSAGE_FLAG_SEEN);
+
+  entry = find_entry_by_source_path (entries, "new/inbox-new:2,RS");
+  g_assert_nonnull (entry);
+  g_assert_cmpstr (entry->maildir_flag_suffix, ==, "RS");
+  g_assert_cmpuint (entry->maildir_flags, ==,
+      WYREBOX_MAILDIR_MESSAGE_FLAG_SEEN | WYREBOX_MAILDIR_MESSAGE_FLAG_REPLIED);
+
+  entry = find_entry_by_source_path (entries, ".Projects/cur/project-old:2,FS");
+  g_assert_nonnull (entry);
+  g_assert_cmpstr (entry->maildir_flag_suffix, ==, "FS");
+  g_assert_cmpuint (entry->maildir_flags, ==,
+      WYREBOX_MAILDIR_MESSAGE_FLAG_FLAGGED | WYREBOX_MAILDIR_MESSAGE_FLAG_SEEN);
+
+  entry = find_entry_by_source_path (entries, ".Projects/new/project-new");
+  g_assert_nonnull (entry);
+  g_assert_null (entry->maildir_flag_suffix);
+  g_assert_cmpuint (entry->maildir_flags, ==, 0);
+
+  entry = find_entry_by_source_path (entries, ".");
+  g_assert_nonnull (entry);
+  g_assert_null (entry->maildir_flag_suffix);
+  g_assert_cmpuint (entry->maildir_flags, ==, 0);
 }
 
 static void
@@ -287,6 +351,8 @@ main (int argc, char **argv)
 
   g_test_add_func ("/maildir/scanner/deterministic-plan",
       test_scanner_produces_deterministic_plan);
+  g_test_add_func ("/maildir/scanner/parses-maildir-filename-flags",
+      test_scanner_parses_maildir_filename_flags);
   g_test_add_func ("/maildir/scanner/ignores-tmp-and-noise",
       test_scanner_ignores_tmp_and_noise);
   g_test_add_func ("/maildir/scanner/missing-maildir-cleanly",
