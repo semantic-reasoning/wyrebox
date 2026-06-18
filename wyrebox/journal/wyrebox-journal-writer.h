@@ -41,6 +41,14 @@ G_DECLARE_FINAL_TYPE (WyreboxJournalWriter,
     GBytes **out_payload,
     guint64 *out_offset, guint64 *out_sequence, GError **error);
 
+     typedef gboolean (*WyreboxJournalWriterTestAppendHook) (const char
+    *journal_root_dir, gpointer user_data, GError **error);
+
+     void wyrebox_journal_writer_set_test_append_hook (WyreboxJournalWriter
+    *self,
+    WyreboxJournalWriterTestAppendHook hook,
+    gpointer user_data, GDestroyNotify destroy_notify);
+
      gboolean wyrebox_journal_writer_append_guarded (WyreboxJournalWriter
     *self,
     WyreboxJournalEventType event_type,
