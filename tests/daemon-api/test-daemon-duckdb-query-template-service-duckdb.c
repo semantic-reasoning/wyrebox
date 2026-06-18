@@ -320,10 +320,22 @@ seed_subject_contains_headers (const gchar *path)
       "'object-contains-underscore', 33, 33),"
       "('message-contains-backslash', 'account-1', "
       "'object-contains-backslash', 34, 34),"
+      "('message-contains-accented-latin', 'account-1', "
+      "'object-contains-accented-latin', 35, 35),"
+      "('message-contains-greek', 'account-1', "
+      "'object-contains-greek', 36, 36),"
+      "('message-contains-turkish-dotted-i', 'account-1', "
+      "'object-contains-turkish-dotted-i', 37, 37),"
+      "('message-contains-turkish-dotless-i', 'account-1', "
+      "'object-contains-turkish-dotless-i', 38, 38),"
+      "('message-contains-sharp-s', 'account-1', "
+      "'object-contains-sharp-s', 39, 39),"
+      "('message-contains-decoded-rfc2047', 'account-1', "
+      "'object-contains-decoded-rfc2047', 40, 40),"
       "('message-contains-null', 'account-1', 'object-contains-null', "
-      "35, 35),"
+      "41, 41),"
       "('message-contains-other-account', 'account-2', "
-      "'object-contains-other-account', 36, 36);");
+      "'object-contains-other-account', 42, 42);");
   exec_sql (connection,
       "INSERT INTO message_headers ("
       "message_id, rfc_message_id, duplicate_message_id_count, subject, "
@@ -347,13 +359,37 @@ seed_subject_contains_headers (const gchar *path)
       "'<message-contains-backslash@example.test>', 0, "
       "'Path C:\\\\Temp', 'Sender <sender@example.test>', "
       "'Bob <bob@example.test>', NULL, NULL, NULL, 88, 89),"
+      "('message-contains-accented-latin', "
+      "'<message-contains-accented-latin@example.test>', 0, "
+      "'résumé de projet', 'Sender <sender@example.test>', "
+      "'Bob <bob@example.test>', NULL, NULL, NULL, 90, 91),"
+      "('message-contains-greek', "
+      "'<message-contains-greek@example.test>', 0, "
+      "'συνάντηση έργου', 'Sender <sender@example.test>', "
+      "'Bob <bob@example.test>', NULL, NULL, NULL, 92, 93),"
+      "('message-contains-turkish-dotted-i', "
+      "'<message-contains-turkish-dotted-i@example.test>', 0, "
+      "'istanbul planı', 'Sender <sender@example.test>', "
+      "'Bob <bob@example.test>', NULL, NULL, NULL, 94, 95),"
+      "('message-contains-turkish-dotless-i', "
+      "'<message-contains-turkish-dotless-i@example.test>', 0, "
+      "'ışık notu', 'Sender <sender@example.test>', "
+      "'Bob <bob@example.test>', NULL, NULL, NULL, 96, 97),"
+      "('message-contains-sharp-s', "
+      "'<message-contains-sharp-s@example.test>', 0, "
+      "'straße update', 'Sender <sender@example.test>', "
+      "'Bob <bob@example.test>', NULL, NULL, NULL, 98, 99),"
+      "('message-contains-decoded-rfc2047', "
+      "'<message-contains-decoded-rfc2047@example.test>', 0, "
+      "'café réunion', 'Sender <sender@example.test>', "
+      "'Bob <bob@example.test>', NULL, NULL, NULL, 100, 101),"
       "('message-contains-null', '<message-contains-null@example.test>', 0, "
       "NULL, 'Sender <sender@example.test>', 'Bob <bob@example.test>', "
-      "NULL, NULL, NULL, 90, 91),"
+      "NULL, NULL, NULL, 102, 103),"
       "('message-contains-other-account', "
       "'<message-contains-other-account@example.test>', 0, "
       "'Quarterly Subject Review', 'Sender <sender@example.test>', "
-      "'Bob <bob@example.test>', NULL, NULL, NULL, 92, 93);");
+      "'Bob <bob@example.test>', NULL, NULL, NULL, 104, 105);");
 }
 
 static void
@@ -1631,6 +1667,86 @@ test_duckdb_service_messages_subject_contains_matches_case_insensitive (void)
 }
 
 static void
+test_duckdb_service_messages_subject_contains_keeps_non_ascii_literal (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+  seed_subject_contains_headers (path);
+
+  csv = dispatch_messages_subject_contains_csv (path, "account-1", "résumé",
+      "100", "0");
+  g_assert_true (g_strstr_len (csv, -1, "message-contains-accented-latin")
+      != NULL);
+
+  g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_subject_contains_csv (path, "account-1", "RÉSUMÉ",
+      "100", "0");
+  g_assert_false (g_strstr_len (csv, -1, "message-contains-accented-latin")
+      != NULL);
+
+  g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_subject_contains_csv (path, "account-1",
+      "συνάντηση", "100", "0");
+  g_assert_true (g_strstr_len (csv, -1, "message-contains-greek") != NULL);
+
+  g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_subject_contains_csv (path, "account-1",
+      "ΣΥΝΆΝΤΗΣΗ", "100", "0");
+  g_assert_false (g_strstr_len (csv, -1, "message-contains-greek") != NULL);
+
+  g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_subject_contains_csv (path, "account-1", "istanbul",
+      "100", "0");
+  g_assert_true (g_strstr_len (csv, -1,
+          "message-contains-turkish-dotted-i") != NULL);
+
+  g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_subject_contains_csv (path, "account-1",
+      "İSTANBUL", "100", "0");
+  g_assert_false (g_strstr_len (csv, -1,
+          "message-contains-turkish-dotted-i") != NULL);
+
+  g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_subject_contains_csv (path, "account-1", "ışık",
+      "100", "0");
+  g_assert_true (g_strstr_len (csv, -1,
+          "message-contains-turkish-dotless-i") != NULL);
+
+  g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_subject_contains_csv (path, "account-1", "IŞIK",
+      "100", "0");
+  g_assert_false (g_strstr_len (csv, -1,
+          "message-contains-turkish-dotless-i") != NULL);
+
+  g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_subject_contains_csv (path, "account-1", "straße",
+      "100", "0");
+  g_assert_true (g_strstr_len (csv, -1, "message-contains-sharp-s") != NULL);
+
+  g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_subject_contains_csv (path, "account-1", "STRASSE",
+      "100", "0");
+  g_assert_false (g_strstr_len (csv, -1, "message-contains-sharp-s") != NULL);
+
+  g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_subject_contains_csv (path, "account-1", "café",
+      "100", "0");
+  g_assert_true (g_strstr_len (csv, -1,
+          "message-contains-decoded-rfc2047") != NULL);
+
+  g_clear_pointer (&csv, g_free);
+  csv = dispatch_messages_subject_contains_csv (path, "account-1", "CAFÉ",
+      "100", "0");
+  g_assert_false (g_strstr_len (csv, -1,
+          "message-contains-decoded-rfc2047") != NULL);
+
+  (void) g_remove (path);
+}
+
+static void
     test_duckdb_service_messages_subject_contains_treats_wildcards_as_literals
     (void)
 {
@@ -1986,6 +2102,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/messages-subject-contains-case-insensitive",
       test_duckdb_service_messages_subject_contains_matches_case_insensitive);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/messages-subject-contains-non-ascii-literal",
+      test_duckdb_service_messages_subject_contains_keeps_non_ascii_literal);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/messages-subject-contains-literal-wildcards",
       test_duckdb_service_messages_subject_contains_treats_wildcards_as_literals);
