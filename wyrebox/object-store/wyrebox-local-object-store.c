@@ -8,6 +8,9 @@
 #include <glib/gstdio.h>
 #include <gio/gio.h>
 
+G_DEFINE_QUARK (wyrebox-local-object-store-error,
+    wyrebox_local_object_store_error)
+
 struct _WyreboxLocalObjectStore
 {
   GObject parent_instance;
@@ -118,8 +121,8 @@ verify_object_contents (const char *path,
     return TRUE;
 
   g_set_error (error,
-      G_IO_ERROR,
-      G_IO_ERROR_INVALID_DATA,
+      WYREBOX_LOCAL_OBJECT_STORE_ERROR,
+      WYREBOX_LOCAL_OBJECT_STORE_ERROR_HASH_MISMATCH,
       "object %s failed SHA-256 verification: expected %s, got %s",
       path, expected_hex, actual_hex);
   return FALSE;
