@@ -1,2 +1,6 @@
-[wrap-redirect]
-filename = wirelog/subprojects/nanoarrow.wrap
+[wrap-git]
+url = https://github.com/apache/arrow-nanoarrow.git
+revision = 65ab7e9f29244589ccbe7f95900c1295633baf42
+
+[provide]
+nanoarrow = nanoarrow_dep
