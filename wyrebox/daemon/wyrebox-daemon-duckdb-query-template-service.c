@@ -452,6 +452,64 @@ duckdb_query_template_append_message_by_id_row (GString *csv,
 }
 
 static gboolean
+duckdb_query_template_append_message_fact_row (GString *csv,
+    duckdb_result *result, idx_t row, GError **error)
+{
+  g_auto (DuckDBOwnedString) account_id = NULL;
+  g_auto (DuckDBOwnedString) message_id = NULL;
+  g_auto (DuckDBOwnedString) object_id = NULL;
+  g_auto (DuckDBOwnedString) fact_id = NULL;
+  g_auto (DuckDBOwnedString) predicate = NULL;
+  g_auto (DuckDBOwnedString) args_json = NULL;
+  g_auto (DuckDBOwnedString) source = NULL;
+
+  for (idx_t column = 0; column < 12; column++) {
+    if (duckdb_value_is_null (result, column, row)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "DuckDB query template returned NULL in message facts row");
+      return FALSE;
+    }
+  }
+
+  account_id = duckdb_value_varchar (result, 0, row);
+  message_id = duckdb_value_varchar (result, 1, row);
+  object_id = duckdb_value_varchar (result, 2, row);
+  fact_id = duckdb_value_varchar (result, 3, row);
+  predicate = duckdb_value_varchar (result, 4, row);
+  args_json = duckdb_value_varchar (result, 5, row);
+  source = duckdb_value_varchar (result, 6, row);
+
+  csv_append_value (csv, account_id);
+  g_string_append_c (csv, ',');
+  csv_append_value (csv, message_id);
+  g_string_append_c (csv, ',');
+  csv_append_value (csv, object_id);
+  g_string_append_c (csv, ',');
+  csv_append_value (csv, fact_id);
+  g_string_append_c (csv, ',');
+  csv_append_value (csv, predicate);
+  g_string_append_c (csv, ',');
+  csv_append_value (csv, args_json);
+  g_string_append_c (csv, ',');
+  csv_append_value (csv, source);
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 7, row));
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 8, row));
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 9, row));
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 10, row));
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 11, row));
+  g_string_append_c (csv, '\n');
+
+  return TRUE;
+}
+
+static gboolean
 duckdb_query_template_execute_derived_view_uid_map (DuckDBQueryTemplateExecutor
     *executor, const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonDuckDBQueryTemplateRequest *request,
@@ -621,6 +679,68 @@ duckdb_query_template_execute_message_by_id (DuckDBQueryTemplateExecutor
 
   for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
     if (!duckdb_query_template_append_message_by_id_row (csv, &result, row,
+            error))
+      return FALSE;
+  }
+
+  {
+    gsize csv_len = csv->len;
+    gchar *csv_data = g_string_free (g_steal_pointer (&csv), FALSE);
+
+    bytes = g_bytes_new_take (csv_data, csv_len);
+  }
+
+  return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+      identity->request_id,
+      NULL, request->query_id, identity->correlation_id, 0, bytes, TRUE, error);
+}
+
+static gboolean
+duckdb_query_template_execute_message_facts_by_message_id
+    (DuckDBQueryTemplateExecutor *executor,
+    const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDuckDBQueryTemplateRequest *request,
+    WyreboxDaemonStreamChunkFrame *out_chunk, GError **error)
+{
+  static const gchar *sql =
+      "SELECT mf.account_id, mf.message_id, mf.object_id, mf.fact_id, "
+      "mf.predicate, mf.args_json, mf.source, mf.confidence_ppm, "
+      "mf.created_at_unix_us, mf.retracted_at_unix_us, mf.journal_offset, "
+      "mf.journal_sequence "
+      "FROM message_facts mf "
+      "WHERE mf.account_id = ? "
+      "AND mf.message_id = ? "
+      "ORDER BY mf.journal_sequence ASC, mf.fact_id ASC;";
+  g_auto (duckdb_prepared_statement) statement = NULL;
+  g_auto (duckdb_result) result = { 0 };
+  g_autoptr (GString) csv = NULL;
+  g_autoptr (GBytes) bytes = NULL;
+  const gchar *message_id = request->parameters[0];
+
+  if (!duckdb_query_template_prepare (executor, sql, &statement, error) ||
+      !duckdb_query_template_bind_varchar (statement, 1, request->scope_id,
+          error) ||
+      !duckdb_query_template_bind_varchar (statement, 2, message_id, error))
+    return FALSE;
+
+  if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+    const char *detail = duckdb_result_error (&result);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB query template execution failed: %s",
+        detail != NULL ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  csv = g_string_new
+      ("account_id,message_id,object_id,fact_id,predicate,args_json,source,"
+      "confidence_ppm,created_at_unix_us,retracted_at_unix_us,journal_offset,"
+      "journal_sequence\n");
+
+  for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+    if (!duckdb_query_template_append_message_fact_row (csv, &result, row,
             error))
       return FALSE;
   }
@@ -1038,6 +1158,11 @@ duckdb_query_template_service_execute (const WyreboxDaemonRequestIdentity
   if (g_strcmp0 (request->template_id, "message.by_id.v1") == 0)
     return duckdb_query_template_execute_message_by_id (executor, identity,
         request, out_chunk, error);
+
+  if (g_strcmp0 (request->template_id,
+          "message.facts_by_message_id.v1") == 0)
+    return duckdb_query_template_execute_message_facts_by_message_id
+        (executor, identity, request, out_chunk, error);
 
   if (g_strcmp0 (request->template_id, "messages.by_from_addr.v1") == 0)
     return duckdb_query_template_execute_messages_by_from_addr (executor,
