@@ -26,6 +26,9 @@ struct _WyreboxJournalWriter
   guint64 next_sequence;
   gboolean failed;
   GMutex append_mutex;
+  WyreboxJournalWriterTestAppendHook test_append_hook;
+  gpointer test_append_hook_user_data;
+  GDestroyNotify test_append_hook_destroy;
 };
 
 G_DEFINE_TYPE (WyreboxJournalWriter, wyrebox_journal_writer, G_TYPE_OBJECT);
@@ -312,6 +315,9 @@ wyrebox_journal_writer_finalize (GObject *object)
   if (self->fd >= 0)
     (void) close (self->fd);
 
+  if (self->test_append_hook_destroy != NULL &&
+      self->test_append_hook_user_data != NULL)
+    self->test_append_hook_destroy (self->test_append_hook_user_data);
   g_clear_pointer (&self->journal_root_dir, g_free);
   g_clear_pointer (&self->segment_path, g_free);
   g_mutex_clear (&self->append_mutex);
@@ -333,6 +339,22 @@ wyrebox_journal_writer_init (WyreboxJournalWriter *self)
   self->fd = -1;
   self->next_sequence = 1;
   g_mutex_init (&self->append_mutex);
+}
+
+void
+wyrebox_journal_writer_set_test_append_hook (WyreboxJournalWriter *self,
+    WyreboxJournalWriterTestAppendHook hook, gpointer user_data,
+    GDestroyNotify destroy_notify)
+{
+  g_return_if_fail (WYREBOX_IS_JOURNAL_WRITER (self));
+
+  if (self->test_append_hook_destroy != NULL &&
+      self->test_append_hook_user_data != NULL)
+    self->test_append_hook_destroy (self->test_append_hook_user_data);
+
+  self->test_append_hook = hook;
+  self->test_append_hook_user_data = user_data;
+  self->test_append_hook_destroy = destroy_notify;
 }
 
 static gboolean
@@ -707,9 +729,16 @@ wyrebox_journal_writer_append_guarded (WyreboxJournalWriter *self,
   g_mutex_lock (&self->append_mutex);
   success = callback (self->journal_root_dir, user_data, &payload, out_offset,
       out_sequence, error);
-  if (success && payload != NULL)
+  if (success && payload != NULL) {
+    if (self->test_append_hook != NULL &&
+        !self->test_append_hook (self->journal_root_dir,
+            self->test_append_hook_user_data, error)) {
+      g_mutex_unlock (&self->append_mutex);
+      return FALSE;
+    }
     success = wyrebox_journal_writer_append_unlocked (self, event_type,
         payload, out_offset, out_sequence, error);
+  }
   g_mutex_unlock (&self->append_mutex);
 
   return success;
