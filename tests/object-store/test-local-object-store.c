@@ -353,7 +353,8 @@ test_fetch_rejects_corrupted_object (void)
 
   output = wyrebox_local_object_store_get_bytes (store, key, &error);
   g_assert_null (output);
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_error (error, WYREBOX_LOCAL_OBJECT_STORE_ERROR,
+      WYREBOX_LOCAL_OBJECT_STORE_ERROR_HASH_MISMATCH);
 
   remove_tree (root);
 }
@@ -386,7 +387,8 @@ test_fetch_rejects_truncated_object (void)
 
   output = wyrebox_local_object_store_get_bytes (store, key, &error);
   g_assert_null (output);
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_error (error, WYREBOX_LOCAL_OBJECT_STORE_ERROR,
+      WYREBOX_LOCAL_OBJECT_STORE_ERROR_HASH_MISMATCH);
 
   remove_tree (root);
 }
@@ -420,7 +422,8 @@ test_duplicate_put_rejects_corrupted_existing_object (void)
   g_assert_false (wyrebox_local_object_store_put_bytes (store, input,
           &second_key, &error));
   g_assert_null (second_key);
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_error (error, WYREBOX_LOCAL_OBJECT_STORE_ERROR,
+      WYREBOX_LOCAL_OBJECT_STORE_ERROR_HASH_MISMATCH);
 
   remove_tree (root);
 }

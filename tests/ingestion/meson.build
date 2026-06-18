@@ -94,6 +94,9 @@ test('rfc5322 date parser', rfc5322_date_test)
 test(
   'delivery materializer',
   delivery_materializer_test,
+  env: {
+    'WYREBOX_EML_FIXTURE_DIR': eml_fixture_dir,
+  },
 )
 
 test(
