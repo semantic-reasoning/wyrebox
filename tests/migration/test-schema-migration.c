@@ -494,7 +494,7 @@ struct _TestSchemaMetadataStoreSpy
   gboolean save_called;
   gboolean observed_checkpoint_precondition_satisfied;
   guint migration_operation_call_count;
-  WyreboxSchemaMetadataStoreMigrationOperation observed_operations[8];
+  WyreboxSchemaMetadataStoreMigrationOperation observed_operations[9];
   gboolean fail_next_migration_operation;
   WyreboxSchemaMetadataStoreMigrationOperation observed_operation;
   guint64 observed_operation_source_version;
@@ -604,6 +604,8 @@ static gboolean
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN
       || operation ==
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US
+      || operation ==
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_PROVENANCE_SPANS
       || operation ==
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW;
 }
@@ -835,10 +837,10 @@ static void
   g_assert_no_error (error);
   g_assert_true (spy->save_called);
   g_assert_cmpuint (spy->save_call_count, ==, 1);
-  g_assert_cmpuint (spy->migration_operation_call_count, ==, 8);
+  g_assert_cmpuint (spy->migration_operation_call_count, ==, 9);
   g_assert_cmpint (spy->observed_operation, ==,
-      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW);
-  g_assert_cmpuint (spy->observed_operation_source_version, ==, 7);
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_PROVENANCE_SPANS);
+  g_assert_cmpuint (spy->observed_operation_source_version, ==, 8);
   g_assert_cmpuint (spy->observed_operation_target_version, ==,
       wyrebox_schema_migration_get_current_schema_version ());
   g_assert_false (spy->observed_checkpoint_precondition_satisfied);
@@ -869,7 +871,7 @@ test_schema_migration_run_store_missing_metadata_applies_full_path (void)
   g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
           (WyreboxSchemaMetadataStore *) spy, FALSE, &error));
   g_assert_no_error (error);
-  g_assert_cmpuint (spy->migration_operation_call_count, ==, 8);
+  g_assert_cmpuint (spy->migration_operation_call_count, ==, 9);
   g_assert_cmpint (spy->observed_operations[0], ==,
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP);
   g_assert_cmpint (spy->observed_operations[1], ==,
@@ -886,6 +888,8 @@ test_schema_migration_run_store_missing_metadata_applies_full_path (void)
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US);
   g_assert_cmpint (spy->observed_operations[7], ==,
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW);
+  g_assert_cmpint (spy->observed_operations[8], ==,
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_PROVENANCE_SPANS);
   g_assert_cmpuint (spy->save_call_count, ==, 1);
 
   g_object_unref (spy);
@@ -2956,7 +2960,7 @@ test_missing_schema_metadata_runs_legacy_bootstrap_to_first_version (void)
 
   g_assert_false (metadata.schema_version_present);
   g_assert_cmpuint (first_version, ==, 1);
-  g_assert_cmpuint (current_version, ==, 8);
+  g_assert_cmpuint (current_version, ==, 9);
   g_assert_true (wyrebox_schema_migration_evaluate_to_version (migration,
           &metadata, first_version, &error));
   g_assert_no_error (error);
@@ -3092,8 +3096,8 @@ test_explicit_forward_path_succeeds_with_checkpoint_precondition (void)
   g_assert_true (wyrebox_schema_migration_evaluate_to_current (migration,
           &metadata, &error));
   g_assert_no_error (error);
-  g_assert_cmpuint (fixture_data.operation_call_count, ==, 8);
-  g_assert_cmpuint (fixture_data.validation_call_count, ==, 8);
+  g_assert_cmpuint (fixture_data.operation_call_count, ==, 9);
+  g_assert_cmpuint (fixture_data.validation_call_count, ==, 9);
   g_assert_cmpuint (metadata.schema_version, ==, current_version);
   g_assert_false (metadata.materialization_checkpoint_present);
   g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==, 0);
@@ -3181,7 +3185,7 @@ test_schema_version_constants_are_testable (void)
   g_assert_cmpuint (wyrebox_schema_migration_get_first_supported_schema_version
       (), ==, 1);
   g_assert_cmpuint (wyrebox_schema_migration_get_current_schema_version (),
-      ==, 8);
+      ==, 9);
 }
 
 int

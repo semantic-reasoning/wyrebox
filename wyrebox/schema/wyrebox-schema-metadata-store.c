@@ -462,6 +462,40 @@ static gboolean
 }
 
 static gboolean
+    duckdb_store_validate_message_header_table_v9
+    (WyreboxSchemaMetadataStoreDuckdb * self, GError ** error)
+{
+  static const WyreboxDuckdbColumnSpec message_headers_columns[] = {
+    {"message_id", "VARCHAR", TRUE},
+    {"rfc_message_id", "VARCHAR", FALSE},
+    {"duplicate_message_id_count", "UBIGINT", TRUE},
+    {"subject", "VARCHAR", FALSE},
+    {"from_addr", "VARCHAR", FALSE},
+    {"sender_domain", "VARCHAR", FALSE},
+    {"to_addr", "VARCHAR", FALSE},
+    {"cc_addr", "VARCHAR", FALSE},
+    {"bcc_addr", "VARCHAR", FALSE},
+    {"date_raw", "VARCHAR", FALSE},
+    {"date_unix_us", "BIGINT", FALSE},
+    {"journal_offset", "UBIGINT", TRUE},
+    {"journal_sequence", "UBIGINT", TRUE},
+    {"message_id_span_start", "UBIGINT", FALSE},
+    {"message_id_span_end", "UBIGINT", FALSE},
+    {"subject_span_start", "UBIGINT", FALSE},
+    {"subject_span_end", "UBIGINT", FALSE},
+  };
+  static const gchar *message_headers_primary_key_columns[] = {
+    "message_id",
+  };
+
+  return duckdb_store_validate_table_columns (self, "message_headers",
+      message_headers_columns, G_N_ELEMENTS (message_headers_columns), error)
+      && duckdb_store_validate_primary_key (self, "message_headers",
+      message_headers_primary_key_columns,
+      G_N_ELEMENTS (message_headers_primary_key_columns), error);
+}
+
+static gboolean
     duckdb_store_validate_message_header_table_v3
     (WyreboxSchemaMetadataStoreDuckdb * self, GError ** error)
 {
@@ -562,6 +596,8 @@ static gboolean
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN
       || operation ==
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US
+      || operation ==
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_PROVENANCE_SPANS
       || operation ==
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW)
     return TRUE;
@@ -1128,6 +1164,35 @@ duckdb_store_add_message_header_date_unix_us (WyreboxSchemaMetadataStoreDuckdb
 }
 
 static gboolean
+    duckdb_store_add_message_header_provenance_spans
+    (WyreboxSchemaMetadataStoreDuckdb * self, GError ** error)
+{
+  g_autoptr (GError) current_error = NULL;
+  g_autoptr (GError) v9_ready_error = NULL;
+
+  if (duckdb_store_validate_message_header_table_v9 (self, &current_error))
+    return TRUE;
+
+  if (!duckdb_store_validate_message_header_table (self, &v9_ready_error)) {
+    g_propagate_error (error, g_steal_pointer (&v9_ready_error));
+    return FALSE;
+  }
+
+  return duckdb_store_query (self,
+      "ALTER TABLE message_headers ADD COLUMN message_id_span_start UBIGINT;",
+      error)
+      && duckdb_store_query (self,
+      "ALTER TABLE message_headers ADD COLUMN message_id_span_end UBIGINT;",
+      error)
+      && duckdb_store_query (self,
+      "ALTER TABLE message_headers ADD COLUMN subject_span_start UBIGINT;",
+      error)
+      && duckdb_store_query (self,
+      "ALTER TABLE message_headers ADD COLUMN subject_span_end UBIGINT;", error)
+      && duckdb_store_validate_message_header_table_v9 (self, error);
+}
+
+static gboolean
 duckdb_store_create_derived_view_memberships (WyreboxSchemaMetadataStoreDuckdb
     *self, GError **error)
 {
@@ -1555,6 +1620,7 @@ static gboolean
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT:
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN:
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US:
+    case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_PROVENANCE_SPANS:
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW:
       break;
     default:
@@ -1590,6 +1656,10 @@ static gboolean
           || (operation ==
               WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US
               && duckdb_store_add_message_header_date_unix_us (duckdb_store,
+                  error))
+          || (operation ==
+              WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_PROVENANCE_SPANS
+              && duckdb_store_add_message_header_provenance_spans (duckdb_store,
                   error))
           || (operation ==
               WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW

@@ -179,6 +179,25 @@ bind_uint64 (duckdb_prepared_statement statement, idx_t index,
 }
 
 static gboolean
+bind_nullable_uint64 (duckdb_prepared_statement statement, idx_t index,
+    gboolean has_value, guint64 value, GError **error)
+{
+  if (!has_value) {
+    if (duckdb_bind_null (statement, index) == DuckDBSuccess)
+      return TRUE;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB delivery materializer NULL bind failed at index %"
+        G_GUINT64_FORMAT, (guint64) index);
+    return FALSE;
+  }
+
+  return bind_uint64 (statement, index, value, error);
+}
+
+static gboolean
 bind_nullable_int64 (duckdb_prepared_statement statement, idx_t index,
     gboolean has_value, gint64 value, GError **error)
 {
@@ -491,6 +510,8 @@ materializer_ensure_message_headers (WyreboxDeliveryMaterializer *self,
   g_autofree gchar *sender_domain = NULL;
   gboolean has_date_unix_us = FALSE;
   gint64 date_unix_us = 0;
+  gboolean has_message_id_span = record->message_id_span_valid;
+  gboolean has_subject_span = record->subject_span_valid;
   guint64 count = 0;
 
   sender_domain = extract_sender_domain_from_from_addr (record->from);
@@ -501,9 +522,10 @@ materializer_ensure_message_headers (WyreboxDeliveryMaterializer *self,
           "INSERT OR IGNORE INTO message_headers ("
           "message_id, rfc_message_id, duplicate_message_id_count, "
           "subject, from_addr, sender_domain, to_addr, cc_addr, bcc_addr, "
-          "date_raw, date_unix_us, "
+          "date_raw, date_unix_us, message_id_span_start, "
+          "message_id_span_end, subject_span_start, subject_span_end, "
           "journal_offset, journal_sequence"
-          ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+          ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
           &statement, error) ||
       !bind_varchar (statement, 1, message_id, error) ||
       !bind_nullable_varchar (statement, 2, record->rfc_message_id, error) ||
@@ -517,8 +539,16 @@ materializer_ensure_message_headers (WyreboxDeliveryMaterializer *self,
       !bind_nullable_varchar (statement, 10, record->date_raw, error) ||
       !bind_nullable_int64 (statement, 11, has_date_unix_us, date_unix_us,
           error) ||
-      !bind_uint64 (statement, 12, record->journal_offset, error) ||
-      !bind_uint64 (statement, 13, record->journal_sequence, error) ||
+      !bind_nullable_uint64 (statement, 12, has_message_id_span,
+          record->message_id_span_start, error) ||
+      !bind_nullable_uint64 (statement, 13, has_message_id_span,
+          record->message_id_span_end, error) ||
+      !bind_nullable_uint64 (statement, 14, has_subject_span,
+          record->subject_span_start, error) ||
+      !bind_nullable_uint64 (statement, 15, has_subject_span,
+          record->subject_span_end, error) ||
+      !bind_uint64 (statement, 16, record->journal_offset, error) ||
+      !bind_uint64 (statement, 17, record->journal_sequence, error) ||
       !materializer_execute_prepared (statement, error))
     return FALSE;
 
@@ -535,6 +565,10 @@ materializer_ensure_message_headers (WyreboxDeliveryMaterializer *self,
           "AND bcc_addr IS NOT DISTINCT FROM ? "
           "AND date_raw IS NOT DISTINCT FROM ? "
           "AND date_unix_us IS NOT DISTINCT FROM ? "
+          "AND message_id_span_start IS NOT DISTINCT FROM ? "
+          "AND message_id_span_end IS NOT DISTINCT FROM ? "
+          "AND subject_span_start IS NOT DISTINCT FROM ? "
+          "AND subject_span_end IS NOT DISTINCT FROM ? "
           "AND journal_offset = ? AND journal_sequence = ?;",
           &statement, error) ||
       !bind_varchar (statement, 1, message_id, error) ||
@@ -549,8 +583,16 @@ materializer_ensure_message_headers (WyreboxDeliveryMaterializer *self,
       !bind_nullable_varchar (statement, 10, record->date_raw, error) ||
       !bind_nullable_int64 (statement, 11, has_date_unix_us, date_unix_us,
           error) ||
-      !bind_uint64 (statement, 12, record->journal_offset, error) ||
-      !bind_uint64 (statement, 13, record->journal_sequence, error) ||
+      !bind_nullable_uint64 (statement, 12, has_message_id_span,
+          record->message_id_span_start, error) ||
+      !bind_nullable_uint64 (statement, 13, has_message_id_span,
+          record->message_id_span_end, error) ||
+      !bind_nullable_uint64 (statement, 14, has_subject_span,
+          record->subject_span_start, error) ||
+      !bind_nullable_uint64 (statement, 15, has_subject_span,
+          record->subject_span_end, error) ||
+      !bind_uint64 (statement, 16, record->journal_offset, error) ||
+      !bind_uint64 (statement, 17, record->journal_sequence, error) ||
       !materializer_count_prepared (statement, &count, error))
     return FALSE;
 
