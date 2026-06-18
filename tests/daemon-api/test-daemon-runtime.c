@@ -966,6 +966,51 @@ static void
 }
 
 static void
+    test_runtime_prepare_catalog_rejects_unsafe_journal_suffix_without_migrating
+    (void)
+{
+  g_autofree char *journal_root = create_journal_root ();
+  g_autofree char *catalog_path = create_unprepared_catalog_path ();
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+  g_autoptr (GError) error = NULL;
+  guint64 journal_offset = 0;
+  guint64 journal_sequence = 0;
+  g_autofree char *segment_path = NULL;
+
+  append_runtime_journal_record (journal_root, &journal_offset,
+      &journal_sequence);
+  segment_path = journal_segment_path (journal_root);
+  g_assert_cmpint (truncate (segment_path, 17), ==, 0);
+
+  base.schema_version_present = TRUE;
+  base.schema_version = wyrebox_schema_migration_get_current_schema_version ();
+  runtime_set_materialization_checkpoint_fields (&base, journal_offset,
+      journal_sequence);
+  save_catalog_schema_state (catalog_path, &base);
+
+  g_assert_false (wyrebox_daemon_runtime_prepare_catalog (journal_root,
+          catalog_path, FALSE, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_nonnull (strstr (error->message,
+          "journal unsafe suffix found before checkpoint validation"));
+  g_clear_error (&error);
+
+  load_catalog_schema_state (catalog_path, &loaded);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==, base.schema_version);
+  g_assert_true (loaded.materialization_checkpoint_present);
+  g_assert_cmpuint (loaded.materialization_checkpoint_journal_offset, ==,
+      base.materialization_checkpoint_journal_offset);
+  g_assert_cmpuint (loaded.materialization_checkpoint_sequence, ==,
+      base.materialization_checkpoint_sequence);
+  g_assert_false (loaded.checkpoint_precondition_satisfied);
+
+  remove_catalog_path (catalog_path);
+  remove_tree (journal_root);
+}
+
+static void
 test_runtime_prepare_catalog_rejects_invalid_args (void)
 {
   g_autofree char *journal_root = create_journal_root ();
@@ -1215,6 +1260,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/runtime/prepare-catalog/rejects-corrupt-checkpoint-without-migrating",
       test_runtime_prepare_catalog_rejects_corrupt_checkpoint_without_migrating);
+  g_test_add_func
+      ("/daemon-api/runtime/prepare-catalog/rejects-unsafe-journal-suffix-without-migrating",
+      test_runtime_prepare_catalog_rejects_unsafe_journal_suffix_without_migrating);
   g_test_add_func ("/daemon-api/runtime/prepare-catalog/invalid-args",
       test_runtime_prepare_catalog_rejects_invalid_args);
   g_test_add_func
