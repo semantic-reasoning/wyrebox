@@ -1,7 +1,7 @@
 project('wyrebox',
   'c',
   version: '0.1.0',
-  license: 'GPL-3.0-or-later',
+  license: 'MPL-2.0',
   meson_version: '>=1.0.0',
 )
 
