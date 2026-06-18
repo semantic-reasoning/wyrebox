@@ -1,0 +1,11 @@
+From: Folded <folded@example.test>
+To: Target <target@example.test>
+Cc: First <first@example.test>,
+ Second <second@example.test>
+Bcc: Hidden <hidden@example.test>
+Subject: First line
+ second line
+Date: Thu, 11 Jun 2026 00:00:00 +0000
+Message-ID: <folded@example.test>
+
+Body.
