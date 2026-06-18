@@ -6,9 +6,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MESON_BUILD_FILE = REPO_ROOT / "wyrebox" / "meson.build"
 
-EXAMPLE_FILES = [
+INSTALL_FILES = [
     "../examples/postfix/README.md",
-    "../examples/postfix/master.cf.wyrebox-pipe",
+    "../examples/postfix/master.cf.wyrebox-pipe.in",
     "../examples/postfix/transport.wyrebox-pipe",
 ]
 
@@ -26,10 +26,20 @@ def assert_example_install_block(build_file: str) -> None:
         "postfix example install block must stay within the capnp guard"
     )
 
-    for example_file in EXAMPLE_FILES:
+    for example_file in INSTALL_FILES:
         assert example_file in build_file, (
             f"missing example file in install_data block: {example_file}"
         )
+
+    assert "configure_file(" in build_file, (
+        "postfix install example must be configured from a template"
+    )
+    assert "master.cf.wyrebox-pipe.in" in build_file, (
+        "missing install-time master.cf template"
+    )
+    assert "'../examples/postfix/master.cf.wyrebox-pipe'" not in build_file, (
+        "source-only master.cf example should stay out of the install block"
+    )
 
     assert "join_paths(" in build_file, "missing install_dir join_paths call"
     for fragment in ["'doc'", "meson.project_name()", "'examples'", "'postfix'"]:
