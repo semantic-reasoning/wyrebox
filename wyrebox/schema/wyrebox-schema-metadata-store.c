@@ -532,7 +532,9 @@ static gboolean
       || operation ==
       WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN
       || operation ==
-      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US)
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US
+      || operation ==
+      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW)
     return TRUE;
 
   g_set_error (error,
@@ -1164,6 +1166,42 @@ duckdb_store_scope_derived_views_by_account (WyreboxSchemaMetadataStoreDuckdb
 }
 
 static gboolean
+duckdb_store_create_object_reachability_view (WyreboxSchemaMetadataStoreDuckdb
+    *self, GError **error)
+{
+  return duckdb_store_query (self,
+      "CREATE VIEW object_reachability AS "
+      "SELECT o.object_id, o.size_bytes, "
+      "CAST(COALESCE(ordinary.message_reference_count, 0) AS UBIGINT) "
+      "AS message_reference_count, "
+      "CAST(COALESCE(ordinary.visible_mailbox_membership_count, 0) AS UBIGINT) "
+      "AS visible_mailbox_membership_count, "
+      "CAST(COALESCE(derived.visible_derived_view_membership_count, 0) AS UBIGINT) "
+      "AS visible_derived_view_membership_count, "
+      "COALESCE(ordinary.visible_mailbox_membership_count, 0) > 0 "
+      "AS is_gc_reachable, "
+      "COALESCE(ordinary.visible_mailbox_membership_count, 0) = 0 "
+      "AS is_gc_candidate "
+      "FROM objects o "
+      "LEFT JOIN ("
+      "SELECT m.object_id, COUNT(*) AS message_reference_count, "
+      "CAST(SUM(CASE WHEN mm.is_visible THEN 1 ELSE 0 END) AS UBIGINT) "
+      "AS visible_mailbox_membership_count "
+      "FROM mailbox_memberships mm "
+      "JOIN messages m ON m.message_id = mm.message_id "
+      "GROUP BY m.object_id"
+      ") ordinary ON ordinary.object_id = o.object_id "
+      "LEFT JOIN ("
+      "SELECT m.object_id, "
+      "CAST(SUM(CASE WHEN dvm.is_visible THEN 1 ELSE 0 END) AS UBIGINT) "
+      "AS visible_derived_view_membership_count "
+      "FROM derived_view_memberships dvm "
+      "JOIN messages m ON m.message_id = dvm.message_id "
+      "GROUP BY m.object_id"
+      ") derived ON derived.object_id = o.object_id;", error);
+}
+
+static gboolean
 duckdb_store_create_bootstrap_catalog (WyreboxSchemaMetadataStoreDuckdb *self,
     GError **error)
 {
@@ -1467,6 +1505,7 @@ static gboolean
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_SCOPE_DERIVED_VIEWS_BY_ACCOUNT:
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_SENDER_DOMAIN:
     case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US:
+    case WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW:
       break;
     default:
       goto unsupported;
@@ -1501,6 +1540,10 @@ static gboolean
           || (operation ==
               WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_DATE_UNIX_US
               && duckdb_store_add_message_header_date_unix_us (duckdb_store,
+                  error))
+          || (operation ==
+              WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW
+              && duckdb_store_create_object_reachability_view (duckdb_store,
                   error))) ||
       !duckdb_store_query (duckdb_store, "COMMIT;", error)) {
     duckdb_store_rollback_quietly (duckdb_store);

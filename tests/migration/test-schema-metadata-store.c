@@ -214,6 +214,20 @@ duckdb_table_exists (duckdb_connection connection, const gchar *table_name)
   return duckdb_value_uint64 (&result, 0, 0) == 1;
 }
 
+static gboolean
+duckdb_view_exists (duckdb_connection connection, const gchar *view_name)
+{
+  g_auto (duckdb_result) result = { 0 };
+  g_autofree gchar *query = NULL;
+
+  query = g_strdup_printf ("SELECT COUNT(*) FROM information_schema.views "
+      "WHERE table_name = '%s';", view_name);
+  g_assert_cmpint (duckdb_query (connection, query, &result), ==,
+      DuckDBSuccess);
+
+  return duckdb_value_uint64 (&result, 0, 0) == 1;
+}
+
 static gint64
 query_int64 (duckdb_connection connection, const gchar *sql)
 {
@@ -237,6 +251,78 @@ query_is_null (duckdb_connection connection, const gchar *sql)
   g_assert_cmpuint (duckdb_row_count (&result), ==, 1);
 
   return duckdb_value_is_null (&result, 0, 0);
+}
+
+static void
+assert_object_reachability_row (duckdb_connection connection,
+    const gchar *object_id, guint64 expected_visible_mailbox_membership_count,
+    guint64 expected_visible_derived_view_membership_count,
+    gboolean expected_gc_reachable, gboolean expected_gc_candidate)
+{
+  g_auto (duckdb_result) result = { 0 };
+  g_autofree gchar *query = NULL;
+
+  query =
+      g_strdup_printf
+      ("SELECT visible_mailbox_membership_count, "
+      "visible_derived_view_membership_count, is_gc_reachable, "
+      "is_gc_candidate FROM object_reachability WHERE object_id = '%s';",
+      object_id);
+  g_assert_cmpint (duckdb_query (connection, query, &result), ==,
+      DuckDBSuccess);
+  g_assert_cmpuint (duckdb_column_count (&result), ==, 4);
+  g_assert_cmpuint (duckdb_row_count (&result), ==, 1);
+
+  g_assert_cmpuint (duckdb_value_uint64 (&result, 0, 0), ==,
+      expected_visible_mailbox_membership_count);
+  g_assert_cmpuint (duckdb_value_uint64 (&result, 1, 0), ==,
+      expected_visible_derived_view_membership_count);
+  g_assert_cmpint (duckdb_value_boolean (&result, 2, 0) ? TRUE : FALSE, ==,
+      expected_gc_reachable ? TRUE : FALSE);
+  g_assert_cmpint (duckdb_value_boolean (&result, 3, 0) ? TRUE : FALSE, ==,
+      expected_gc_candidate ? TRUE : FALSE);
+}
+
+static void
+assert_object_reachability_view_schema (duckdb_connection connection)
+{
+  static const gchar *expected_names[] = {
+    "object_id",
+    "size_bytes",
+    "message_reference_count",
+    "visible_mailbox_membership_count",
+    "visible_derived_view_membership_count",
+    "is_gc_reachable",
+    "is_gc_candidate",
+  };
+  static const gchar *expected_types[] = {
+    "VARCHAR",
+    "UBIGINT",
+    "UBIGINT",
+    "UBIGINT",
+    "UBIGINT",
+    "BOOLEAN",
+    "BOOLEAN",
+  };
+  g_auto (duckdb_result) result = { 0 };
+  g_autofree gchar *query = NULL;
+
+  query = g_strdup_printf ("PRAGMA table_info('object_reachability');");
+  g_assert_cmpint (duckdb_query (connection, query, &result), ==,
+      DuckDBSuccess);
+  g_assert_cmpuint (duckdb_column_count (&result), ==, 6);
+  g_assert_cmpuint (duckdb_row_count (&result), ==,
+      G_N_ELEMENTS (expected_names));
+
+  for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+    g_auto (TestDuckdbOwnedString) actual_name =
+        duckdb_value_varchar (&result, 1, row);
+    g_auto (TestDuckdbOwnedString) actual_type =
+        duckdb_value_varchar (&result, 2, row);
+
+    g_assert_cmpstr (actual_name, ==, expected_names[row]);
+    g_assert_cmpstr (actual_type, ==, expected_types[row]);
+  }
 }
 
 static void
@@ -356,6 +442,45 @@ assert_derived_view_membership_constraints (const gchar *path)
 
   (void) duckdb_disconnect (&connection);
   (void) duckdb_close (&database);
+}
+
+static void
+seed_object_reachability_fixture (duckdb_connection connection)
+{
+  assert_bootstrap_query_succeeds (connection,
+      "INSERT INTO objects (object_id, size_bytes) VALUES "
+      "('sha256:derived', 103),"
+      "('sha256:hidden', 102),"
+      "('sha256:orphan', 105),"
+      "('sha256:shared', 104)," "('sha256:visible', 101);");
+  assert_bootstrap_query_succeeds (connection,
+      "INSERT INTO messages (message_id, account_id, object_id, "
+      "journal_offset, journal_sequence) VALUES "
+      "('message-derived', 'account-1', 'sha256:derived', 11, 1),"
+      "('message-hidden', 'account-1', 'sha256:hidden', 12, 2),"
+      "('message-shared-hidden', 'account-1', 'sha256:shared', 13, 3),"
+      "('message-shared-visible', 'account-1', 'sha256:shared', 14, 4),"
+      "('message-visible', 'account-1', 'sha256:visible', 15, 5);");
+  assert_bootstrap_query_succeeds (connection,
+      "INSERT INTO mailbox_memberships ("
+      "membership_id, account_id, mailbox_id, message_id, uid, "
+      "internal_date_unix_us, journal_offset, journal_sequence, is_visible"
+      ") VALUES "
+      "('membership-hidden', 'account-1', 'mailbox-inbox', "
+      "'message-hidden', 1, 1000, 12, 2, FALSE),"
+      "('membership-shared-hidden', 'account-1', 'mailbox-inbox', "
+      "'message-shared-hidden', 2, 1001, 13, 3, FALSE),"
+      "('membership-shared-visible', 'account-1', 'mailbox-inbox', "
+      "'message-shared-visible', 3, 1002, 14, 4, TRUE),"
+      "('membership-visible', 'account-1', 'mailbox-inbox', "
+      "'message-visible', 4, 1003, 15, 5, TRUE);");
+  assert_bootstrap_query_succeeds (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES "
+      "('derived-membership-derived', 'account-1', 'view-projects', "
+      "'message-derived', 1, TRUE, 'rule-hash-1', 2000);");
 }
 
 static void
@@ -711,6 +836,27 @@ static void
 }
 
 static void
+    test_memory_store_accepts_add_object_reachability_view_migration_operation
+    (void)
+{
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  guint64 source_version = 0;
+  guint64 target_version = 0;
+
+  store = wyrebox_schema_metadata_store_new_memory ();
+  g_assert_nonnull (store);
+
+  target_version = wyrebox_schema_migration_get_current_schema_version ();
+  source_version = target_version - 1;
+
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW,
+          source_version, target_version, &error));
+  g_assert_no_error (error);
+}
+
+static void
 test_memory_store_rejects_unknown_migration_operation (void)
 {
   g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
@@ -928,6 +1074,65 @@ test_duckdb_store_add_message_header_date_unix_us_migration_operation (void)
   (void) duckdb_disconnect (&connection);
   (void) duckdb_close (&database);
   g_clear_object (&store);
+  remove_directory_tree (root);
+}
+
+static void
+test_duckdb_store_add_object_reachability_view_migration_operation (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
+          0,
+          wyrebox_schema_migration_get_first_supported_schema_version (),
+          &error));
+  g_assert_no_error (error);
+
+  g_clear_object (&store);
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+  seed_object_reachability_fixture (connection);
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW,
+          wyrebox_schema_migration_get_current_schema_version () - 1,
+          wyrebox_schema_migration_get_current_schema_version (), &error));
+  g_assert_no_error (error);
+
+  g_clear_object (&store);
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  g_assert_true (duckdb_view_exists (connection, "object_reachability"));
+  assert_object_reachability_view_schema (connection);
+  assert_object_reachability_row (connection, "sha256:visible", 1, 0,
+      TRUE, FALSE);
+  assert_object_reachability_row (connection, "sha256:hidden", 0, 0,
+      FALSE, TRUE);
+  assert_object_reachability_row (connection, "sha256:derived", 0, 1,
+      FALSE, TRUE);
+  assert_object_reachability_row (connection, "sha256:shared", 1, 0,
+      TRUE, FALSE);
+  assert_object_reachability_row (connection, "sha256:orphan", 0, 0,
+      FALSE, TRUE);
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
   remove_directory_tree (root);
 }
 
@@ -1183,6 +1388,9 @@ main (int argc, char **argv)
       "memory-store-accepts-add-message-header-date-unix-us-operation",
       test_memory_store_accepts_add_message_header_date_unix_us_migration_operation);
   g_test_add_func ("/migration/schema-metadata-store/"
+      "memory-store-accepts-add-object-reachability-view-operation",
+      test_memory_store_accepts_add_object_reachability_view_migration_operation);
+  g_test_add_func ("/migration/schema-metadata-store/"
       "memory-store-rejects-unknown-operation",
       test_memory_store_rejects_unknown_migration_operation);
   g_test_add_func
@@ -1200,6 +1408,9 @@ main (int argc, char **argv)
   g_test_add_func ("/migration/schema-metadata-store/duckdb-store/"
       "add-message-header-date-unix-us-operation",
       test_duckdb_store_add_message_header_date_unix_us_migration_operation);
+  g_test_add_func ("/migration/schema-metadata-store/duckdb-store/"
+      "add-object-reachability-view-operation",
+      test_duckdb_store_add_object_reachability_view_migration_operation);
   g_test_add_func
       ("/migration/schema-metadata-store/duckdb-store/"
       "legacy-bootstrap-creates-catalog-tables",
