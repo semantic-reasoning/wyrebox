@@ -1,82 +1,47 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
-import json
-import os
-import subprocess
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BUILD_ROOT_CANDIDATES = [
-    Path(os.environ["MESON_BUILD_ROOT"])
-    if "MESON_BUILD_ROOT" in os.environ
-    else None,
-    Path.cwd(),
-    REPO_ROOT / "_build",
-    REPO_ROOT / "build",
-    REPO_ROOT / "builddir",
+MESON_BUILD_FILE = REPO_ROOT / "wyrebox" / "meson.build"
+
+EXAMPLE_FILES = [
+    "../examples/postfix/README.md",
+    "../examples/postfix/master.cf.wyrebox-pipe",
+    "../examples/postfix/transport.wyrebox-pipe",
 ]
 
 
-def detect_build_root() -> Path:
-    for candidate in BUILD_ROOT_CANDIDATES:
-        if candidate is None:
-            continue
+def read_build_file() -> str:
+    assert MESON_BUILD_FILE.is_file(), (
+        f"missing meson build file: {MESON_BUILD_FILE}"
+    )
+    return MESON_BUILD_FILE.read_text(encoding="utf-8")
 
-        if (candidate / "meson-info" / "intro-buildoptions.json").is_file():
-            return candidate
 
-    raise AssertionError(
-        "could not locate a meson build root with intro-buildoptions.json"
+def assert_example_install_block(build_file: str) -> None:
+    assert "install_data(" in build_file, "missing example install_data block"
+    assert "if capnp_serialization_found" in build_file, (
+        "postfix example install block must stay within the capnp guard"
     )
 
+    for example_file in EXAMPLE_FILES:
+        assert example_file in build_file, (
+            f"missing example file in install_data block: {example_file}"
+        )
 
-BUILD_ROOT = detect_build_root()
+    assert "join_paths(" in build_file, "missing install_dir join_paths call"
+    for fragment in ["'doc'", "meson.project_name()", "'examples'", "'postfix'"]:
+        assert fragment in build_file, f"missing install_dir fragment: {fragment}"
 
-EXAMPLE_INSTALL_RELATIVE_DIR = Path("share") / "doc" / "wyrebox" / "examples" / "postfix"
-EXAMPLE_INSTALL_FILES = [
-    "README.md",
-    "master.cf.wyrebox-pipe",
-    "transport.wyrebox-pipe",
-]
-
-
-def load_install_plan() -> dict[str, dict[str, dict[str, object]]]:
-    result = subprocess.run(
-        ["meson", "introspect", str(BUILD_ROOT), "--install-plan"],
-        check=True,
-        text=True,
-        capture_output=True,
+    assert build_file.count("install_data(") == 1, (
+        "postfix example bundle install block should remain singular"
     )
-
-    return json.loads(result.stdout)
-
-
-def assert_expected_example_files(plan: dict[str, dict[str, dict[str, object]]]) -> None:
-    data = plan["data"]
-
-    for filename in EXAMPLE_INSTALL_FILES:
-        suffix = f"examples/postfix/{filename}"
-        matching_paths = [
-            source_path for source_path in data if source_path.endswith(suffix)
-        ]
-        assert matching_paths, f"missing install plan entry: {suffix}"
-        assert len(matching_paths) == 1, (
-            f"ambiguous install plan entry for {suffix}: {matching_paths}"
-        )
-        source_path = matching_paths[0]
-
-        expected_destination = (
-            "{datadir}/doc/wyrebox/examples/postfix/" + filename
-        )
-        assert data[source_path]["destination"] == expected_destination, (
-            f"unexpected install destination for {source_path}: "
-            f"{data[source_path]['destination']}"
-        )
 
 
 def main() -> None:
-    assert_expected_example_files(load_install_plan())
+    assert_example_install_block(read_build_file())
 
 
 if __name__ == "__main__":
