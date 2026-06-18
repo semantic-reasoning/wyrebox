@@ -204,6 +204,12 @@ daemon_flag_keyword_update_dispatcher_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_config_test = executable(
+  'test-daemon-config',
+  'test-daemon-config.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_runtime_test = executable(
   'test-daemon-runtime',
   'test-daemon-runtime.c',
@@ -365,6 +371,7 @@ test(
 test('daemon flag keyword update request', daemon_flag_keyword_update_request_test)
 test('daemon flag keyword update dispatcher',
   daemon_flag_keyword_update_dispatcher_test)
+test('daemon config', daemon_config_test)
 test('daemon runtime', daemon_runtime_test)
 test('daemon socket listener', daemon_socket_listener_test)
 test('daemon error', daemon_error_test)

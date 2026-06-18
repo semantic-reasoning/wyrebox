@@ -1,0 +1,287 @@
+#include "wyrebox-daemon-config.h"
+#include "wyrebox-daemon-runtime.h"
+
+#include <gio/gio.h>
+#include <glib/gstdio.h>
+
+#include <errno.h>
+#include <string.h>
+#include <sys/stat.h>
+
+struct _WyreboxDaemonConfig
+{
+  GObject parent_instance;
+
+  char *config_path;
+  char *socket_path;
+};
+
+G_DEFINE_TYPE (WyreboxDaemonConfig, wyrebox_daemon_config, G_TYPE_OBJECT);
+
+static gboolean
+config_file_is_secure (const char *config_path, GError **error)
+{
+  struct stat stat_buf = { 0 };
+
+  if (lstat (config_path, &stat_buf) != 0) {
+    int saved_errno = errno;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        g_io_error_from_errno (saved_errno),
+        "failed to stat daemon config '%s': %s",
+        config_path, g_strerror (saved_errno));
+    return FALSE;
+  }
+
+  if (!S_ISREG (stat_buf.st_mode)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon config '%s' is not a regular file", config_path);
+    return FALSE;
+  }
+
+  if ((stat_buf.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_PERMISSION_DENIED,
+        "daemon config '%s' must not be group- or world-writable", config_path);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
+config_line_is_comment_or_blank (const char *line)
+{
+  const char *cursor = line;
+
+  while (cursor != NULL && g_ascii_isspace (*cursor))
+    cursor++;
+
+  return cursor == NULL || *cursor == '\0' || *cursor == '#' || *cursor == ';';
+}
+
+static gboolean
+parse_daemon_config_file (const char *config_path, const char *contents,
+    char **out_socket_path, GError **error)
+{
+  g_auto (GStrv) lines = NULL;
+  gboolean in_daemon_section = FALSE;
+  gboolean seen_socket_path = FALSE;
+  char *socket_path = NULL;
+
+  lines = g_strsplit (contents, "\n", -1);
+
+  for (guint index = 0; lines[index] != NULL; index++) {
+    char *line = lines[index];
+    char *separator = NULL;
+    char *key = NULL;
+    char *value = NULL;
+
+    g_strstrip (line);
+    if (config_line_is_comment_or_blank (line))
+      continue;
+
+    if (line[0] == '[') {
+      char *section_end = strchr (line, ']');
+
+      if (section_end == NULL || section_end[1] != '\0') {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config '%s' has malformed section header: %s",
+            config_path, line);
+        goto out;
+      }
+
+      *section_end = '\0';
+      in_daemon_section = g_strcmp0 (line + 1, "daemon") == 0;
+      if (!in_daemon_section) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config '%s' has unsupported section '%s'",
+            config_path, line + 1);
+        goto out;
+      }
+
+      continue;
+    }
+
+    if (!in_daemon_section) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "daemon config '%s' must define a [daemon] section before %s",
+          config_path, line);
+      goto out;
+    }
+
+    separator = strchr (line, '=');
+    if (separator == NULL) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "daemon config '%s' has malformed assignment: %s", config_path, line);
+      goto out;
+    }
+
+    *separator = '\0';
+    key = g_strstrip (line);
+    value = g_strstrip (separator + 1);
+
+    if (key == NULL || *key == '\0') {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "daemon config '%s' has an empty key near %s",
+          config_path, separator + 1);
+      goto out;
+    }
+
+    if (g_strcmp0 (key, "socket_path") == 0) {
+      if (seen_socket_path) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config '%s' defines socket_path more than once",
+            config_path);
+        goto out;
+      }
+
+      if (value == NULL || *value == '\0') {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT,
+            "daemon config '%s' socket_path is required", config_path);
+        goto out;
+      }
+
+      if (!g_path_is_absolute (value)) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config '%s' socket_path must be absolute: %s",
+            config_path, value);
+        goto out;
+      }
+
+      if (g_strcmp0 (value, WYREBOX_DAEMON_DEFAULT_SOCKET_PATH) != 0) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config '%s' socket_path must be %s, not %s",
+            config_path, WYREBOX_DAEMON_DEFAULT_SOCKET_PATH, value);
+        goto out;
+      }
+
+      socket_path = g_strdup (value);
+      seen_socket_path = TRUE;
+      continue;
+    }
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon config '%s' has unknown key '%s'", config_path, key);
+    goto out;
+  }
+
+  if (!seen_socket_path) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon config '%s' is missing socket_path", config_path);
+    goto out;
+  }
+
+  *out_socket_path = g_steal_pointer (&socket_path);
+  return TRUE;
+
+out:
+  g_clear_pointer (&socket_path, g_free);
+  return FALSE;
+}
+
+static void
+wyrebox_daemon_config_finalize (GObject *object)
+{
+  WyreboxDaemonConfig *self = WYREBOX_DAEMON_CONFIG (object);
+
+  g_clear_pointer (&self->config_path, g_free);
+  g_clear_pointer (&self->socket_path, g_free);
+
+  G_OBJECT_CLASS (wyrebox_daemon_config_parent_class)->finalize (object);
+}
+
+static void
+wyrebox_daemon_config_class_init (WyreboxDaemonConfigClass *klass)
+{
+  GObjectClass *object_class = G_OBJECT_CLASS (klass);
+
+  object_class->finalize = wyrebox_daemon_config_finalize;
+}
+
+static void
+wyrebox_daemon_config_init (WyreboxDaemonConfig *self)
+{
+}
+
+WyreboxDaemonConfig *
+wyrebox_daemon_config_new_from_file (const char *config_path, GError **error)
+{
+  g_autofree char *contents = NULL;
+  g_autofree char *socket_path = NULL;
+  WyreboxDaemonConfig *self = NULL;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  if (config_path == NULL || *config_path == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "daemon config path is required");
+    return NULL;
+  }
+
+  if (!g_path_is_absolute (config_path)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "daemon config path must be absolute: %s", config_path);
+    return NULL;
+  }
+
+  if (!config_file_is_secure (config_path, error))
+    return NULL;
+
+  if (!g_file_get_contents (config_path, &contents, NULL, error))
+    return NULL;
+
+  if (!parse_daemon_config_file (config_path, contents, &socket_path, error))
+    return NULL;
+
+  self = g_object_new (WYREBOX_TYPE_DAEMON_CONFIG, NULL);
+  self->config_path = g_strdup (config_path);
+  self->socket_path = g_steal_pointer (&socket_path);
+
+  return self;
+}
+
+const char *
+wyrebox_daemon_config_get_socket_path (WyreboxDaemonConfig *self)
+{
+  g_return_val_if_fail (WYREBOX_IS_DAEMON_CONFIG (self), NULL);
+
+  return self->socket_path;
+}
+
+const char *
+wyrebox_daemon_config_get_config_path (WyreboxDaemonConfig *self)
+{
+  g_return_val_if_fail (WYREBOX_IS_DAEMON_CONFIG (self), NULL);
+
+  return self->config_path;
+}
