@@ -1290,7 +1290,7 @@ gboolean
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
   if (out_changes != NULL)
-    *out_changes = NULL;
+    g_clear_pointer (out_changes, g_ptr_array_unref);
 
   if (!WYREBOX_IS_DERIVED_VIEW_MATERIALIZER (self)) {
     g_set_error (error,
@@ -1374,7 +1374,7 @@ materializer_refresh_memberships_with_changes (WyreboxDerivedViewMaterializer
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
   if (out_changes != NULL)
-    *out_changes = NULL;
+    g_clear_pointer (out_changes, g_ptr_array_unref);
 
   if (!WYREBOX_IS_DERIVED_VIEW_MATERIALIZER (self)) {
     g_set_error (error,

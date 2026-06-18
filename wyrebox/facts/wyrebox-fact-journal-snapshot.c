@@ -185,10 +185,12 @@ active_table_to_sorted_array (GHashTable *active)
   for (GList * iter = values; iter != NULL; iter = iter->next) {
     WyreboxFactRecord *record = iter->data;
     g_autofree char *key = NULL;
+    g_autofree char *stored_key = NULL;
 
     key = build_fact_identity_key (record->predicate, record->source,
         record->args);
-    g_assert_true (g_hash_table_steal (active, key));
+    g_assert_true (g_hash_table_steal_extended (active, key,
+            (gpointer *) & stored_key, NULL));
     g_ptr_array_add (records, record);
   }
 

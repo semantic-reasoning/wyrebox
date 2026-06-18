@@ -20,7 +20,7 @@ gboolean
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
   if (out_changes != NULL)
-    *out_changes = NULL;
+    g_clear_pointer (out_changes, g_ptr_array_unref);
 
   if (relation_name == NULL || relation_name[0] == '\0') {
     g_set_error (error,
@@ -60,7 +60,7 @@ gboolean
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
   if (out_changes != NULL)
-    *out_changes = NULL;
+    g_clear_pointer (out_changes, g_ptr_array_unref);
 
   facts = wyrebox_fact_journal_snapshot_load_active (journal_root_dir, error);
   if (facts == NULL)

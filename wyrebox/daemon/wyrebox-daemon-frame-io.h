@@ -19,6 +19,10 @@ GBytes *wyrebox_daemon_frame_io_read_payload (GInputStream *stream,
 /*
  * Returns TRUE on success, FALSE on protocol or I/O errors.
  *
+ * @out_payload must point to a valid #GBytes pointer (%NULL or owned); any
+ * existing value is unreffed and cleared before the read so stale output never
+ * survives a failed or EOF read.
+ *
  * A clean EOF before a frame is reported as successful read with @out_payload set
  * to %NULL and @out_eof set to %TRUE.
  */
