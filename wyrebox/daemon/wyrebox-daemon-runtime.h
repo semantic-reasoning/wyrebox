@@ -22,6 +22,44 @@ const char *wyrebox_daemon_runtime_get_default_fact_dump_dir (void);
  */
 GFile *wyrebox_daemon_runtime_get_default_fact_dump_file (void);
 
+typedef enum {
+  WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_VALID,
+  WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID,
+} WyreboxDaemonDeliveryStorageValidationStatus;
+
+typedef enum {
+  WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_NONE,
+  WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_INVALID_ARGUMENT,
+  WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_JOURNAL_UNAVAILABLE,
+  WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_OBJECT_STORE_UNAVAILABLE,
+  WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_UNSAFE_JOURNAL_SUFFIX,
+  WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_MISSING_OBJECT,
+  WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_SIZE_MISMATCH,
+  WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_HASH_MISMATCH,
+  WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED,
+} WyreboxDaemonDeliveryStorageValidationFailureCategory;
+
+typedef struct {
+  WyreboxDaemonDeliveryStorageValidationStatus status;
+  WyreboxDaemonDeliveryStorageValidationFailureCategory failure_category;
+  guint64 safe_end_offset;
+  gboolean has_last_safe_sequence;
+  guint64 last_safe_sequence;
+  gboolean has_unsafe_offset;
+  guint64 unsafe_offset;
+} WyreboxDaemonDeliveryStorageValidationReport;
+
+/*
+ * Produces a structured, read-only report for the delivery journal and
+ * immutable raw object store. The report is filled on both valid and invalid
+ * storage outcomes. Returns TRUE only when storage is valid.
+ */
+gboolean wyrebox_daemon_runtime_validate_delivery_storage_report (
+    const char *journal_root_dir,
+    const char *object_root_dir,
+    WyreboxDaemonDeliveryStorageValidationReport *out_report,
+    GError **error);
+
 /*
  * Validates the delivery journal and immutable raw object store before the
  * daemon serves requests.

@@ -5,6 +5,7 @@
 #include "wyrebox-eml-ingestor.h"
 #include "wyrebox-journal-writer.h"
 #include "wyrebox-local-object-store.h"
+#include "wyrebox-message-delivered-payload.h"
 #include "wyrebox-schema-metadata-store.h"
 #include "wyrebox-schema-migration.h"
 
@@ -335,11 +336,24 @@ test_runtime_validate_delivery_storage_accepts_valid_delivery (void)
   g_autofree char *object_root =
       g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
   g_auto (WyreboxEmlIngestResult) result = { 0 };
+  WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
   g_autoptr (GError) error = NULL;
 
   g_assert_nonnull (journal_root);
   g_assert_nonnull (object_root);
   ingest_runtime_preflight_message (journal_root, object_root, &result);
+
+  g_assert_true (wyrebox_daemon_runtime_validate_delivery_storage_report
+      (journal_root, object_root, &report, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (report.status, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_VALID);
+  g_assert_cmpint (report.failure_category, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_NONE);
+  g_assert_cmpuint (report.safe_end_offset, >, result.journal_offset);
+  g_assert_true (report.has_last_safe_sequence);
+  g_assert_cmpuint (report.last_safe_sequence, ==, result.journal_sequence);
+  g_assert_false (report.has_unsafe_offset);
 
   g_assert_true (wyrebox_daemon_runtime_validate_delivery_storage
       (journal_root, object_root, &error));
@@ -405,6 +419,7 @@ test_runtime_validate_delivery_storage_rejects_missing_object (void)
   g_autofree char *object_root =
       g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
   g_auto (WyreboxEmlIngestResult) result = { 0 };
+  WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
   g_autoptr (GError) error = NULL;
   g_autofree char *object_path = NULL;
 
@@ -413,6 +428,19 @@ test_runtime_validate_delivery_storage_rejects_missing_object (void)
   ingest_runtime_preflight_message (journal_root, object_root, &result);
   object_path = object_path_for_key (object_root, result.object_key);
   g_assert_cmpint (g_remove (object_path), ==, 0);
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage_report
+      (journal_root, object_root, &report, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_cmpint (report.status, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID);
+  g_assert_cmpint (report.failure_category, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_MISSING_OBJECT);
+  g_assert_cmpuint (report.safe_end_offset, >, result.journal_offset);
+  g_assert_true (report.has_last_safe_sequence);
+  g_assert_cmpuint (report.last_safe_sequence, ==, result.journal_sequence);
+  g_assert_false (report.has_unsafe_offset);
+  g_clear_error (&error);
 
   g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage
       (journal_root, object_root, &error));
@@ -425,24 +453,103 @@ test_runtime_validate_delivery_storage_rejects_missing_object (void)
 }
 
 static void
-test_runtime_validate_delivery_storage_rejects_corrupt_object (void)
+test_runtime_validate_delivery_storage_rejects_size_mismatch (void)
 {
-  static const char corrupt[] = "corrupt object bytes";
+  static const guint8 message[] = "size mismatch message";
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+  WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GBytes) input = g_bytes_new_static (message, sizeof (message) - 1);
+  g_autoptr (GBytes) payload = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autofree char *object_key = NULL;
+  guint64 journal_offset = 0;
+  guint64 journal_sequence = 0;
+
+  g_assert_nonnull (journal_root);
+  g_assert_nonnull (object_root);
+  store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+  g_assert_true (wyrebox_local_object_store_put_bytes (store, input,
+          &object_key, &error));
+  g_assert_no_error (error);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+  payload = wyrebox_message_delivered_payload_encode (object_key,
+      sizeof (message), &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (payload);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED, payload,
+          &journal_offset, &journal_sequence, &error));
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage_report
+      (journal_root, object_root, &report, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_cmpint (report.status, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID);
+  g_assert_cmpint (report.failure_category, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_SIZE_MISMATCH);
+  g_assert_true (report.has_last_safe_sequence);
+  g_assert_cmpuint (report.last_safe_sequence, ==, journal_sequence);
+  g_clear_error (&error);
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage
+      (journal_root, object_root, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_nonnull (strstr (error->message, "startup delivery storage"));
+  g_assert_nonnull (strstr (error->message, "mismatched size"));
+
+  remove_tree (journal_root);
+  remove_tree (object_root);
+}
+
+static void
+test_runtime_validate_delivery_storage_rejects_hash_mismatch (void)
+{
   g_autofree char *journal_root =
       g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
   g_autofree char *object_root =
       g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
   g_auto (WyreboxEmlIngestResult) result = { 0 };
+  WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
   g_autoptr (GError) error = NULL;
   g_autofree char *object_path = NULL;
+  g_autofree char *contents = NULL;
+  gsize length = 0;
 
   g_assert_nonnull (journal_root);
   g_assert_nonnull (object_root);
   ingest_runtime_preflight_message (journal_root, object_root, &result);
   object_path = object_path_for_key (object_root, result.object_key);
-  g_assert_true (g_file_set_contents (object_path, corrupt, strlen (corrupt),
+  g_assert_true (g_file_get_contents (object_path, &contents, &length, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (length, >, 0);
+  contents[0] ^= 0x01;
+  g_assert_true (g_file_set_contents (object_path, contents, (gssize) length,
           &error));
   g_assert_no_error (error);
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage_report
+      (journal_root, object_root, &report, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_cmpint (report.status, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID);
+  g_assert_cmpint (report.failure_category, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_HASH_MISMATCH);
+  g_assert_cmpuint (report.safe_end_offset, >, result.journal_offset);
+  g_assert_true (report.has_last_safe_sequence);
+  g_assert_cmpuint (report.last_safe_sequence, ==, result.journal_sequence);
+  g_assert_false (report.has_unsafe_offset);
+  g_clear_error (&error);
 
   g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage
       (journal_root, object_root, &error));
@@ -462,6 +569,7 @@ test_runtime_validate_delivery_storage_rejects_unsafe_journal_suffix (void)
   g_autofree char *object_root =
       g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
   g_auto (WyreboxEmlIngestResult) result = { 0 };
+  WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
   g_autoptr (GError) error = NULL;
   g_autofree char *segment_path = NULL;
 
@@ -470,6 +578,17 @@ test_runtime_validate_delivery_storage_rejects_unsafe_journal_suffix (void)
   ingest_runtime_preflight_message (journal_root, object_root, &result);
   segment_path = journal_segment_path (journal_root);
   g_assert_cmpint (truncate (segment_path, 17), ==, 0);
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage_report
+      (journal_root, object_root, &report, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_cmpint (report.status, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID);
+  g_assert_cmpint (report.failure_category, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_UNSAFE_JOURNAL_SUFFIX);
+  g_assert_true (report.has_unsafe_offset);
+  g_assert_false (report.has_last_safe_sequence);
+  g_clear_error (&error);
 
   g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage
       (journal_root, object_root, &error));
@@ -484,7 +603,17 @@ test_runtime_validate_delivery_storage_rejects_unsafe_journal_suffix (void)
 static void
 test_runtime_validate_delivery_storage_rejects_invalid_args (void)
 {
+  WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
   g_autoptr (GError) error = NULL;
+
+  g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage_report
+      (NULL, "/tmp", &report, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpint (report.status, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID);
+  g_assert_cmpint (report.failure_category, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_INVALID_ARGUMENT);
+  g_clear_error (&error);
 
   g_assert_false (wyrebox_daemon_runtime_validate_delivery_storage
       (NULL, "/tmp", &error));
@@ -1060,8 +1189,11 @@ main (int argc, char **argv)
       ("/daemon-api/runtime/validate-delivery-storage/missing-object",
       test_runtime_validate_delivery_storage_rejects_missing_object);
   g_test_add_func
-      ("/daemon-api/runtime/validate-delivery-storage/corrupt-object",
-      test_runtime_validate_delivery_storage_rejects_corrupt_object);
+      ("/daemon-api/runtime/validate-delivery-storage/size-mismatch",
+      test_runtime_validate_delivery_storage_rejects_size_mismatch);
+  g_test_add_func
+      ("/daemon-api/runtime/validate-delivery-storage/hash-mismatch",
+      test_runtime_validate_delivery_storage_rejects_hash_mismatch);
   g_test_add_func
       ("/daemon-api/runtime/validate-delivery-storage/unsafe-journal-suffix",
       test_runtime_validate_delivery_storage_rejects_unsafe_journal_suffix);
