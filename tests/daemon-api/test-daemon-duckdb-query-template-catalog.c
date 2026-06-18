@@ -86,6 +86,9 @@ test_catalog_resolves_allowlisted_templates (void)
   assert_template_resolves ("message.by_id.v1", "message-1",
       "message by id", "message_id",
       "stream-chunk.duckdb-template.message-by-id.v1");
+  assert_template_resolves ("facts.by_source.v1", "rule",
+      "facts by source", "source",
+      "stream-chunk.duckdb-template.facts-by-source.v1");
   assert_metadata_template_resolves ("messages.by_from_addr.v1",
       "Alice <alice@example.test>", "messages by from address", "from_addr",
       "stream-chunk.duckdb-template.messages-by-from-addr.v1");
@@ -202,6 +205,23 @@ test_catalog_rejects_dovecot_for_search_templates (void)
   g_autoptr (GError) error = NULL;
 
   init_request (&request, "messages.subject_contains.v1", parameters);
+
+  g_assert_false (wyrebox_daemon_duckdb_query_template_catalog_validate
+      (WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN, "account-1", &request,
+          &descriptor, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
+  g_assert_null (descriptor);
+}
+
+static void
+test_catalog_rejects_dovecot_for_fact_provenance_templates (void)
+{
+  const char *parameters[] = { "rule", NULL };
+  const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  init_request (&request, "facts.by_source.v1", parameters);
 
   g_assert_false (wyrebox_daemon_duckdb_query_template_catalog_validate
       (WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN, "account-1", &request,
@@ -431,6 +451,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/catalog/rejects-dovecot-for-search-templates",
       test_catalog_rejects_dovecot_for_search_templates);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/catalog/rejects-dovecot-for-fact-provenance-templates",
+      test_catalog_rejects_dovecot_for_fact_provenance_templates);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/catalog/rejects-unknown-template",
       test_catalog_rejects_unknown_template);
