@@ -655,6 +655,14 @@ init_facts_by_source_request (WyreboxDaemonDuckDBQueryTemplateRequest *request,
 }
 
 static void
+init_facts_by_fact_id_request (WyreboxDaemonDuckDBQueryTemplateRequest *request,
+    const gchar *account_id, const gchar *fact_id)
+{
+  init_request_with_template (request, "facts.by_fact_id.v1", account_id,
+      fact_id);
+}
+
+static void
 init_messages_by_from_addr_request (WyreboxDaemonDuckDBQueryTemplateRequest
     *request, const gchar *account_id, const gchar *from_addr)
 {
@@ -903,6 +911,36 @@ dispatch_facts_by_source_csv (const gchar *path, const gchar *account_id,
   g_assert_nonnull (service);
 
   init_facts_by_source_request (&request, account_id, source);
+  g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
+          "request-1", "admin-cli", account_id, "duckdb-tool",
+          "correlation-1", &request, &frame, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpuint (frame.stream_chunk.chunk_index, ==, 0);
+  g_assert_true (frame.stream_chunk.end_of_stream);
+
+  data = g_bytes_get_data (frame.stream_chunk.bytes, &size);
+  return g_strndup (data, size);
+}
+
+static gchar *
+dispatch_facts_by_fact_id_csv (const gchar *path, const gchar *account_id,
+    const gchar *fact_id)
+{
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  gconstpointer data = NULL;
+  gsize size = 0;
+
+  service = wyrebox_daemon_duckdb_query_template_service_new_duckdb (path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (service);
+
+  init_facts_by_fact_id_request (&request, account_id, fact_id);
   g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
           "request-1", "admin-cli", account_id, "duckdb-tool",
           "correlation-1", &request, &frame, &error));
@@ -1433,6 +1471,62 @@ test_duckdb_service_facts_by_source_missing_source_is_header_only (void)
   seed_catalog (path);
 
   csv = dispatch_facts_by_source_csv (path, "account-1", "missing");
+  g_assert_cmpstr (csv, ==,
+      "account_id,message_id,object_id,fact_id,predicate,args_json,source,"
+      "confidence_ppm,created_at_unix_us,retracted_at_unix_us,journal_offset,"
+      "journal_sequence\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_returns_facts_by_fact_id_csv (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+  seed_message_facts (path);
+
+  csv = dispatch_facts_by_fact_id_csv (path, "account-1", "fact-a");
+  g_assert_cmpstr (csv, ==,
+      "account_id,message_id,object_id,fact_id,predicate,args_json,source,"
+      "confidence_ppm,created_at_unix_us,retracted_at_unix_us,journal_offset,"
+      "journal_sequence\n"
+      "account-1,message-a,object-a,fact-a,sender,"
+      "\"[\"\"Alice\"\", \"\"Alice <alice@example.test>\"\"]\",rule,"
+      "990000,900,0,21,22\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_facts_by_fact_id_isolates_cross_account_rows (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+  seed_message_facts (path);
+
+  csv = dispatch_facts_by_fact_id_csv (path, "account-1", "fact-other-account");
+  g_assert_cmpstr (csv, ==,
+      "account_id,message_id,object_id,fact_id,predicate,args_json,source,"
+      "confidence_ppm,created_at_unix_us,retracted_at_unix_us,journal_offset,"
+      "journal_sequence\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_facts_by_fact_id_missing_fact_is_header_only (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+
+  csv = dispatch_facts_by_fact_id_csv (path, "account-1", "fact-missing");
   g_assert_cmpstr (csv, ==,
       "account_id,message_id,object_id,fact_id,predicate,args_json,source,"
       "confidence_ppm,created_at_unix_us,retracted_at_unix_us,journal_offset,"
@@ -2297,6 +2391,15 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/facts-by-source-missing-source",
       test_duckdb_service_facts_by_source_missing_source_is_header_only);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/facts-by-fact-id-csv",
+      test_duckdb_service_returns_facts_by_fact_id_csv);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/facts-by-fact-id-cross-account-isolation",
+      test_duckdb_service_facts_by_fact_id_isolates_cross_account_rows);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/facts-by-fact-id-missing-fact",
+      test_duckdb_service_facts_by_fact_id_missing_fact_is_header_only);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/messages-by-from-addr-csv",
       test_duckdb_service_returns_messages_by_from_addr_csv);
