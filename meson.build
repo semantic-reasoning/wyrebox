@@ -588,6 +588,12 @@ test(
 )
 
 test(
+  'docs issue 0028 benchmark scaffold',
+  python,
+  args: files('tests/benchmarks/test_issue_0028_benchmark_scaffold.py'),
+)
+
+test(
   'docs issue 0029 postfix pipe install',
   python,
   args: files('tests/docs/test_issue_0029_postfix_pipe_install.py'),
@@ -619,3 +625,4 @@ subdir('tests/postfix')
 subdir('tests/facts')
 subdir('tests/duckdb')
 subdir('tests/wirelog')
+subdir('tests/benchmarks')
