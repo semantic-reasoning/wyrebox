@@ -612,6 +612,12 @@ test(
 )
 
 test(
+  'docs issue 0028 duckdb query template subject contains benchmark scaffold',
+  python,
+  args: files('tests/benchmarks/test_issue_0028_duckdb_query_template_subject_contains_benchmark_scaffold.py'),
+)
+
+test(
   'docs issue 0029 postfix pipe install',
   python,
   args: files('tests/docs/test_issue_0029_postfix_pipe_install.py'),
