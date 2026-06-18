@@ -20,6 +20,16 @@ typedef struct
   char *message_id;
 
   /*
+   * Raw byte span for the first canonical Message-ID header within the RFC
+   * 5322 header block. The start is inclusive and the end is exclusive. When
+   * the Message-ID header is absent, message_id_span_valid is FALSE and the
+   * offsets are zero.
+   */
+  gboolean message_id_span_valid;
+  guint64 message_id_span_start;
+  guint64 message_id_span_end;
+
+  /*
    * Raw unfolded header values for selected RFC 5322 fields. RFC 2047 encoded
    * words, addresses, and dates are preserved as-is; this boundary does not
    * decode MIME headers, normalize addresses, or parse dates.

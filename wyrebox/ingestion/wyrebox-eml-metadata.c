@@ -11,6 +11,9 @@ wyrebox_eml_metadata_clear (WyreboxEmlMetadata *metadata)
     return;
 
   g_clear_pointer (&metadata->message_id, g_free);
+  metadata->message_id_span_valid = FALSE;
+  metadata->message_id_span_start = 0;
+  metadata->message_id_span_end = 0;
   g_clear_pointer (&metadata->subject, g_free);
   g_clear_pointer (&metadata->from, g_free);
   g_clear_pointer (&metadata->to, g_free);
@@ -71,6 +74,11 @@ commit_header (WyreboxEmlMetadata *metadata, const char *name, GString *value,
       metadata->message_id = g_strdup (value->str);
     else
       metadata->duplicate_message_id_count++;
+    if (!metadata->message_id_span_valid && span_valid) {
+      metadata->message_id_span_valid = TRUE;
+      metadata->message_id_span_start = span_start;
+      metadata->message_id_span_end = span_end;
+    }
   } else if (g_ascii_strcasecmp (name, "Subject") == 0) {
     set_first_value (&metadata->subject, value);
     if (!metadata->subject_span_valid && span_valid) {
@@ -220,6 +228,9 @@ wyrebox_eml_metadata_parse_bytes (GBytes *bytes,
 
   *out_metadata = metadata;
   metadata.message_id = NULL;
+  metadata.message_id_span_valid = FALSE;
+  metadata.message_id_span_start = 0;
+  metadata.message_id_span_end = 0;
   metadata.subject = NULL;
   metadata.from = NULL;
   metadata.to = NULL;

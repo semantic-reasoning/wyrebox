@@ -12,6 +12,7 @@ static const char *fixture_names[] = {
   "missing-message-id.eml",
   "duplicate-message-id.eml",
   "folded-subject.eml",
+  "folded-message-id.eml",
 };
 
 static void
