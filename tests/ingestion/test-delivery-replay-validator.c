@@ -171,7 +171,8 @@ test_message_delivered_missing_object_fails_validation (void)
 
   g_assert_false (wyrebox_delivery_replay_validator_validate_all (validator,
           &error));
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+      WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_MISSING_OBJECT);
   g_clear_error (&error);
 
   remove_tree (object_root);
@@ -239,7 +240,8 @@ test_message_delivered_size_mismatch_fails_validation (void)
   g_assert_nonnull (validator);
   g_assert_false (wyrebox_delivery_replay_validator_validate_all (validator,
           &error));
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+      WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_SIZE_MISMATCH);
   g_assert_nonnull (g_strstr_len (error->message, -1, "sequence 2"));
   g_assert_nonnull (g_strstr_len (error->message, -1, "size"));
   g_clear_error (&error);
@@ -305,7 +307,8 @@ test_message_delivered_hash_mismatch_fails_validation (void)
   g_assert_nonnull (validator);
   g_assert_false (wyrebox_delivery_replay_validator_validate_all (validator,
           &error));
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+      WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_HASH_MISMATCH);
   g_assert_nonnull (g_strstr_len (error->message, -1, "sequence 1"));
   g_assert_nonnull (g_strstr_len (error->message, -1, "SHA-256"));
   g_clear_error (&error);
