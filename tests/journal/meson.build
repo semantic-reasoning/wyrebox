@@ -29,6 +29,12 @@ daemon_audit_payload_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+journal_event_test = executable(
+  'test-journal-event',
+  'test-journal-event.c',
+  dependencies: [wyrebox_dep],
+)
+
 message_delivered_journal_test = executable(
   'test-message-delivered-journal',
   'test-message-delivered-journal.c',
@@ -47,5 +53,6 @@ test('message delivered payload codec', message_delivered_payload_test)
 test('derived view membership changed payload',
   derived_view_membership_changed_payload_test)
 test('daemon audit payload', daemon_audit_payload_test)
+test('journal event', journal_event_test)
 test('message delivered journal', message_delivered_journal_test)
 test('fact mutation journal', fact_mutation_journal_test)
