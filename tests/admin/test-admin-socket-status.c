@@ -1,4 +1,5 @@
 #include "wyrebox-admin-socket-status.h"
+#include "wyrebox-admin-health.h"
 #include "wyrebox-daemon-runtime.h"
 
 #include <gio/gio.h>
@@ -60,6 +61,26 @@ create_listening_socket (const char *path)
   g_assert_cmpint (listen (fd, 1), ==, 0);
 
   return fd;
+}
+
+typedef struct
+{
+  int fd;
+} AcceptThreadData;
+
+static gpointer
+accept_one_connection (gpointer user_data)
+{
+  AcceptThreadData *data = user_data;
+  struct sockaddr_un addr = { 0 };
+  socklen_t addrlen = sizeof (addr);
+  int client_fd = -1;
+
+  client_fd = accept (data->fd, (struct sockaddr *) &addr, &addrlen);
+  if (client_fd >= 0)
+    close (client_fd);
+
+  return NULL;
 }
 
 static void
@@ -187,6 +208,41 @@ test_cli_human_and_json_output (void)
 }
 
 static void
+test_health_probe_and_cli_output (void)
+{
+  const char *admin = g_getenv ("WYREBOX_ADMIN_EXECUTABLE");
+  g_autofree char *dir = create_tmp_dir ();
+  g_autofree char *path = g_build_filename (dir, "wyrebox.sock", NULL);
+  g_auto (WyreboxAdminHealthResult) result = { 0 };
+  AcceptThreadData accept_data = { 0 };
+  g_autoptr (GThread) accept_thread = NULL;
+  int fd = -1;
+  char *human_argv[] = { (char *) admin, (char *) "health",
+    (char *) "--socket-path", path, NULL
+  };
+  char *json_argv[] = { (char *) admin, (char *) "health",
+    (char *) "--socket-path", path, (char *) "--json", NULL
+  };
+
+  g_assert_nonnull (admin);
+  fd = create_listening_socket (path);
+  accept_data.fd = fd;
+  accept_thread = g_thread_new ("wyrebox-admin-health-accept",
+      accept_one_connection, &accept_data);
+
+  g_assert_cmpint (wyrebox_admin_health_probe (path, &result), ==, 0);
+  g_assert_true (result.healthy);
+  g_assert_cmpstr (result.status_name, ==, "ok");
+
+  assert_cli (human_argv, 0, "healthy=true", NULL);
+  assert_cli (json_argv, 0, "\"healthy\":true", NULL);
+
+  g_thread_join (g_steal_pointer (&accept_thread));
+  close (fd);
+  remove_tree (dir);
+}
+
+static void
 test_cli_usage_error_output (void)
 {
   const char *admin = g_getenv ("WYREBOX_ADMIN_EXECUTABLE");
@@ -213,6 +269,8 @@ main (int argc, char **argv)
       test_stale_socket_is_not_connectable);
   g_test_add_func ("/admin/socket-status/cli-output",
       test_cli_human_and_json_output);
+  g_test_add_func ("/admin/health/probe-and-cli-output",
+      test_health_probe_and_cli_output);
   g_test_add_func ("/admin/socket-status/cli-usage",
       test_cli_usage_error_output);
 

@@ -1,4 +1,5 @@
 wyrebox_sources = files(
+  'admin/wyrebox-admin-health.c',
   'admin/wyrebox-admin-main.c',
   'admin/wyrebox-admin-health-status.c',
   'admin/wyrebox-admin-readiness-status.c',
