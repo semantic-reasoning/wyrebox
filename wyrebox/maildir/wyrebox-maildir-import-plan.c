@@ -55,7 +55,10 @@ void wyrebox_maildir_import_plan_execution_entry_clear
   if (entry == NULL)
     return;
 
+  g_clear_pointer (&entry->mailbox_path, g_free);
   g_clear_pointer (&entry->source_path, g_free);
+  g_clear_pointer (&entry->maildir_flag_suffix, g_free);
+  entry->maildir_flags = 0;
   wyrebox_eml_ingest_result_clear (&entry->ingest_result);
 }
 
@@ -454,6 +457,13 @@ wyrebox_maildir_import_plan_execute (WyreboxMaildirImportPlan *self,
   g_return_val_if_fail (WYREBOX_IS_EML_INGESTOR (ingestor), NULL);
   g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
+  if (!wyrebox_eml_ingestor_has_journal_writer (ingestor)) {
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+        "Maildir import execution requires a journaled ingestor");
+    return execution_result_new (WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_REFUSED,
+        NULL);
+  }
+
   verification = wyrebox_maildir_import_plan_dry_run_verify_current (self,
       root_path, error);
   if (verification == NULL)
@@ -499,7 +509,11 @@ wyrebox_maildir_import_plan_execute (WyreboxMaildirImportPlan *self,
     }
 
     execution_entry = g_new0 (WyreboxMaildirImportPlanExecutionEntry, 1);
+    execution_entry->mailbox_path = g_strdup (plan_entry->mailbox_path);
     execution_entry->source_path = g_strdup (plan_entry->source_path);
+    execution_entry->maildir_flag_suffix =
+        g_strdup (plan_entry->maildir_flag_suffix);
+    execution_entry->maildir_flags = plan_entry->maildir_flags;
     execution_entry->ingest_result.object_key =
         g_steal_pointer (&ingest_result.object_key);
     execution_entry->ingest_result.size_bytes = ingest_result.size_bytes;
