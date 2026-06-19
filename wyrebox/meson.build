@@ -1,6 +1,7 @@
 wyrebox_sources = files(
   'admin/wyrebox-admin-main.c',
   'admin/wyrebox-admin-health-status.c',
+  'admin/wyrebox-admin-readiness-status.c',
   'admin/wyrebox-admin-socket-status.c',
   'object-store/wyrebox-local-object-store.c',
   'backup/wyrebox-backup-manifest.c',
