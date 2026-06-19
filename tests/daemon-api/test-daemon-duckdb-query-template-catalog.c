@@ -68,6 +68,28 @@ assert_metadata_template_resolves (const char *template_id,
 }
 
 static void
+assert_result_schema_matches (const char *template_id,
+    const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor *expected,
+    gsize n_expected)
+{
+  const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
+
+  descriptor = wyrebox_daemon_duckdb_query_template_catalog_lookup
+      (template_id);
+  g_assert_nonnull (descriptor);
+  g_assert_cmpuint (descriptor->n_result_columns, ==, n_expected);
+
+  for (gsize i = 0; i < n_expected; i++) {
+    g_assert_cmpstr (descriptor->result_columns[i].column_name, ==,
+        expected[i].column_name);
+    g_assert_cmpstr (descriptor->result_columns[i].logical_type, ==,
+        expected[i].logical_type);
+    g_assert_cmpint (descriptor->result_columns[i].nullable, ==,
+        expected[i].nullable);
+  }
+}
+
+static void
 test_catalog_resolves_allowlisted_templates (void)
 {
   const char *date_range_parameters[] = { "1704067200000000",
@@ -130,6 +152,89 @@ test_catalog_resolves_allowlisted_templates (void)
   g_assert_cmpstr (descriptor->parameter_names[2], ==, "limit");
   g_assert_cmpstr (descriptor->parameter_names[3], ==, "offset");
   g_assert_null (descriptor->parameter_names[4]);
+}
+
+static void
+test_catalog_exposes_uid_map_result_schema (void)
+{
+  static const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor
+      mailbox_expected[] = {
+    {"account_id", "VARCHAR", FALSE, NULL},
+    {"mailbox_id", "VARCHAR", FALSE, NULL},
+    {"uidvalidity", "UBIGINT", FALSE, NULL},
+    {"uid", "UBIGINT", FALSE, NULL},
+    {"message_id", "VARCHAR", FALSE, NULL},
+    {"object_id", "VARCHAR", FALSE, NULL},
+  };
+  static const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor
+      derived_view_expected[] = {
+    {"account_id", "VARCHAR", FALSE, NULL},
+    {"view_id", "VARCHAR", FALSE, NULL},
+    {"uidvalidity", "UBIGINT", FALSE, NULL},
+    {"uid", "UBIGINT", FALSE, NULL},
+    {"message_id", "VARCHAR", FALSE, NULL},
+    {"object_id", "VARCHAR", FALSE, NULL},
+    {"rule_version_hash", "VARCHAR", FALSE, NULL},
+  };
+
+  assert_result_schema_matches ("mailbox.uid_map.v1", mailbox_expected,
+      G_N_ELEMENTS (mailbox_expected));
+  assert_result_schema_matches ("derived_view.uid_map.v1",
+      derived_view_expected, G_N_ELEMENTS (derived_view_expected));
+}
+
+static void
+test_catalog_exposes_message_result_schema (void)
+{
+  static const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor expected[]
+      = {
+    {"account_id", "VARCHAR", FALSE, NULL},
+    {"message_id", "VARCHAR", FALSE, NULL},
+    {"object_id", "VARCHAR", FALSE, NULL},
+    {"message_journal_offset", "UBIGINT", FALSE, NULL},
+    {"message_journal_sequence", "UBIGINT", FALSE, NULL},
+    {"rfc_message_id", "VARCHAR", TRUE, NULL},
+    {"subject", "VARCHAR", TRUE, NULL},
+    {"from_addr", "VARCHAR", TRUE, NULL},
+    {"to_addr", "VARCHAR", TRUE, NULL},
+    {"cc_addr", "VARCHAR", TRUE, NULL},
+    {"bcc_addr", "VARCHAR", TRUE, NULL},
+    {"date_raw", "VARCHAR", TRUE, NULL},
+    {"header_journal_offset", "UBIGINT", TRUE, NULL},
+    {"header_journal_sequence", "UBIGINT", TRUE, NULL},
+  };
+
+  assert_result_schema_matches ("message.by_id.v1", expected,
+      G_N_ELEMENTS (expected));
+  assert_result_schema_matches ("messages.by_subject.v1", expected,
+      G_N_ELEMENTS (expected));
+  assert_result_schema_matches ("messages.by_date_range.v1", expected,
+      G_N_ELEMENTS (expected));
+}
+
+static void
+test_catalog_exposes_fact_result_schema (void)
+{
+  static const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor expected[]
+      = {
+    {"account_id", "VARCHAR", FALSE, NULL},
+    {"message_id", "VARCHAR", FALSE, NULL},
+    {"object_id", "VARCHAR", FALSE, NULL},
+    {"fact_id", "VARCHAR", FALSE, NULL},
+    {"predicate", "VARCHAR", FALSE, NULL},
+    {"args_json", "VARCHAR", FALSE, NULL},
+    {"source", "VARCHAR", FALSE, NULL},
+    {"source_span_start", "UBIGINT", TRUE, NULL},
+    {"source_span_end", "UBIGINT", TRUE, NULL},
+    {"confidence_ppm", "UBIGINT", FALSE, NULL},
+    {"created_at_unix_us", "UBIGINT", FALSE, NULL},
+    {"retracted_at_unix_us", "UBIGINT", FALSE, NULL},
+    {"journal_offset", "UBIGINT", FALSE, NULL},
+    {"journal_sequence", "UBIGINT", FALSE, NULL},
+  };
+
+  assert_result_schema_matches ("facts.by_fact_id_with_provenance.v1",
+      expected, G_N_ELEMENTS (expected));
 }
 
 static void
@@ -475,6 +580,15 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/catalog/resolves-allowlisted",
       test_catalog_resolves_allowlisted_templates);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/catalog/exposes-uid-map-result-schema",
+      test_catalog_exposes_uid_map_result_schema);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/catalog/exposes-message-result-schema",
+      test_catalog_exposes_message_result_schema);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/catalog/exposes-fact-result-schema",
+      test_catalog_exposes_fact_result_schema);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/catalog/allows-trusted-tool",
       test_catalog_allows_trusted_tool);

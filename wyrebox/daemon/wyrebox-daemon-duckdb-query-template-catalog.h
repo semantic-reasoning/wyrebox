@@ -10,13 +10,27 @@ G_BEGIN_DECLS
 
 typedef struct
 {
+  const char *column_name;
+  const char *logical_type;
+  gboolean nullable;
+  const char *description;
+} WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor;
+
+typedef struct
+{
   const char *template_id;
   const char *name;
   const char *scope_kind;
   const char *output_format;
   gsize n_parameters;
   const char * const *parameter_names;
+  gsize n_result_columns;
+  const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor *
+      result_columns;
 } WyreboxDaemonDuckDBQueryTemplateDescriptor;
+
+const WyreboxDaemonDuckDBQueryTemplateDescriptor *
+wyrebox_daemon_duckdb_query_template_catalog_lookup (const char *template_id);
 
 gboolean wyrebox_daemon_duckdb_query_template_catalog_validate (
     WyreboxDaemonClientIdentityClass client_class,
