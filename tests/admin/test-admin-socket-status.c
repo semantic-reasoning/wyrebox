@@ -1,6 +1,7 @@
 #include "wyrebox-admin-socket-status.h"
 #include "wyrebox-admin-health.h"
 #include "wyrebox-daemon-runtime.h"
+#include "wyrebox-journal-writer.h"
 
 #include <gio/gio.h>
 #include <glib.h>
@@ -253,6 +254,46 @@ test_cli_usage_error_output (void)
       "Usage:");
 }
 
+static void
+test_journal_position_cli_output (void)
+{
+  const char *admin = g_getenv ("WYREBOX_ADMIN_EXECUTABLE");
+  g_autofree char *dir = create_tmp_dir ();
+  g_autofree char *journal_root = g_build_filename (dir, "journal", NULL);
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  g_autoptr (GError) error = NULL;
+  char payload_bytes[] = "event-payload";
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  char *human_argv[] = { (char *) admin, (char *) "journal-position",
+    (char *) "--journal-root", journal_root, NULL
+  };
+  char *json_argv[] = { (char *) admin, (char *) "journal-position",
+    (char *) "--journal-root", journal_root, (char *) "--json", NULL
+  };
+
+  g_assert_nonnull (admin);
+  g_assert_cmpint (g_mkdir_with_parents (journal_root, 0755), ==, 0);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+
+  payload = g_bytes_new_static (payload_bytes, sizeof payload_bytes - 1);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED, payload,
+          &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (offset, ==, 0);
+  g_assert_cmpuint (sequence, ==, 1);
+
+  assert_cli (human_argv, 0, "last_offset=0", NULL);
+  assert_cli (json_argv, 0, "\"last_offset\":0", NULL);
+
+  remove_tree (dir);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -273,6 +314,8 @@ main (int argc, char **argv)
       test_health_probe_and_cli_output);
   g_test_add_func ("/admin/socket-status/cli-usage",
       test_cli_usage_error_output);
+  g_test_add_func ("/admin/journal-position/cli-output",
+      test_journal_position_cli_output);
 
   return g_test_run ();
 }
