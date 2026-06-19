@@ -27,6 +27,22 @@ typedef enum {
   WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID,
 } WyreboxDaemonDeliveryStorageValidationStatus;
 
+typedef struct {
+  gchar *object_id;
+  guint64 size_bytes;
+  guint64 message_reference_count;
+  guint64 visible_mailbox_membership_count;
+  guint64 visible_derived_view_membership_count;
+  gboolean is_gc_reachable;
+  gboolean is_gc_candidate;
+} WyreboxDaemonObjectReachabilityReport;
+
+void wyrebox_daemon_object_reachability_report_clear (
+    WyreboxDaemonObjectReachabilityReport *report);
+
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDaemonObjectReachabilityReport,
+    wyrebox_daemon_object_reachability_report_clear)
+
 typedef enum {
   WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_NONE,
   WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_INVALID_ARGUMENT,
@@ -58,6 +74,12 @@ gboolean wyrebox_daemon_runtime_validate_delivery_storage_report (
     const char *journal_root_dir,
     const char *object_root_dir,
     WyreboxDaemonDeliveryStorageValidationReport *out_report,
+    GError **error);
+
+gboolean wyrebox_daemon_runtime_load_object_reachability_report (
+    const char *catalog_path,
+    const char *object_id,
+    WyreboxDaemonObjectReachabilityReport *out_report,
     GError **error);
 
 /*
