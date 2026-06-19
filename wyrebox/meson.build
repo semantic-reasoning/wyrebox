@@ -15,6 +15,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-mailbox-list-result.c',
   'daemon/wyrebox-daemon-mailbox-list-service.c',
   'daemon/wyrebox-daemon-derived-view-package.c',
+  'daemon/wyrebox-daemon-derived-view-package-catalog.c',
   'daemon/wyrebox-daemon-export-request.c',
   'daemon/wyrebox-daemon-export-dataset-catalog.c',
   'daemon/wyrebox-daemon-export-job-request.c',
