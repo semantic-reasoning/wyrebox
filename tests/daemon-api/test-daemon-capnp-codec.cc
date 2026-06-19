@@ -6,6 +6,7 @@
 #include "wyrebox-daemon-mailbox-select-request.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
 #include "wyrebox-daemon-mailbox-select-service.h"
+#include "wyrebox-daemon-mailbox-status-request.h"
 #include "wyrebox-daemon-message-fetch-request.h"
 #include "wyrebox-daemon-message-fetch-service.h"
 #include "wyrebox-daemon-delivery-ingestion-request.h"
@@ -107,6 +108,31 @@ build_mailbox_select_request_bytes (const char *mailbox_id,
   mailbox_select_request.setAccountIdentity ("account-1");
   mailbox_select_request.setMailboxId (mailbox_id);
   mailbox_select_request.setMailboxName (mailbox_name);
+
+  auto words = capnp::messageToFlatArray (request_builder);
+  auto bytes = words.asBytes ();
+
+  return g_bytes_new (bytes.begin (), bytes.size ());
+}
+
+static GBytes *
+build_mailbox_status_request_bytes (const char *mailbox_id,
+    const char *mailbox_name, const char *request_id)
+{
+  capnp::MallocMessageBuilder request_builder;
+  auto request_frame = request_builder.initRoot < RequestFrame > ();
+
+  auto identity = request_frame.initIdentity ();
+  identity.setRequestId (request_id);
+  identity.setCallerIdentity ("dovecot");
+  identity.setAccountIdentity ("account-1");
+  identity.setToolIdentity ("dovecot-storage");
+  identity.setCorrelationId ("corr-status");
+
+  auto mailbox_status_request = request_frame.initMailboxStatus ();
+  mailbox_status_request.setAccountIdentity ("account-1");
+  mailbox_status_request.setMailboxId (mailbox_id);
+  mailbox_status_request.setMailboxName (mailbox_name);
 
   auto words = capnp::messageToFlatArray (request_builder);
   auto bytes = words.asBytes ();
@@ -999,6 +1025,78 @@ assert_mailbox_select_request_encoder_rejects_invalid_input (void)
       &invalid_request, NULL, &error);
   g_assert_null (encoded);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
+assert_request_bytes_decode_mailbox_status_by_id (void)
+{
+  g_autoptr (GBytes) request =
+      build_mailbox_status_request_bytes ("mailbox-inbox", "",
+          "request-status");
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+          request, &decoded, &decoded_state, &decoded_state_clear, NULL,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.operation,
+      ==, WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_STATUS);
+  g_assert_nonnull (decoded.mailbox_status);
+  g_assert_cmpstr (decoded.mailbox_status->account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.mailbox_status->mailbox_id, ==, "mailbox-inbox");
+  g_assert_null (decoded.mailbox_status->mailbox_name);
+  g_assert_null (decoded.mailbox_list);
+  g_assert_null (decoded.mailbox_select);
+
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  decoded_state_clear (decoded_state);
+}
+
+static void
+assert_mailbox_status_request_encoder_round_trip_by_id (void)
+{
+  g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+  g_auto (WyreboxDaemonMailboxStatusRequest) request = { 0 };
+  g_autoptr (GBytes) encoded = NULL;
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+
+  g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+          "request-encode-mailbox-status",
+          "dovecot", "account-1", "dovecot-storage", "corr-status",
+          &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_daemon_mailbox_status_request_init (&request,
+          "account-1", "mailbox-inbox", NULL, &error));
+  g_assert_no_error (error);
+
+  encoded = wyrebox_daemon_capnp_codec_encode_mailbox_status_request (&identity,
+      &request, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+          encoded, &decoded, &decoded_state, &decoded_state_clear, NULL,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.operation,
+      ==, WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_STATUS);
+  g_assert_nonnull (decoded.mailbox_status);
+  g_assert_cmpstr (decoded.mailbox_status->account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.mailbox_status->mailbox_id, ==, "mailbox-inbox");
+  g_assert_null (decoded.mailbox_status->mailbox_name);
+  g_assert_null (decoded.mailbox_list);
+  g_assert_null (decoded.mailbox_select);
+
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  decoded_state_clear (decoded_state);
 }
 
 static void
@@ -4323,6 +4421,10 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/capnp/codec/reject-mailbox-select-encode-invalid-input",
       assert_mailbox_select_request_encoder_rejects_invalid_input);
+  g_test_add_func ("/daemon-api/capnp/codec/decode-mailbox-status-id",
+      assert_request_bytes_decode_mailbox_status_by_id);
+  g_test_add_func ("/daemon-api/capnp/codec/encode-mailbox-status-valid-id",
+      assert_mailbox_status_request_encoder_round_trip_by_id);
   g_test_add_func ("/daemon-api/capnp/codec/encode-mailbox-list-request",
       assert_mailbox_list_request_encoder_round_trip);
   g_test_add_func
