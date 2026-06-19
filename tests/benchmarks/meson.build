@@ -77,3 +77,17 @@ benchmark(
   'postfix pipe input microbenchmark',
   postfix_pipe_input_benchmark,
 )
+
+postfix_lmtp_session_benchmark = executable(
+  'wyrebox-benchmark-postfix-lmtp-session',
+  [
+    'wyrebox-benchmark-postfix-lmtp-session.c',
+    'wyrebox-benchmark-report.c',
+  ],
+  dependencies: [wyrebox_dep],
+)
+
+benchmark(
+  'postfix lmtp session microbenchmark',
+  postfix_lmtp_session_benchmark,
+)
