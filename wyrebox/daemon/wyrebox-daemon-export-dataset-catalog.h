@@ -11,6 +11,9 @@ typedef struct
   const char *name;
   const char *schema_version;
   const char *output_format;
+  const char *incremental_cursor;
+  const char *stable_ordering;
+  const char *authorization_scope;
   const char *description;
 } WyreboxDaemonExportDatasetDescriptor;
 

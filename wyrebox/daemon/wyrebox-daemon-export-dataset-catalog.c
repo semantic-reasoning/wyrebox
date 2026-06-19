@@ -8,6 +8,9 @@ static const WyreboxDaemonExportDatasetDescriptor catalog[] = {
         "message metadata",
         "schema.metadata.v1",
         "parquet",
+        "journal-offset",
+        "journal_offset ASC, journal_sequence ASC, message_id ASC",
+        "account_identity",
         "Stable message-level analytical export with header and object "
         "references",
       },
@@ -16,6 +19,9 @@ static const WyreboxDaemonExportDatasetDescriptor catalog[] = {
         "mailbox memberships",
         "schema.membership.v1",
         "parquet",
+        "journal-offset",
+        "journal_offset ASC, journal_sequence ASC, mailbox_id ASC",
+        "account_identity",
         "Stable mailbox membership export with UID and visibility state",
       },
   {
@@ -23,6 +29,9 @@ static const WyreboxDaemonExportDatasetDescriptor catalog[] = {
         "event stream records",
         "schema.event-stream.v1",
         "parquet",
+        "journal-offset",
+        "journal_offset ASC, journal_sequence ASC, event_id ASC",
+        "account_identity",
         "Append-only canonical event export ordered by journal position",
       },
   {
@@ -30,6 +39,9 @@ static const WyreboxDaemonExportDatasetDescriptor catalog[] = {
         "fact records",
         "schema.fact-record.v1",
         "parquet",
+        "journal-offset",
+        "journal_offset ASC, journal_sequence ASC, fact_id ASC",
+        "account_identity",
         "Canonical fact export with source and provenance metadata",
       },
   {
@@ -37,6 +49,9 @@ static const WyreboxDaemonExportDatasetDescriptor catalog[] = {
         "derived view memberships",
         "schema.derived-view-membership.v1",
         "parquet",
+        "journal-offset",
+        "journal_offset ASC, journal_sequence ASC, derived_view_id ASC",
+        "account_identity",
         "Derived mailbox membership export for virtual views",
       },
   {
@@ -44,6 +59,9 @@ static const WyreboxDaemonExportDatasetDescriptor catalog[] = {
         "object storage statistics",
         "schema.object-storage-statistics.v1",
         "parquet",
+        "time-range",
+        "captured_at_unix_us ASC, bucket_name ASC",
+        "account_identity",
         "Object storage inventory and size statistics",
       },
 };

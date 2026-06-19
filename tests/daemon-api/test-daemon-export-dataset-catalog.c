@@ -13,6 +13,10 @@ test_catalog_resolves_message_metadata (void)
   g_assert_cmpstr (descriptor->name, ==, "message metadata");
   g_assert_cmpstr (descriptor->schema_version, ==, "schema.metadata.v1");
   g_assert_cmpstr (descriptor->output_format, ==, "parquet");
+  g_assert_cmpstr (descriptor->incremental_cursor, ==, "journal-offset");
+  g_assert_cmpstr (descriptor->stable_ordering, ==,
+      "journal_offset ASC, journal_sequence ASC, message_id ASC");
+  g_assert_cmpstr (descriptor->authorization_scope, ==, "account_identity");
 }
 
 static void
@@ -27,6 +31,9 @@ test_catalog_resolves_object_storage_statistics (void)
   g_assert_cmpstr (descriptor->name, ==, "object storage statistics");
   g_assert_cmpstr (descriptor->schema_version, ==,
       "schema.object-storage-statistics.v1");
+  g_assert_cmpstr (descriptor->incremental_cursor, ==, "time-range");
+  g_assert_cmpstr (descriptor->stable_ordering, ==,
+      "captured_at_unix_us ASC, bucket_name ASC");
 }
 
 static void
