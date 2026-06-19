@@ -1809,6 +1809,27 @@ test_duckdb_service_returns_facts_by_fact_id_with_provenance_csv (void)
 }
 
 static void
+test_duckdb_service_returns_facts_by_fact_id_with_null_provenance_spans (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+  seed_message_facts (path);
+
+  csv = dispatch_facts_by_fact_id_with_provenance_csv (path, "account-1",
+      "fact-b");
+  g_assert_cmpstr (csv, ==,
+      "account_id,message_id,object_id,fact_id,predicate,args_json,source,"
+      "source_span_start,source_span_end,confidence_ppm,created_at_unix_us,"
+      "retracted_at_unix_us,journal_offset,journal_sequence\n"
+      "account-1,message-a,object-a,fact-b,mention,\"[\"\"Project A\"\"]\","
+      "llm,,,910000,1000,0,22,23\n");
+  (void) g_remove (path);
+}
+
+static void
 test_duckdb_service_facts_by_fact_id_isolates_cross_account_rows (void)
 {
   g_autofree gchar *path = create_temp_catalog_path ();
@@ -2779,6 +2800,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/facts-by-fact-id-with-provenance-csv",
       test_duckdb_service_returns_facts_by_fact_id_with_provenance_csv);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/facts-by-fact-id-with-provenance-null-span-csv",
+      test_duckdb_service_returns_facts_by_fact_id_with_null_provenance_spans);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/facts-by-fact-id-cross-account-isolation",
       test_duckdb_service_facts_by_fact_id_isolates_cross_account_rows);
