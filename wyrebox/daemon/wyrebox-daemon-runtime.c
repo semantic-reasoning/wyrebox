@@ -292,6 +292,59 @@ wyrebox_daemon_runtime_validate_delivery_storage_report (const char
 }
 
 gboolean
+wyrebox_daemon_runtime_recover_and_validate_delivery_storage (const char
+    *journal_root_dir, const char *object_root_dir,
+    WyreboxDaemonDeliveryStorageValidationReport *out_report, GError **error)
+{
+  g_autoptr (GError) validation_error = NULL;
+  g_autoptr (GError) recovery_error = NULL;
+  g_autoptr (GError) recovered_validation_error = NULL;
+  WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
+  guint64 safe_end_offset = 0;
+  guint64 last_safe_sequence = 0;
+
+  g_return_val_if_fail (out_report != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  runtime_delivery_storage_report_init (out_report);
+
+  if (wyrebox_daemon_runtime_validate_delivery_storage_report (journal_root_dir,
+          object_root_dir, &report, &validation_error)) {
+    *out_report = report;
+    return TRUE;
+  }
+
+  if (report.failure_category !=
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_UNSAFE_JOURNAL_SUFFIX)
+  {
+    *out_report = report;
+    g_propagate_error (error, g_steal_pointer (&validation_error));
+    return FALSE;
+  }
+
+  if (!wyrebox_journal_writer_recover_torn_suffix (journal_root_dir,
+          &safe_end_offset, &last_safe_sequence, &recovery_error)) {
+    *out_report = report;
+    g_propagate_error (error, g_steal_pointer (&recovery_error));
+    return FALSE;
+  }
+
+  (void) safe_end_offset;
+  (void) last_safe_sequence;
+
+  if (!wyrebox_daemon_runtime_validate_delivery_storage_report
+      (journal_root_dir, object_root_dir, &report,
+          &recovered_validation_error)) {
+    *out_report = report;
+    g_propagate_error (error, g_steal_pointer (&recovered_validation_error));
+    return FALSE;
+  }
+
+  *out_report = report;
+  return TRUE;
+}
+
+gboolean
 wyrebox_daemon_runtime_validate_delivery_storage (const char *journal_root_dir,
     const char *object_root_dir, GError **error)
 {
