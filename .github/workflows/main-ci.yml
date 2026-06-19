@@ -1,0 +1,126 @@
+name: Main CI
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+
+      - name: Install formatter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends indent
+
+      - name: Check C formatting
+        run: |
+          mapfile -d '' c_files < <(git ls-files -z -- '*.c')
+
+          if [ "${#c_files[@]}" -eq 0 ]; then
+            echo "No C files."
+            exit 0
+          fi
+
+          ./tools/gst-indent "${c_files[@]}"
+          git diff --exit-code -- "${c_files[@]}"
+
+  build:
+    name: Build (${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    needs: lint
+
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+
+    env:
+      CC: ${{ matrix.compiler }}
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            ${{ matrix.compiler }} \
+            libglib2.0-dev \
+            meson \
+            ninja-build \
+            pkg-config \
+            unzip
+
+      - name: Configure
+        run: |
+          meson setup _build
+
+      - name: Build
+        run: |
+          meson compile -C _build
+
+      - name: Test
+        run: |
+          meson test -C _build --print-errorlogs
+
+  sanitize:
+    name: Sanitize (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: build
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    env:
+      ASAN_OPTIONS: "abort_on_error=1:halt_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1"
+      UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            libglib2.0-dev \
+            meson \
+            ninja-build \
+            pkg-config \
+            unzip
+
+      - name: Configure
+        run: |
+          meson setup _build -Db_sanitize=address,undefined -Db_lundef=false
+
+      - name: Build
+        run: |
+          meson compile -C _build
+
+      - name: Test
+        run: |
+          meson test -C _build --print-errorlogs
