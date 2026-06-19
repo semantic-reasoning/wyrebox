@@ -605,6 +605,175 @@ test_runtime_validate_delivery_storage_rejects_unsafe_journal_suffix (void)
 }
 
 static void
+test_runtime_recover_and_validate_delivery_storage_recovers_torn_suffix (void)
+{
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autofree gchar *contents = NULL;
+  gsize length = 0;
+  g_auto (WyreboxEmlIngestResult) result = { 0 };
+  WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (GBytes) next_payload =
+      g_bytes_new_static ((const guint8 *) "next", 4);
+  guint64 initial_offset = 0;
+  guint64 initial_sequence = 0;
+  guint64 next_offset = 0;
+  guint64 next_sequence = 0;
+
+  g_assert_nonnull (journal_root);
+  g_assert_nonnull (object_root);
+  ingest_runtime_preflight_message (journal_root, object_root, &result);
+  append_runtime_journal_record (journal_root, &initial_offset,
+      &initial_sequence);
+
+  segment_path = journal_segment_path (journal_root);
+  g_assert_true (g_file_get_contents (segment_path, &contents, &length,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (length, >, 1);
+  g_assert_true (g_file_set_contents (segment_path, contents, length - 1,
+          &error));
+  g_assert_no_error (error);
+
+  g_assert_true (wyrebox_daemon_runtime_recover_and_validate_delivery_storage
+      (journal_root, object_root, &report, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (report.status, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_VALID);
+  g_assert_cmpint (report.failure_category, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_NONE);
+  g_assert_true (report.has_last_safe_sequence);
+  g_assert_cmpuint (report.last_safe_sequence, ==, result.journal_sequence);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED,
+          next_payload, &next_offset, &next_sequence, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (next_offset, ==, report.safe_end_offset);
+  g_assert_cmpuint (next_sequence, ==, report.last_safe_sequence + 1);
+
+  g_clear_object (&writer);
+  store = wyrebox_local_object_store_open_existing (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  g_assert_true (wyrebox_daemon_runtime_validate_delivery_storage_report
+      (journal_root, object_root, &report, &error));
+  g_assert_no_error (error);
+
+  remove_tree (journal_root);
+  remove_tree (object_root);
+}
+
+static void
+    test_runtime_recover_and_validate_delivery_storage_rejects_checksum_corruption
+    (void)
+{
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autofree gchar *contents = NULL;
+  gsize length = 0;
+  g_auto (WyreboxEmlIngestResult) result = { 0 };
+  WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (GBytes) payload =
+      g_bytes_new_static ((const guint8 *) "runtime-check", 13);
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  GStatBuf before = { 0 };
+  GStatBuf after = { 0 };
+
+  g_assert_nonnull (journal_root);
+  g_assert_nonnull (object_root);
+  ingest_runtime_preflight_message (journal_root, object_root, &result);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED,
+          payload, &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_clear_object (&writer);
+
+  segment_path = journal_segment_path (journal_root);
+  g_assert_cmpint (g_stat (segment_path, &before), ==, 0);
+  g_assert_true (g_file_get_contents (segment_path, &contents, &length,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (length, >, 0);
+  contents[length - 1] ^= 0x01;
+  g_assert_true (g_file_set_contents (segment_path, contents, (gssize) length,
+          &error));
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_daemon_runtime_recover_and_validate_delivery_storage
+      (journal_root, object_root, &report, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_cmpint (report.failure_category, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_UNSAFE_JOURNAL_SUFFIX);
+  g_assert_cmpint (g_stat (segment_path, &after), ==, 0);
+  g_assert_cmpuint (after.st_size, ==, before.st_size);
+
+  remove_tree (journal_root);
+  remove_tree (object_root);
+}
+
+static void
+    test_runtime_recover_and_validate_delivery_storage_rejects_partial_first_record
+    (void)
+{
+  const guint8 torn_header[] = { 0x57, 0x59, 0x52, 0x45 };
+  g_autofree char *journal_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+  g_autofree char *object_root =
+      g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+  g_autofree char *segment_path = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
+  g_autoptr (GError) error = NULL;
+  GStatBuf before = { 0 };
+  GStatBuf after = { 0 };
+
+  g_assert_nonnull (journal_root);
+  g_assert_nonnull (object_root);
+  segment_path = journal_segment_path (journal_root);
+  g_assert_true (g_file_set_contents (segment_path, (const char *) torn_header,
+          sizeof (torn_header), &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (g_stat (segment_path, &before), ==, 0);
+
+  store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  g_assert_false (wyrebox_daemon_runtime_recover_and_validate_delivery_storage
+      (journal_root, object_root, &report, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+  g_assert_cmpint (report.failure_category, ==,
+      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_UNSAFE_JOURNAL_SUFFIX);
+  g_assert_cmpint (g_stat (segment_path, &after), ==, 0);
+  g_assert_cmpuint (after.st_size, ==, before.st_size);
+
+  remove_tree (journal_root);
+  remove_tree (object_root);
+}
+
+static void
     test_runtime_validate_delivery_storage_prefers_object_root_failure_over_unsafe_journal_suffix
     (void)
 {
@@ -1286,6 +1455,15 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/runtime/validate-delivery-storage/unsafe-journal-suffix",
       test_runtime_validate_delivery_storage_rejects_unsafe_journal_suffix);
+  g_test_add_func
+      ("/daemon-api/runtime/recover-and-validate-delivery-storage/torn-suffix",
+      test_runtime_recover_and_validate_delivery_storage_recovers_torn_suffix);
+  g_test_add_func
+      ("/daemon-api/runtime/recover-and-validate-delivery-storage/checksum-corruption",
+      test_runtime_recover_and_validate_delivery_storage_rejects_checksum_corruption);
+  g_test_add_func
+      ("/daemon-api/runtime/recover-and-validate-delivery-storage/partial-first-record",
+      test_runtime_recover_and_validate_delivery_storage_rejects_partial_first_record);
   g_test_add_func
       ("/daemon-api/runtime/validate-delivery-storage/prefers-object-root-failure-over-unsafe-journal-suffix",
       test_runtime_validate_delivery_storage_prefers_object_root_failure_over_unsafe_journal_suffix);
