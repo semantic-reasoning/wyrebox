@@ -19,6 +19,29 @@ G_DECLARE_DERIVABLE_TYPE (WyreboxSchemaMetadataStore,
     SCHEMA_METADATA_STORE,
     GObject)
 
+typedef struct
+{
+  gchar *run_id;
+  guint64 start_journal_offset;
+  guint64 start_journal_sequence;
+  guint64 end_journal_offset;
+  guint64 end_journal_sequence;
+  guint64 materialized_schema_version;
+  gchar *object_store_identity;
+  gchar *rule_package_version;
+  gchar *view_package_version;
+  gchar *engine_version;
+  guint64 created_at_unix_us;
+  gchar *completion_status;
+  gchar *error_state;
+} WyreboxMaterializationManifest;
+
+void wyrebox_materialization_manifest_clear (
+    WyreboxMaterializationManifest *manifest);
+
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxMaterializationManifest,
+    wyrebox_materialization_manifest_clear)
+
 typedef enum
 {
   WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP = 1,
@@ -41,6 +64,15 @@ struct _WyreboxSchemaMetadataStoreClass
       GError **error);
   gboolean (*save) (WyreboxSchemaMetadataStore *self,
       const WyreboxSchemaMigrationMetadataState *state,
+      GError **error);
+  gboolean (*load_materialization_manifest) (
+      WyreboxSchemaMetadataStore *self,
+      const gchar *run_id,
+      WyreboxMaterializationManifest *out_manifest,
+      GError **error);
+  gboolean (*save_materialization_manifest) (
+      WyreboxSchemaMetadataStore *self,
+      const WyreboxMaterializationManifest *manifest,
       GError **error);
   gboolean (*apply_migration_operation) (
       WyreboxSchemaMetadataStore *self,
@@ -97,6 +129,27 @@ gboolean wyrebox_schema_metadata_store_load (
 gboolean wyrebox_schema_metadata_store_save (
     WyreboxSchemaMetadataStore *self,
     const WyreboxSchemaMigrationMetadataState *state,
+    GError **error);
+
+/*
+ * Load a recorded materialization manifest by run ID.
+ *
+ * On success, @out_manifest is fully initialized and owned by the caller.
+ */
+gboolean wyrebox_schema_metadata_store_load_materialization_manifest (
+    WyreboxSchemaMetadataStore *self,
+    const gchar *run_id,
+    WyreboxMaterializationManifest *out_manifest,
+    GError **error);
+
+/*
+ * Persist one materialization manifest record.
+ *
+ * The manifest is append-only and must use a unique run ID.
+ */
+gboolean wyrebox_schema_metadata_store_save_materialization_manifest (
+    WyreboxSchemaMetadataStore *self,
+    const WyreboxMaterializationManifest *manifest,
     GError **error);
 
 /*

@@ -15,6 +15,7 @@ typedef struct
 
   gboolean has_state;
   WyreboxSchemaMigrationMetadataState persisted_state;
+  GHashTable *materialization_manifests;
   gboolean fail_next_save;
 } WyreboxSchemaMetadataStoreMemory;
 
@@ -22,6 +23,159 @@ typedef struct
 {
   WyreboxSchemaMetadataStoreClass parent_class;
 } WyreboxSchemaMetadataStoreMemoryClass;
+
+void
+wyrebox_materialization_manifest_clear (WyreboxMaterializationManifest
+    *manifest)
+{
+  if (manifest == NULL)
+    return;
+
+  g_clear_pointer (&manifest->run_id, g_free);
+  g_clear_pointer (&manifest->object_store_identity, g_free);
+  g_clear_pointer (&manifest->rule_package_version, g_free);
+  g_clear_pointer (&manifest->view_package_version, g_free);
+  g_clear_pointer (&manifest->engine_version, g_free);
+  g_clear_pointer (&manifest->completion_status, g_free);
+  g_clear_pointer (&manifest->error_state, g_free);
+  memset (manifest, 0, sizeof *manifest);
+}
+
+static WyreboxMaterializationManifest *
+wyrebox_materialization_manifest_dup (const WyreboxMaterializationManifest
+    *manifest)
+{
+  WyreboxMaterializationManifest *copy = NULL;
+
+  g_return_val_if_fail (manifest != NULL, NULL);
+
+  copy = g_new0 (WyreboxMaterializationManifest, 1);
+  copy->run_id = g_strdup (manifest->run_id);
+  copy->start_journal_offset = manifest->start_journal_offset;
+  copy->start_journal_sequence = manifest->start_journal_sequence;
+  copy->end_journal_offset = manifest->end_journal_offset;
+  copy->end_journal_sequence = manifest->end_journal_sequence;
+  copy->materialized_schema_version = manifest->materialized_schema_version;
+  copy->object_store_identity = g_strdup (manifest->object_store_identity);
+  copy->rule_package_version = g_strdup (manifest->rule_package_version);
+  copy->view_package_version = g_strdup (manifest->view_package_version);
+  copy->engine_version = g_strdup (manifest->engine_version);
+  copy->created_at_unix_us = manifest->created_at_unix_us;
+  copy->completion_status = g_strdup (manifest->completion_status);
+  copy->error_state = g_strdup (manifest->error_state);
+
+  return copy;
+}
+
+static void
+wyrebox_materialization_manifest_free (WyreboxMaterializationManifest *manifest)
+{
+  if (manifest == NULL)
+    return;
+
+  wyrebox_materialization_manifest_clear (manifest);
+  g_free (manifest);
+}
+
+static gboolean
+wyrebox_materialization_manifest_validate (const WyreboxMaterializationManifest
+    *manifest, GError **error)
+{
+  const gchar *status = NULL;
+
+  g_return_val_if_fail (manifest != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (manifest->run_id == NULL || manifest->run_id[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "materialization manifest requires a non-empty run ID");
+    return FALSE;
+  }
+
+  if (manifest->object_store_identity == NULL ||
+      manifest->object_store_identity[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "materialization manifest requires a non-empty object store identity");
+    return FALSE;
+  }
+
+  if (manifest->rule_package_version == NULL ||
+      manifest->rule_package_version[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "materialization manifest requires a non-empty rule package version");
+    return FALSE;
+  }
+
+  if (manifest->view_package_version == NULL ||
+      manifest->view_package_version[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "materialization manifest requires a non-empty view package version");
+    return FALSE;
+  }
+
+  if (manifest->engine_version == NULL || manifest->engine_version[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "materialization manifest requires a non-empty engine version");
+    return FALSE;
+  }
+
+  if (manifest->completion_status == NULL ||
+      manifest->completion_status[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "materialization manifest requires a non-empty completion status");
+    return FALSE;
+  }
+
+  status = manifest->completion_status;
+  if (g_strcmp0 (status, "completed") != 0 && g_strcmp0 (status, "failed") != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "materialization manifest completion status must be completed or failed");
+    return FALSE;
+  }
+
+  if (g_strcmp0 (status, "completed") == 0 && manifest->error_state != NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "completed materialization manifests must not carry an error state");
+    return FALSE;
+  }
+
+  if (g_strcmp0 (status, "failed") == 0 &&
+      (manifest->error_state == NULL || manifest->error_state[0] == '\0')) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "failed materialization manifests require an error state");
+    return FALSE;
+  }
+
+  if (manifest->start_journal_offset > manifest->end_journal_offset ||
+      (manifest->start_journal_offset == manifest->end_journal_offset &&
+          manifest->start_journal_sequence > manifest->end_journal_sequence)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "materialization manifest journal range is not ordered");
+    return FALSE;
+  }
+
+  return TRUE;
+}
 
 typedef struct
 {
@@ -36,6 +190,26 @@ typedef struct
 {
   WyreboxSchemaMetadataStoreClass parent_class;
 } WyreboxSchemaMetadataStoreDuckdbClass;
+
+static void wyrebox_schema_metadata_store_memory_finalize (GObject * object);
+static gboolean
+    wyrebox_schema_metadata_store_memory_load_materialization_manifest
+    (WyreboxSchemaMetadataStore * self, const gchar * run_id,
+    WyreboxMaterializationManifest * out_manifest, GError ** error);
+static gboolean
+    wyrebox_schema_metadata_store_memory_save_materialization_manifest
+    (WyreboxSchemaMetadataStore * self,
+    const WyreboxMaterializationManifest * manifest, GError ** error);
+static gboolean
+    wyrebox_schema_metadata_store_duckdb_load_materialization_manifest
+    (WyreboxSchemaMetadataStore * self, const gchar * run_id,
+    WyreboxMaterializationManifest * out_manifest, GError ** error);
+static gboolean
+    wyrebox_schema_metadata_store_duckdb_save_materialization_manifest
+    (WyreboxSchemaMetadataStore * self,
+    const WyreboxMaterializationManifest * manifest, GError ** error);
+static void duckdb_store_rollback_quietly (WyreboxSchemaMetadataStoreDuckdb *
+    self);
 
 G_DEFINE_TYPE (WyreboxSchemaMetadataStore, wyrebox_schema_metadata_store,
     G_TYPE_OBJECT);
@@ -547,6 +721,90 @@ wyrebox_schema_metadata_store_memory_load (WyreboxSchemaMetadataStore *self,
 }
 
 static gboolean
+    wyrebox_schema_metadata_store_memory_load_materialization_manifest
+    (WyreboxSchemaMetadataStore * self, const gchar * run_id,
+    WyreboxMaterializationManifest * out_manifest, GError ** error)
+{
+  WyreboxSchemaMetadataStoreMemory *memory_store = NULL;
+  WyreboxMaterializationManifest *stored_manifest = NULL;
+
+  g_return_val_if_fail (g_type_check_instance_is_a (
+          (GTypeInstance *) self,
+          wyrebox_schema_metadata_store_memory_get_type ()), FALSE);
+  g_return_val_if_fail (run_id != NULL, FALSE);
+  g_return_val_if_fail (out_manifest != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  memory_store = (WyreboxSchemaMetadataStoreMemory *) self;
+  wyrebox_materialization_manifest_clear (out_manifest);
+
+  stored_manifest =
+      g_hash_table_lookup (memory_store->materialization_manifests, run_id);
+  if (stored_manifest == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_NOT_FOUND, "materialization manifest %s not found", run_id);
+    return FALSE;
+  }
+
+  {
+    g_autofree WyreboxMaterializationManifest *copy =
+        wyrebox_materialization_manifest_dup (stored_manifest);
+
+    *out_manifest = *copy;
+    copy->run_id = NULL;
+    copy->object_store_identity = NULL;
+    copy->rule_package_version = NULL;
+    copy->view_package_version = NULL;
+    copy->engine_version = NULL;
+    copy->completion_status = NULL;
+    copy->error_state = NULL;
+  }
+  return TRUE;
+}
+
+static gboolean
+    wyrebox_schema_metadata_store_memory_save_materialization_manifest
+    (WyreboxSchemaMetadataStore * self,
+    const WyreboxMaterializationManifest * manifest, GError ** error)
+{
+  WyreboxSchemaMetadataStoreMemory *memory_store = NULL;
+  WyreboxMaterializationManifest *copy = NULL;
+  gchar *run_id = NULL;
+
+  g_return_val_if_fail (g_type_check_instance_is_a (
+          (GTypeInstance *) self,
+          wyrebox_schema_metadata_store_memory_get_type ()), FALSE);
+  g_return_val_if_fail (manifest != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (!wyrebox_materialization_manifest_validate (manifest, error))
+    return FALSE;
+
+  memory_store = (WyreboxSchemaMetadataStoreMemory *) self;
+  if (memory_store->fail_next_save) {
+    memory_store->fail_next_save = FALSE;
+    g_set_error (error,
+        G_IO_ERROR, G_IO_ERROR_FAILED, "forced metadata store save failure");
+    return FALSE;
+  }
+
+  if (g_hash_table_contains (memory_store->materialization_manifests,
+          manifest->run_id)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_EXISTS,
+        "materialization manifest %s already exists", manifest->run_id);
+    return FALSE;
+  }
+
+  copy = wyrebox_materialization_manifest_dup (manifest);
+  run_id = g_strdup (copy->run_id);
+  g_hash_table_insert (memory_store->materialization_manifests, run_id, copy);
+  return TRUE;
+}
+
+static gboolean
 wyrebox_schema_metadata_store_memory_save (WyreboxSchemaMetadataStore *self,
     const WyreboxSchemaMigrationMetadataState *state, GError **error)
 {
@@ -611,14 +869,32 @@ static gboolean
 }
 
 static void
+wyrebox_schema_metadata_store_memory_finalize (GObject *object)
+{
+  WyreboxSchemaMetadataStoreMemory *self =
+      (WyreboxSchemaMetadataStoreMemory *) object;
+
+  g_clear_pointer (&self->materialization_manifests, g_hash_table_destroy);
+
+  G_OBJECT_CLASS (wyrebox_schema_metadata_store_memory_parent_class)->finalize
+      (object);
+}
+
+static void
     wyrebox_schema_metadata_store_memory_class_init
     (WyreboxSchemaMetadataStoreMemoryClass * klass)
 {
+  GObjectClass *object_class = G_OBJECT_CLASS (klass);
   WyreboxSchemaMetadataStoreClass *store_class =
       WYREBOX_SCHEMA_METADATA_STORE_CLASS (klass);
 
+  object_class->finalize = wyrebox_schema_metadata_store_memory_finalize;
   store_class->load = wyrebox_schema_metadata_store_memory_load;
   store_class->save = wyrebox_schema_metadata_store_memory_save;
+  store_class->load_materialization_manifest =
+      wyrebox_schema_metadata_store_memory_load_materialization_manifest;
+  store_class->save_materialization_manifest =
+      wyrebox_schema_metadata_store_memory_save_materialization_manifest;
   store_class->apply_migration_operation =
       wyrebox_schema_metadata_store_memory_apply_migration_operation;
 }
@@ -629,6 +905,9 @@ wyrebox_schema_metadata_store_memory_init (WyreboxSchemaMetadataStoreMemory
 {
   self->fail_next_save = FALSE;
   self->has_state = FALSE;
+  self->materialization_manifests = g_hash_table_new_full (g_str_hash,
+      g_str_equal, g_free,
+      (GDestroyNotify) wyrebox_materialization_manifest_free);
   wyrebox_schema_migration_metadata_state_clear (&self->persisted_state);
 }
 
@@ -833,7 +1112,26 @@ duckdb_store_create_schema (WyreboxSchemaMetadataStoreDuckdb *self,
       "checkpoint_key VARCHAR PRIMARY KEY "
       "CHECK (checkpoint_key = 'materialization'),"
       "journal_offset UBIGINT NOT NULL,"
-      "journal_sequence UBIGINT NOT NULL" ");", error);
+      "journal_sequence UBIGINT NOT NULL" ");", error)
+      && duckdb_store_query (self,
+      "CREATE TABLE IF NOT EXISTS materialization_manifests ("
+      "run_id VARCHAR PRIMARY KEY CHECK (run_id <> ''),"
+      "start_journal_offset UBIGINT NOT NULL,"
+      "start_journal_sequence UBIGINT NOT NULL,"
+      "end_journal_offset UBIGINT NOT NULL,"
+      "end_journal_sequence UBIGINT NOT NULL,"
+      "materialized_schema_version UBIGINT NOT NULL,"
+      "object_store_identity VARCHAR NOT NULL CHECK (object_store_identity <> ''),"
+      "rule_package_version VARCHAR NOT NULL CHECK (rule_package_version <> ''),"
+      "view_package_version VARCHAR NOT NULL CHECK (view_package_version <> ''),"
+      "engine_version VARCHAR NOT NULL CHECK (engine_version <> ''),"
+      "created_at_unix_us UBIGINT NOT NULL,"
+      "completion_status VARCHAR NOT NULL CHECK (completion_status IN ('completed', 'failed')),"
+      "error_state VARCHAR,"
+      "CHECK (start_journal_offset < end_journal_offset OR "
+      "(start_journal_offset = end_journal_offset AND "
+      "start_journal_sequence <= end_journal_sequence)),"
+      "CHECK (error_state IS NULL OR error_state <> '')" ");", error);
 }
 
 static gboolean
@@ -1475,6 +1773,183 @@ static gboolean
 }
 
 static gboolean
+    duckdb_store_load_materialization_manifest
+    (WyreboxSchemaMetadataStoreDuckdb * self,
+    const gchar * run_id, WyreboxMaterializationManifest * out_manifest,
+    GError ** error)
+{
+  g_auto (duckdb_result) result = { 0 };
+  g_auto (duckdb_prepared_statement) statement = NULL;
+  idx_t rows = 0;
+
+  g_return_val_if_fail (run_id != NULL, FALSE);
+  g_return_val_if_fail (out_manifest != NULL, FALSE);
+
+  wyrebox_materialization_manifest_clear (out_manifest);
+
+  if (!duckdb_store_prepare (self,
+          "SELECT run_id, start_journal_offset, start_journal_sequence, "
+          "end_journal_offset, end_journal_sequence, "
+          "materialized_schema_version, object_store_identity, "
+          "rule_package_version, view_package_version, engine_version, "
+          "created_at_unix_us, completion_status, error_state "
+          "FROM materialization_manifests WHERE run_id = ?;",
+          &statement, error))
+    return FALSE;
+
+  if (duckdb_bind_varchar (statement, 1, run_id) != DuckDBSuccess) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB materialization manifest run ID bind failed");
+    return FALSE;
+  }
+
+  if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+    const char *detail = duckdb_result_error (&result);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB materialization manifest load failed: %s",
+        detail != NULL ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  rows = duckdb_row_count (&result);
+  if (rows > 1 || duckdb_column_count (&result) != 13) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "DuckDB materialization manifest result has invalid shape");
+    return FALSE;
+  }
+
+  if (rows == 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_NOT_FOUND, "materialization manifest %s not found", run_id);
+    return FALSE;
+  }
+
+  {
+    g_auto (WyreboxMaterializationManifest) loaded = { 0 };
+
+    if (duckdb_value_is_null (&result, 0, 0) ||
+        duckdb_value_is_null (&result, 1, 0) ||
+        duckdb_value_is_null (&result, 2, 0) ||
+        duckdb_value_is_null (&result, 3, 0) ||
+        duckdb_value_is_null (&result, 4, 0) ||
+        duckdb_value_is_null (&result, 5, 0) ||
+        duckdb_value_is_null (&result, 6, 0) ||
+        duckdb_value_is_null (&result, 7, 0) ||
+        duckdb_value_is_null (&result, 8, 0) ||
+        duckdb_value_is_null (&result, 9, 0) ||
+        duckdb_value_is_null (&result, 10, 0) ||
+        duckdb_value_is_null (&result, 11, 0)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "DuckDB materialization manifest row has NULL required fields");
+      return FALSE;
+    }
+
+    loaded.run_id = duckdb_store_dup_nullable_varchar (&result, 0, 0);
+    loaded.start_journal_offset = (guint64) duckdb_value_uint64 (&result, 1, 0);
+    loaded.start_journal_sequence =
+        (guint64) duckdb_value_uint64 (&result, 2, 0);
+    loaded.end_journal_offset = (guint64) duckdb_value_uint64 (&result, 3, 0);
+    loaded.end_journal_sequence = (guint64) duckdb_value_uint64 (&result, 4, 0);
+    loaded.materialized_schema_version =
+        (guint64) duckdb_value_uint64 (&result, 5, 0);
+    loaded.object_store_identity = duckdb_store_dup_nullable_varchar (&result,
+        6, 0);
+    loaded.rule_package_version = duckdb_store_dup_nullable_varchar (&result,
+        7, 0);
+    loaded.view_package_version = duckdb_store_dup_nullable_varchar (&result,
+        8, 0);
+    loaded.engine_version = duckdb_store_dup_nullable_varchar (&result, 9, 0);
+    loaded.created_at_unix_us = (guint64) duckdb_value_uint64 (&result, 10, 0);
+    loaded.completion_status = duckdb_store_dup_nullable_varchar (&result, 11,
+        0);
+    loaded.error_state = duckdb_store_dup_nullable_varchar (&result, 12, 0);
+
+    if (!wyrebox_materialization_manifest_validate (&loaded, error))
+      return FALSE;
+
+    *out_manifest = loaded;
+    loaded.run_id = NULL;
+    loaded.object_store_identity = NULL;
+    loaded.rule_package_version = NULL;
+    loaded.view_package_version = NULL;
+    loaded.engine_version = NULL;
+    loaded.completion_status = NULL;
+    loaded.error_state = NULL;
+  }
+
+  return TRUE;
+}
+
+static gboolean
+    duckdb_store_save_materialization_manifest
+    (WyreboxSchemaMetadataStoreDuckdb * self,
+    const WyreboxMaterializationManifest * manifest, GError ** error)
+{
+  g_auto (duckdb_prepared_statement) statement = NULL;
+
+  g_return_val_if_fail (manifest != NULL, FALSE);
+
+  if (!wyrebox_materialization_manifest_validate (manifest, error))
+    return FALSE;
+
+  if (!duckdb_store_query (self, "BEGIN TRANSACTION;", error))
+    return FALSE;
+
+  if (!duckdb_store_create_schema (self, error) ||
+      !duckdb_store_prepare (self,
+          "INSERT INTO materialization_manifests ("
+          "run_id, start_journal_offset, start_journal_sequence, "
+          "end_journal_offset, end_journal_sequence, "
+          "materialized_schema_version, object_store_identity, "
+          "rule_package_version, view_package_version, engine_version, "
+          "created_at_unix_us, completion_status, error_state"
+          ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+          &statement, error) ||
+      !duckdb_store_bind_varchar (statement, 1, manifest->run_id, error) ||
+      !duckdb_store_bind_uint64 (statement, 2,
+          manifest->start_journal_offset, error) ||
+      !duckdb_store_bind_uint64 (statement, 3,
+          manifest->start_journal_sequence, error) ||
+      !duckdb_store_bind_uint64 (statement, 4,
+          manifest->end_journal_offset, error) ||
+      !duckdb_store_bind_uint64 (statement, 5,
+          manifest->end_journal_sequence, error) ||
+      !duckdb_store_bind_uint64 (statement, 6,
+          manifest->materialized_schema_version, error) ||
+      !duckdb_store_bind_varchar (statement, 7,
+          manifest->object_store_identity, error) ||
+      !duckdb_store_bind_varchar (statement, 8,
+          manifest->rule_package_version, error) ||
+      !duckdb_store_bind_varchar (statement, 9,
+          manifest->view_package_version, error) ||
+      !duckdb_store_bind_varchar (statement, 10,
+          manifest->engine_version, error) ||
+      !duckdb_store_bind_uint64 (statement, 11,
+          manifest->created_at_unix_us, error) ||
+      !duckdb_store_bind_varchar (statement, 12,
+          manifest->completion_status, error) ||
+      !duckdb_store_bind_nullable_varchar (statement, 13,
+          manifest->error_state, error) ||
+      !duckdb_store_execute_prepared (statement, error) ||
+      !duckdb_store_query (self, "COMMIT;", error)) {
+    duckdb_store_rollback_quietly (self);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
 wyrebox_schema_metadata_store_duckdb_load (WyreboxSchemaMetadataStore *self,
     WyreboxSchemaMigrationMetadataState *out_state, GError **error)
 {
@@ -1492,6 +1967,43 @@ wyrebox_schema_metadata_store_duckdb_load (WyreboxSchemaMetadataStore *self,
   return duckdb_store_load_schema_metadata (duckdb_store, out_state, error)
       && duckdb_store_load_materialization_checkpoint (duckdb_store,
       out_state, error);
+}
+
+static gboolean
+    wyrebox_schema_metadata_store_duckdb_load_materialization_manifest
+    (WyreboxSchemaMetadataStore * self, const gchar * run_id,
+    WyreboxMaterializationManifest * out_manifest, GError ** error)
+{
+  WyreboxSchemaMetadataStoreDuckdb *duckdb_store = NULL;
+
+  g_return_val_if_fail (g_type_check_instance_is_a (
+          (GTypeInstance *) self,
+          wyrebox_schema_metadata_store_duckdb_get_type ()), FALSE);
+  g_return_val_if_fail (run_id != NULL, FALSE);
+  g_return_val_if_fail (out_manifest != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  duckdb_store = (WyreboxSchemaMetadataStoreDuckdb *) self;
+  return duckdb_store_load_materialization_manifest (duckdb_store, run_id,
+      out_manifest, error);
+}
+
+static gboolean
+    wyrebox_schema_metadata_store_duckdb_save_materialization_manifest
+    (WyreboxSchemaMetadataStore * self,
+    const WyreboxMaterializationManifest * manifest, GError ** error)
+{
+  WyreboxSchemaMetadataStoreDuckdb *duckdb_store = NULL;
+
+  g_return_val_if_fail (g_type_check_instance_is_a (
+          (GTypeInstance *) self,
+          wyrebox_schema_metadata_store_duckdb_get_type ()), FALSE);
+  g_return_val_if_fail (manifest != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  duckdb_store = (WyreboxSchemaMetadataStoreDuckdb *) self;
+  return duckdb_store_save_materialization_manifest (duckdb_store, manifest,
+      error);
 }
 
 static void
@@ -1708,6 +2220,10 @@ static void
   object_class->finalize = wyrebox_schema_metadata_store_duckdb_finalize;
   store_class->load = wyrebox_schema_metadata_store_duckdb_load;
   store_class->save = wyrebox_schema_metadata_store_duckdb_save;
+  store_class->load_materialization_manifest =
+      wyrebox_schema_metadata_store_duckdb_load_materialization_manifest;
+  store_class->save_materialization_manifest =
+      wyrebox_schema_metadata_store_duckdb_save_materialization_manifest;
   store_class->apply_migration_operation =
       wyrebox_schema_metadata_store_duckdb_apply_migration_operation;
 }
@@ -1751,6 +2267,44 @@ wyrebox_schema_metadata_store_save (WyreboxSchemaMetadataStore *self,
     return FALSE;
 
   return klass->save (self, state, error);
+}
+
+gboolean
+    wyrebox_schema_metadata_store_load_materialization_manifest
+    (WyreboxSchemaMetadataStore * self, const gchar * run_id,
+    WyreboxMaterializationManifest * out_manifest, GError ** error)
+{
+  WyreboxSchemaMetadataStoreClass *klass = NULL;
+
+  g_return_val_if_fail (WYREBOX_IS_SCHEMA_METADATA_STORE (self), FALSE);
+  g_return_val_if_fail (run_id != NULL, FALSE);
+  g_return_val_if_fail (out_manifest != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  klass = WYREBOX_SCHEMA_METADATA_STORE_GET_CLASS (self);
+  if (klass == NULL || klass->load_materialization_manifest == NULL)
+    return FALSE;
+
+  return klass->load_materialization_manifest (self, run_id, out_manifest,
+      error);
+}
+
+gboolean
+    wyrebox_schema_metadata_store_save_materialization_manifest
+    (WyreboxSchemaMetadataStore * self,
+    const WyreboxMaterializationManifest * manifest, GError ** error)
+{
+  WyreboxSchemaMetadataStoreClass *klass = NULL;
+
+  g_return_val_if_fail (WYREBOX_IS_SCHEMA_METADATA_STORE (self), FALSE);
+  g_return_val_if_fail (manifest != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  klass = WYREBOX_SCHEMA_METADATA_STORE_GET_CLASS (self);
+  if (klass == NULL || klass->save_materialization_manifest == NULL)
+    return FALSE;
+
+  return klass->save_materialization_manifest (self, manifest, error);
 }
 
 /* *INDENT-OFF* */
