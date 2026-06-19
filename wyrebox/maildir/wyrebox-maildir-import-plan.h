@@ -1,5 +1,6 @@
 #pragma once
 
+#include "wyrebox-eml-ingestor.h"
 #include "wyrebox-maildir-scanner.h"
 
 #include <gio/gio.h>
@@ -56,6 +57,53 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (
     WyreboxMaildirImportPlanVerificationResult,
     wyrebox_maildir_import_plan_verification_result_free)
 
+typedef struct
+{
+  gchar *source_path;
+  WyreboxEmlIngestResult ingest_result;
+} WyreboxMaildirImportPlanExecutionEntry;
+
+void wyrebox_maildir_import_plan_execution_entry_clear (
+    WyreboxMaildirImportPlanExecutionEntry *entry);
+
+void wyrebox_maildir_import_plan_execution_entry_free (
+    WyreboxMaildirImportPlanExecutionEntry *entry);
+
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxMaildirImportPlanExecutionEntry,
+    wyrebox_maildir_import_plan_execution_entry_clear)
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (WyreboxMaildirImportPlanExecutionEntry,
+    wyrebox_maildir_import_plan_execution_entry_free)
+
+typedef enum
+{
+  WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_UNKNOWN = 0,
+  WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_OK,
+  WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_REFUSED,
+  WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_SOURCE_READ_FAILED,
+  WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_INGEST_FAILED,
+} WyreboxMaildirImportPlanExecutionStatus;
+
+typedef struct
+{
+  gboolean ok;
+  WyreboxMaildirImportPlanExecutionStatus status;
+  gchar *failure_path;
+  GPtrArray *entries;
+} WyreboxMaildirImportPlanExecutionResult;
+
+void wyrebox_maildir_import_plan_execution_result_clear (
+    WyreboxMaildirImportPlanExecutionResult *result);
+
+void wyrebox_maildir_import_plan_execution_result_free (
+    WyreboxMaildirImportPlanExecutionResult *result);
+
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxMaildirImportPlanExecutionResult,
+    wyrebox_maildir_import_plan_execution_result_clear)
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (WyreboxMaildirImportPlanExecutionResult,
+    wyrebox_maildir_import_plan_execution_result_free)
+
 #define WYREBOX_TYPE_MAILDIR_IMPORT_PLAN \
   (wyrebox_maildir_import_plan_get_type ())
 
@@ -109,6 +157,12 @@ wyrebox_maildir_import_plan_dry_run_verify_current (
 gboolean wyrebox_maildir_import_plan_verify_current (
     WyreboxMaildirImportPlan *self,
     const gchar *root_path,
+    GError **error);
+
+WyreboxMaildirImportPlanExecutionResult *
+wyrebox_maildir_import_plan_execute (WyreboxMaildirImportPlan *self,
+    const gchar *root_path,
+    WyreboxEmlIngestor *ingestor,
     GError **error);
 
 G_END_DECLS
