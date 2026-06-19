@@ -70,6 +70,17 @@ gboolean wyrebox_daemon_runtime_validate_delivery_storage (
     GError **error);
 
 /*
+ * Attempts torn journal suffix recovery, then re-validates delivery storage.
+ * Recovery only applies to a recoverable torn journal suffix; checksum,
+ * object-store, and other corruption failures are reported without mutation.
+ */
+gboolean wyrebox_daemon_runtime_recover_and_validate_delivery_storage (
+    const char *journal_root_dir,
+    const char *object_root_dir,
+    WyreboxDaemonDeliveryStorageValidationReport *out_report,
+    GError **error);
+
+/*
  * Prepare a DuckDB catalog for serving, validating the journal state against
  * any recorded materialization checkpoint before applying migrations.
  */
