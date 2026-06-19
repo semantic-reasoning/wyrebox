@@ -148,7 +148,10 @@ wirelog_force_fallback = get_option('wrap_mode') == 'forcefallback'
 if wirelog_force_fallback
   wirelog_dep = disabler()
 else
-  wirelog_dep = dependency('wirelog', required: false, allow_fallback: false)
+  wirelog_dep = dependency('wirelog',
+    version: '==0.51.0',
+    required: false,
+    allow_fallback: false)
 endif
 wirelog_runtime_summary = 'required via pkg-config'
 wirelog_from_subproject = false
