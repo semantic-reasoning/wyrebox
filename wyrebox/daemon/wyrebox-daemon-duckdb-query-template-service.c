@@ -328,6 +328,143 @@ csv_append_boolean (GString *csv, gboolean value)
 }
 
 static gboolean
+duckdb_query_template_logical_type_matches_duckdb_type (const char
+    *logical_type, duckdb_type actual_type)
+{
+  if (g_strcmp0 (logical_type, "VARCHAR") == 0)
+    return actual_type == DUCKDB_TYPE_VARCHAR;
+  if (g_strcmp0 (logical_type, "UBIGINT") == 0)
+    return actual_type == DUCKDB_TYPE_UBIGINT;
+  if (g_strcmp0 (logical_type, "BIGINT") == 0)
+    return actual_type == DUCKDB_TYPE_BIGINT;
+  if (g_strcmp0 (logical_type, "BOOLEAN") == 0)
+    return actual_type == DUCKDB_TYPE_BOOLEAN;
+
+  return FALSE;
+}
+
+static gboolean
+duckdb_query_template_validate_result_schema (const
+    WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor,
+    duckdb_result *result, GError **error)
+{
+  idx_t column_count = 0;
+
+  g_return_val_if_fail (descriptor != NULL, FALSE);
+  g_return_val_if_fail (result != NULL, FALSE);
+
+  column_count = duckdb_column_count (result);
+  if (column_count != descriptor->n_result_columns) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "DuckDB query template '%s' schema validation failed: expected %"
+        G_GSIZE_FORMAT " column(s) but returned %" G_GUINT64_FORMAT,
+        descriptor->template_id, descriptor->n_result_columns,
+        (guint64) column_count);
+    return FALSE;
+  }
+
+  for (idx_t column = 0; column < column_count; column++) {
+    const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor *expected =
+        &descriptor->result_columns[column];
+    const char *actual_name = duckdb_column_name (result, column);
+    duckdb_type actual_type = duckdb_column_type (result, column);
+
+    if (g_strcmp0 (actual_name, expected->column_name) != 0) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "DuckDB query template '%s' schema validation failed: expected "
+          "column %" G_GUINT64_FORMAT " name '%s' but returned '%s'",
+          descriptor->template_id, (guint64) column, expected->column_name,
+          actual_name != NULL ? actual_name : "(null)");
+      return FALSE;
+    }
+
+    if (!duckdb_query_template_logical_type_matches_duckdb_type
+        (expected->logical_type, actual_type)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_DATA,
+          "DuckDB query template '%s' schema validation failed: column '%s' "
+          "expected logical type '%s'",
+          descriptor->template_id, expected->column_name,
+          expected->logical_type);
+      return FALSE;
+    }
+  }
+
+  return TRUE;
+}
+
+static gchar *
+duckdb_query_template_build_csv_header (const
+    WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor)
+{
+  g_autoptr (GString) csv = NULL;
+
+  g_return_val_if_fail (descriptor != NULL, NULL);
+
+  csv = g_string_new (NULL);
+  for (gsize column = 0; column < descriptor->n_result_columns; column++) {
+    const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor *expected =
+        &descriptor->result_columns[column];
+
+    if (column > 0)
+      g_string_append_c (csv, ',');
+    g_string_append (csv, expected->column_name);
+  }
+  g_string_append_c (csv, '\n');
+
+  return g_string_free (g_steal_pointer (&csv), FALSE);
+}
+
+static gboolean
+duckdb_query_template_init_csv_from_result (const
+    WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor,
+    duckdb_result *result, GString **out_csv, GError **error)
+{
+  g_autofree gchar *csv_header = NULL;
+
+  g_return_val_if_fail (descriptor != NULL, FALSE);
+  g_return_val_if_fail (result != NULL, FALSE);
+  g_return_val_if_fail (out_csv != NULL, FALSE);
+
+  if (!duckdb_query_template_validate_result_schema (descriptor, result, error))
+    return FALSE;
+
+  csv_header = duckdb_query_template_build_csv_header (descriptor);
+  *out_csv = g_string_new (csv_header);
+  return TRUE;
+}
+
+static gboolean
+duckdb_query_template_init_csv_for_request (const
+    WyreboxDaemonDuckDBQueryTemplateRequest *request, duckdb_result *result,
+    GString **out_csv, GError **error)
+{
+  const WyreboxDaemonDuckDBQueryTemplateDescriptor *descriptor = NULL;
+
+  g_return_val_if_fail (request != NULL, FALSE);
+  g_return_val_if_fail (result != NULL, FALSE);
+  g_return_val_if_fail (out_csv != NULL, FALSE);
+
+  descriptor = wyrebox_daemon_duckdb_query_template_catalog_lookup
+      (request->template_id);
+  if (descriptor == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "unsupported duckdb query template '%s'", request->template_id);
+    return FALSE;
+  }
+
+  return duckdb_query_template_init_csv_from_result (descriptor, result,
+      out_csv, error);
+}
+
+static gboolean
 duckdb_query_template_append_uid_map_row (GString *csv,
     duckdb_result *result, idx_t row, GError **error)
 {
@@ -612,9 +749,9 @@ duckdb_query_template_execute_derived_view_uid_map (DuckDBQueryTemplateExecutor
     return FALSE;
   }
 
-  csv = g_string_new
-      ("account_id,view_id,uidvalidity,uid,message_id,object_id,"
-      "rule_version_hash\n");
+  if (!duckdb_query_template_init_csv_for_request (request, &result, &csv,
+          error))
+    return FALSE;
 
   for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
     if (!duckdb_query_template_append_derived_view_uid_map_row (csv, &result,
@@ -675,8 +812,9 @@ duckdb_query_template_execute_uid_map (DuckDBQueryTemplateExecutor *executor,
     return FALSE;
   }
 
-  csv = g_string_new
-      ("account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n");
+  if (!duckdb_query_template_init_csv_for_request (request, &result, &csv,
+          error))
+    return FALSE;
 
   for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
     if (!duckdb_query_template_append_uid_map_row (csv, &result, row, error))
@@ -703,9 +841,11 @@ duckdb_query_template_execute_message_by_id (DuckDBQueryTemplateExecutor
 {
   static const gchar *sql =
       "SELECT m.account_id, m.message_id, m.object_id, "
-      "m.journal_offset, m.journal_sequence, mh.rfc_message_id, "
+      "m.journal_offset AS message_journal_offset, "
+      "m.journal_sequence AS message_journal_sequence, mh.rfc_message_id, "
       "mh.subject, mh.from_addr, mh.to_addr, mh.cc_addr, mh.bcc_addr, "
-      "mh.date_raw, mh.journal_offset, mh.journal_sequence "
+      "mh.date_raw, mh.journal_offset AS header_journal_offset, "
+      "mh.journal_sequence AS header_journal_sequence "
       "FROM messages m "
       "LEFT JOIN message_headers mh ON mh.message_id = m.message_id "
       "WHERE m.account_id = ? "
@@ -733,11 +873,9 @@ duckdb_query_template_execute_message_by_id (DuckDBQueryTemplateExecutor
     return FALSE;
   }
 
-  csv = g_string_new
-      ("account_id,message_id,object_id,message_journal_offset,"
-      "message_journal_sequence,rfc_message_id,subject,from_addr,to_addr,"
-      "cc_addr,bcc_addr,date_raw,header_journal_offset,"
-      "header_journal_sequence\n");
+  if (!duckdb_query_template_init_csv_for_request (request, &result, &csv,
+          error))
+    return FALSE;
 
   for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
     if (!duckdb_query_template_append_message_by_id_row (csv, &result, row,
@@ -767,8 +905,10 @@ static gboolean
   static const gchar *sql =
       "SELECT mm.account_id, mm.mailbox_id, mm.membership_id, "
       "mm.message_id, mm.uid, mus.uidvalidity, mm.is_visible, m.object_id, "
-      "m.journal_offset, m.journal_sequence, mm.journal_offset, "
-      "mm.journal_sequence "
+      "m.journal_offset AS message_journal_offset, "
+      "m.journal_sequence AS message_journal_sequence, "
+      "mm.journal_offset AS membership_journal_offset, "
+      "mm.journal_sequence AS membership_journal_sequence "
       "FROM mailbox_memberships mm "
       "JOIN mailbox_uid_state mus ON mus.account_id = mm.account_id "
       "AND mus.namespace_kind = 'mailbox' "
@@ -802,10 +942,9 @@ static gboolean
     return FALSE;
   }
 
-  csv = g_string_new
-      ("account_id,mailbox_id,membership_id,message_id,uid,uidvalidity,"
-      "is_visible,object_id,message_journal_offset,message_journal_sequence,"
-      "membership_journal_offset,membership_journal_sequence\n");
+  if (!duckdb_query_template_init_csv_for_request (request, &result, &csv,
+          error))
+    return FALSE;
 
   for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
     if (!duckdb_query_template_append_mailbox_history_by_message_row (csv,
@@ -864,10 +1003,9 @@ static gboolean
     return FALSE;
   }
 
-  csv = g_string_new
-      ("account_id,message_id,object_id,fact_id,predicate,args_json,source,"
-      "confidence_ppm,created_at_unix_us,retracted_at_unix_us,journal_offset,"
-      "journal_sequence\n");
+  if (!duckdb_query_template_init_csv_for_request (request, &result, &csv,
+          error))
+    return FALSE;
 
   for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
     if (!duckdb_query_template_append_message_fact_row (csv, &result, row,
@@ -925,10 +1063,9 @@ static gboolean
     return FALSE;
   }
 
-  csv = g_string_new
-      ("account_id,message_id,object_id,fact_id,predicate,args_json,source,"
-      "confidence_ppm,created_at_unix_us,retracted_at_unix_us,journal_offset,"
-      "journal_sequence\n");
+  if (!duckdb_query_template_init_csv_for_request (request, &result, &csv,
+          error))
+    return FALSE;
 
   for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
     if (!duckdb_query_template_append_message_fact_row (csv, &result, row,
@@ -986,10 +1123,9 @@ static gboolean
     return FALSE;
   }
 
-  csv = g_string_new
-      ("account_id,message_id,object_id,fact_id,predicate,args_json,source,"
-      "confidence_ppm,created_at_unix_us,retracted_at_unix_us,journal_offset,"
-      "journal_sequence\n");
+  if (!duckdb_query_template_init_csv_for_request (request, &result, &csv,
+          error))
+    return FALSE;
 
   for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
     if (!duckdb_query_template_append_message_fact_row (csv, &result, row,
@@ -1086,11 +1222,11 @@ static gboolean
       "CASE "
       "WHEN mf.source = 'header:message-id' THEN mh.message_id_span_start "
       "WHEN mf.source = 'header:subject' THEN mh.subject_span_start "
-      "ELSE NULL END, "
+      "ELSE NULL END AS source_span_start, "
       "CASE "
       "WHEN mf.source = 'header:message-id' THEN mh.message_id_span_end "
       "WHEN mf.source = 'header:subject' THEN mh.subject_span_end "
-      "ELSE NULL END, "
+      "ELSE NULL END AS source_span_end, "
       "mf.confidence_ppm, mf.created_at_unix_us, mf.retracted_at_unix_us, "
       "mf.journal_offset, mf.journal_sequence "
       "FROM message_facts mf "
@@ -1120,10 +1256,9 @@ static gboolean
     return FALSE;
   }
 
-  csv = g_string_new
-      ("account_id,message_id,object_id,fact_id,predicate,args_json,source,"
-      "source_span_start,source_span_end,confidence_ppm,created_at_unix_us,"
-      "retracted_at_unix_us,journal_offset,journal_sequence\n");
+  if (!duckdb_query_template_init_csv_for_request (request, &result, &csv,
+          error))
+    return FALSE;
 
   for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
     if (!duckdb_query_template_append_message_fact_with_provenance_row (csv,
@@ -1151,9 +1286,11 @@ duckdb_query_template_execute_messages_by_from_addr (DuckDBQueryTemplateExecutor
 {
   static const gchar *sql =
       "SELECT m.account_id, m.message_id, m.object_id, "
-      "m.journal_offset, m.journal_sequence, mh.rfc_message_id, "
+      "m.journal_offset AS message_journal_offset, "
+      "m.journal_sequence AS message_journal_sequence, mh.rfc_message_id, "
       "mh.subject, mh.from_addr, mh.to_addr, mh.cc_addr, mh.bcc_addr, "
-      "mh.date_raw, mh.journal_offset, mh.journal_sequence "
+      "mh.date_raw, mh.journal_offset AS header_journal_offset, "
+      "mh.journal_sequence AS header_journal_sequence "
       "FROM messages m "
       "JOIN message_headers mh ON mh.message_id = m.message_id "
       "WHERE m.account_id = ? "
@@ -1190,11 +1327,9 @@ duckdb_query_template_execute_messages_by_from_addr (DuckDBQueryTemplateExecutor
     return FALSE;
   }
 
-  csv = g_string_new
-      ("account_id,message_id,object_id,message_journal_offset,"
-      "message_journal_sequence,rfc_message_id,subject,from_addr,to_addr,"
-      "cc_addr,bcc_addr,date_raw,header_journal_offset,"
-      "header_journal_sequence\n");
+  if (!duckdb_query_template_init_csv_for_request (request, &result, &csv,
+          error))
+    return FALSE;
 
   for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
     if (!duckdb_query_template_append_message_by_id_row (csv, &result, row,
@@ -1223,9 +1358,11 @@ static gboolean
 {
   static const gchar *sql =
       "SELECT m.account_id, m.message_id, m.object_id, "
-      "m.journal_offset, m.journal_sequence, mh.rfc_message_id, "
+      "m.journal_offset AS message_journal_offset, "
+      "m.journal_sequence AS message_journal_sequence, mh.rfc_message_id, "
       "mh.subject, mh.from_addr, mh.to_addr, mh.cc_addr, mh.bcc_addr, "
-      "mh.date_raw, mh.journal_offset, mh.journal_sequence "
+      "mh.date_raw, mh.journal_offset AS header_journal_offset, "
+      "mh.journal_sequence AS header_journal_sequence "
       "FROM messages m "
       "JOIN message_headers mh ON mh.message_id = m.message_id "
       "WHERE m.account_id = ? "
@@ -1265,11 +1402,9 @@ static gboolean
     return FALSE;
   }
 
-  csv = g_string_new
-      ("account_id,message_id,object_id,message_journal_offset,"
-      "message_journal_sequence,rfc_message_id,subject,from_addr,to_addr,"
-      "cc_addr,bcc_addr,date_raw,header_journal_offset,"
-      "header_journal_sequence\n");
+  if (!duckdb_query_template_init_csv_for_request (request, &result, &csv,
+          error))
+    return FALSE;
 
   for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
     if (!duckdb_query_template_append_message_by_id_row (csv, &result, row,
@@ -1297,9 +1432,11 @@ duckdb_query_template_execute_messages_by_subject (DuckDBQueryTemplateExecutor
 {
   static const gchar *sql =
       "SELECT m.account_id, m.message_id, m.object_id, "
-      "m.journal_offset, m.journal_sequence, mh.rfc_message_id, "
+      "m.journal_offset AS message_journal_offset, "
+      "m.journal_sequence AS message_journal_sequence, mh.rfc_message_id, "
       "mh.subject, mh.from_addr, mh.to_addr, mh.cc_addr, mh.bcc_addr, "
-      "mh.date_raw, mh.journal_offset, mh.journal_sequence "
+      "mh.date_raw, mh.journal_offset AS header_journal_offset, "
+      "mh.journal_sequence AS header_journal_sequence "
       "FROM messages m "
       "JOIN message_headers mh ON mh.message_id = m.message_id "
       "WHERE m.account_id = ? "
@@ -1336,11 +1473,9 @@ duckdb_query_template_execute_messages_by_subject (DuckDBQueryTemplateExecutor
     return FALSE;
   }
 
-  csv = g_string_new
-      ("account_id,message_id,object_id,message_journal_offset,"
-      "message_journal_sequence,rfc_message_id,subject,from_addr,to_addr,"
-      "cc_addr,bcc_addr,date_raw,header_journal_offset,"
-      "header_journal_sequence\n");
+  if (!duckdb_query_template_init_csv_for_request (request, &result, &csv,
+          error))
+    return FALSE;
 
   for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
     if (!duckdb_query_template_append_message_by_id_row (csv, &result, row,
@@ -1369,9 +1504,11 @@ static gboolean
 {
   static const gchar *sql =
       "SELECT m.account_id, m.message_id, m.object_id, "
-      "m.journal_offset, m.journal_sequence, mh.rfc_message_id, "
+      "m.journal_offset AS message_journal_offset, "
+      "m.journal_sequence AS message_journal_sequence, mh.rfc_message_id, "
       "mh.subject, mh.from_addr, mh.to_addr, mh.cc_addr, mh.bcc_addr, "
-      "mh.date_raw, mh.journal_offset, mh.journal_sequence "
+      "mh.date_raw, mh.journal_offset AS header_journal_offset, "
+      "mh.journal_sequence AS header_journal_sequence "
       "FROM messages m "
       "JOIN message_headers mh ON mh.message_id = m.message_id "
       "WHERE m.account_id = ? "
@@ -1421,11 +1558,9 @@ static gboolean
     return FALSE;
   }
 
-  csv = g_string_new
-      ("account_id,message_id,object_id,message_journal_offset,"
-      "message_journal_sequence,rfc_message_id,subject,from_addr,to_addr,"
-      "cc_addr,bcc_addr,date_raw,header_journal_offset,"
-      "header_journal_sequence\n");
+  if (!duckdb_query_template_init_csv_for_request (request, &result, &csv,
+          error))
+    return FALSE;
 
   for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
     if (!duckdb_query_template_append_message_by_id_row (csv, &result, row,
@@ -1454,9 +1589,11 @@ static gboolean
 {
   static const gchar *sql =
       "SELECT m.account_id, m.message_id, m.object_id, "
-      "m.journal_offset, m.journal_sequence, mh.rfc_message_id, "
+      "m.journal_offset AS message_journal_offset, "
+      "m.journal_sequence AS message_journal_sequence, mh.rfc_message_id, "
       "mh.subject, mh.from_addr, mh.to_addr, mh.cc_addr, mh.bcc_addr, "
-      "mh.date_raw, mh.journal_offset, mh.journal_sequence "
+      "mh.date_raw, mh.journal_offset AS header_journal_offset, "
+      "mh.journal_sequence AS header_journal_sequence "
       "FROM messages m "
       "JOIN message_headers mh ON mh.message_id = m.message_id "
       "WHERE m.account_id = ? "
@@ -1501,11 +1638,9 @@ static gboolean
     return FALSE;
   }
 
-  csv = g_string_new
-      ("account_id,message_id,object_id,message_journal_offset,"
-      "message_journal_sequence,rfc_message_id,subject,from_addr,to_addr,"
-      "cc_addr,bcc_addr,date_raw,header_journal_offset,"
-      "header_journal_sequence\n");
+  if (!duckdb_query_template_init_csv_for_request (request, &result, &csv,
+          error))
+    return FALSE;
 
   for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
     if (!duckdb_query_template_append_message_by_id_row (csv, &result, row,
