@@ -4,6 +4,8 @@
 #include "wyrebox-admin-schema-version.h"
 #include "wyrebox-admin-socket-status.h"
 #include "wyrebox-journal-reader.h"
+#include "wyrebox-schema-metadata-store.h"
+#include "wyrebox-schema-metadata-store.h"
 
 #include <gio/gio.h>
 #include <glib/gstdio.h>
@@ -21,6 +23,13 @@ typedef struct
   char *journal_root;
   gboolean json;
 } WyreboxAdminJournalPositionOptions;
+
+typedef struct
+{
+  char *journal_root;
+  char *catalog_path;
+  gboolean json;
+} WyreboxAdminMaterializationCheckpointOptions;
 
 static void
 wyrebox_admin_socket_status_options_clear (WyreboxAdminSocketStatusOptions
@@ -51,6 +60,23 @@ wyrebox_admin_journal_position_options_clear
 /* *INDENT-OFF* */
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxAdminJournalPositionOptions,
     wyrebox_admin_journal_position_options_clear)
+/* *INDENT-ON* */
+
+static void
+    wyrebox_admin_materialization_checkpoint_options_clear
+    (WyreboxAdminMaterializationCheckpointOptions * options)
+{
+  if (options == NULL)
+    return;
+
+  g_clear_pointer (&options->journal_root, g_free);
+  g_clear_pointer (&options->catalog_path, g_free);
+  options->json = FALSE;
+}
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxAdminMaterializationCheckpointOptions,
+    wyrebox_admin_materialization_checkpoint_options_clear)
 /* *INDENT-ON* */
 
 /* *INDENT-ON* */
@@ -216,15 +242,59 @@ parse_journal_position_options (int argc, char **argv,
   return TRUE;
 }
 
+static gboolean
+parse_materialization_checkpoint_options (int argc, char **argv,
+    WyreboxAdminMaterializationCheckpointOptions *options, GError **error)
+{
+  for (int index = 0; index < argc; index++) {
+    if (g_strcmp0 (argv[index], "--json") == 0) {
+      options->json = TRUE;
+      continue;
+    }
+
+    if (g_strcmp0 (argv[index], "--journal-root") == 0) {
+      if (index + 1 >= argc) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT, "--journal-root requires a value");
+        return FALSE;
+      }
+
+      g_free (options->journal_root);
+      options->journal_root = g_strdup (argv[++index]);
+      continue;
+    }
+
+    if (g_strcmp0 (argv[index], "--catalog-path") == 0) {
+      if (index + 1 >= argc) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT, "--catalog-path requires a value");
+        return FALSE;
+      }
+
+      g_free (options->catalog_path);
+      options->catalog_path = g_strdup (argv[++index]);
+      continue;
+    }
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "unexpected positional argument: %s", argv[index]);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
 static int
 print_usage (void)
 {
   g_printerr ("Usage: wyrebox-admin <socket-status|health-status|"
-      "readiness-status|health|schema-version> "
-      "[--socket-path PATH] [--json]\n");
-  g_printerr ("Usage: wyrebox-admin <socket-status|health-status|"
-      "readiness-status|health|schema-version|journal-position> "
-      "[--socket-path PATH] [--journal-root PATH] [--json]\n");
+      "readiness-status|health|schema-version|journal-position|"
+      "materialization-checkpoint> [--socket-path PATH] [--journal-root PATH] "
+      "[--catalog-path PATH] [--json]\n");
   return WYREBOX_ADMIN_SOCKET_STATUS_EXIT_USAGE_ERROR;
 }
 
@@ -418,6 +488,96 @@ run_journal_position (int argc, char **argv)
 }
 
 static int
+run_materialization_checkpoint (int argc, char **argv)
+{
+  g_auto (WyreboxAdminMaterializationCheckpointOptions) options = { 0 };
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (WyreboxJournalReader) reader = NULL;
+  g_auto (WyreboxJournalRecord) record = { 0 };
+  g_auto (WyreboxMaterializationManifest) manifest = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GString) json = NULL;
+  gboolean eof = FALSE;
+  gboolean stale = FALSE;
+  guint64 journal_last_offset = 0;
+  guint64 journal_last_sequence = 0;
+  int exit_status = WYREBOX_ADMIN_SOCKET_STATUS_EXIT_USAGE_ERROR;
+
+  if (!parse_materialization_checkpoint_options (argc, argv, &options, &error))
+    return print_usage ();
+
+  if (options.journal_root == NULL || options.catalog_path == NULL) {
+    g_set_error (&error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "--journal-root and --catalog-path are required");
+    return print_usage ();
+  }
+
+  store = wyrebox_schema_metadata_store_new_duckdb (options.catalog_path,
+      &error);
+  if (store == NULL)
+    return WYREBOX_ADMIN_SOCKET_STATUS_EXIT_CONNECT_FAILED;
+
+  if (!wyrebox_schema_metadata_store_load_latest_materialization_manifest
+      (store, &manifest, &error))
+    return WYREBOX_ADMIN_SOCKET_STATUS_EXIT_CONNECT_FAILED;
+
+  reader = wyrebox_journal_reader_new (options.journal_root, &error);
+  if (reader == NULL)
+    return WYREBOX_ADMIN_SOCKET_STATUS_EXIT_CONNECT_FAILED;
+
+  while (wyrebox_journal_reader_read_next (reader, &record, &eof, &error)) {
+    journal_last_offset = record.offset;
+    journal_last_sequence = record.sequence;
+    wyrebox_journal_record_clear (&record);
+    if (eof)
+      break;
+  }
+
+  if (error != NULL)
+    return WYREBOX_ADMIN_SOCKET_STATUS_EXIT_CONNECT_FAILED;
+
+  stale = manifest.end_journal_offset < journal_last_offset ||
+      manifest.end_journal_sequence < journal_last_sequence;
+
+  exit_status = 0;
+
+  if (options.json) {
+    json = g_string_new (NULL);
+    g_string_append (json, "{");
+    g_string_append (json, "\"journal_root\":");
+    append_json_escaped (json, options.journal_root);
+    g_string_append (json, ",\"catalog_path\":");
+    append_json_escaped (json, options.catalog_path);
+    g_string_append (json, ",\"manifest_run_id\":");
+    append_json_escaped (json, manifest.run_id);
+    g_string_append_printf (json,
+        ",\"manifest_end_offset\":%" G_GUINT64_FORMAT
+        ",\"manifest_end_sequence\":%" G_GUINT64_FORMAT
+        ",\"journal_last_offset\":%" G_GUINT64_FORMAT
+        ",\"journal_last_sequence\":%" G_GUINT64_FORMAT
+        ",\"stale\":%s}",
+        manifest.end_journal_offset,
+        manifest.end_journal_sequence,
+        journal_last_offset, journal_last_sequence, stale ? "true" : "false");
+    g_print ("%s\n", json->str);
+  } else {
+    g_print ("materialization-checkpoint journal_root=%s catalog_path=%s "
+        "manifest_run_id=%s manifest_end_offset=%" G_GUINT64_FORMAT
+        " manifest_end_sequence=%" G_GUINT64_FORMAT
+        " journal_last_offset=%" G_GUINT64_FORMAT
+        " journal_last_sequence=%" G_GUINT64_FORMAT
+        " stale=%s\n",
+        options.journal_root, options.catalog_path, manifest.run_id,
+        manifest.end_journal_offset, manifest.end_journal_sequence,
+        journal_last_offset, journal_last_sequence, stale ? "true" : "false");
+  }
+
+  return exit_status;
+}
+
+static int
 run_command (int argc, char **argv)
 {
   if (argc < 2)
@@ -440,6 +600,9 @@ run_command (int argc, char **argv)
 
   if (g_strcmp0 (argv[1], "journal-position") == 0)
     return run_journal_position (argc - 2, argv + 2);
+
+  if (g_strcmp0 (argv[1], "materialization-checkpoint") == 0)
+    return run_materialization_checkpoint (argc - 2, argv + 2);
 
   return print_usage ();
 }
