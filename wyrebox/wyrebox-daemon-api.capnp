@@ -15,6 +15,7 @@ struct RequestFrame {
     wirelogPredicateQuery @8 :WirelogPredicateQueryRequest;
     duckDBQueryTemplate @9 :DuckDBQueryTemplateRequest;
     factBatchImport @10 :FactBatchImportRequest;
+    mailEventStream @12 :MailEventStreamRequest;
   }
 }
 
@@ -174,6 +175,12 @@ struct FactMutationRequest {
 
 struct FactBatchImportRequest {
   entries @0 :List(FactMutationRequest);
+}
+
+struct MailEventStreamRequest {
+  accountIdentity @0 :Text;
+  afterJournalOffset @1 :UInt64;
+  afterJournalSequence @2 :UInt64;
 }
 
 enum FactMutationKind {
