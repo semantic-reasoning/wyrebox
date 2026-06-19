@@ -125,6 +125,8 @@ seed_catalog (const gchar *path)
       "1, TRUE),"
       "('membership-a', 'account-1', 'mailbox-inbox', 'message-a', 1, 2, 2, "
       "2, TRUE),"
+      "('membership-a-archive', 'account-1', 'mailbox-archive', "
+      "'message-a', 6, 6, 6, 6, TRUE),"
       "('membership-hidden', 'account-1', 'mailbox-inbox', "
       "'message-hidden', 3, 3, 3, 3, FALSE),"
       "('membership-other-mailbox', 'account-1', 'mailbox-archive', "
@@ -661,6 +663,15 @@ init_message_by_id_request (WyreboxDaemonDuckDBQueryTemplateRequest *request,
 }
 
 static void
+    init_mailbox_history_by_message_request
+    (WyreboxDaemonDuckDBQueryTemplateRequest * request,
+    const gchar * account_id, const gchar * message_id)
+{
+  init_request_with_template (request, "mailbox.history_by_message.v1",
+      account_id, message_id);
+}
+
+static void
     init_message_facts_by_message_id_request
     (WyreboxDaemonDuckDBQueryTemplateRequest * request,
     const gchar * account_id, const gchar * message_id)
@@ -883,6 +894,36 @@ dispatch_message_by_id_csv (const gchar *path, const gchar *account_id,
   g_assert_nonnull (service);
 
   init_message_by_id_request (&request, account_id, message_id);
+  g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
+          "request-1", "admin-cli", account_id, "duckdb-tool",
+          "correlation-1", &request, &frame, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpuint (frame.stream_chunk.chunk_index, ==, 0);
+  g_assert_true (frame.stream_chunk.end_of_stream);
+
+  data = g_bytes_get_data (frame.stream_chunk.bytes, &size);
+  return g_strndup (data, size);
+}
+
+static gchar *
+dispatch_mailbox_history_by_message_csv (const gchar *path,
+    const gchar *account_id, const gchar *message_id)
+{
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  gconstpointer data = NULL;
+  gsize size = 0;
+
+  service = wyrebox_daemon_duckdb_query_template_service_new_duckdb (path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (service);
+
+  init_mailbox_history_by_message_request (&request, account_id, message_id);
   g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
           "request-1", "admin-cli", account_id, "duckdb-tool",
           "correlation-1", &request, &frame, &error));
@@ -1373,6 +1414,67 @@ test_duckdb_service_returns_message_by_id_with_headers (void)
       "Alice <alice@example.test>,Bob <bob@example.test>,"
       "Carol <carol@example.test>,Blind <blind@example.test>,"
       "\"Mon, 01 Jan 2024 00:00:00 +0000\",20,21\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_returns_mailbox_history_by_message_csv (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+
+  csv = dispatch_mailbox_history_by_message_csv (path, "account-1",
+      "message-a");
+  g_assert_cmpstr (csv, ==,
+      "account_id,mailbox_id,membership_id,message_id,uid,uidvalidity,"
+      "is_visible,object_id,message_journal_offset,message_journal_sequence,"
+      "membership_journal_offset,membership_journal_sequence\n"
+      "account-1,mailbox-inbox,membership-a,message-a,1,77,TRUE,object-a,2,2,"
+      "2,2\n"
+      "account-1,mailbox-archive,membership-a-archive,message-a,6,88,TRUE,"
+      "object-a,2,2,6,6\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_mailbox_history_by_message_includes_hidden_rows (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+
+  csv = dispatch_mailbox_history_by_message_csv (path, "account-1",
+      "message-hidden");
+  g_assert_cmpstr (csv, ==,
+      "account_id,mailbox_id,membership_id,message_id,uid,uidvalidity,"
+      "is_visible,object_id,message_journal_offset,message_journal_sequence,"
+      "membership_journal_offset,membership_journal_sequence\n"
+      "account-1,mailbox-inbox,membership-hidden,message-hidden,3,77,FALSE,"
+      "object-hidden,3,3,3,3\n");
+  (void) g_remove (path);
+}
+
+static void
+    test_duckdb_service_mailbox_history_by_message_isolates_cross_account_rows
+    (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+
+  csv = dispatch_mailbox_history_by_message_csv (path, "account-1",
+      "message-other-account");
+  g_assert_cmpstr (csv, ==,
+      "account_id,mailbox_id,membership_id,message_id,uid,uidvalidity,"
+      "is_visible,object_id,message_journal_offset,message_journal_sequence,"
+      "membership_journal_offset,membership_journal_sequence\n");
   (void) g_remove (path);
 }
 
@@ -2446,6 +2548,15 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/message-by-id-with-headers",
       test_duckdb_service_returns_message_by_id_with_headers);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/mailbox-history-by-message-csv",
+      test_duckdb_service_returns_mailbox_history_by_message_csv);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/mailbox-history-by-message-hidden-rows",
+      test_duckdb_service_mailbox_history_by_message_includes_hidden_rows);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/mailbox-history-by-message-cross-account-isolation",
+      test_duckdb_service_mailbox_history_by_message_isolates_cross_account_rows);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/message-by-id-cross-account-isolation",
       test_duckdb_service_message_by_id_isolates_cross_account_rows);
