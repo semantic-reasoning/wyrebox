@@ -17,5 +17,10 @@ typedef struct
 const WyreboxDaemonExportDatasetDescriptor *
 wyrebox_daemon_export_dataset_catalog_lookup (const char *dataset_id);
 
+gsize wyrebox_daemon_export_dataset_catalog_size (void);
+
+const WyreboxDaemonExportDatasetDescriptor *
+wyrebox_daemon_export_dataset_catalog_at (gsize index);
+
 G_END_DECLS
 /* *INDENT-ON* */

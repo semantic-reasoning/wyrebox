@@ -61,3 +61,18 @@ wyrebox_daemon_export_dataset_catalog_lookup (const char *dataset_id)
 
   return NULL;
 }
+
+gsize
+wyrebox_daemon_export_dataset_catalog_size (void)
+{
+  return G_N_ELEMENTS (catalog);
+}
+
+const WyreboxDaemonExportDatasetDescriptor *
+wyrebox_daemon_export_dataset_catalog_at (gsize index)
+{
+  if (index >= G_N_ELEMENTS (catalog))
+    return NULL;
+
+  return &catalog[index];
+}
