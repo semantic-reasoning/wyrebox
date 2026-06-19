@@ -42,6 +42,36 @@ check_request_frame_roundtrip (void)
 }
 
 static bool
+check_mailbox_status_request_frame_roundtrip (void)
+{
+  capnp::MallocMessageBuilder request_builder;
+  auto request_frame = request_builder.initRoot<RequestFrame> ();
+
+  auto identity = request_frame.initIdentity ();
+  identity.setRequestId ("request-id");
+  identity.setCallerIdentity ("caller");
+  identity.setAccountIdentity ("account");
+  identity.setToolIdentity ("tool");
+  identity.setCorrelationId ("corr");
+
+  auto mailbox_status = request_frame.initMailboxStatus ();
+  mailbox_status.setAccountIdentity ("account");
+  mailbox_status.setMailboxId ("mailbox-id");
+  mailbox_status.setMailboxName ("");
+
+  auto request_words = capnp::messageToFlatArray (request_builder);
+  capnp::FlatArrayMessageReader request_reader (request_words.asPtr ());
+  auto request_roundtrip = request_reader.getRoot<RequestFrame> ();
+  auto request_identity = request_roundtrip.getIdentity ();
+
+  return std::strcmp (request_identity.getRequestId ().cStr (), "request-id") == 0 &&
+    std::strcmp (
+      request_roundtrip.getMailboxStatus ().getMailboxId ().cStr (),
+      "mailbox-id") == 0 &&
+    std::strcmp (request_identity.getCallerIdentity ().cStr (), "caller") == 0;
+}
+
+static bool
 check_response_frame_roundtrip (void)
 {
   capnp::MallocMessageBuilder response_builder;
@@ -76,6 +106,7 @@ main (int argc, char **argv)
   (void) argv;
 
   if (!check_request_frame_roundtrip () ||
+      !check_mailbox_status_request_frame_roundtrip () ||
       !check_response_frame_roundtrip ()) {
     return 1;
   }

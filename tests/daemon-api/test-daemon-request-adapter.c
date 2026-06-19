@@ -235,6 +235,7 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
   out_request->operation = WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_NONE;
   out_request->mailbox_list = NULL;
   out_request->mailbox_select = NULL;
+  out_request->mailbox_status = NULL;
   out_request->fact_mutation = NULL;
   out_request->delivery_ingestion = NULL;
   out_request->wirelog_predicate_query = NULL;

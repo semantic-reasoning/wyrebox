@@ -46,6 +46,12 @@ daemon_mailbox_select_request_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_mailbox_status_request_test = executable(
+  'test-daemon-mailbox-status-request',
+  'test-daemon-mailbox-status-request.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_mailbox_select_result_test = executable(
   'test-daemon-mailbox-select-result',
   'test-daemon-mailbox-select-result.c',
@@ -316,6 +322,7 @@ test('daemon mailbox list request', daemon_mailbox_list_request_test)
 test('daemon mailbox list result', daemon_mailbox_list_result_test)
 test('daemon mailbox catalog duckdb', daemon_mailbox_catalog_duckdb_test)
 test('daemon mailbox select request', daemon_mailbox_select_request_test)
+test('daemon mailbox status request', daemon_mailbox_status_request_test)
 test('daemon mailbox select result', daemon_mailbox_select_result_test)
 test('daemon request router', daemon_request_router_test)
 test('daemon fact mutation request', daemon_fact_mutation_request_test)

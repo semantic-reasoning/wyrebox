@@ -4,6 +4,7 @@
 #include "wyrebox-daemon-message-fetch-dispatcher.h"
 #include "wyrebox-daemon-mailbox-list-dispatcher.h"
 #include "wyrebox-daemon-mailbox-select-dispatcher.h"
+#include "wyrebox-daemon-mailbox-status-request.h"
 #include "wyrebox-daemon-delivery-ingestion-dispatcher.h"
 #include "wyrebox-daemon-duckdb-query-template-dispatcher.h"
 #include "wyrebox-daemon-wirelog-predicate-query-dispatcher.h"
@@ -19,6 +20,7 @@ typedef enum {
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_NONE,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_LIST,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_SELECT,
+  WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_STATUS,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_FETCH,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_SEARCH,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION,
@@ -40,6 +42,7 @@ typedef struct
   WyreboxDaemonRequestFrameOperation operation;
   const WyreboxDaemonMailboxListRequest *mailbox_list;
   const WyreboxDaemonMailboxSelectRequest *mailbox_select;
+  const WyreboxDaemonMailboxStatusRequest *mailbox_status;
   const WyreboxDaemonFactMutationRequest *fact_mutation;
   const WyreboxDaemonFactBatchImportRequest *fact_batch_import;
   const WyreboxDaemonMessageFetchRequest *message_fetch;

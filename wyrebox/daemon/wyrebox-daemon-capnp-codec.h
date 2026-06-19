@@ -5,6 +5,7 @@
 #include "wyrebox-daemon-duckdb-query-template-request.h"
 #include "wyrebox-daemon-mailbox-list-request.h"
 #include "wyrebox-daemon-mailbox-select-request.h"
+#include "wyrebox-daemon-mailbox-status-request.h"
 #include "wyrebox-daemon-peer-credentials.h"
 #include "wyrebox-daemon-request-identity.h"
 #include "wyrebox-daemon-response-frame.h"
@@ -64,6 +65,12 @@ GBytes *wyrebox_daemon_capnp_codec_encode_mailbox_list_request (
 GBytes *wyrebox_daemon_capnp_codec_encode_mailbox_select_request (
     const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonMailboxSelectRequest *request,
+    gpointer user_data,
+    GError **error);
+
+GBytes *wyrebox_daemon_capnp_codec_encode_mailbox_status_request (
+    const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMailboxStatusRequest *request,
     gpointer user_data,
     GError **error);
 

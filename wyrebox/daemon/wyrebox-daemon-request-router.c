@@ -355,6 +355,51 @@ route_mailbox_select (WyreboxDaemonMailboxSelectService *service,
 }
 
 static gboolean
+route_mailbox_status (WyreboxDaemonMailboxSelectService *service,
+    const WyreboxDaemonDecodedRequestFrame *request_frame,
+    WyreboxDaemonResponseFrame *out_frame, GError **error)
+{
+  g_auto (WyreboxDaemonMailboxSelectRequest) select_request = { 0 };
+  g_autoptr (GError) local_error = NULL;
+
+  if (!WYREBOX_IS_DAEMON_MAILBOX_SELECT_SERVICE (service)) {
+    g_set_error (&local_error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "mailbox STATUS request frame cannot be routed without service");
+    return init_error_response (out_frame,
+        request_frame->request_id, request_frame->correlation_id, local_error,
+        error);
+  }
+
+  if (request_frame->mailbox_status == NULL) {
+    g_set_error (&local_error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "mailbox STATUS request frame is missing payload");
+    return init_error_response (out_frame,
+        request_frame->request_id, request_frame->correlation_id, local_error,
+        error);
+  }
+
+  if (!wyrebox_daemon_mailbox_select_request_init (&select_request,
+          request_frame->mailbox_status->account_identity,
+          request_frame->mailbox_status->mailbox_id,
+          request_frame->mailbox_status->mailbox_name, &local_error)) {
+    return init_error_response (out_frame,
+        request_frame->request_id, request_frame->correlation_id, local_error,
+        error);
+  }
+
+  return wyrebox_daemon_mailbox_select_dispatch (service,
+      request_frame->request_id,
+      request_frame->caller_identity,
+      request_frame->account_identity,
+      request_frame->tool_identity,
+      request_frame->correlation_id, &select_request, out_frame, error);
+}
+
+static gboolean
 route_mailbox_list (WyreboxDaemonMailboxListService *service,
     const WyreboxDaemonDecodedRequestFrame *request_frame,
     WyreboxDaemonResponseFrame *out_frame, GError **error)
@@ -416,6 +461,9 @@ wyrebox_daemon_request_router_route (WyreboxDaemonDeliveryIngestionService
           out_frame, error);
     case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_SELECT:
       return route_mailbox_select (mailbox_select_service, request_frame,
+          out_frame, error);
+    case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_STATUS:
+      return route_mailbox_status (mailbox_select_service, request_frame,
           out_frame, error);
     case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_FETCH:
       return route_message_fetch (message_fetch_service, request_frame,
