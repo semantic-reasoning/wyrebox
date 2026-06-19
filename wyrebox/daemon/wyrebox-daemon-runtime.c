@@ -34,6 +34,12 @@ duckdb_result_clear (duckdb_result *result)
 }
 
 static void
+duckdb_prepared_statement_clear (duckdb_prepared_statement *statement)
+{
+  duckdb_destroy_prepare (statement);
+}
+
+static void
 duckdb_config_clear (duckdb_config *config)
 {
   if (*config != NULL)
@@ -52,6 +58,8 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_database, duckdb_database_clear)
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_connection, duckdb_connection_clear)
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_result, duckdb_result_clear)
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_config, duckdb_config_clear)
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_prepared_statement,
+    duckdb_prepared_statement_clear)
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_owned_string, duckdb_owned_string_clear)
 /* *INDENT-ON* */
 
@@ -123,6 +131,21 @@ static void
   report->status = WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID;
   report->failure_category =
       WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED;
+}
+
+void wyrebox_daemon_object_reachability_report_clear
+    (WyreboxDaemonObjectReachabilityReport * report)
+{
+  if (report == NULL)
+    return;
+
+  g_clear_pointer (&report->object_id, g_free);
+  report->size_bytes = 0;
+  report->message_reference_count = 0;
+  report->visible_mailbox_membership_count = 0;
+  report->visible_derived_view_membership_count = 0;
+  report->is_gc_reachable = FALSE;
+  report->is_gc_candidate = FALSE;
 }
 
 static void
@@ -489,6 +512,134 @@ runtime_open_catalog_read_only (const char *catalog_path,
   }
 
   return TRUE;
+}
+
+static gboolean
+    runtime_object_reachability_report_load_row
+    (duckdb_connection connection,
+    const char *object_id,
+    WyreboxDaemonObjectReachabilityReport * out_report, GError ** error)
+{
+  g_auto (duckdb_result) result = { 0 };
+  g_auto (duckdb_prepared_statement) statement = NULL;
+  g_auto (duckdb_owned_string) returned_object_id = NULL;
+
+  if (duckdb_prepare (connection,
+          "SELECT object_id, size_bytes, message_reference_count, "
+          "visible_mailbox_membership_count, "
+          "visible_derived_view_membership_count, is_gc_reachable, "
+          "is_gc_candidate FROM object_reachability WHERE object_id = ?;",
+          &statement) != DuckDBSuccess) {
+    const char *detail = statement != NULL ?
+        duckdb_prepare_error (statement) : NULL;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "failed to prepare object reachability query: %s",
+        detail != NULL && *detail != '\0' ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  if (duckdb_bind_varchar (statement, 1, object_id) != DuckDBSuccess) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED, "failed to bind object reachability object_id");
+    return FALSE;
+  }
+
+  if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+    const char *detail = duckdb_result_error (&result);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "failed to query object reachability: %s",
+        detail != NULL && *detail != '\0' ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  if (duckdb_row_count (&result) == 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_NOT_FOUND,
+        "object reachability row %s was not found", object_id);
+    return FALSE;
+  }
+
+  if (duckdb_row_count (&result) != 1 || duckdb_column_count (&result) != 7) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "object reachability query returned an unexpected shape");
+    return FALSE;
+  }
+
+  wyrebox_daemon_object_reachability_report_clear (out_report);
+  returned_object_id = duckdb_value_varchar (&result, 0, 0);
+  if (returned_object_id == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "object reachability row returned a NULL object_id");
+    return FALSE;
+  }
+
+  out_report->object_id = g_strdup (returned_object_id);
+  if (out_report->object_id == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED, "failed to duplicate object reachability object_id");
+    return FALSE;
+  }
+
+  out_report->size_bytes = (guint64) duckdb_value_uint64 (&result, 1, 0);
+  out_report->message_reference_count =
+      (guint64) duckdb_value_uint64 (&result, 2, 0);
+  out_report->visible_mailbox_membership_count =
+      (guint64) duckdb_value_uint64 (&result, 3, 0);
+  out_report->visible_derived_view_membership_count =
+      (guint64) duckdb_value_uint64 (&result, 4, 0);
+  out_report->is_gc_reachable =
+      duckdb_value_boolean (&result, 5, 0) ? TRUE : FALSE;
+  out_report->is_gc_candidate =
+      duckdb_value_boolean (&result, 6, 0) ? TRUE : FALSE;
+
+  return TRUE;
+}
+
+gboolean
+wyrebox_daemon_runtime_load_object_reachability_report (const char
+    *catalog_path, const char *object_id,
+    WyreboxDaemonObjectReachabilityReport *out_report, GError **error)
+{
+  g_auto (duckdb_database) database = NULL;
+  g_auto (duckdb_connection) connection = NULL;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+  g_return_val_if_fail (out_report != NULL, FALSE);
+
+  if (catalog_path == NULL || *catalog_path == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "DuckDB catalog path is required");
+    return FALSE;
+  }
+
+  if (object_id == NULL || *object_id == '\0') {
+    g_set_error (error,
+        G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "object id is required");
+    return FALSE;
+  }
+
+  wyrebox_daemon_object_reachability_report_clear (out_report);
+
+  if (!runtime_open_catalog_read_only (catalog_path, &database, &connection,
+          error))
+    return FALSE;
+
+  return runtime_object_reachability_report_load_row (connection, object_id,
+      out_report, error);
 }
 
 static GPtrArray *

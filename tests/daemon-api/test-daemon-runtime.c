@@ -240,6 +240,63 @@ query_catalog_uint64 (const char *catalog_path, const char *sql)
 }
 
 static void
+seed_object_reachability_fixture (duckdb_connection connection)
+{
+  execute_sql (connection,
+      "INSERT INTO objects (object_id, size_bytes) VALUES "
+      "('sha256:derived', 103),"
+      "('sha256:hidden', 102),"
+      "('sha256:orphan', 105),"
+      "('sha256:shared', 104),"
+      "('sha256:visible', 101)," "('sha256:quote''object', 106);");
+  execute_sql (connection,
+      "INSERT INTO messages (message_id, account_id, object_id, "
+      "journal_offset, journal_sequence) VALUES "
+      "('message-derived', 'account-1', 'sha256:derived', 11, 1),"
+      "('message-hidden', 'account-1', 'sha256:hidden', 12, 2),"
+      "('message-shared-hidden', 'account-1', 'sha256:shared', 13, 3),"
+      "('message-shared-visible', 'account-1', 'sha256:shared', 14, 4),"
+      "('message-visible', 'account-1', 'sha256:visible', 15, 5),"
+      "('message-orphan', 'account-1', 'sha256:orphan', 16, 6),"
+      "('message-quote', 'account-1', 'sha256:quote''object', 17, 7);");
+  execute_sql (connection,
+      "INSERT INTO mailbox_memberships ("
+      "membership_id, account_id, mailbox_id, message_id, uid, "
+      "internal_date_unix_us, journal_offset, journal_sequence, is_visible"
+      ") VALUES "
+      "('membership-hidden', 'account-1', 'mailbox-inbox', "
+      "'message-hidden', 1, 1000, 12, 2, FALSE),"
+      "('membership-shared-hidden', 'account-1', 'mailbox-inbox', "
+      "'message-shared-hidden', 2, 1001, 13, 3, FALSE),"
+      "('membership-shared-visible', 'account-1', 'mailbox-inbox', "
+      "'message-shared-visible', 3, 1002, 14, 4, TRUE),"
+      "('membership-visible', 'account-1', 'mailbox-inbox', "
+      "'message-visible', 4, 1003, 15, 5, TRUE),"
+      "('membership-quote', 'account-1', 'mailbox-inbox', "
+      "'message-quote', 5, 1004, 17, 7, TRUE);");
+  execute_sql (connection,
+      "INSERT INTO derived_view_memberships ("
+      "membership_id, account_id, view_id, message_id, uid, is_visible, "
+      "rule_version_hash, materialized_at_unix_us"
+      ") VALUES "
+      "('derived-membership-derived', 'account-1', 'view-projects', "
+      "'message-derived', 1, TRUE, 'rule-hash-1', 2000);");
+}
+
+static char *
+create_object_reachability_catalog_path (void)
+{
+  g_autofree char *catalog_path = create_catalog_path ();
+  TestDuckdbFixture fixture = { 0 };
+
+  open_duckdb_fixture (catalog_path, &fixture);
+  seed_object_reachability_fixture (fixture.connection);
+  close_duckdb_fixture (&fixture);
+
+  return g_steal_pointer (&catalog_path);
+}
+
+static void
 remove_catalog_path (const char *catalog_path)
 {
   g_autofree char *catalog_dir = g_path_get_dirname (catalog_path);
@@ -829,6 +886,135 @@ static void
 
   remove_tree (journal_root);
   remove_tree (object_root);
+}
+
+static void
+test_runtime_load_object_reachability_report_returns_row (void)
+{
+  g_autofree char *catalog_path = create_object_reachability_catalog_path ();
+  WyreboxDaemonObjectReachabilityReport report = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_nonnull (catalog_path);
+  g_assert_true (wyrebox_daemon_runtime_load_object_reachability_report
+      (catalog_path, "sha256:visible", &report, &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (report.object_id, ==, "sha256:visible");
+  g_assert_cmpuint (report.size_bytes, ==, 101);
+  g_assert_cmpuint (report.message_reference_count, ==, 1);
+  g_assert_cmpuint (report.visible_mailbox_membership_count, ==, 1);
+  g_assert_cmpuint (report.visible_derived_view_membership_count, ==, 0);
+  g_assert_true (report.is_gc_reachable);
+  g_assert_false (report.is_gc_candidate);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM object_reachability;"), ==, 6);
+
+  wyrebox_daemon_object_reachability_report_clear (&report);
+  remove_catalog_path (catalog_path);
+}
+
+static void
+test_runtime_load_object_reachability_report_handles_quoted_object_id (void)
+{
+  g_autofree char *catalog_path = create_object_reachability_catalog_path ();
+  WyreboxDaemonObjectReachabilityReport report = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_nonnull (catalog_path);
+  g_assert_true (wyrebox_daemon_runtime_load_object_reachability_report
+      (catalog_path, "sha256:quote'object", &report, &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (report.object_id, ==, "sha256:quote'object");
+  g_assert_cmpuint (report.size_bytes, ==, 106);
+  g_assert_cmpuint (report.message_reference_count, ==, 1);
+  g_assert_cmpuint (report.visible_mailbox_membership_count, ==, 1);
+  g_assert_cmpuint (report.visible_derived_view_membership_count, ==, 0);
+  g_assert_true (report.is_gc_reachable);
+  g_assert_false (report.is_gc_candidate);
+
+  wyrebox_daemon_object_reachability_report_clear (&report);
+  remove_catalog_path (catalog_path);
+}
+
+static void
+test_runtime_load_object_reachability_report_returns_candidate (void)
+{
+  g_autofree char *catalog_path = create_object_reachability_catalog_path ();
+  WyreboxDaemonObjectReachabilityReport report = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_nonnull (catalog_path);
+  g_assert_true (wyrebox_daemon_runtime_load_object_reachability_report
+      (catalog_path, "sha256:derived", &report, &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (report.object_id, ==, "sha256:derived");
+  g_assert_cmpuint (report.size_bytes, ==, 103);
+  g_assert_cmpuint (report.message_reference_count, ==, 1);
+  g_assert_cmpuint (report.visible_mailbox_membership_count, ==, 0);
+  g_assert_cmpuint (report.visible_derived_view_membership_count, ==, 1);
+  g_assert_false (report.is_gc_reachable);
+  g_assert_true (report.is_gc_candidate);
+
+  wyrebox_daemon_object_reachability_report_clear (&report);
+  remove_catalog_path (catalog_path);
+}
+
+static void
+test_runtime_load_object_reachability_report_rejects_missing_object (void)
+{
+  g_autofree char *catalog_path = create_object_reachability_catalog_path ();
+  WyreboxDaemonObjectReachabilityReport report = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_nonnull (catalog_path);
+  g_assert_false (wyrebox_daemon_runtime_load_object_reachability_report
+      (catalog_path, "sha256:missing", &report, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_assert_nonnull (strstr (error->message, "sha256:missing"));
+  wyrebox_daemon_object_reachability_report_clear (&report);
+  remove_catalog_path (catalog_path);
+}
+
+static void
+test_runtime_load_object_reachability_report_rejects_invalid_args (void)
+{
+  WyreboxDaemonObjectReachabilityReport report = {
+    .object_id = g_strdup ("sentinel"),
+    .size_bytes = 42,
+    .message_reference_count = 7,
+    .visible_mailbox_membership_count = 3,
+    .visible_derived_view_membership_count = 2,
+    .is_gc_reachable = TRUE,
+    .is_gc_candidate = TRUE,
+  };
+  g_autofree char *object_id_snapshot = NULL;
+  g_autoptr (GError) error = NULL;
+
+  object_id_snapshot = g_strdup (report.object_id);
+
+  g_assert_false (wyrebox_daemon_runtime_load_object_reachability_report
+      (NULL, "sha256:visible", &report, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpstr (report.object_id, ==, object_id_snapshot);
+  g_assert_cmpuint (report.size_bytes, ==, 42);
+  g_assert_cmpuint (report.message_reference_count, ==, 7);
+  g_assert_cmpuint (report.visible_mailbox_membership_count, ==, 3);
+  g_assert_cmpuint (report.visible_derived_view_membership_count, ==, 2);
+  g_assert_true (report.is_gc_reachable);
+  g_assert_true (report.is_gc_candidate);
+  g_clear_error (&error);
+
+  g_assert_false (wyrebox_daemon_runtime_load_object_reachability_report
+      ("", "sha256:visible", &report, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpstr (report.object_id, ==, object_id_snapshot);
+  g_clear_error (&error);
+
+  g_assert_false (wyrebox_daemon_runtime_load_object_reachability_report
+      ("catalog.duckdb", NULL, &report, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpstr (report.object_id, ==, object_id_snapshot);
+  wyrebox_daemon_object_reachability_report_clear (&report);
 }
 
 static void
@@ -1513,6 +1699,21 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/runtime/validate-delivery-storage/unsafe-journal-suffix",
       test_runtime_validate_delivery_storage_rejects_unsafe_journal_suffix);
+  g_test_add_func
+      ("/daemon-api/runtime/object-reachability/returns-row",
+      test_runtime_load_object_reachability_report_returns_row);
+  g_test_add_func
+      ("/daemon-api/runtime/object-reachability/quoted-object-id",
+      test_runtime_load_object_reachability_report_handles_quoted_object_id);
+  g_test_add_func
+      ("/daemon-api/runtime/object-reachability/derived-candidate",
+      test_runtime_load_object_reachability_report_returns_candidate);
+  g_test_add_func
+      ("/daemon-api/runtime/object-reachability/missing-object",
+      test_runtime_load_object_reachability_report_rejects_missing_object);
+  g_test_add_func
+      ("/daemon-api/runtime/object-reachability/invalid-args",
+      test_runtime_load_object_reachability_report_rejects_invalid_args);
   g_test_add_func
       ("/daemon-api/runtime/recover-and-validate-delivery-storage/torn-suffix",
       test_runtime_recover_and_validate_delivery_storage_recovers_torn_suffix);
