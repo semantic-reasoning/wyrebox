@@ -22,6 +22,7 @@ typedef struct
 } WyreboxBackupSet;
 
 void wyrebox_backup_set_entry_clear (WyreboxBackupSetEntry *entry);
+void wyrebox_backup_set_entry_free (WyreboxBackupSetEntry *entry);
 void wyrebox_backup_set_clear (WyreboxBackupSet *set);
 
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxBackupSetEntry,

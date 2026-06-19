@@ -29,6 +29,16 @@ wyrebox_backup_set_entry_clear (WyreboxBackupSetEntry *entry)
 }
 
 void
+wyrebox_backup_set_entry_free (WyreboxBackupSetEntry *entry)
+{
+  if (entry == NULL)
+    return;
+
+  wyrebox_backup_set_entry_clear (entry);
+  g_free (entry);
+}
+
+void
 wyrebox_backup_set_clear (WyreboxBackupSet *set)
 {
   if (set == NULL)
@@ -36,12 +46,6 @@ wyrebox_backup_set_clear (WyreboxBackupSet *set)
 
   g_clear_pointer (&set->backup_id, g_free);
   if (set->entries != NULL) {
-    for (guint i = 0; i < set->entries->len; i++) {
-      WyreboxBackupSetEntry *entry = g_ptr_array_index (set->entries, i);
-
-      wyrebox_backup_set_entry_clear (entry);
-      g_free (entry);
-    }
     g_ptr_array_free (set->entries, TRUE);
   }
 
