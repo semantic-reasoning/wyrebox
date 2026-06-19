@@ -160,4 +160,8 @@ jobs:
       - name: Test
         run: |
           export LD_LIBRARY_PATH="$DUCKDB_ROOT/lib:${LD_LIBRARY_PATH:-}"
-          meson test -C _build --print-errorlogs
+          # Sanitizer-instrumented runs are several times slower than a normal
+          # build; on the arm64 runner the derived-view-materializer suite
+          # exceeds Meson's default 30s per-test limit. Scale all test timeouts
+          # so slow-but-progressing tests are not killed prematurely.
+          meson test -C _build --timeout-multiplier 6 --print-errorlogs
