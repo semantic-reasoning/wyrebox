@@ -51,6 +51,16 @@ test_catalog_is_enumerable (void)
   g_assert_null (wyrebox_daemon_derived_view_package_catalog_at (1));
 }
 
+static void
+test_catalog_validates_all_entries (void)
+{
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_derived_view_package_catalog_validate_all
+      (&error));
+  g_assert_no_error (error);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -64,6 +74,8 @@ main (int argc, char **argv)
       test_catalog_rejects_unknown_package);
   g_test_add_func ("/daemon-api/derived-view-package-catalog/is-enumerable",
       test_catalog_is_enumerable);
+  g_test_add_func ("/daemon-api/derived-view-package-catalog/validate-all",
+      test_catalog_validates_all_entries);
 
   return g_test_run ();
 }

@@ -96,6 +96,37 @@ validate_string_vector (gchar **values, const gchar *field_name, GError **error)
   return TRUE;
 }
 
+static gboolean
+compare_string_vector (gchar **values, const char *const *expected_values,
+    const gchar *field_name, GError **error)
+{
+  guint i = 0;
+
+  for (i = 0; values != NULL && values[i] != NULL &&
+      expected_values != NULL && expected_values[i] != NULL; i++) {
+    if (g_strcmp0 (values[i], expected_values[i]) != 0) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "derived view package manifest field '%s' does not match catalog "
+          "descriptor", field_name);
+      return FALSE;
+    }
+  }
+
+  if ((values != NULL && values[i] != NULL) ||
+      (expected_values != NULL && expected_values[i] != NULL)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "derived view package manifest field '%s' does not match catalog "
+        "descriptor", field_name);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
 void wyrebox_daemon_derived_view_package_manifest_clear
     (WyreboxDaemonDerivedViewPackageManifest * manifest)
 {
@@ -197,6 +228,7 @@ wyrebox_daemon_derived_view_package_manifest_matches_descriptor (const
 
   if (g_strcmp0 (manifest->package_name, descriptor->package_name) != 0 ||
       g_strcmp0 (manifest->package_version, descriptor->package_version) != 0 ||
+      g_strcmp0 (manifest->description, descriptor->description) != 0 ||
       g_strcmp0 (manifest->compatible_schema_version,
           descriptor->compatible_schema_version) != 0 ||
       g_strcmp0 (manifest->compatible_api_version,
@@ -208,6 +240,12 @@ wyrebox_daemon_derived_view_package_manifest_matches_descriptor (const
         "derived view package manifest does not match catalog descriptor");
     return FALSE;
   }
+
+  if (!compare_string_vector (manifest->declared_inputs,
+          descriptor->declared_inputs, "declared_inputs", error) ||
+      !compare_string_vector (manifest->declared_outputs,
+          descriptor->declared_outputs, "declared_outputs", error))
+    return FALSE;
 
   if (g_strcmp0 (manifest->author, descriptor->author) != 0) {
     g_set_error (error,

@@ -114,6 +114,47 @@ test_rejects_mismatched_catalog_descriptor (void)
     .package_name = "project.view.package",
     .package_version = "2.0.0",
     .description = "Project view package",
+    .declared_inputs = (const char *const[]) {
+          "mail.message",
+          "mail.fact",
+          NULL,
+        },
+    .declared_outputs = (const char *const[]) {
+          "mail.view",
+          NULL,
+        },
+    .compatible_schema_version = "schema-7",
+    .compatible_api_version = "api-3",
+    .rules_source = "view('project').",
+    .author = "wyrebox",
+    .source_ref = "git+https://example.invalid/package",
+  };
+
+  g_assert_false
+      (wyrebox_daemon_derived_view_package_manifest_matches_descriptor
+      (&manifest, &descriptor, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
+test_rejects_mismatched_declared_inputs (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonDerivedViewPackageManifest) manifest =
+      make_valid_manifest ();
+  WyreboxDaemonDerivedViewPackageDescriptor descriptor = {
+    .package_name = "project.view.package",
+    .package_version = "1.0.0",
+    .description = "Project view package",
+    .declared_inputs = (const char *const[]) {
+          "mail.message",
+          "mail.rule",
+          NULL,
+        },
+    .declared_outputs = (const char *const[]) {
+          "mail.view",
+          NULL,
+        },
     .compatible_schema_version = "schema-7",
     .compatible_api_version = "api-3",
     .rules_source = "view('project').",
@@ -144,6 +185,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon/derived-view-package/rejects-mismatched-catalog-descriptor",
       test_rejects_mismatched_catalog_descriptor);
+  g_test_add_func
+      ("/daemon/derived-view-package/rejects-mismatched-declared-inputs",
+      test_rejects_mismatched_declared_inputs);
 
   return g_test_run ();
 }

@@ -10,6 +10,8 @@ typedef struct
   const char *package_name;
   const char *package_version;
   const char *description;
+  const char *const *declared_inputs;
+  const char *const *declared_outputs;
   const char *compatible_schema_version;
   const char *compatible_api_version;
   const char *rules_source;

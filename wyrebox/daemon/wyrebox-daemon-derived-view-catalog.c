@@ -197,7 +197,7 @@ gboolean
   copy->definition_ref = g_strdup (definition->definition_ref);
   copy->rules_source = g_strdup (definition->rules_source);
   copy->relation_name = g_strdup (definition->relation_name);
-  copy->enabled = definition->enabled;
+  copy->enabled = TRUE;
 
   g_ptr_array_add (catalog->definitions, copy);
   return TRUE;
