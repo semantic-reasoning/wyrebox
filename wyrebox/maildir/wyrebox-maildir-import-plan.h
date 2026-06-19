@@ -59,8 +59,8 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (
 
 typedef struct
 {
-  gchar *mailbox_path;
   gchar *source_path;
+  gchar *mailbox_path;
   gchar *maildir_flag_suffix;
   guint maildir_flags;
   WyreboxEmlIngestResult ingest_result;
