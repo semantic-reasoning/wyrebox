@@ -22,6 +22,18 @@ assert_plan_entry (WyreboxMaildirImportPlanEntry *entry,
 }
 
 static void
+assert_execution_entry (WyreboxMaildirImportPlanExecutionEntry *entry,
+    WyreboxMaildirImportPlanEntry *plan_entry)
+{
+  g_assert_nonnull (entry);
+  g_assert_cmpstr (entry->mailbox_path, ==, plan_entry->mailbox_path);
+  g_assert_cmpstr (entry->source_path, ==, plan_entry->source_path);
+  g_assert_cmpstr (entry->maildir_flag_suffix, ==,
+      plan_entry->maildir_flag_suffix);
+  g_assert_cmpuint (entry->maildir_flags, ==, plan_entry->maildir_flags);
+}
+
+static void
 assert_verification_failure (WyreboxMaildirImportPlanVerificationResult *result,
     WyreboxMaildirImportPlanVerificationStatus status, const char *failure_path)
 {
@@ -431,8 +443,7 @@ test_import_plan_executes_through_eml_ingestor (void)
       g_autofree gchar *source_path = g_build_filename (copy_root,
           plan_entry->source_path, NULL);
 
-      g_assert_cmpstr (execution_entry->source_path, ==,
-          plan_entry->source_path);
+      assert_execution_entry (execution_entry, plan_entry);
       g_assert_cmpuint (execution_entry->ingest_result.size_bytes, ==,
           plan_entry->size_bytes);
       g_assert_cmpuint (execution_entry->ingest_result.journal_sequence, >,
@@ -529,6 +540,67 @@ test_import_plan_rejects_drift_before_writing (void)
   g_assert_cmpuint (count_message_delivered_records (journal_root), ==, 0);
 }
 
+static void
+test_import_plan_refuses_non_journaled_ingestor (void)
+{
+  const char *fixture_root = g_getenv ("WYREBOX_MAILDIR_FIXTURE_DIR");
+  g_autofree gchar *copy_root = NULL;
+  g_autofree gchar *object_root = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxMaildirScanner) scanner = NULL;
+  g_autoptr (WyreboxMaildirImportPlan) plan = NULL;
+  g_autoptr (WyreboxMaildirImportPlanExecutionResult) result = NULL;
+  g_autoptr (WyreboxLocalObjectStore) store = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+  g_autoptr (GPtrArray) scan_entries = NULL;
+
+  g_assert_nonnull (fixture_root);
+  copy_root = g_dir_make_tmp ("wyrebox-maildir-import-nojournal-XXXXXX", NULL);
+  object_root =
+      g_dir_make_tmp ("wyrebox-maildir-import-nojournal-objects-XXXXXX", NULL);
+  g_assert_nonnull (copy_root);
+  g_assert_nonnull (object_root);
+  g_assert_true (copy_tree_recursive (fixture_root, copy_root, &error));
+  g_assert_no_error (error);
+
+  scanner = wyrebox_maildir_scanner_new ();
+  g_assert_true (wyrebox_maildir_scanner_scan (scanner, copy_root,
+          &scan_entries, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (add_message_id_headers_to_maildir (copy_root, scan_entries,
+          &error));
+  g_assert_no_error (error);
+
+  g_clear_pointer (&scan_entries, g_ptr_array_unref);
+  g_assert_true (wyrebox_maildir_scanner_scan (scanner, copy_root,
+          &scan_entries, &error));
+  g_assert_no_error (error);
+
+  plan = wyrebox_maildir_import_plan_new_from_scan_entries (copy_root,
+      scan_entries, &error);
+  g_assert_nonnull (plan);
+  g_assert_no_error (error);
+
+  store = wyrebox_local_object_store_new (object_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  ingestor = wyrebox_eml_ingestor_new (store);
+  g_assert_nonnull (ingestor);
+  g_assert_false (wyrebox_eml_ingestor_has_journal_writer (ingestor));
+
+  result = wyrebox_maildir_import_plan_execute (plan, copy_root, ingestor,
+      &error);
+  g_assert_nonnull (result);
+  g_assert_false (result->ok);
+  g_assert_cmpint (result->status, ==,
+      WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_REFUSED);
+  g_assert_null (result->failure_path);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpuint (result->entries->len, ==, 0);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -544,6 +616,8 @@ main (int argc, char **argv)
       test_import_plan_dry_run_rejects_empty_scan);
   g_test_add_func ("/maildir/import-plan/executes-through-eml-ingestor",
       test_import_plan_executes_through_eml_ingestor);
+  g_test_add_func ("/maildir/import-plan/refuses-non-journaled-ingestor",
+      test_import_plan_refuses_non_journaled_ingestor);
   g_test_add_func ("/maildir/import-plan/rejects-drift-before-writing",
       test_import_plan_rejects_drift_before_writing);
 
