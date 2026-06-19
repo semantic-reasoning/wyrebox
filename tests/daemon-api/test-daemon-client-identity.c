@@ -75,6 +75,21 @@ test_fact_mutation_authorization_classes (void)
 }
 
 static void
+test_dataset_export_authorization_classes (void)
+{
+  g_assert_true (wyrebox_daemon_client_identity_can_export_datasets
+      (WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI));
+  g_assert_true (wyrebox_daemon_client_identity_can_export_datasets
+      (WYREBOX_DAEMON_CLIENT_IDENTITY_TRUSTED_TOOL));
+  g_assert_false (wyrebox_daemon_client_identity_can_export_datasets
+      (WYREBOX_DAEMON_CLIENT_IDENTITY_POSTFIX_HELPER));
+  g_assert_false (wyrebox_daemon_client_identity_can_export_datasets
+      (WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN));
+  g_assert_false (wyrebox_daemon_client_identity_can_export_datasets
+      (WYREBOX_DAEMON_CLIENT_IDENTITY_UNKNOWN));
+}
+
+static void
 test_class_names_are_stable (void)
 {
   g_assert_cmpstr (wyrebox_daemon_client_identity_class_to_name
@@ -104,6 +119,8 @@ main (int argc, char **argv)
       test_controlled_query_authorization_classes);
   g_test_add_func ("/daemon-api/client-identity/fact-mutation-authorization",
       test_fact_mutation_authorization_classes);
+  g_test_add_func ("/daemon-api/client-identity/export-authorization",
+      test_dataset_export_authorization_classes);
   g_test_add_func ("/daemon-api/client-identity/class-names",
       test_class_names_are_stable);
 
