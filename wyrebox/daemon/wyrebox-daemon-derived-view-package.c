@@ -1,0 +1,178 @@
+#include "wyrebox-daemon-derived-view-package.h"
+
+#include <gio/gio.h>
+
+static gboolean
+is_nonempty_text (const gchar *value)
+{
+  return value != NULL && value[0] != '\0';
+}
+
+static gboolean
+contains_control_character (const gchar *value)
+{
+  for (const gchar * cursor = value; cursor != NULL && *cursor != '\0';
+      cursor++) {
+    if (g_ascii_iscntrl (*cursor))
+      return TRUE;
+  }
+
+  return FALSE;
+}
+
+static gboolean
+validate_text_field (const gchar *value, const gchar *field_name,
+    gboolean allow_empty, GError **error)
+{
+  if (!allow_empty && !is_nonempty_text (value)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "derived view package field '%s' is required", field_name);
+    return FALSE;
+  }
+
+  if (value != NULL && contains_control_character (value)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "derived view package field '%s' must not contain control "
+        "characters", field_name);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
+validate_string_vector (gchar **values, const gchar *field_name, GError **error)
+{
+  g_autoptr (GHashTable) seen = NULL;
+
+  if (values == NULL || values[0] == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "derived view package field '%s' requires at least one entry",
+        field_name);
+    return FALSE;
+  }
+
+  seen = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+
+  for (guint i = 0; values[i] != NULL; i++) {
+    const gchar *value = values[i];
+
+    if (!is_nonempty_text (value)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "derived view package field '%s' contains an empty entry",
+          field_name);
+      return FALSE;
+    }
+
+    if (contains_control_character (value)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "derived view package field '%s' contains control characters",
+          field_name);
+      return FALSE;
+    }
+
+    if (g_hash_table_contains (seen, value)) {
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_INVALID_ARGUMENT,
+          "derived view package field '%s' contains duplicate entry '%s'",
+          field_name, value);
+      return FALSE;
+    }
+
+    g_hash_table_add (seen, g_strdup (value));
+  }
+
+  return TRUE;
+}
+
+void wyrebox_daemon_derived_view_package_manifest_clear
+    (WyreboxDaemonDerivedViewPackageManifest * manifest)
+{
+  if (manifest == NULL)
+    return;
+
+  g_clear_pointer (&manifest->package_name, g_free);
+  g_clear_pointer (&manifest->package_version, g_free);
+  g_clear_pointer (&manifest->description, g_free);
+  g_strfreev (manifest->declared_inputs);
+  manifest->declared_inputs = NULL;
+  g_strfreev (manifest->declared_outputs);
+  manifest->declared_outputs = NULL;
+  g_clear_pointer (&manifest->compatible_schema_version, g_free);
+  g_clear_pointer (&manifest->compatible_api_version, g_free);
+  g_clear_pointer (&manifest->rules_source, g_free);
+  g_clear_pointer (&manifest->author, g_free);
+  g_clear_pointer (&manifest->source_ref, g_free);
+}
+
+static void
+package_manifest_free (gpointer data)
+{
+  WyreboxDaemonDerivedViewPackageManifest *manifest = data;
+
+  if (manifest == NULL)
+    return;
+
+  wyrebox_daemon_derived_view_package_manifest_clear (manifest);
+  g_free (manifest);
+}
+
+void wyrebox_daemon_derived_view_package_manifest_free
+    (WyreboxDaemonDerivedViewPackageManifest * manifest)
+{
+  package_manifest_free (manifest);
+}
+
+gboolean
+wyrebox_daemon_derived_view_package_manifest_validate (const
+    WyreboxDaemonDerivedViewPackageManifest *manifest, GError **error)
+{
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (manifest == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "derived view package manifest is required");
+    return FALSE;
+  }
+
+  if (!validate_text_field (manifest->package_name, "package_name", FALSE,
+          error) ||
+      !validate_text_field (manifest->package_version, "package_version",
+          FALSE, error) ||
+      !validate_text_field (manifest->description, "description", FALSE,
+          error) ||
+      !validate_string_vector (manifest->declared_inputs, "declared_inputs",
+          error) ||
+      !validate_string_vector (manifest->declared_outputs, "declared_outputs",
+          error) ||
+      !validate_text_field (manifest->compatible_schema_version,
+          "compatible_schema_version", FALSE, error) ||
+      !validate_text_field (manifest->compatible_api_version,
+          "compatible_api_version", FALSE, error) ||
+      !validate_text_field (manifest->rules_source, "rules_source", FALSE,
+          error))
+    return FALSE;
+
+  if (manifest->author != NULL &&
+      !validate_text_field (manifest->author, "author", TRUE, error))
+    return FALSE;
+
+  if (manifest->source_ref != NULL &&
+      !validate_text_field (manifest->source_ref, "source_ref", TRUE, error))
+    return FALSE;
+
+  return TRUE;
+}
