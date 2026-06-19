@@ -1010,6 +1010,50 @@ test_schema_migration_run_store_to_current_future_metadata_rejected (void)
 }
 
 static void
+    test_schema_migration_duckdb_run_store_to_current_future_metadata_rejected
+    (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxSchemaMigrationMetadataState) loaded = { 0 };
+  g_auto (WyreboxSchemaMigrationMetadataState) base = { 0 };
+
+  migration = wyrebox_schema_migration_new ();
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  base.schema_version_present = TRUE;
+  base.schema_version =
+      wyrebox_schema_migration_get_current_schema_version () + 1;
+  test_schema_migration_set_materialization_checkpoint_fields (&base);
+
+  g_assert_true (wyrebox_schema_metadata_store_save (store, &base, &error));
+  g_assert_no_error (error);
+
+  g_clear_error (&error);
+  g_assert_false (wyrebox_schema_migration_run_store_to_current (migration,
+          store, FALSE, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
+
+  g_clear_error (&error);
+  g_assert_true (wyrebox_schema_metadata_store_load (store, &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_true (loaded.schema_version_present);
+  g_assert_cmpuint (loaded.schema_version, ==, base.schema_version);
+  g_assert_true (loaded.materialization_checkpoint_present);
+  g_assert_cmpuint (loaded.materialization_checkpoint_journal_offset, ==,
+      base.materialization_checkpoint_journal_offset);
+  g_assert_cmpuint (loaded.materialization_checkpoint_sequence, ==,
+      base.materialization_checkpoint_sequence);
+
+  remove_directory_tree (root);
+}
+
+static void
     test_schema_migration_run_store_to_current_legacy_without_checkpoint_fails
     (void)
 {
@@ -3223,6 +3267,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/migration/schema/run-store-to-current-future-metadata-rejected",
       test_schema_migration_run_store_to_current_future_metadata_rejected);
+  g_test_add_func
+      ("/migration/schema/duckdb-run-store-to-current-future-metadata-rejected",
+      test_schema_migration_duckdb_run_store_to_current_future_metadata_rejected);
   g_test_add_func
       ("/migration/schema/run-store-to-current-legacy-without-checkpoint",
       test_schema_migration_run_store_to_current_legacy_without_checkpoint_fails);
