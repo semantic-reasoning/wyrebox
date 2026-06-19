@@ -49,6 +49,48 @@ void wyrebox_maildir_import_plan_verification_result_free
   g_free (result);
 }
 
+void wyrebox_maildir_import_plan_execution_entry_clear
+    (WyreboxMaildirImportPlanExecutionEntry * entry)
+{
+  if (entry == NULL)
+    return;
+
+  g_clear_pointer (&entry->source_path, g_free);
+  wyrebox_eml_ingest_result_clear (&entry->ingest_result);
+}
+
+void wyrebox_maildir_import_plan_execution_entry_free
+    (WyreboxMaildirImportPlanExecutionEntry * entry)
+{
+  if (entry == NULL)
+    return;
+
+  wyrebox_maildir_import_plan_execution_entry_clear (entry);
+  g_free (entry);
+}
+
+void wyrebox_maildir_import_plan_execution_result_clear
+    (WyreboxMaildirImportPlanExecutionResult * result)
+{
+  if (result == NULL)
+    return;
+
+  result->ok = FALSE;
+  result->status = WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_UNKNOWN;
+  g_clear_pointer (&result->failure_path, g_free);
+  g_clear_pointer (&result->entries, g_ptr_array_unref);
+}
+
+void wyrebox_maildir_import_plan_execution_result_free
+    (WyreboxMaildirImportPlanExecutionResult * result)
+{
+  if (result == NULL)
+    return;
+
+  wyrebox_maildir_import_plan_execution_result_clear (result);
+  g_free (result);
+}
+
 static void
 maildir_import_plan_entry_free (gpointer data)
 {
@@ -211,6 +253,56 @@ verification_result_new (WyreboxMaildirImportPlanVerificationStatus status,
   return result;
 }
 
+static WyreboxMaildirImportPlanExecutionResult *
+execution_result_new (WyreboxMaildirImportPlanExecutionStatus status,
+    const gchar *failure_path)
+{
+  WyreboxMaildirImportPlanExecutionResult *result =
+      g_new0 (WyreboxMaildirImportPlanExecutionResult, 1);
+
+  result->ok = status == WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_OK;
+  result->status = status;
+  result->failure_path = g_strdup (failure_path);
+  result->entries = g_ptr_array_new_with_free_func (
+      (GDestroyNotify) wyrebox_maildir_import_plan_execution_entry_free);
+
+  return result;
+}
+
+static gboolean
+maildir_message_bytes_match_plan (const gchar *root_path,
+    const WyreboxMaildirImportPlanEntry *entry, GBytes **out_bytes,
+    GError **error)
+{
+  g_autofree gchar *absolute_path = NULL;
+  g_autofree gchar *contents = NULL;
+  gsize contents_len = 0;
+  g_autoptr (GChecksum) checksum = NULL;
+
+  *out_bytes = NULL;
+
+  absolute_path = g_build_filename (root_path, entry->source_path, NULL);
+  if (!g_file_get_contents (absolute_path, &contents, &contents_len, error))
+    return FALSE;
+
+  if ((guint64) contents_len != entry->size_bytes) {
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+        "Maildir message size changed for %s", entry->source_path);
+    return FALSE;
+  }
+
+  checksum = g_checksum_new (G_CHECKSUM_SHA256);
+  g_checksum_update (checksum, (const guchar *) contents, contents_len);
+  if (g_strcmp0 (g_checksum_get_string (checksum), entry->sha256_digest) != 0) {
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+        "Maildir message digest changed for %s", entry->source_path);
+    return FALSE;
+  }
+
+  *out_bytes = g_bytes_new_take (g_steal_pointer (&contents), contents_len);
+  return TRUE;
+}
+
 static gboolean
 verify_scan_entry_against_plan (const gchar *root_path,
     const WyreboxMaildirScanEntry *scan_entry,
@@ -348,4 +440,75 @@ wyrebox_maildir_import_plan_verify_current (WyreboxMaildirImportPlan *self,
   result = wyrebox_maildir_import_plan_dry_run_verify_current (self,
       root_path, error);
   return result != NULL && result->ok;
+}
+
+WyreboxMaildirImportPlanExecutionResult *
+wyrebox_maildir_import_plan_execute (WyreboxMaildirImportPlan *self,
+    const gchar *root_path, WyreboxEmlIngestor *ingestor, GError **error)
+{
+  g_autoptr (WyreboxMaildirImportPlanVerificationResult) verification = NULL;
+  WyreboxMaildirImportPlanExecutionResult *result = NULL;
+
+  g_return_val_if_fail (WYREBOX_IS_MAILDIR_IMPORT_PLAN (self), NULL);
+  g_return_val_if_fail (root_path != NULL && root_path[0] != '\0', NULL);
+  g_return_val_if_fail (WYREBOX_IS_EML_INGESTOR (ingestor), NULL);
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+  verification = wyrebox_maildir_import_plan_dry_run_verify_current (self,
+      root_path, error);
+  if (verification == NULL)
+    return NULL;
+
+  if (!verification->ok) {
+    result =
+        execution_result_new (WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_REFUSED,
+        verification->failure_path);
+    return result;
+  }
+
+  result =
+      execution_result_new (WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_OK, NULL);
+
+  for (guint index = 0; index < self->entries->len; index++) {
+    WyreboxMaildirImportPlanEntry *plan_entry =
+        g_ptr_array_index (self->entries,
+        index);
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlIngestResult) ingest_result = { 0 };
+    WyreboxMaildirImportPlanExecutionEntry *execution_entry = NULL;
+
+    if (plan_entry->kind != WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE)
+      continue;
+
+    if (!maildir_message_bytes_match_plan (root_path, plan_entry, &bytes,
+            error)) {
+      result->ok = FALSE;
+      result->status = WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_SOURCE_READ_FAILED;
+      g_clear_pointer (&result->failure_path, g_free);
+      result->failure_path = g_strdup (plan_entry->source_path);
+      return result;
+    }
+
+    if (!wyrebox_eml_ingestor_ingest_bytes (ingestor, bytes,
+            &ingest_result, error)) {
+      result->ok = FALSE;
+      result->status = WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_INGEST_FAILED;
+      g_clear_pointer (&result->failure_path, g_free);
+      result->failure_path = g_strdup (plan_entry->source_path);
+      return result;
+    }
+
+    execution_entry = g_new0 (WyreboxMaildirImportPlanExecutionEntry, 1);
+    execution_entry->source_path = g_strdup (plan_entry->source_path);
+    execution_entry->ingest_result.object_key =
+        g_steal_pointer (&ingest_result.object_key);
+    execution_entry->ingest_result.size_bytes = ingest_result.size_bytes;
+    execution_entry->ingest_result.journal_offset =
+        ingest_result.journal_offset;
+    execution_entry->ingest_result.journal_sequence =
+        ingest_result.journal_sequence;
+    g_ptr_array_add (result->entries, execution_entry);
+  }
+
+  return result;
 }
