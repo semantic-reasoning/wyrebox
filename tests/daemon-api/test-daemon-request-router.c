@@ -21,7 +21,7 @@ route_without_wirelog (WyreboxDaemonDeliveryIngestionService *delivery,
     WyreboxDaemonResponseFrame *out, GError **error)
 {
   return wyrebox_daemon_request_router_route (delivery, fact, list, select,
-      fetch, search, NULL, NULL, flag, frame, out, error);
+      fetch, search, NULL, NULL, NULL, flag, frame, out, error);
 }
 
 static gboolean
@@ -30,7 +30,7 @@ route_with_wirelog (WyreboxDaemonWirelogPredicateQueryService *wirelog,
     WyreboxDaemonResponseFrame *out, GError **error)
 {
   return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
-      NULL, wirelog, NULL, NULL, frame, out, error);
+      NULL, NULL, wirelog, NULL, NULL, frame, out, error);
 }
 
 static gboolean
@@ -39,7 +39,16 @@ route_with_duckdb_query_template (WyreboxDaemonDuckDBQueryTemplateService
     WyreboxDaemonResponseFrame *out, GError **error)
 {
   return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
-      NULL, NULL, duckdb, NULL, frame, out, error);
+      NULL, NULL, NULL, duckdb, NULL, frame, out, error);
+}
+
+static gboolean
+route_with_mail_event_stream (WyreboxDaemonMailEventStreamService
+    *mail_event_stream, const WyreboxDaemonDecodedRequestFrame *frame,
+    WyreboxDaemonResponseFrame *out, GError **error)
+{
+  return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
+      NULL, mail_event_stream, NULL, NULL, NULL, frame, out, error);
 }
 
 #define wyrebox_daemon_request_router_route route_without_wirelog
@@ -198,6 +207,39 @@ query_duckdb_template_fixture (const WyreboxDaemonRequestIdentity *identity,
       NULL, request->query_id, identity->correlation_id, 0, bytes, TRUE, error);
 }
 
+typedef struct
+{
+  gboolean *was_called;
+} MailEventStreamFixture;
+
+static gboolean
+stream_mail_events_fixture (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMailEventStreamRequest *request,
+    WyreboxDaemonStreamChunkFrame *out_chunk, gpointer user_data,
+    GError **error)
+{
+  MailEventStreamFixture *fixture = user_data;
+  g_autoptr (GBytes) bytes =
+      g_bytes_new_static ("mail-event-rows", strlen ("mail-event-rows"));
+
+  g_assert_cmpstr (identity->request_id, ==, "request-mail-event");
+  g_assert_cmpstr (identity->caller_identity, ==, "dovecot");
+  g_assert_cmpstr (identity->account_identity, ==, "account-1");
+  g_assert_cmpstr (request->account_identity, ==, "account-1");
+  g_assert_cmpstr (request->mailbox_identity, ==, "mailbox-inbox");
+  g_assert_cmpstr (request->event_type, ==, "MessageDelivered");
+  g_assert_cmpuint (request->after_journal_offset, ==, 41);
+  g_assert_cmpuint (request->after_journal_sequence, ==, 6);
+
+  if (fixture != NULL && fixture->was_called != NULL)
+    *fixture->was_called = TRUE;
+
+  return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+      identity->request_id,
+      NULL, "mail-event-stream", identity->correlation_id, 0, bytes, TRUE,
+      error);
+}
+
 static gboolean
 select_fixture_mailbox (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonMailboxSelectRequest *request,
@@ -237,6 +279,106 @@ status_fixture_mailbox (const WyreboxDaemonRequestIdentity *identity,
   return wyrebox_daemon_mailbox_select_result_init (out_result,
       WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
       "mailbox-inbox", "INBOX", 77, 42, 123, error);
+}
+
+static void
+test_request_router_routes_mail_event_stream (void)
+{
+  gboolean was_called = FALSE;
+  MailEventStreamFixture fixture = { &was_called };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonMailEventStreamService) service = NULL;
+  g_auto (WyreboxDaemonMailEventStreamRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_mail_event_stream_request_init (&request,
+          "account-1", "mailbox-inbox", NULL, "MessageDelivered", 41, 6,
+          1000, 2000, &error));
+  g_assert_no_error (error);
+
+  service = wyrebox_daemon_mail_event_stream_service_new
+      (stream_mail_events_fixture, &fixture, NULL);
+  g_assert_nonnull (service);
+
+  request_frame.request_id = "request-mail-event";
+  request_frame.caller_identity = "dovecot";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "dovecot-storage";
+  request_frame.correlation_id = "corr-mail-event";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAIL_EVENT_STREAM;
+  request_frame.mail_event_stream = &request;
+
+  g_assert_true (route_with_mail_event_stream (service, &request_frame,
+          &frame, &error));
+  g_assert_no_error (error);
+  g_assert_true (was_called);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpstr (frame.request_id, ==, "request-mail-event");
+  g_assert_cmpstr (frame.correlation_id, ==, "corr-mail-event");
+  g_assert_cmpstr (frame.stream_chunk.query_id, ==, "mail-event-stream");
+}
+
+static void
+test_request_router_rejects_missing_mail_event_stream_payload (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonMailEventStreamService) service = NULL;
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+  gboolean was_called = FALSE;
+  MailEventStreamFixture fixture = { &was_called };
+
+  request_frame.request_id = "request-mail-event";
+  request_frame.caller_identity = "dovecot";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "dovecot-storage";
+  request_frame.correlation_id = "corr-mail-event";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAIL_EVENT_STREAM;
+  request_frame.mail_event_stream = NULL;
+
+  service = wyrebox_daemon_mail_event_stream_service_new
+      (stream_mail_events_fixture, &fixture, NULL);
+  g_assert_nonnull (service);
+
+  g_assert_true (route_with_mail_event_stream (service, &request_frame,
+          &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+}
+
+static void
+test_request_router_rejects_missing_mail_event_stream_service (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonMailEventStreamRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_mail_event_stream_request_init (&request,
+          "account-1", "mailbox-inbox", NULL, "MessageDelivered", 41, 6,
+          1000, 2000, &error));
+  g_assert_no_error (error);
+
+  request_frame.request_id = "request-mail-event";
+  request_frame.caller_identity = "dovecot";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "dovecot-storage";
+  request_frame.correlation_id = "corr-mail-event";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAIL_EVENT_STREAM;
+  request_frame.mail_event_stream = &request;
+
+  g_assert_true (route_with_mail_event_stream (NULL, &request_frame, &frame,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
 }
 
 static gboolean
@@ -1810,6 +1952,14 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/request-router/"
       "rejects-missing-message-search-service",
       test_request_router_rejects_missing_message_search_service);
+  g_test_add_func ("/daemon-api/request-router/routes-mail-event-stream",
+      test_request_router_routes_mail_event_stream);
+  g_test_add_func ("/daemon-api/request-router/"
+      "rejects-missing-mail-event-stream-payload",
+      test_request_router_rejects_missing_mail_event_stream_payload);
+  g_test_add_func ("/daemon-api/request-router/"
+      "rejects-missing-mail-event-stream-service",
+      test_request_router_rejects_missing_mail_event_stream_service);
   g_test_add_func ("/daemon-api/request-router/routes-delivery-ingestion",
       test_request_router_routes_delivery_ingestion);
   g_test_add_func ("/daemon-api/request-router/"
