@@ -112,30 +112,53 @@ duckdb_api_probe = '''
   }
 '''
 
-if host_machine.cpu_family() != 'x86_64'
-  error('DuckDB is required, but the bundled DuckDB prebuilt ' +
-    'subproject supports Linux x86_64 only.')
-endif
+# DuckDB provisioning is architecture-aware. On x86_64 the build uses the
+# bundled prebuilt subproject wrap. On other architectures (e.g. arm64) no
+# prebuilt is bundled, so DuckDB must be built from source out-of-band and
+# pointed at via -Dduckdb_root=<dir> (containing include/duckdb.h and
+# lib/libduckdb.so). In every case WyreBox provides DuckDB itself rather than
+# resolving a system provider.
+duckdb_root = get_option('duckdb_root')
 
-# Use the wrapped DuckDB subproject directly: dependency fallback can resolve a
-# system provider, which this build intentionally avoids.
-duckdb_subproject = subproject('duckdb-prebuilt-linux')
-duckdb_subproject_dep = duckdb_subproject.get_variable('duckdb_dep')
+if duckdb_root != ''
+  duckdb_lib = cc.find_library('duckdb',
+    dirs: duckdb_root / 'lib',
+    required: true,
+  )
+  duckdb_subproject_dep = declare_dependency(
+    dependencies: duckdb_lib,
+    compile_args: ['-I' + duckdb_root / 'include'],
+  )
+  duckdb_api_name = 'DuckDB C API via source-built duckdb_root'
+  duckdb_summary = 'enabled via source-built DuckDB at ' + duckdb_root
+elif host_machine.cpu_family() == 'x86_64'
+  # Use the wrapped DuckDB subproject directly: dependency fallback can resolve a
+  # system provider, which this build intentionally avoids.
+  duckdb_subproject = subproject('duckdb-prebuilt-linux')
+  duckdb_subproject_dep = duckdb_subproject.get_variable('duckdb_dep')
+  duckdb_api_name = 'DuckDB C API via linux prebuilt subproject'
+  duckdb_summary = 'enabled via linux prebuilt subproject wrap'
+else
+  error('DuckDB is required, but the bundled DuckDB prebuilt subproject ' +
+    'supports Linux x86_64 only; on other architectures build DuckDB from ' +
+    'source and pass -Dduckdb_root=<dir> (containing include/ and lib/).')
+endif
 
 duckdb_api_usable = cc.links(
   duckdb_api_probe,
-  name: 'DuckDB C API via linux prebuilt subproject',
+  name: duckdb_api_name,
   dependencies: duckdb_subproject_dep,
 )
 
 if not duckdb_api_usable
-  error('DuckDB is required, but the DuckDB linux prebuilt ' +
-    'subproject did not provide a compile/link usable C API.')
+  error('DuckDB is required, but the configured DuckDB provider did not ' +
+    'provide a compile/link usable C API.')
 endif
 
 duckdb_deps = [duckdb_subproject_dep]
+# Always true: WyreBox bundles/provides DuckDB (prebuilt wrap or source build),
+# never a system package. See tests/build-config/test-build-config.c.
 duckdb_from_subproject = true
-duckdb_summary = 'enabled via linux prebuilt subproject wrap'
 summary('duckdb', duckdb_summary, section: 'Dependencies')
 
 wirelog_runtime_option = get_option('wirelog_runtime')
