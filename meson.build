@@ -665,6 +665,12 @@ test(
   args: files('tests/docs/test_issue_0011_postfix_lmtp_examples.py'),
 )
 
+test(
+  'docs issue 0025 backup restore workflow contract',
+  python,
+  args: files('tests/docs/test_issue_0025_backup_restore_workflow_contract.py'),
+)
+
 subdir('tests/object-store')
 subdir('tests/backup')
 subdir('tests/admin')
