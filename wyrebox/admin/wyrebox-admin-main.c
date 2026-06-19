@@ -295,6 +295,11 @@ print_usage (void)
       "readiness-status|health|schema-version|journal-position|"
       "materialization-checkpoint> [--socket-path PATH] [--journal-root PATH] "
       "[--catalog-path PATH] [--json]\n");
+  g_printerr ("Usage: wyrebox-admin <socket-status|health-status|"
+      "readiness-status|health|schema-version|journal-position|"
+      "materialization-checkpoint|materialization-manifest> "
+      "[--socket-path PATH] [--journal-root PATH] [--catalog-path PATH] "
+      "[--json]\n");
   return WYREBOX_ADMIN_SOCKET_STATUS_EXIT_USAGE_ERROR;
 }
 
@@ -499,6 +504,8 @@ run_materialization_checkpoint (int argc, char **argv)
   g_autoptr (GString) json = NULL;
   gboolean eof = FALSE;
   gboolean stale = FALSE;
+  guint64 journal_offset_lag = 0;
+  guint64 journal_sequence_lag = 0;
   guint64 journal_last_offset = 0;
   guint64 journal_last_sequence = 0;
   int exit_status = WYREBOX_ADMIN_SOCKET_STATUS_EXIT_USAGE_ERROR;
@@ -540,6 +547,11 @@ run_materialization_checkpoint (int argc, char **argv)
 
   stale = manifest.end_journal_offset < journal_last_offset ||
       manifest.end_journal_sequence < journal_last_sequence;
+  if (journal_last_offset >= manifest.end_journal_offset)
+    journal_offset_lag = journal_last_offset - manifest.end_journal_offset;
+  if (journal_last_sequence >= manifest.end_journal_sequence)
+    journal_sequence_lag =
+        journal_last_sequence - manifest.end_journal_sequence;
 
   exit_status = 0;
 
@@ -557,10 +569,13 @@ run_materialization_checkpoint (int argc, char **argv)
         ",\"manifest_end_sequence\":%" G_GUINT64_FORMAT
         ",\"journal_last_offset\":%" G_GUINT64_FORMAT
         ",\"journal_last_sequence\":%" G_GUINT64_FORMAT
+        ",\"journal_offset_lag\":%" G_GUINT64_FORMAT
+        ",\"journal_sequence_lag\":%" G_GUINT64_FORMAT
         ",\"stale\":%s}",
         manifest.end_journal_offset,
         manifest.end_journal_sequence,
-        journal_last_offset, journal_last_sequence, stale ? "true" : "false");
+        journal_last_offset, journal_last_sequence, journal_offset_lag,
+        journal_sequence_lag, stale ? "true" : "false");
     g_print ("%s\n", json->str);
   } else {
     g_print ("materialization-checkpoint journal_root=%s catalog_path=%s "
@@ -568,10 +583,99 @@ run_materialization_checkpoint (int argc, char **argv)
         " manifest_end_sequence=%" G_GUINT64_FORMAT
         " journal_last_offset=%" G_GUINT64_FORMAT
         " journal_last_sequence=%" G_GUINT64_FORMAT
+        " journal_offset_lag=%" G_GUINT64_FORMAT
+        " journal_sequence_lag=%" G_GUINT64_FORMAT
         " stale=%s\n",
         options.journal_root, options.catalog_path, manifest.run_id,
         manifest.end_journal_offset, manifest.end_journal_sequence,
-        journal_last_offset, journal_last_sequence, stale ? "true" : "false");
+        journal_last_offset, journal_last_sequence, journal_offset_lag,
+        journal_sequence_lag, stale ? "true" : "false");
+  }
+
+  return exit_status;
+}
+
+static int
+run_materialization_manifest (int argc, char **argv)
+{
+  g_auto (WyreboxAdminMaterializationCheckpointOptions) options = { 0 };
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_auto (WyreboxMaterializationManifest) manifest = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GString) json = NULL;
+  int exit_status = WYREBOX_ADMIN_SOCKET_STATUS_EXIT_USAGE_ERROR;
+
+  if (!parse_materialization_checkpoint_options (argc, argv, &options, &error))
+    return print_usage ();
+
+  if (options.catalog_path == NULL) {
+    g_set_error (&error,
+        G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "--catalog-path is required");
+    return print_usage ();
+  }
+
+  store = wyrebox_schema_metadata_store_new_duckdb (options.catalog_path,
+      &error);
+  if (store == NULL)
+    return WYREBOX_ADMIN_SOCKET_STATUS_EXIT_CONNECT_FAILED;
+
+  if (!wyrebox_schema_metadata_store_load_latest_materialization_manifest
+      (store, &manifest, &error))
+    return WYREBOX_ADMIN_SOCKET_STATUS_EXIT_CONNECT_FAILED;
+
+  exit_status = 0;
+
+  if (options.json) {
+    json = g_string_new (NULL);
+    g_string_append (json, "{");
+    g_string_append (json, "\"catalog_path\":");
+    append_json_escaped (json, options.catalog_path);
+    g_string_append (json, ",\"run_id\":");
+    append_json_escaped (json, manifest.run_id);
+    g_string_append_printf (json,
+        ",\"start_journal_offset\":%" G_GUINT64_FORMAT
+        ",\"start_journal_sequence\":%" G_GUINT64_FORMAT
+        ",\"end_journal_offset\":%" G_GUINT64_FORMAT
+        ",\"end_journal_sequence\":%" G_GUINT64_FORMAT
+        ",\"materialized_schema_version\":%" G_GUINT64_FORMAT
+        ",\"object_store_identity\":",
+        manifest.start_journal_offset,
+        manifest.start_journal_sequence,
+        manifest.end_journal_offset,
+        manifest.end_journal_sequence, manifest.materialized_schema_version);
+    append_json_escaped (json, manifest.object_store_identity);
+    g_string_append (json, ",\"rule_package_version\":");
+    append_json_escaped (json, manifest.rule_package_version);
+    g_string_append (json, ",\"view_package_version\":");
+    append_json_escaped (json, manifest.view_package_version);
+    g_string_append (json, ",\"engine_version\":");
+    append_json_escaped (json, manifest.engine_version);
+    g_string_append_printf (json,
+        ",\"created_at_unix_us\":%" G_GUINT64_FORMAT
+        ",\"completion_status\":", manifest.created_at_unix_us);
+    append_json_escaped (json, manifest.completion_status);
+    g_string_append (json, ",\"error_state\":");
+    append_json_escaped (json, manifest.error_state);
+    g_string_append_c (json, '}');
+    g_print ("%s\n", json->str);
+  } else {
+    g_print ("materialization-manifest catalog_path=%s run_id=%s "
+        "start_journal_offset=%" G_GUINT64_FORMAT
+        " start_journal_sequence=%" G_GUINT64_FORMAT
+        " end_journal_offset=%" G_GUINT64_FORMAT
+        " end_journal_sequence=%" G_GUINT64_FORMAT
+        " materialized_schema_version=%" G_GUINT64_FORMAT
+        " object_store_identity=%s rule_package_version=%s "
+        "view_package_version=%s engine_version=%s created_at_unix_us=%"
+        G_GUINT64_FORMAT " completion_status=%s error_state=%s\n",
+        options.catalog_path, manifest.run_id,
+        manifest.start_journal_offset, manifest.start_journal_sequence,
+        manifest.end_journal_offset, manifest.end_journal_sequence,
+        manifest.materialized_schema_version,
+        manifest.object_store_identity, manifest.rule_package_version,
+        manifest.view_package_version, manifest.engine_version,
+        manifest.created_at_unix_us, manifest.completion_status,
+        manifest.error_state != NULL ? manifest.error_state : "");
   }
 
   return exit_status;
@@ -603,6 +707,9 @@ run_command (int argc, char **argv)
 
   if (g_strcmp0 (argv[1], "materialization-checkpoint") == 0)
     return run_materialization_checkpoint (argc - 2, argv + 2);
+
+  if (g_strcmp0 (argv[1], "materialization-manifest") == 0)
+    return run_materialization_manifest (argc - 2, argv + 2);
 
   return print_usage ();
 }

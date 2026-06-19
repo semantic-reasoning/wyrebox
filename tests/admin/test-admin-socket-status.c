@@ -297,7 +297,8 @@ test_journal_position_cli_output (void)
 
 static void
 seed_materialization_manifest (const char *catalog_path,
-    const char *run_id, guint64 end_offset, guint64 end_sequence)
+    const char *run_id, guint64 start_offset, guint64 start_sequence,
+    guint64 end_offset, guint64 end_sequence)
 {
   g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
   g_autoptr (GError) error = NULL;
@@ -308,8 +309,8 @@ seed_materialization_manifest (const char *catalog_path,
   g_assert_nonnull (store);
 
   manifest.run_id = g_strdup (run_id);
-  manifest.start_journal_offset = 10;
-  manifest.start_journal_sequence = 1;
+  manifest.start_journal_offset = start_offset;
+  manifest.start_journal_sequence = start_sequence;
   manifest.end_journal_offset = end_offset;
   manifest.end_journal_sequence = end_sequence;
   manifest.materialized_schema_version =
@@ -376,10 +377,110 @@ test_materialization_checkpoint_cli_output (void)
   g_assert_cmpuint (offset, ==, 0);
   g_assert_cmpuint (sequence, ==, 1);
 
-  seed_materialization_manifest (catalog_path, "run-1", 20, 1);
+  seed_materialization_manifest (catalog_path, "run-1", 10, 1, 20, 1);
 
   assert_cli (human_argv, 0, "stale=false", NULL);
+  assert_cli (human_argv, 0, "journal_offset_lag=0", NULL);
   assert_cli (json_argv, 0, "\"stale\":false", NULL);
+  assert_cli (json_argv, 0, "\"journal_offset_lag\":0", NULL);
+
+  remove_tree (dir);
+}
+
+static void
+test_materialization_checkpoint_cli_output_reports_stale_lag (void)
+{
+  const char *admin = g_getenv ("WYREBOX_ADMIN_EXECUTABLE");
+  g_autofree char *dir = create_tmp_dir ();
+  g_autofree char *journal_root = g_build_filename (dir, "journal", NULL);
+  g_autofree char *catalog_path = g_build_filename (dir, "catalog.duckdb",
+      NULL);
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (GBytes) payload = NULL;
+  g_autoptr (GError) error = NULL;
+  char payload_bytes[] = "event-payload";
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  char *human_argv[] = {
+    (char *) admin,
+    (char *) "materialization-checkpoint",
+    (char *) "--journal-root",
+    (char *) journal_root,
+    (char *) "--catalog-path",
+    (char *) catalog_path,
+    NULL
+  };
+  char *json_argv[] = {
+    (char *) admin,
+    (char *) "materialization-checkpoint",
+    (char *) "--journal-root",
+    (char *) journal_root,
+    (char *) "--catalog-path",
+    (char *) catalog_path,
+    (char *) "--json",
+    NULL
+  };
+
+  g_assert_nonnull (admin);
+  g_assert_cmpint (g_mkdir_with_parents (journal_root, 0755), ==, 0);
+
+  writer = wyrebox_journal_writer_new (journal_root, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (writer);
+
+  payload = g_bytes_new_static (payload_bytes, sizeof payload_bytes - 1);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED, payload,
+          &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (offset, >=, 0);
+  g_assert_cmpuint (sequence, ==, 1);
+  g_assert_true (wyrebox_journal_writer_append (writer,
+          WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED, payload,
+          &offset, &sequence, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (offset, >, 0);
+  g_assert_cmpuint (sequence, ==, 2);
+
+  seed_materialization_manifest (catalog_path, "run-1", 0, 1, 0, 1);
+
+  assert_cli (human_argv, 0, "stale=true", NULL);
+  assert_cli (human_argv, 0, "journal_sequence_lag=1", NULL);
+  assert_cli (json_argv, 0, "\"stale\":true", NULL);
+  assert_cli (json_argv, 0, "\"journal_sequence_lag\":1", NULL);
+
+  remove_tree (dir);
+}
+
+static void
+test_materialization_manifest_cli_output (void)
+{
+  const char *admin = g_getenv ("WYREBOX_ADMIN_EXECUTABLE");
+  g_autofree char *dir = create_tmp_dir ();
+  g_autofree char *catalog_path = g_build_filename (dir, "catalog.duckdb",
+      NULL);
+  g_autoptr (GError) error = NULL;
+  char *human_argv[] = {
+    (char *) admin,
+    (char *) "materialization-manifest",
+    (char *) "--catalog-path",
+    (char *) catalog_path,
+    NULL
+  };
+  char *json_argv[] = {
+    (char *) admin,
+    (char *) "materialization-manifest",
+    (char *) "--catalog-path",
+    (char *) catalog_path,
+    (char *) "--json",
+    NULL
+  };
+
+  g_assert_nonnull (admin);
+  seed_materialization_manifest (catalog_path, "run-1", 10, 1, 20, 1);
+
+  assert_cli (human_argv, 0, "run_id=run-1", NULL);
+  assert_cli (json_argv, 0, "\"run_id\":\"run-1\"", NULL);
 
   remove_tree (dir);
 }
@@ -408,6 +509,10 @@ main (int argc, char **argv)
       test_journal_position_cli_output);
   g_test_add_func ("/admin/materialization-checkpoint/cli-output",
       test_materialization_checkpoint_cli_output);
+  g_test_add_func ("/admin/materialization-checkpoint/cli-output-stale",
+      test_materialization_checkpoint_cli_output_reports_stale_lag);
+  g_test_add_func ("/admin/materialization-manifest/cli-output",
+      test_materialization_manifest_cli_output);
 
   return g_test_run ();
 }

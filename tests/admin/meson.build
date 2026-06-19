@@ -53,3 +53,11 @@ test(
     'WYREBOX_ADMIN_EXECUTABLE': wyrebox_admin.full_path(),
   },
 )
+
+test(
+  'admin materialization manifest',
+  admin_socket_status_test,
+  env: {
+    'WYREBOX_ADMIN_EXECUTABLE': wyrebox_admin.full_path(),
+  },
+)
