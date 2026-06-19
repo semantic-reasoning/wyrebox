@@ -156,6 +156,7 @@ static gboolean
     .definition_ref = (gchar *) configured_derived_view_definition_ref,
     .rules_source = (gchar *) configured_derived_view_rules_source,
     .relation_name = (gchar *) configured_derived_view_relation_name,
+    .enabled = TRUE,
   };
   guint n_definitions = 0;
 
@@ -245,6 +246,7 @@ gboolean
     .definition_ref = (gchar *) definition_ref,
     .rules_source = (gchar *) rules_source,
     .relation_name = (gchar *) relation_name,
+    .enabled = TRUE,
   };
 
   g_return_val_if_fail (WYREBOX_IS_DAEMON_FACT_MUTATION_SERVICE (self), FALSE);
@@ -252,6 +254,30 @@ gboolean
 
   return wyrebox_daemon_derived_view_catalog_register_definition
       (self->derived_view_catalog, &definition, error);
+}
+
+gboolean
+    wyrebox_daemon_fact_mutation_service_enable_wirelog_derived_view
+    (WyreboxDaemonFactMutationService * self, const char *view_id,
+    GError ** error)
+{
+  g_return_val_if_fail (WYREBOX_IS_DAEMON_FACT_MUTATION_SERVICE (self), FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  return wyrebox_daemon_derived_view_catalog_enable_definition
+      (self->derived_view_catalog, view_id, error);
+}
+
+gboolean
+    wyrebox_daemon_fact_mutation_service_disable_wirelog_derived_view
+    (WyreboxDaemonFactMutationService * self, const char *view_id,
+    GError ** error)
+{
+  g_return_val_if_fail (WYREBOX_IS_DAEMON_FACT_MUTATION_SERVICE (self), FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  return wyrebox_daemon_derived_view_catalog_disable_definition
+      (self->derived_view_catalog, view_id, error);
 }
 
 static gboolean
@@ -390,6 +416,9 @@ materialize_configured_derived_views (WyreboxDaemonFactMutationService *self,
         (self->derived_view_catalog, i);
     if (definition == NULL)
       return FALSE;
+
+    if (!definition->enabled)
+      continue;
 
     g_clear_pointer (&changes, g_ptr_array_unref);
     if (!wyrebox_derived_view_materializer_refresh_from_rules_and_facts_with_changes (materializer, scope_id, definition->view_id, definition->imap_name, definition->definition_ref, (guint64) g_get_real_time (), definition->rules_source, scoped_facts, definition->relation_name, &changes, &view_error)) {

@@ -23,6 +23,7 @@ wyrebox_daemon_derived_view_definition_clear (WyreboxDaemonDerivedViewDefinition
   g_clear_pointer (&definition->definition_ref, g_free);
   g_clear_pointer (&definition->rules_source, g_free);
   g_clear_pointer (&definition->relation_name, g_free);
+  definition->enabled = FALSE;
 }
 
 static void
@@ -91,6 +92,13 @@ definition_matches_imap_name (const WyreboxDaemonDerivedViewDefinition *left,
     const WyreboxDaemonDerivedViewDefinition *right)
 {
   return g_strcmp0 (left->imap_name, right->imap_name) == 0;
+}
+
+static gboolean
+definition_matches_view_id_string (const WyreboxDaemonDerivedViewDefinition
+    *definition, const char *view_id)
+{
+  return g_strcmp0 (definition->view_id, view_id) == 0;
 }
 
 static void
@@ -189,9 +197,104 @@ gboolean
   copy->definition_ref = g_strdup (definition->definition_ref);
   copy->rules_source = g_strdup (definition->rules_source);
   copy->relation_name = g_strdup (definition->relation_name);
+  copy->enabled = definition->enabled;
 
   g_ptr_array_add (catalog->definitions, copy);
   return TRUE;
+}
+
+static WyreboxDaemonDerivedViewDefinition *
+lookup_definition_mutable (WyreboxDaemonDerivedViewCatalog *catalog,
+    const char *view_id)
+{
+  for (guint i = 0; i < catalog->definitions->len; i++) {
+    WyreboxDaemonDerivedViewDefinition *current =
+        g_ptr_array_index (catalog->definitions, i);
+
+    if (definition_matches_view_id_string (current, view_id))
+      return current;
+  }
+
+  return NULL;
+}
+
+gboolean
+    wyrebox_daemon_derived_view_catalog_enable_definition
+    (WyreboxDaemonDerivedViewCatalog * catalog, const char *view_id,
+    GError ** error)
+{
+  WyreboxDaemonDerivedViewDefinition *definition = NULL;
+
+  g_return_val_if_fail (WYREBOX_DAEMON_IS_DERIVED_VIEW_CATALOG (catalog),
+      FALSE);
+  g_return_val_if_fail (view_id != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  definition = lookup_definition_mutable (catalog, view_id);
+  if (definition == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_NOT_FOUND,
+        "derived view definition '%s' is not registered", view_id);
+    return FALSE;
+  }
+
+  definition->enabled = TRUE;
+  return TRUE;
+}
+
+gboolean
+    wyrebox_daemon_derived_view_catalog_disable_definition
+    (WyreboxDaemonDerivedViewCatalog * catalog, const char *view_id,
+    GError ** error)
+{
+  WyreboxDaemonDerivedViewDefinition *definition = NULL;
+
+  g_return_val_if_fail (WYREBOX_DAEMON_IS_DERIVED_VIEW_CATALOG (catalog),
+      FALSE);
+  g_return_val_if_fail (view_id != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  definition = lookup_definition_mutable (catalog, view_id);
+  if (definition == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_NOT_FOUND,
+        "derived view definition '%s' is not registered", view_id);
+    return FALSE;
+  }
+
+  definition->enabled = FALSE;
+  return TRUE;
+}
+
+gboolean
+    wyrebox_daemon_derived_view_catalog_remove_definition
+    (WyreboxDaemonDerivedViewCatalog * catalog, const char *view_id,
+    GError ** error)
+{
+  guint index = 0;
+
+  g_return_val_if_fail (WYREBOX_DAEMON_IS_DERIVED_VIEW_CATALOG (catalog),
+      FALSE);
+  g_return_val_if_fail (view_id != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  for (index = 0; index < catalog->definitions->len; index++) {
+    WyreboxDaemonDerivedViewDefinition *current =
+        g_ptr_array_index (catalog->definitions, index);
+
+    if (definition_matches_view_id_string (current, view_id)) {
+      g_ptr_array_remove_index (catalog->definitions, index);
+      return TRUE;
+    }
+  }
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_NOT_FOUND,
+      "derived view definition '%s' is not registered", view_id);
+  return FALSE;
 }
 
 guint
@@ -208,4 +311,14 @@ const WyreboxDaemonDerivedViewDefinition
   g_return_val_if_fail (WYREBOX_DAEMON_IS_DERIVED_VIEW_CATALOG (catalog), NULL);
   g_return_val_if_fail (index < catalog->definitions->len, NULL);
   return g_ptr_array_index (catalog->definitions, index);
+}
+
+const WyreboxDaemonDerivedViewDefinition
+    * wyrebox_daemon_derived_view_catalog_lookup_definition
+    (WyreboxDaemonDerivedViewCatalog * catalog, const char *view_id)
+{
+  g_return_val_if_fail (WYREBOX_DAEMON_IS_DERIVED_VIEW_CATALOG (catalog), NULL);
+  g_return_val_if_fail (view_id != NULL, NULL);
+
+  return lookup_definition_mutable (catalog, view_id);
 }

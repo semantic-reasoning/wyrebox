@@ -12,6 +12,7 @@ typedef struct
   gchar *definition_ref;
   gchar *rules_source;
   gchar *relation_name;
+  gboolean enabled;
 } WyreboxDaemonDerivedViewDefinition;
 
 void wyrebox_daemon_derived_view_definition_clear (
@@ -43,6 +44,21 @@ gboolean wyrebox_daemon_derived_view_catalog_register_definition (
     const WyreboxDaemonDerivedViewDefinition *definition,
     GError **error);
 
+gboolean wyrebox_daemon_derived_view_catalog_enable_definition (
+    WyreboxDaemonDerivedViewCatalog *catalog,
+    const char *view_id,
+    GError **error);
+
+gboolean wyrebox_daemon_derived_view_catalog_disable_definition (
+    WyreboxDaemonDerivedViewCatalog *catalog,
+    const char *view_id,
+    GError **error);
+
+gboolean wyrebox_daemon_derived_view_catalog_remove_definition (
+    WyreboxDaemonDerivedViewCatalog *catalog,
+    const char *view_id,
+    GError **error);
+
 guint wyrebox_daemon_derived_view_catalog_get_n_definitions (
     WyreboxDaemonDerivedViewCatalog *catalog);
 
@@ -50,6 +66,11 @@ const WyreboxDaemonDerivedViewDefinition *
 wyrebox_daemon_derived_view_catalog_get_definition (
     WyreboxDaemonDerivedViewCatalog *catalog,
     guint index);
+
+const WyreboxDaemonDerivedViewDefinition *
+wyrebox_daemon_derived_view_catalog_lookup_definition (
+    WyreboxDaemonDerivedViewCatalog *catalog,
+    const char *view_id);
 
 G_END_DECLS
 /* *INDENT-ON* */

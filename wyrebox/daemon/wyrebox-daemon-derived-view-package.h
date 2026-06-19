@@ -7,6 +7,18 @@ G_BEGIN_DECLS
 
 typedef struct
 {
+  const char *package_name;
+  const char *package_version;
+  const char *description;
+  const char *compatible_schema_version;
+  const char *compatible_api_version;
+  const char *rules_source;
+  const char *author;
+  const char *source_ref;
+} WyreboxDaemonDerivedViewPackageDescriptor;
+
+typedef struct
+{
   gchar *package_name;
   gchar *package_version;
   gchar *description;
@@ -30,6 +42,11 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDaemonDerivedViewPackageManifest,
 
 gboolean wyrebox_daemon_derived_view_package_manifest_validate (
     const WyreboxDaemonDerivedViewPackageManifest *manifest,
+    GError **error);
+
+gboolean wyrebox_daemon_derived_view_package_manifest_matches_descriptor (
+    const WyreboxDaemonDerivedViewPackageManifest *manifest,
+    const WyreboxDaemonDerivedViewPackageDescriptor *descriptor,
     GError **error);
 
 G_END_DECLS

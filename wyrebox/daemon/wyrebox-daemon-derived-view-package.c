@@ -176,3 +176,54 @@ wyrebox_daemon_derived_view_package_manifest_validate (const
 
   return TRUE;
 }
+
+gboolean
+wyrebox_daemon_derived_view_package_manifest_matches_descriptor (const
+    WyreboxDaemonDerivedViewPackageManifest *manifest,
+    const WyreboxDaemonDerivedViewPackageDescriptor *descriptor, GError **error)
+{
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (!wyrebox_daemon_derived_view_package_manifest_validate (manifest, error))
+    return FALSE;
+
+  if (descriptor == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "derived view package descriptor is required");
+    return FALSE;
+  }
+
+  if (g_strcmp0 (manifest->package_name, descriptor->package_name) != 0 ||
+      g_strcmp0 (manifest->package_version, descriptor->package_version) != 0 ||
+      g_strcmp0 (manifest->compatible_schema_version,
+          descriptor->compatible_schema_version) != 0 ||
+      g_strcmp0 (manifest->compatible_api_version,
+          descriptor->compatible_api_version) != 0 ||
+      g_strcmp0 (manifest->rules_source, descriptor->rules_source) != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "derived view package manifest does not match catalog descriptor");
+    return FALSE;
+  }
+
+  if (g_strcmp0 (manifest->author, descriptor->author) != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "derived view package manifest does not match catalog author");
+    return FALSE;
+  }
+
+  if (g_strcmp0 (manifest->source_ref, descriptor->source_ref) != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "derived view package manifest does not match catalog source");
+    return FALSE;
+  }
+
+  return TRUE;
+}

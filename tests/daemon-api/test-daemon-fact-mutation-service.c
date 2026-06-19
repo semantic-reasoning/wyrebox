@@ -864,6 +864,68 @@ test_fact_mutation_service_materializes_registered_wirelog_views (void)
 }
 
 static void
+test_fact_mutation_service_skips_disabled_wirelog_views (void)
+{
+  const WyreboxJournalEventType expected[] = {
+    WYREBOX_JOURNAL_EVENT_FACT_INSERTED,
+  };
+  g_autofree char *root =
+      g_dir_make_tmp ("wyrebox-fact-mutation-service-XXXXXX", NULL);
+  g_autofree char *catalog_path = create_catalog_path ();
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_autoptr (WyreboxDaemonFactMutationService) service = NULL;
+  guint64 sequence = 0;
+
+  g_assert_nonnull (root);
+  seed_materialization_catalog (catalog_path, "account-1");
+  writer = wyrebox_journal_writer_new (root, &error);
+  g_assert_no_error (error);
+  append_fact_journal_record_for_view (writer,
+      WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+      "account-1", "mail-1", "view-important", &sequence);
+  g_assert_cmpuint (sequence, ==, 1);
+  service = wyrebox_daemon_fact_mutation_service_new (writer);
+  g_assert_nonnull (service);
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_configure_wirelog_derived_view
+      (service, root, catalog_path, &error));
+  g_assert_no_error (error);
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_register_wirelog_derived_view
+      (service, "view-important", "Important", "wirelog:important",
+          ".decl project_keyword(message_id: symbol, view_id: symbol)\n"
+          ".decl show_in_virtual_folder(view_id: symbol, message_id: symbol)\n"
+          "show_in_virtual_folder(\"view-important\", message_id) :- "
+          "project_keyword(message_id, \"view-important\").\n",
+          "show_in_virtual_folder", &error));
+  g_assert_no_error (error);
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_disable_wirelog_derived_view
+      (service, "view-important", &error));
+  g_assert_no_error (error);
+
+  g_assert_true
+      (wyrebox_daemon_fact_mutation_service_catch_up_wirelog_derived_view
+      (service, "account-1", &error));
+  g_assert_no_error (error);
+
+  assert_journal_events (root, expected, G_N_ELEMENTS (expected), NULL);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM derived_views "
+          "WHERE account_id = 'account-1' "
+          "AND view_id = 'view-important';"), ==, 0);
+  g_assert_cmpuint (query_catalog_uint64 (catalog_path,
+          "SELECT COUNT(*) FROM derived_view_memberships "
+          "WHERE account_id = 'account-1' "
+          "AND view_id = 'view-important' "
+          "AND message_id = 'mail-1' AND is_visible = TRUE;"), ==, 0);
+
+  remove_tree (root);
+  remove_catalog_path (catalog_path);
+}
+
+static void
 test_derived_view_catalog_rejects_invalid_definition (void)
 {
   g_autofree char *root =
@@ -1475,6 +1537,9 @@ main (int argc, char **argv)
   g_test_add_func ("/daemon-api/fact-mutation-service/"
       "materializes-registered-wirelog-views",
       test_fact_mutation_service_materializes_registered_wirelog_views);
+  g_test_add_func ("/daemon-api/fact-mutation-service/"
+      "skips-disabled-wirelog-views",
+      test_fact_mutation_service_skips_disabled_wirelog_views);
   g_test_add_func ("/daemon-api/fact-mutation-service/catch-up-is-idempotent",
       test_fact_mutation_service_catch_up_is_idempotent);
   g_test_add_func ("/daemon-api/fact-mutation-service/"

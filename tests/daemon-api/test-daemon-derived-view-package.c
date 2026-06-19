@@ -1,4 +1,5 @@
 #include "wyrebox-daemon-derived-view-package.h"
+#include "wyrebox-daemon-derived-view-package-catalog.h"
 
 #include <gio/gio.h>
 
@@ -87,6 +88,45 @@ test_rejects_control_characters (void)
   wyrebox_daemon_derived_view_package_manifest_clear (&manifest);
 }
 
+static void
+test_matches_catalog_descriptor (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonDerivedViewPackageManifest) manifest =
+      make_valid_manifest ();
+  const WyreboxDaemonDerivedViewPackageDescriptor *descriptor = NULL;
+
+  descriptor = wyrebox_daemon_derived_view_package_catalog_lookup
+      (manifest.package_name, manifest.package_version);
+  g_assert_nonnull (descriptor);
+  g_assert_true (wyrebox_daemon_derived_view_package_manifest_matches_descriptor
+      (&manifest, descriptor, &error));
+  g_assert_no_error (error);
+}
+
+static void
+test_rejects_mismatched_catalog_descriptor (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonDerivedViewPackageManifest) manifest =
+      make_valid_manifest ();
+  WyreboxDaemonDerivedViewPackageDescriptor descriptor = {
+    .package_name = "project.view.package",
+    .package_version = "2.0.0",
+    .description = "Project view package",
+    .compatible_schema_version = "schema-7",
+    .compatible_api_version = "api-3",
+    .rules_source = "view('project').",
+    .author = "wyrebox",
+    .source_ref = "git+https://example.invalid/package",
+  };
+
+  g_assert_false
+      (wyrebox_daemon_derived_view_package_manifest_matches_descriptor
+      (&manifest, &descriptor, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -99,6 +139,11 @@ main (int argc, char **argv)
       test_rejects_duplicate_declared_inputs);
   g_test_add_func ("/daemon/derived-view-package/control-characters",
       test_rejects_control_characters);
+  g_test_add_func ("/daemon/derived-view-package/matches-catalog-descriptor",
+      test_matches_catalog_descriptor);
+  g_test_add_func
+      ("/daemon/derived-view-package/rejects-mismatched-catalog-descriptor",
+      test_rejects_mismatched_catalog_descriptor);
 
   return g_test_run ();
 }

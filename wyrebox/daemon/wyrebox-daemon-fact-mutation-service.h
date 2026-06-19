@@ -38,6 +38,16 @@ gboolean wyrebox_daemon_fact_mutation_service_register_wirelog_derived_view (
     const char *relation_name,
     GError **error);
 
+gboolean wyrebox_daemon_fact_mutation_service_enable_wirelog_derived_view (
+    WyreboxDaemonFactMutationService *self,
+    const char *view_id,
+    GError **error);
+
+gboolean wyrebox_daemon_fact_mutation_service_disable_wirelog_derived_view (
+    WyreboxDaemonFactMutationService *self,
+    const char *view_id,
+    GError **error);
+
 gboolean wyrebox_daemon_fact_mutation_service_catch_up_wirelog_derived_view (
     WyreboxDaemonFactMutationService *self,
     const char *scope_id,
