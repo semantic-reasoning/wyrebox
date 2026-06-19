@@ -1,11 +1,22 @@
 #include "wyrebox-daemon-fact-mutation-service.h"
 
+#include "wyrebox-daemon-derived-view-catalog.h"
 #include "wyrebox-daemon-client-identity.h"
 #include "wyrebox-daemon-audit-payload.h"
 #include "wyrebox-derived-view-materializer-wirelog.h"
 #include "wyrebox-fact-journal-snapshot.h"
 
 #include <gio/gio.h>
+
+struct _WyreboxDaemonFactMutationService
+{
+  GObject parent_instance;
+
+  WyreboxJournalWriter *journal_writer;
+  char *derived_view_journal_root_dir;
+  char *derived_view_catalog_path;
+  WyreboxDaemonDerivedViewCatalog *derived_view_catalog;
+};
 
 static const char *configured_derived_view_id = "view-projects";
 static const char *configured_derived_view_imap_name = "Projects";
@@ -15,17 +26,8 @@ static const char *configured_derived_view_relation_name =
 static const char *configured_derived_view_rules_source =
     ".decl project_keyword(message_id: symbol, view_id: symbol)\n"
     ".decl show_in_virtual_folder(view_id: symbol, message_id: symbol)\n"
-    "show_in_virtual_folder(view_id, message_id) :- "
-    "project_keyword(message_id, view_id).\n";
-
-struct _WyreboxDaemonFactMutationService
-{
-  GObject parent_instance;
-
-  WyreboxJournalWriter *journal_writer;
-  char *derived_view_journal_root_dir;
-  char *derived_view_catalog_path;
-};
+    "show_in_virtual_folder(\"view-projects\", message_id) :- "
+    "project_keyword(message_id, \"view-projects\").\n";
 
 G_DEFINE_TYPE (WyreboxDaemonFactMutationService,
     wyrebox_daemon_fact_mutation_service, G_TYPE_OBJECT);
@@ -108,6 +110,7 @@ wyrebox_daemon_fact_mutation_service_finalize (GObject *object)
 
   g_clear_pointer (&self->derived_view_journal_root_dir, g_free);
   g_clear_pointer (&self->derived_view_catalog_path, g_free);
+  g_clear_object (&self->derived_view_catalog);
   g_clear_object (&self->journal_writer);
 
   G_OBJECT_CLASS (wyrebox_daemon_fact_mutation_service_parent_class)->finalize
@@ -127,6 +130,7 @@ static void
 wyrebox_daemon_fact_mutation_service_init (WyreboxDaemonFactMutationService
     *self)
 {
+  self->derived_view_catalog = wyrebox_daemon_derived_view_catalog_new ();
 }
 
 WyreboxDaemonFactMutationService *
@@ -140,6 +144,51 @@ wyrebox_daemon_fact_mutation_service_new (WyreboxJournalWriter *journal_writer)
   self->journal_writer = g_object_ref (journal_writer);
 
   return self;
+}
+
+static gboolean
+    register_default_derived_view_if_needed
+    (WyreboxDaemonFactMutationService * self, GError ** error)
+{
+  WyreboxDaemonDerivedViewDefinition definition = {
+    .view_id = (gchar *) configured_derived_view_id,
+    .imap_name = (gchar *) configured_derived_view_imap_name,
+    .definition_ref = (gchar *) configured_derived_view_definition_ref,
+    .rules_source = (gchar *) configured_derived_view_rules_source,
+    .relation_name = (gchar *) configured_derived_view_relation_name,
+  };
+  guint n_definitions = 0;
+
+  n_definitions = wyrebox_daemon_derived_view_catalog_get_n_definitions
+      (self->derived_view_catalog);
+  for (guint i = 0; i < n_definitions; i++) {
+    const WyreboxDaemonDerivedViewDefinition *current = NULL;
+
+    current = wyrebox_daemon_derived_view_catalog_get_definition
+        (self->derived_view_catalog, i);
+    if (current != NULL &&
+        g_strcmp0 (current->view_id, configured_derived_view_id) == 0) {
+      if (g_strcmp0 (current->imap_name,
+              configured_derived_view_imap_name) == 0 &&
+          g_strcmp0 (current->definition_ref,
+              configured_derived_view_definition_ref) == 0 &&
+          g_strcmp0 (current->rules_source,
+              configured_derived_view_rules_source) == 0 &&
+          g_strcmp0 (current->relation_name,
+              configured_derived_view_relation_name) == 0)
+        return TRUE;
+
+      g_set_error (error,
+          G_IO_ERROR,
+          G_IO_ERROR_EXISTS,
+          "default derived view '%s' is already registered with a different "
+          "definition", configured_derived_view_id);
+      return FALSE;
+    }
+  }
+
+  return wyrebox_daemon_derived_view_catalog_register_definition
+      (self->derived_view_catalog, &definition, error);
 }
 
 gboolean
@@ -173,12 +222,36 @@ gboolean
   if (materializer == NULL)
     return FALSE;
 
+  if (!register_default_derived_view_if_needed (self, error))
+    return FALSE;
+
   g_free (self->derived_view_journal_root_dir);
   self->derived_view_journal_root_dir = g_strdup (journal_root_dir);
   g_free (self->derived_view_catalog_path);
   self->derived_view_catalog_path = g_strdup (catalog_path);
 
   return TRUE;
+}
+
+gboolean
+    wyrebox_daemon_fact_mutation_service_register_wirelog_derived_view
+    (WyreboxDaemonFactMutationService * self, const char *view_id,
+    const char *imap_name, const char *definition_ref,
+    const char *rules_source, const char *relation_name, GError ** error)
+{
+  WyreboxDaemonDerivedViewDefinition definition = {
+    .view_id = (gchar *) view_id,
+    .imap_name = (gchar *) imap_name,
+    .definition_ref = (gchar *) definition_ref,
+    .rules_source = (gchar *) rules_source,
+    .relation_name = (gchar *) relation_name,
+  };
+
+  g_return_val_if_fail (WYREBOX_IS_DAEMON_FACT_MUTATION_SERVICE (self), FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  return wyrebox_daemon_derived_view_catalog_register_definition
+      (self->derived_view_catalog, &definition, error);
 }
 
 static gboolean
@@ -276,17 +349,23 @@ filter_facts_for_scope (GPtrArray *facts, const char *scope_id, GError **error)
 }
 
 static gboolean
-materialize_configured_derived_view (WyreboxDaemonFactMutationService *self,
+materialize_configured_derived_views (WyreboxDaemonFactMutationService *self,
     const char *scope_id, GError **error)
 {
   g_autoptr (WyreboxDerivedViewMaterializer) materializer = NULL;
   g_autoptr (GPtrArray) facts = NULL;
   g_autoptr (GPtrArray) scoped_facts = NULL;
   g_autoptr (GPtrArray) changes = NULL;
+  guint n_definitions = 0;
 
   g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
   if (self->derived_view_catalog_path == NULL)
+    return TRUE;
+
+  n_definitions = wyrebox_daemon_derived_view_catalog_get_n_definitions
+      (self->derived_view_catalog);
+  if (n_definitions == 0)
     return TRUE;
 
   materializer = wyrebox_derived_view_materializer_new_duckdb
@@ -303,11 +382,30 @@ materialize_configured_derived_view (WyreboxDaemonFactMutationService *self,
   if (scoped_facts == NULL)
     return FALSE;
 
-  if (!wyrebox_derived_view_materializer_refresh_from_rules_and_facts_with_changes (materializer, scope_id, configured_derived_view_id, configured_derived_view_imap_name, configured_derived_view_definition_ref, (guint64) g_get_real_time (), configured_derived_view_rules_source, scoped_facts, configured_derived_view_relation_name, &changes, error))
-    return FALSE;
+  for (guint i = 0; i < n_definitions; i++) {
+    const WyreboxDaemonDerivedViewDefinition *definition = NULL;
+    g_autoptr (GError) view_error = NULL;
 
-  return wyrebox_derived_view_membership_changes_append_journal (changes,
-      self->journal_writer, error);
+    definition = wyrebox_daemon_derived_view_catalog_get_definition
+        (self->derived_view_catalog, i);
+    if (definition == NULL)
+      return FALSE;
+
+    g_clear_pointer (&changes, g_ptr_array_unref);
+    if (!wyrebox_derived_view_materializer_refresh_from_rules_and_facts_with_changes (materializer, scope_id, definition->view_id, definition->imap_name, definition->definition_ref, (guint64) g_get_real_time (), definition->rules_source, scoped_facts, definition->relation_name, &changes, &view_error)) {
+      g_debug ("derived view materialization failed for %s: %s",
+          definition->view_id, view_error != NULL ? view_error->message :
+          "unknown error");
+      g_propagate_error (error, g_steal_pointer (&view_error));
+      return FALSE;
+    }
+
+    if (!wyrebox_derived_view_membership_changes_append_journal (changes,
+            self->journal_writer, error))
+      return FALSE;
+  }
+
+  return TRUE;
 }
 
 static void
@@ -319,7 +417,8 @@ log_materialization_failure_if_needed (WyreboxDaemonFactMutationService *self,
   if (self->derived_view_catalog_path == NULL)
     return;
 
-  if (!materialize_configured_derived_view (self, scope_id, &materialize_error)) {
+  if (!materialize_configured_derived_views (self, scope_id,
+          &materialize_error)) {
     g_debug ("%s materialization failed after durable commit: %s",
         operation_name, materialize_error->message);
   }
@@ -433,7 +532,7 @@ gboolean
     return FALSE;
   }
 
-  return materialize_configured_derived_view (self, scope_id, error);
+  return materialize_configured_derived_views (self, scope_id, error);
 }
 
 gboolean
