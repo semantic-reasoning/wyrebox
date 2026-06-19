@@ -1,4 +1,5 @@
 #include "wyrebox-local-object-store.h"
+#include "wyrebox-benchmark-report.h"
 
 #include <gio/gio.h>
 #include <glib.h>
@@ -44,7 +45,7 @@ run_microbenchmark (const char *fixture_dir)
 {
   static const char *fixture_name = "simple-crlf.eml";
   g_autofree char *root = NULL;
-  gint64 elapsed_us = 0;
+  g_auto (WyreboxBenchmarkReport) report = { 0 };
 
   g_assert_nonnull (fixture_dir);
 
@@ -67,6 +68,7 @@ run_microbenchmark (const char *fixture_dir)
 
     input = load_fixture_bytes (fixture_dir, fixture_name);
 
+    wyrebox_benchmark_report_init (&report);
     start_us = g_get_monotonic_time ();
     g_assert_true (wyrebox_local_object_store_put_bytes (object_store,
             input, &object_key, &error));
@@ -74,7 +76,8 @@ run_microbenchmark (const char *fixture_dir)
     g_assert_no_error (error);
     g_assert_nonnull (object_key);
 
-    elapsed_us = end_us - start_us;
+    report.elapsed_us = end_us - start_us;
+    wyrebox_benchmark_report_capture_rusage (&report);
 
     stored = wyrebox_local_object_store_get_bytes (object_store,
         object_key, &error);
@@ -83,13 +86,10 @@ run_microbenchmark (const char *fixture_dir)
 
     g_assert_true (g_bytes_equal (input, stored));
     g_assert_cmpuint (g_bytes_get_size (stored), ==, g_bytes_get_size (input));
+    report.object_count = 1;
+    report.disk_bytes = g_bytes_get_size (stored);
 
-    g_print ("{\"schema\":\"wyrebox-benchmark-report/v1\",");
-    g_print ("\"suite\":\"object-store\",");
-    g_print ("\"case\":\"put-bytes\",");
-    g_print ("\"metric\":\"elapsed_us\",");
-    g_print ("\"value\":%" G_GINT64_FORMAT ",", elapsed_us);
-    g_print ("\"status\":\"ok\"}\n");
+    wyrebox_benchmark_report_print_json ("object-store", "put-bytes", &report);
   }
 
   remove_tree (root);

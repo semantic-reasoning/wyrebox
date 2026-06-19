@@ -27,7 +27,10 @@ benchmark(
 
 object_store_benchmark = executable(
   'wyrebox-benchmark-object-store',
-  'wyrebox-benchmark-object-store.c',
+  [
+    'wyrebox-benchmark-object-store.c',
+    'wyrebox-benchmark-report.c',
+  ],
   dependencies: [wyrebox_dep],
 )
 
