@@ -60,6 +60,10 @@ void wyrebox_daemon_request_adapter_set_duckdb_query_template_service (
     WyreboxDaemonRequestAdapter *self,
     WyreboxDaemonDuckDBQueryTemplateService *duckdb_query_template_service);
 
+void wyrebox_daemon_request_adapter_set_mail_event_stream_service (
+    WyreboxDaemonRequestAdapter *self,
+    WyreboxDaemonMailEventStreamService *mail_event_stream_service);
+
 GBytes *wyrebox_daemon_request_adapter_handle_payload (
     const WyreboxDaemonPeerCredentials *peer_credentials,
     GBytes *request,

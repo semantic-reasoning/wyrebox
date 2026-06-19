@@ -103,6 +103,43 @@ route_message_search (WyreboxDaemonMessageSearchService *service,
 }
 
 static gboolean
+route_mail_event_stream (WyreboxDaemonMailEventStreamService *service,
+    const WyreboxDaemonDecodedRequestFrame *request_frame,
+    WyreboxDaemonResponseFrame *out_frame, GError **error)
+{
+  g_autoptr (GError) local_error = NULL;
+
+  if (!WYREBOX_IS_DAEMON_MAIL_EVENT_STREAM_SERVICE (service)) {
+    g_set_error (&local_error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "mail event stream request frame cannot be routed without service");
+    return init_error_response (out_frame,
+        request_frame->request_id, request_frame->correlation_id, local_error,
+        error);
+  }
+
+  if (request_frame->mail_event_stream == NULL) {
+    g_set_error (&local_error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "mail event stream request frame is missing payload");
+    return init_error_response (out_frame,
+        request_frame->request_id, request_frame->correlation_id, local_error,
+        error);
+  }
+
+  return wyrebox_daemon_mail_event_stream_service_handle_identity (service,
+      &(WyreboxDaemonRequestIdentity) {
+      .request_id = (char *) request_frame->request_id,.caller_identity =
+        (char *) request_frame->caller_identity,.account_identity =
+        (char *) request_frame->account_identity,.tool_identity =
+        (char *) request_frame->tool_identity,.correlation_id =
+        (char *) request_frame->correlation_id,},
+      request_frame->mail_event_stream, out_frame, error);
+}
+
+static gboolean
 route_wirelog_predicate_query (WyreboxDaemonWirelogPredicateQueryService
     *service, const WyreboxDaemonDecodedRequestFrame *request_frame,
     WyreboxDaemonResponseFrame *out_frame, GError **error)
@@ -443,6 +480,7 @@ wyrebox_daemon_request_router_route (WyreboxDaemonDeliveryIngestionService
     *mailbox_select_service, WyreboxDaemonMessageFetchService
     *message_fetch_service, WyreboxDaemonMessageSearchService
     *message_search_service,
+    WyreboxDaemonMailEventStreamService *mail_event_stream_service,
     WyreboxDaemonWirelogPredicateQueryService *wirelog_predicate_query_service,
     WyreboxDaemonDuckDBQueryTemplateService *duckdb_query_template_service,
     WyreboxDaemonFlagKeywordUpdateService *flag_keyword_update_service,
@@ -471,6 +509,9 @@ wyrebox_daemon_request_router_route (WyreboxDaemonDeliveryIngestionService
     case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_SEARCH:
       return route_message_search (message_search_service, request_frame,
           out_frame, error);
+    case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAIL_EVENT_STREAM:
+      return route_mail_event_stream (mail_event_stream_service,
+          request_frame, out_frame, error);
     case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY:
       return route_wirelog_predicate_query (wirelog_predicate_query_service,
           request_frame, out_frame, error);

@@ -13,6 +13,7 @@ struct _WyreboxDaemonRequestAdapter
   WyreboxDaemonMailboxSelectService *mailbox_select_service;
   WyreboxDaemonMessageFetchService *message_fetch_service;
   WyreboxDaemonMessageSearchService *message_search_service;
+  WyreboxDaemonMailEventStreamService *mail_event_stream_service;
   WyreboxDaemonWirelogPredicateQueryService *wirelog_predicate_query_service;
   WyreboxDaemonDuckDBQueryTemplateService *duckdb_query_template_service;
   WyreboxDaemonFlagKeywordUpdateService *flag_keyword_update_service;
@@ -75,6 +76,7 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDaemonRequestAdapterDecodedState,
   g_clear_object (&self->mailbox_select_service);
   g_clear_object (&self->message_fetch_service);
   g_clear_object (&self->message_search_service);
+  g_clear_object (&self->mail_event_stream_service);
   g_clear_object (&self->wirelog_predicate_query_service);
   g_clear_object (&self->duckdb_query_template_service);
   g_clear_object (&self->flag_keyword_update_service);
@@ -125,6 +127,7 @@ route_decoded_request (WyreboxDaemonRequestAdapter *self,
       self->mailbox_select_service,
       self->message_fetch_service,
       self->message_search_service,
+      self->mail_event_stream_service,
       self->wirelog_predicate_query_service,
       self->duckdb_query_template_service,
       self->flag_keyword_update_service,
@@ -239,6 +242,18 @@ void wyrebox_daemon_request_adapter_set_duckdb_query_template_service
 
   g_set_object (&self->duckdb_query_template_service,
       duckdb_query_template_service);
+}
+
+void wyrebox_daemon_request_adapter_set_mail_event_stream_service
+    (WyreboxDaemonRequestAdapter * self,
+    WyreboxDaemonMailEventStreamService * mail_event_stream_service)
+{
+  g_return_if_fail (WYREBOX_IS_DAEMON_REQUEST_ADAPTER (self));
+  g_return_if_fail (mail_event_stream_service == NULL
+      || WYREBOX_IS_DAEMON_MAIL_EVENT_STREAM_SERVICE
+      (mail_event_stream_service));
+
+  g_set_object (&self->mail_event_stream_service, mail_event_stream_service);
 }
 
 GBytes *

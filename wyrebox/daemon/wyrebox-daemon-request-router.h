@@ -60,6 +60,7 @@ gboolean wyrebox_daemon_request_router_route (
     WyreboxDaemonMailboxSelectService *mailbox_select_service,
     WyreboxDaemonMessageFetchService *message_fetch_service,
     WyreboxDaemonMessageSearchService *message_search_service,
+    WyreboxDaemonMailEventStreamService *mail_event_stream_service,
     WyreboxDaemonWirelogPredicateQueryService *wirelog_predicate_query_service,
     WyreboxDaemonDuckDBQueryTemplateService *duckdb_query_template_service,
     WyreboxDaemonFlagKeywordUpdateService *flag_keyword_update_service,
