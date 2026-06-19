@@ -16,6 +16,7 @@ typedef struct
   gboolean has_state;
   WyreboxSchemaMigrationMetadataState persisted_state;
   GHashTable *materialization_manifests;
+  GHashTable *materialization_artifact_checksums;
   gboolean fail_next_save;
 } WyreboxSchemaMetadataStoreMemory;
 
@@ -65,6 +66,119 @@ wyrebox_materialization_manifest_equal (const WyreboxMaterializationManifest
       g_strcmp0 (left->completion_status,
       right->completion_status) == 0 &&
       g_strcmp0 (left->error_state, right->error_state) == 0;
+}
+
+void wyrebox_materialization_artifact_checksum_clear
+    (WyreboxMaterializationArtifactChecksum * checksum)
+{
+  if (checksum == NULL)
+    return;
+
+  g_clear_pointer (&checksum->run_id, g_free);
+  g_clear_pointer (&checksum->artifact_kind, g_free);
+  g_clear_pointer (&checksum->artifact_name, g_free);
+  g_clear_pointer (&checksum->checksum_algorithm, g_free);
+  g_clear_pointer (&checksum->logical_checksum, g_free);
+  memset (checksum, 0, sizeof *checksum);
+}
+
+static WyreboxMaterializationArtifactChecksum *
+wyrebox_materialization_artifact_checksum_dup (const
+    WyreboxMaterializationArtifactChecksum *checksum)
+{
+  WyreboxMaterializationArtifactChecksum *copy = NULL;
+
+  g_return_val_if_fail (checksum != NULL, NULL);
+
+  copy = g_new0 (WyreboxMaterializationArtifactChecksum, 1);
+  copy->run_id = g_strdup (checksum->run_id);
+  copy->artifact_kind = g_strdup (checksum->artifact_kind);
+  copy->artifact_name = g_strdup (checksum->artifact_name);
+  copy->row_count = checksum->row_count;
+  copy->checksum_algorithm = g_strdup (checksum->checksum_algorithm);
+  copy->logical_checksum = g_strdup (checksum->logical_checksum);
+
+  return copy;
+}
+
+static void
+    wyrebox_materialization_artifact_checksum_free
+    (WyreboxMaterializationArtifactChecksum * checksum)
+{
+  if (checksum == NULL)
+    return;
+
+  wyrebox_materialization_artifact_checksum_clear (checksum);
+  g_free (checksum);
+}
+
+static gchar *
+wyrebox_materialization_artifact_checksum_key (const gchar *run_id,
+    const gchar *artifact_kind, const gchar *artifact_name)
+{
+  return g_strdup_printf ("%s\037%s\037%s", run_id, artifact_kind,
+      artifact_name);
+}
+
+static gboolean
+wyrebox_materialization_artifact_checksum_validate (const
+    WyreboxMaterializationArtifactChecksum *checksum, GError **error)
+{
+  g_return_val_if_fail (checksum != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (checksum->run_id == NULL || checksum->run_id[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "materialization artifact checksum requires a non-empty run ID");
+    return FALSE;
+  }
+
+  if (checksum->artifact_kind == NULL || checksum->artifact_kind[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "materialization artifact checksum requires a non-empty artifact kind");
+    return FALSE;
+  }
+
+  if (g_strcmp0 (checksum->artifact_kind, "table") != 0 &&
+      g_strcmp0 (checksum->artifact_kind, "view") != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "materialization artifact checksum artifact kind must be table or view");
+    return FALSE;
+  }
+
+  if (checksum->artifact_name == NULL || checksum->artifact_name[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "materialization artifact checksum requires a non-empty artifact name");
+    return FALSE;
+  }
+
+  if (checksum->checksum_algorithm == NULL ||
+      checksum->checksum_algorithm[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "materialization artifact checksum requires a non-empty checksum algorithm");
+    return FALSE;
+  }
+
+  if (checksum->logical_checksum == NULL ||
+      checksum->logical_checksum[0] == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "materialization artifact checksum requires a non-empty logical checksum");
+    return FALSE;
+  }
+
+  return TRUE;
 }
 
 static WyreboxMaterializationManifest *
@@ -831,6 +945,110 @@ static gboolean
 }
 
 static gboolean
+    wyrebox_schema_metadata_store_memory_load_materialization_artifact_checksum
+    (WyreboxSchemaMetadataStore * self, const gchar * run_id,
+    const gchar * artifact_kind, const gchar * artifact_name,
+    WyreboxMaterializationArtifactChecksum * out_checksum, GError ** error)
+{
+  WyreboxSchemaMetadataStoreMemory *memory_store = NULL;
+  WyreboxMaterializationArtifactChecksum *stored_checksum = NULL;
+  g_autofree gchar *key = NULL;
+
+  g_return_val_if_fail (g_type_check_instance_is_a (
+          (GTypeInstance *) self,
+          wyrebox_schema_metadata_store_memory_get_type ()), FALSE);
+  g_return_val_if_fail (run_id != NULL, FALSE);
+  g_return_val_if_fail (artifact_kind != NULL, FALSE);
+  g_return_val_if_fail (artifact_name != NULL, FALSE);
+  g_return_val_if_fail (out_checksum != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  memory_store = (WyreboxSchemaMetadataStoreMemory *) self;
+  wyrebox_materialization_artifact_checksum_clear (out_checksum);
+  key = wyrebox_materialization_artifact_checksum_key (run_id, artifact_kind,
+      artifact_name);
+  stored_checksum =
+      g_hash_table_lookup (memory_store->materialization_artifact_checksums,
+      key);
+  if (stored_checksum == NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_NOT_FOUND,
+        "materialization artifact checksum %s/%s/%s not found", run_id,
+        artifact_kind, artifact_name);
+    return FALSE;
+  }
+
+  {
+    g_autofree WyreboxMaterializationArtifactChecksum *copy =
+        wyrebox_materialization_artifact_checksum_dup (stored_checksum);
+
+    *out_checksum = *copy;
+    copy->run_id = NULL;
+    copy->artifact_kind = NULL;
+    copy->artifact_name = NULL;
+    copy->checksum_algorithm = NULL;
+    copy->logical_checksum = NULL;
+  }
+
+  return TRUE;
+}
+
+static gboolean
+    wyrebox_schema_metadata_store_memory_save_materialization_artifact_checksum
+    (WyreboxSchemaMetadataStore * self,
+    const WyreboxMaterializationArtifactChecksum * checksum, GError ** error)
+{
+  WyreboxSchemaMetadataStoreMemory *memory_store = NULL;
+  WyreboxMaterializationManifest manifest = { 0 };
+  WyreboxMaterializationArtifactChecksum *copy = NULL;
+  gchar *key = NULL;
+
+  g_return_val_if_fail (g_type_check_instance_is_a (
+          (GTypeInstance *) self,
+          wyrebox_schema_metadata_store_memory_get_type ()), FALSE);
+  g_return_val_if_fail (checksum != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (!wyrebox_materialization_artifact_checksum_validate (checksum, error))
+    return FALSE;
+
+  memory_store = (WyreboxSchemaMetadataStoreMemory *) self;
+  if (!wyrebox_schema_metadata_store_memory_load_materialization_manifest (self,
+          checksum->run_id, &manifest, error))
+    return FALSE;
+
+  if (g_strcmp0 (manifest.completion_status, "completed") != 0) {
+    wyrebox_materialization_manifest_clear (&manifest);
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "materialization artifact checksum %s requires a completed manifest",
+        checksum->run_id);
+    return FALSE;
+  }
+
+  wyrebox_materialization_manifest_clear (&manifest);
+  key = wyrebox_materialization_artifact_checksum_key (checksum->run_id,
+      checksum->artifact_kind, checksum->artifact_name);
+  if (g_hash_table_contains (memory_store->materialization_artifact_checksums,
+          key)) {
+    g_free (key);
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_EXISTS,
+        "materialization artifact checksum %s already exists",
+        checksum->run_id);
+    return FALSE;
+  }
+
+  copy = wyrebox_materialization_artifact_checksum_dup (checksum);
+  g_hash_table_insert (memory_store->materialization_artifact_checksums, key,
+      copy);
+  return TRUE;
+}
+
+static gboolean
 wyrebox_schema_metadata_store_memory_save (WyreboxSchemaMetadataStore *self,
     const WyreboxSchemaMigrationMetadataState *state, GError **error)
 {
@@ -901,6 +1119,8 @@ wyrebox_schema_metadata_store_memory_finalize (GObject *object)
       (WyreboxSchemaMetadataStoreMemory *) object;
 
   g_clear_pointer (&self->materialization_manifests, g_hash_table_destroy);
+  g_clear_pointer (&self->materialization_artifact_checksums,
+      g_hash_table_destroy);
 
   G_OBJECT_CLASS (wyrebox_schema_metadata_store_memory_parent_class)->finalize
       (object);
@@ -921,6 +1141,10 @@ static void
       wyrebox_schema_metadata_store_memory_load_materialization_manifest;
   store_class->save_materialization_manifest =
       wyrebox_schema_metadata_store_memory_save_materialization_manifest;
+  store_class->load_materialization_artifact_checksum =
+      wyrebox_schema_metadata_store_memory_load_materialization_artifact_checksum;
+  store_class->save_materialization_artifact_checksum =
+      wyrebox_schema_metadata_store_memory_save_materialization_artifact_checksum;
   store_class->apply_migration_operation =
       wyrebox_schema_metadata_store_memory_apply_migration_operation;
 }
@@ -934,6 +1158,9 @@ wyrebox_schema_metadata_store_memory_init (WyreboxSchemaMetadataStoreMemory
   self->materialization_manifests = g_hash_table_new_full (g_str_hash,
       g_str_equal, g_free,
       (GDestroyNotify) wyrebox_materialization_manifest_free);
+  self->materialization_artifact_checksums = g_hash_table_new_full (g_str_hash,
+      g_str_equal, g_free,
+      (GDestroyNotify) wyrebox_materialization_artifact_checksum_free);
   wyrebox_schema_migration_metadata_state_clear (&self->persisted_state);
 }
 
@@ -1157,7 +1384,16 @@ duckdb_store_create_schema (WyreboxSchemaMetadataStoreDuckdb *self,
       "CHECK (start_journal_offset < end_journal_offset OR "
       "(start_journal_offset = end_journal_offset AND "
       "start_journal_sequence <= end_journal_sequence)),"
-      "CHECK (error_state IS NULL OR error_state <> '')" ");", error);
+      "CHECK (error_state IS NULL OR error_state <> '')" ");", error)
+      && duckdb_store_query (self,
+      "CREATE TABLE IF NOT EXISTS materialization_artifact_checksums ("
+      "run_id VARCHAR NOT NULL CHECK (run_id <> ''),"
+      "artifact_kind VARCHAR NOT NULL CHECK (artifact_kind IN ('table', 'view')),"
+      "artifact_name VARCHAR NOT NULL CHECK (artifact_name <> ''),"
+      "row_count UBIGINT NOT NULL,"
+      "checksum_algorithm VARCHAR NOT NULL CHECK (checksum_algorithm <> ''),"
+      "logical_checksum VARCHAR NOT NULL CHECK (logical_checksum <> ''),"
+      "PRIMARY KEY (run_id, artifact_kind, artifact_name)" ");", error);
 }
 
 static gboolean
@@ -1976,6 +2212,157 @@ static gboolean
 }
 
 static gboolean
+    duckdb_store_load_materialization_artifact_checksum
+    (WyreboxSchemaMetadataStoreDuckdb * self, const gchar * run_id,
+    const gchar * artifact_kind, const gchar * artifact_name,
+    WyreboxMaterializationArtifactChecksum * out_checksum, GError ** error)
+{
+  g_auto (duckdb_result) result = { 0 };
+  g_auto (duckdb_prepared_statement) statement = NULL;
+  idx_t rows = 0;
+
+  g_return_val_if_fail (run_id != NULL, FALSE);
+  g_return_val_if_fail (artifact_kind != NULL, FALSE);
+  g_return_val_if_fail (artifact_name != NULL, FALSE);
+  g_return_val_if_fail (out_checksum != NULL, FALSE);
+
+  wyrebox_materialization_artifact_checksum_clear (out_checksum);
+
+  if (!duckdb_store_prepare (self,
+          "SELECT run_id, artifact_kind, artifact_name, row_count, "
+          "checksum_algorithm, logical_checksum "
+          "FROM materialization_artifact_checksums "
+          "WHERE run_id = ? AND artifact_kind = ? AND artifact_name = ?;",
+          &statement, error))
+    return FALSE;
+
+  if (duckdb_bind_varchar (statement, 1, run_id) != DuckDBSuccess ||
+      duckdb_bind_varchar (statement, 2, artifact_kind) != DuckDBSuccess ||
+      duckdb_bind_varchar (statement, 3, artifact_name) != DuckDBSuccess) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB materialization artifact checksum bind failed");
+    return FALSE;
+  }
+
+  if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+    const char *detail = duckdb_result_error (&result);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB materialization artifact checksum load failed: %s",
+        detail != NULL ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  rows = duckdb_row_count (&result);
+  if (rows > 1 || duckdb_column_count (&result) != 6) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "DuckDB materialization artifact checksum result has invalid shape");
+    return FALSE;
+  }
+
+  if (rows == 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_NOT_FOUND,
+        "materialization artifact checksum %s/%s/%s not found", run_id,
+        artifact_kind, artifact_name);
+    return FALSE;
+  }
+
+  if (duckdb_value_is_null (&result, 0, 0) ||
+      duckdb_value_is_null (&result, 1, 0) ||
+      duckdb_value_is_null (&result, 2, 0) ||
+      duckdb_value_is_null (&result, 3, 0) ||
+      duckdb_value_is_null (&result, 4, 0) ||
+      duckdb_value_is_null (&result, 5, 0)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "DuckDB materialization artifact checksum row has NULL required fields");
+    return FALSE;
+  }
+
+  out_checksum->run_id = duckdb_store_dup_nullable_varchar (&result, 0, 0);
+  out_checksum->artifact_kind = duckdb_store_dup_nullable_varchar (&result, 1,
+      0);
+  out_checksum->artifact_name = duckdb_store_dup_nullable_varchar (&result, 2,
+      0);
+  out_checksum->row_count = (guint64) duckdb_value_uint64 (&result, 3, 0);
+  out_checksum->checksum_algorithm =
+      duckdb_store_dup_nullable_varchar (&result, 4, 0);
+  out_checksum->logical_checksum =
+      duckdb_store_dup_nullable_varchar (&result, 5, 0);
+
+  if (!wyrebox_materialization_artifact_checksum_validate (out_checksum, error))
+    return FALSE;
+
+  return TRUE;
+}
+
+static gboolean
+    duckdb_store_save_materialization_artifact_checksum
+    (WyreboxSchemaMetadataStoreDuckdb * self,
+    const WyreboxMaterializationArtifactChecksum * checksum, GError ** error)
+{
+  g_auto (duckdb_prepared_statement) statement = NULL;
+  g_auto (duckdb_result) result = { 0 };
+  WyreboxSchemaMetadataStore *store = NULL;
+  g_auto (WyreboxMaterializationManifest) manifest = { 0 };
+
+  g_return_val_if_fail (checksum != NULL, FALSE);
+
+  if (!wyrebox_materialization_artifact_checksum_validate (checksum, error))
+    return FALSE;
+
+  store = WYREBOX_SCHEMA_METADATA_STORE (g_object_ref (self));
+  if (!wyrebox_schema_metadata_store_load_materialization_manifest (store,
+          checksum->run_id, &manifest, error))
+    return FALSE;
+
+  if (g_strcmp0 (manifest.completion_status, "completed") != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "materialization artifact checksum %s requires a completed manifest",
+        checksum->run_id);
+    return FALSE;
+  }
+
+  if (!duckdb_store_query (self, "BEGIN TRANSACTION;", error))
+    return FALSE;
+
+  if (!duckdb_store_prepare (self,
+          "INSERT INTO materialization_artifact_checksums ("
+          "run_id, artifact_kind, artifact_name, row_count, "
+          "checksum_algorithm, logical_checksum"
+          ") VALUES (?, ?, ?, ?, ?, ?);",
+          &statement, error) ||
+      !duckdb_store_bind_varchar (statement, 1, checksum->run_id, error) ||
+      !duckdb_store_bind_varchar (statement, 2, checksum->artifact_kind,
+          error) ||
+      !duckdb_store_bind_varchar (statement, 3, checksum->artifact_name,
+          error) ||
+      !duckdb_store_bind_uint64 (statement, 4, checksum->row_count, error) ||
+      !duckdb_store_bind_varchar (statement, 5, checksum->checksum_algorithm,
+          error) ||
+      !duckdb_store_bind_varchar (statement, 6, checksum->logical_checksum,
+          error) ||
+      !duckdb_store_execute_prepared (statement, error) ||
+      !duckdb_store_query (self, "COMMIT;", error)) {
+    duckdb_store_rollback_quietly (self);
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static gboolean
 wyrebox_schema_metadata_store_duckdb_load (WyreboxSchemaMetadataStore *self,
     WyreboxSchemaMigrationMetadataState *out_state, GError **error)
 {
@@ -2030,6 +2417,46 @@ static gboolean
   duckdb_store = (WyreboxSchemaMetadataStoreDuckdb *) self;
   return duckdb_store_save_materialization_manifest (duckdb_store, manifest,
       error);
+}
+
+static gboolean
+    wyrebox_schema_metadata_store_duckdb_load_materialization_artifact_checksum
+    (WyreboxSchemaMetadataStore * self, const gchar * run_id,
+    const gchar * artifact_kind, const gchar * artifact_name,
+    WyreboxMaterializationArtifactChecksum * out_checksum, GError ** error)
+{
+  WyreboxSchemaMetadataStoreDuckdb *duckdb_store = NULL;
+
+  g_return_val_if_fail (g_type_check_instance_is_a (
+          (GTypeInstance *) self,
+          wyrebox_schema_metadata_store_duckdb_get_type ()), FALSE);
+  g_return_val_if_fail (run_id != NULL, FALSE);
+  g_return_val_if_fail (artifact_kind != NULL, FALSE);
+  g_return_val_if_fail (artifact_name != NULL, FALSE);
+  g_return_val_if_fail (out_checksum != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  duckdb_store = (WyreboxSchemaMetadataStoreDuckdb *) self;
+  return duckdb_store_load_materialization_artifact_checksum (duckdb_store,
+      run_id, artifact_kind, artifact_name, out_checksum, error);
+}
+
+static gboolean
+    wyrebox_schema_metadata_store_duckdb_save_materialization_artifact_checksum
+    (WyreboxSchemaMetadataStore * self,
+    const WyreboxMaterializationArtifactChecksum * checksum, GError ** error)
+{
+  WyreboxSchemaMetadataStoreDuckdb *duckdb_store = NULL;
+
+  g_return_val_if_fail (g_type_check_instance_is_a (
+          (GTypeInstance *) self,
+          wyrebox_schema_metadata_store_duckdb_get_type ()), FALSE);
+  g_return_val_if_fail (checksum != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  duckdb_store = (WyreboxSchemaMetadataStoreDuckdb *) self;
+  return duckdb_store_save_materialization_artifact_checksum (duckdb_store,
+      checksum, error);
 }
 
 static void
@@ -2250,6 +2677,10 @@ static void
       wyrebox_schema_metadata_store_duckdb_load_materialization_manifest;
   store_class->save_materialization_manifest =
       wyrebox_schema_metadata_store_duckdb_save_materialization_manifest;
+  store_class->load_materialization_artifact_checksum =
+      wyrebox_schema_metadata_store_duckdb_load_materialization_artifact_checksum;
+  store_class->save_materialization_artifact_checksum =
+      wyrebox_schema_metadata_store_duckdb_save_materialization_artifact_checksum;
   store_class->apply_migration_operation =
       wyrebox_schema_metadata_store_duckdb_apply_migration_operation;
 }
@@ -2331,6 +2762,47 @@ gboolean
     return FALSE;
 
   return klass->save_materialization_manifest (self, manifest, error);
+}
+
+gboolean
+    wyrebox_schema_metadata_store_load_materialization_artifact_checksum
+    (WyreboxSchemaMetadataStore * self, const gchar * run_id,
+    const gchar * artifact_kind, const gchar * artifact_name,
+    WyreboxMaterializationArtifactChecksum * out_checksum, GError ** error)
+{
+  WyreboxSchemaMetadataStoreClass *klass = NULL;
+
+  g_return_val_if_fail (WYREBOX_IS_SCHEMA_METADATA_STORE (self), FALSE);
+  g_return_val_if_fail (run_id != NULL, FALSE);
+  g_return_val_if_fail (artifact_kind != NULL, FALSE);
+  g_return_val_if_fail (artifact_name != NULL, FALSE);
+  g_return_val_if_fail (out_checksum != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  klass = WYREBOX_SCHEMA_METADATA_STORE_GET_CLASS (self);
+  if (klass == NULL || klass->load_materialization_artifact_checksum == NULL)
+    return FALSE;
+
+  return klass->load_materialization_artifact_checksum (self, run_id,
+      artifact_kind, artifact_name, out_checksum, error);
+}
+
+gboolean
+    wyrebox_schema_metadata_store_save_materialization_artifact_checksum
+    (WyreboxSchemaMetadataStore * self,
+    const WyreboxMaterializationArtifactChecksum * checksum, GError ** error)
+{
+  WyreboxSchemaMetadataStoreClass *klass = NULL;
+
+  g_return_val_if_fail (WYREBOX_IS_SCHEMA_METADATA_STORE (self), FALSE);
+  g_return_val_if_fail (checksum != NULL, FALSE);
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  klass = WYREBOX_SCHEMA_METADATA_STORE_GET_CLASS (self);
+  if (klass == NULL || klass->save_materialization_artifact_checksum == NULL)
+    return FALSE;
+
+  return klass->save_materialization_artifact_checksum (self, checksum, error);
 }
 
 /* *INDENT-OFF* */

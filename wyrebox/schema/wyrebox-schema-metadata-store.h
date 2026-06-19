@@ -36,12 +36,28 @@ typedef struct
   gchar *error_state;
 } WyreboxMaterializationManifest;
 
+typedef struct
+{
+  gchar *run_id;
+  gchar *artifact_kind;
+  gchar *artifact_name;
+  guint64 row_count;
+  gchar *checksum_algorithm;
+  gchar *logical_checksum;
+} WyreboxMaterializationArtifactChecksum;
+
 void wyrebox_materialization_manifest_clear (
     WyreboxMaterializationManifest *manifest);
 
 gboolean wyrebox_materialization_manifest_equal (
     const WyreboxMaterializationManifest *left,
     const WyreboxMaterializationManifest *right);
+
+void wyrebox_materialization_artifact_checksum_clear (
+    WyreboxMaterializationArtifactChecksum *checksum);
+
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxMaterializationArtifactChecksum,
+    wyrebox_materialization_artifact_checksum_clear)
 
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxMaterializationManifest,
     wyrebox_materialization_manifest_clear)
@@ -77,6 +93,17 @@ struct _WyreboxSchemaMetadataStoreClass
   gboolean (*save_materialization_manifest) (
       WyreboxSchemaMetadataStore *self,
       const WyreboxMaterializationManifest *manifest,
+      GError **error);
+  gboolean (*load_materialization_artifact_checksum) (
+      WyreboxSchemaMetadataStore *self,
+      const gchar *run_id,
+      const gchar *artifact_kind,
+      const gchar *artifact_name,
+      WyreboxMaterializationArtifactChecksum *out_checksum,
+      GError **error);
+  gboolean (*save_materialization_artifact_checksum) (
+      WyreboxSchemaMetadataStore *self,
+      const WyreboxMaterializationArtifactChecksum *checksum,
       GError **error);
   gboolean (*apply_migration_operation) (
       WyreboxSchemaMetadataStore *self,
@@ -154,6 +181,19 @@ gboolean wyrebox_schema_metadata_store_load_materialization_manifest (
 gboolean wyrebox_schema_metadata_store_save_materialization_manifest (
     WyreboxSchemaMetadataStore *self,
     const WyreboxMaterializationManifest *manifest,
+    GError **error);
+
+gboolean wyrebox_schema_metadata_store_load_materialization_artifact_checksum (
+    WyreboxSchemaMetadataStore *self,
+    const gchar *run_id,
+    const gchar *artifact_kind,
+    const gchar *artifact_name,
+    WyreboxMaterializationArtifactChecksum *out_checksum,
+    GError **error);
+
+gboolean wyrebox_schema_metadata_store_save_materialization_artifact_checksum (
+    WyreboxSchemaMetadataStore *self,
+    const WyreboxMaterializationArtifactChecksum *checksum,
     GError **error);
 
 /*

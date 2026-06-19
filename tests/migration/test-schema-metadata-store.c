@@ -649,6 +649,37 @@ set_failed_materialization_manifest_fields (WyreboxMaterializationManifest
 }
 
 static void
+    set_materialization_artifact_checksum_fields
+    (WyreboxMaterializationArtifactChecksum * checksum)
+{
+  g_assert_nonnull (checksum);
+
+  checksum->run_id = g_strdup ("run-20260619-0001");
+  checksum->artifact_kind = g_strdup ("table");
+  checksum->artifact_name = g_strdup ("messages");
+  checksum->row_count = 42;
+  checksum->checksum_algorithm = g_strdup ("xxh3-64");
+  checksum->logical_checksum = g_strdup ("9b4b8c9d7b6f5a10");
+}
+
+static void
+assert_materialization_artifact_checksums_schema (duckdb_connection connection)
+{
+  static const TestDuckdbBootstrapColumn checksum_columns[] = {
+    {"run_id", "VARCHAR", TRUE},
+    {"artifact_kind", "VARCHAR", TRUE},
+    {"artifact_name", "VARCHAR", TRUE},
+    {"row_count", "UBIGINT", TRUE},
+    {"checksum_algorithm", "VARCHAR", TRUE},
+    {"logical_checksum", "VARCHAR", TRUE},
+  };
+
+  assert_bootstrap_table_schema (connection,
+      "materialization_artifact_checksums", checksum_columns,
+      G_N_ELEMENTS (checksum_columns));
+}
+
+static void
 assert_materialization_manifest_row (duckdb_connection connection,
     const WyreboxMaterializationManifest *manifest)
 {
@@ -872,6 +903,91 @@ test_duckdb_store_materialization_manifest_roundtrip (void)
 }
 
 static void
+test_save_and_load_materialization_artifact_checksum_roundtrip (void)
+{
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxMaterializationManifest) manifest = { 0 };
+  g_auto (WyreboxMaterializationArtifactChecksum) original = { 0 };
+  g_auto (WyreboxMaterializationArtifactChecksum) loaded = { 0 };
+
+  store = wyrebox_schema_metadata_store_new_memory ();
+  g_assert_nonnull (store);
+
+  set_materialization_manifest_fields (&manifest);
+  g_assert_true (wyrebox_schema_metadata_store_save_materialization_manifest
+      (store, &manifest, &error));
+  g_assert_no_error (error);
+
+  set_materialization_artifact_checksum_fields (&original);
+  g_assert_true
+      (wyrebox_schema_metadata_store_save_materialization_artifact_checksum
+      (store, &original, &error));
+  g_assert_no_error (error);
+
+  g_clear_error (&error);
+  g_assert_true
+      (wyrebox_schema_metadata_store_load_materialization_artifact_checksum
+      (store, original.run_id, original.artifact_kind, original.artifact_name,
+          &loaded, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpstr (loaded.run_id, ==, original.run_id);
+  g_assert_cmpstr (loaded.artifact_kind, ==, original.artifact_kind);
+  g_assert_cmpstr (loaded.artifact_name, ==, original.artifact_name);
+  g_assert_cmpuint (loaded.row_count, ==, original.row_count);
+  g_assert_cmpstr (loaded.checksum_algorithm, ==, original.checksum_algorithm);
+  g_assert_cmpstr (loaded.logical_checksum, ==, original.logical_checksum);
+}
+
+static void
+test_duckdb_store_materialization_artifact_checksum_roundtrip (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxMaterializationManifest) manifest = { 0 };
+  g_auto (WyreboxMaterializationArtifactChecksum) original = { 0 };
+  g_auto (WyreboxMaterializationArtifactChecksum) loaded = { 0 };
+  duckdb_database database = NULL;
+  duckdb_connection connection = NULL;
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  set_materialization_manifest_fields (&manifest);
+  g_assert_true (wyrebox_schema_metadata_store_save_materialization_manifest
+      (store, &manifest, &error));
+  g_assert_no_error (error);
+
+  set_materialization_artifact_checksum_fields (&original);
+  g_assert_true
+      (wyrebox_schema_metadata_store_save_materialization_artifact_checksum
+      (store, &original, &error));
+  g_assert_no_error (error);
+
+  g_clear_error (&error);
+  g_assert_true
+      (wyrebox_schema_metadata_store_load_materialization_artifact_checksum
+      (store, original.run_id, original.artifact_kind, original.artifact_name,
+          &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_cmpstr (loaded.logical_checksum, ==, original.logical_checksum);
+
+  g_clear_object (&store);
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+  assert_materialization_artifact_checksums_schema (connection);
+
+  (void) duckdb_disconnect (&connection);
+  (void) duckdb_close (&database);
+  remove_directory_tree (root);
+}
+
+static void
 test_materialization_manifest_validation_rejects_missing_inputs (void)
 {
   g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
@@ -905,6 +1021,101 @@ static void
 
   g_assert_false (wyrebox_schema_metadata_store_save_materialization_manifest
       (store, &manifest, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+}
+
+static void
+test_materialization_artifact_checksum_rejects_duplicate_key (void)
+{
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxMaterializationManifest) manifest = { 0 };
+  g_auto (WyreboxMaterializationArtifactChecksum) checksum = { 0 };
+
+  store = wyrebox_schema_metadata_store_new_memory ();
+  g_assert_nonnull (store);
+
+  set_materialization_manifest_fields (&manifest);
+  g_assert_true (wyrebox_schema_metadata_store_save_materialization_manifest
+      (store, &manifest, &error));
+  g_assert_no_error (error);
+
+  set_materialization_artifact_checksum_fields (&checksum);
+  g_assert_true
+      (wyrebox_schema_metadata_store_save_materialization_artifact_checksum
+      (store, &checksum, &error));
+  g_assert_no_error (error);
+
+  g_clear_error (&error);
+  g_assert_false
+      (wyrebox_schema_metadata_store_save_materialization_artifact_checksum
+      (store, &checksum, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_EXISTS);
+}
+
+static void
+test_materialization_artifact_checksum_rejects_missing_manifest (void)
+{
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxMaterializationArtifactChecksum) checksum = { 0 };
+
+  store = wyrebox_schema_metadata_store_new_memory ();
+  g_assert_nonnull (store);
+
+  set_materialization_artifact_checksum_fields (&checksum);
+  g_assert_false
+      (wyrebox_schema_metadata_store_save_materialization_artifact_checksum
+      (store, &checksum, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+}
+
+static void
+test_materialization_artifact_checksum_rejects_failed_manifest (void)
+{
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxMaterializationManifest) manifest = { 0 };
+  g_auto (WyreboxMaterializationArtifactChecksum) checksum = { 0 };
+
+  store = wyrebox_schema_metadata_store_new_memory ();
+  g_assert_nonnull (store);
+
+  set_failed_materialization_manifest_fields (&manifest);
+  g_assert_true (wyrebox_schema_metadata_store_save_materialization_manifest
+      (store, &manifest, &error));
+  g_assert_no_error (error);
+
+  set_materialization_artifact_checksum_fields (&checksum);
+  g_clear_pointer (&checksum.run_id, g_free);
+  checksum.run_id = g_strdup (manifest.run_id);
+  g_assert_false
+      (wyrebox_schema_metadata_store_save_materialization_artifact_checksum
+      (store, &checksum, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+}
+
+static void
+test_materialization_artifact_checksum_validation_rejects_missing_inputs (void)
+{
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxMaterializationManifest) manifest = { 0 };
+  g_auto (WyreboxMaterializationArtifactChecksum) checksum = { 0 };
+
+  store = wyrebox_schema_metadata_store_new_memory ();
+  g_assert_nonnull (store);
+
+  set_materialization_manifest_fields (&manifest);
+  g_assert_true (wyrebox_schema_metadata_store_save_materialization_manifest
+      (store, &manifest, &error));
+  g_assert_no_error (error);
+
+  set_materialization_artifact_checksum_fields (&checksum);
+  g_clear_pointer (&checksum.logical_checksum, g_free);
+  g_assert_false
+      (wyrebox_schema_metadata_store_save_materialization_artifact_checksum
+      (store, &checksum, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
 }
 
@@ -1745,6 +1956,24 @@ main (int argc, char **argv)
   g_test_add_func
       ("/migration/schema-metadata-store/materialization-manifest-equal-detects-drift",
       test_materialization_manifest_equal_detects_drift);
+  g_test_add_func
+      ("/migration/schema-metadata-store/materialization-artifact-checksum-roundtrip",
+      test_save_and_load_materialization_artifact_checksum_roundtrip);
+  g_test_add_func
+      ("/migration/schema-metadata-store/duckdb-materialization-artifact-checksum-roundtrip",
+      test_duckdb_store_materialization_artifact_checksum_roundtrip);
+  g_test_add_func
+      ("/migration/schema-metadata-store/materialization-artifact-checksum-duplicate-key",
+      test_materialization_artifact_checksum_rejects_duplicate_key);
+  g_test_add_func
+      ("/migration/schema-metadata-store/materialization-artifact-checksum-missing-manifest",
+      test_materialization_artifact_checksum_rejects_missing_manifest);
+  g_test_add_func
+      ("/migration/schema-metadata-store/materialization-artifact-checksum-failed-manifest",
+      test_materialization_artifact_checksum_rejects_failed_manifest);
+  g_test_add_func
+      ("/migration/schema-metadata-store/materialization-artifact-checksum-validation-missing-inputs",
+      test_materialization_artifact_checksum_validation_rejects_missing_inputs);
   g_test_add_func
       ("/migration/schema-metadata-store/transient-precondition-not-persisted",
       test_transient_checkpoint_precondition_is_not_persisted);
