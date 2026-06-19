@@ -39,6 +39,20 @@ test_export_order_names_are_stable (void)
           (WyreboxDaemonExportOrder) 0));
 }
 
+static void
+test_object_reference_contract_is_stable (void)
+{
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_export_object_reference_contract_is_stable
+      ("sha256+object-key", &error));
+  g_assert_no_error (error);
+
+  g_assert_false (wyrebox_daemon_export_object_reference_contract_is_stable
+      ("sha512+object-key", &error));
+  g_assert_nonnull (error);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -50,6 +64,8 @@ main (int argc, char **argv)
       test_missing_schema_metadata_fields_are_rejected);
   g_test_add_func ("/daemon-api/export-schema/order-names",
       test_export_order_names_are_stable);
+  g_test_add_func ("/daemon-api/export-schema/object-reference-contract",
+      test_object_reference_contract_is_stable);
 
   return g_test_run ();
 }

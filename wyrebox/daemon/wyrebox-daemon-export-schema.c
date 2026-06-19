@@ -85,3 +85,24 @@ wyrebox_daemon_export_schema_metadata_init (WyreboxDaemonExportSchemaMetadata
 
   return TRUE;
 }
+
+gboolean
+wyrebox_daemon_export_object_reference_contract_is_stable (const char
+    *object_reference_contract, GError **error)
+{
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+  if (!validate_required_text (object_reference_contract,
+          "object_reference_contract", error))
+    return FALSE;
+
+  if (g_strcmp0 (object_reference_contract, "sha256+object-key") != 0) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "export object reference contract must be sha256+object-key");
+    return FALSE;
+  }
+
+  return TRUE;
+}

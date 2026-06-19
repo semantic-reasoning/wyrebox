@@ -37,6 +37,10 @@ gboolean wyrebox_daemon_export_schema_metadata_init (
     const char *object_reference_contract,
     GError **error);
 
+gboolean wyrebox_daemon_export_object_reference_contract_is_stable (
+    const char *object_reference_contract,
+    GError **error);
+
 const char *wyrebox_daemon_export_order_to_string (
     WyreboxDaemonExportOrder order);
 
