@@ -1,0 +1,179 @@
+#include "wyrebox-admin-socket-status.h"
+
+#include <gio/gio.h>
+#include <glib/gstdio.h>
+#include <sysexits.h>
+#include <string.h>
+
+typedef struct
+{
+  char *socket_path;
+  gboolean json;
+} WyreboxAdminSocketStatusOptions;
+
+static void
+wyrebox_admin_socket_status_options_clear (WyreboxAdminSocketStatusOptions
+    *options)
+{
+  if (options == NULL)
+    return;
+
+  g_clear_pointer (&options->socket_path, g_free);
+  options->json = FALSE;
+}
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxAdminSocketStatusOptions,
+    wyrebox_admin_socket_status_options_clear)
+/* *INDENT-ON* */
+
+static gchar **
+copy_argv (int argc, char **argv)
+{
+  gchar **copy = g_new0 (gchar *, argc + 1);
+
+  for (int i = 0; i < argc; i++)
+    copy[i] = g_strdup (argv[i]);
+
+  return copy;
+}
+
+static void
+append_json_escaped (GString *output, const char *value)
+{
+  const unsigned char *p = (const unsigned char *) value;
+
+  g_string_append_c (output, '"');
+  if (p != NULL) {
+    for (; *p != '\0'; p++) {
+      switch (*p) {
+        case '\\':
+          g_string_append (output, "\\\\");
+          break;
+        case '\"':
+          g_string_append (output, "\\\"");
+          break;
+        case '\b':
+          g_string_append (output, "\\b");
+          break;
+        case '\f':
+          g_string_append (output, "\\f");
+          break;
+        case '\n':
+          g_string_append (output, "\\n");
+          break;
+        case '\r':
+          g_string_append (output, "\\r");
+          break;
+        case '\t':
+          g_string_append (output, "\\t");
+          break;
+        default:
+          if (g_ascii_isprint (*p)) {
+            g_string_append_c (output, (char) *p);
+          } else {
+            g_string_append_printf (output, "\\u%04x", (guint) * p);
+          }
+          break;
+      }
+    }
+  }
+  g_string_append_c (output, '"');
+}
+
+static gboolean
+parse_socket_status_options (int argc, char **argv,
+    WyreboxAdminSocketStatusOptions *options, GError **error)
+{
+  g_auto (GStrv) mutable_argv = NULL;
+  g_autoptr (GOptionContext) context = NULL;
+  GOptionEntry entries[] = {
+    {"socket-path", 0, 0, G_OPTION_ARG_STRING, &options->socket_path,
+        "WyreBox daemon socket path", "PATH"},
+    {"json", 0, 0, G_OPTION_ARG_NONE, &options->json,
+        "Emit machine-readable JSON output", NULL},
+    {NULL}
+  };
+
+  mutable_argv = copy_argv (argc, argv);
+  context = g_option_context_new (NULL);
+  g_option_context_set_help_enabled (context, FALSE);
+  g_option_context_add_main_entries (context, entries, NULL);
+
+  if (!g_option_context_parse_strv (context, &mutable_argv, error))
+    return FALSE;
+
+  if (mutable_argv[1] != NULL) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "unexpected positional argument: %s", mutable_argv[1]);
+    return FALSE;
+  }
+
+  if (options->socket_path == NULL)
+    options->socket_path =
+        g_strdup (wyrebox_admin_socket_status_default_socket_path ());
+
+  return TRUE;
+}
+
+static int
+print_usage (void)
+{
+  g_printerr ("Usage: wyrebox-admin socket-status [--socket-path PATH] "
+      "[--json]\n");
+  return WYREBOX_ADMIN_SOCKET_STATUS_EXIT_USAGE_ERROR;
+}
+
+static int
+run_socket_status (int argc, char **argv)
+{
+  g_auto (WyreboxAdminSocketStatusOptions) options = { 0 };
+  g_auto (WyreboxAdminSocketStatusResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GString) json = NULL;
+  int exit_status = WYREBOX_ADMIN_SOCKET_STATUS_EXIT_USAGE_ERROR;
+
+  if (!parse_socket_status_options (argc, argv, &options, &error))
+    return print_usage ();
+
+  exit_status = wyrebox_admin_socket_status_probe (options.socket_path,
+      &result);
+
+  if (options.json) {
+    json = g_string_new (NULL);
+    g_string_append (json, "{");
+    g_string_append (json, "\"socket_path\":");
+    append_json_escaped (json, result.socket_path);
+    g_string_append (json, ",\"status\":");
+    append_json_escaped (json, result.status_name);
+    g_string_append_printf (json, ",\"connectable\":%s}",
+        result.connectable ? "true" : "false");
+    g_print ("%s\n", json->str);
+  } else {
+    g_print ("socket-status path=%s status: %s connectable=%s\n",
+        result.socket_path, result.status_name,
+        result.connectable ? "true" : "false");
+  }
+
+  return exit_status;
+}
+
+static int
+run_command (int argc, char **argv)
+{
+  if (argc < 2)
+    return print_usage ();
+
+  if (g_strcmp0 (argv[1], "socket-status") == 0)
+    return run_socket_status (argc - 1, argv + 1);
+
+  return print_usage ();
+}
+
+int
+main (int argc, char **argv)
+{
+  return run_command (argc, argv);
+}
