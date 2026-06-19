@@ -63,3 +63,17 @@ benchmark(
   'duckdb query template subject contains microbenchmark',
   duckdb_query_template_subject_contains_benchmark,
 )
+
+postfix_pipe_input_benchmark = executable(
+  'wyrebox-benchmark-postfix-pipe-input',
+  [
+    'wyrebox-benchmark-postfix-pipe-input.c',
+    'wyrebox-benchmark-report.c',
+  ],
+  dependencies: [wyrebox_dep],
+)
+
+benchmark(
+  'postfix pipe input microbenchmark',
+  postfix_pipe_input_benchmark,
+)
