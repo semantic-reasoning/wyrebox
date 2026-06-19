@@ -1,3 +1,4 @@
+#include "wyrebox-admin-health-status.h"
 #include "wyrebox-admin-socket-status.h"
 
 #include <gio/gio.h>
@@ -161,6 +162,19 @@ run_socket_status (int argc, char **argv)
 }
 
 static int
+run_health_status (int argc, char **argv)
+{
+  (void) argc;
+  (void) argv;
+
+  g_print ("health-status state=%s\n",
+      wyrebox_admin_health_status_state_to_name
+      (WYREBOX_ADMIN_HEALTH_STATUS_UNAVAILABLE));
+
+  return WYREBOX_ADMIN_SOCKET_STATUS_EXIT_SUCCESS;
+}
+
+static int
 run_command (int argc, char **argv)
 {
   if (argc < 2)
@@ -168,6 +182,9 @@ run_command (int argc, char **argv)
 
   if (g_strcmp0 (argv[1], "socket-status") == 0)
     return run_socket_status (argc - 1, argv + 1);
+
+  if (g_strcmp0 (argv[1], "health-status") == 0)
+    return run_health_status (argc - 1, argv + 1);
 
   return print_usage ();
 }
