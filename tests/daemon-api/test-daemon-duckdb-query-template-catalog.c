@@ -95,6 +95,9 @@ test_catalog_resolves_allowlisted_templates (void)
   assert_template_resolves ("facts.by_fact_id_with_provenance.v1", "fact-a",
       "facts by fact id with provenance", "fact_id",
       "stream-chunk.duckdb-template.facts-by-fact-id-with-provenance.v1");
+  assert_template_resolves ("mailbox.history_by_message.v1", "message-a",
+      "mailbox history by message", "message_id",
+      "stream-chunk.duckdb-template.mailbox-history-by-message.v1");
   assert_metadata_template_resolves ("messages.by_from_addr.v1",
       "Alice <alice@example.test>", "messages by from address", "from_addr",
       "stream-chunk.duckdb-template.messages-by-from-addr.v1");
@@ -245,6 +248,15 @@ test_catalog_rejects_dovecot_for_fact_provenance_templates (void)
   g_assert_null (descriptor);
 
   init_request (&request, "facts.by_fact_id_with_provenance.v1", parameters);
+
+  g_clear_error (&error);
+  g_assert_false (wyrebox_daemon_duckdb_query_template_catalog_validate
+      (WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN, "account-1", &request,
+          &descriptor, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
+  g_assert_null (descriptor);
+
+  init_request (&request, "mailbox.history_by_message.v1", parameters);
 
   g_clear_error (&error);
   g_assert_false (wyrebox_daemon_duckdb_query_template_catalog_validate
