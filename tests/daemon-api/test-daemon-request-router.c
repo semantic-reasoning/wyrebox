@@ -1,6 +1,7 @@
 #include "wyrebox-daemon-request-router.h"
 #include "wyrebox-daemon-flag-keyword-update-request.h"
 #include "wyrebox-daemon-delivery-ingestion-request.h"
+#include "wyrebox-daemon-mailbox-status-request.h"
 #include "wyrebox-journal-reader.h"
 
 #include <gio/gio.h>
@@ -212,6 +213,27 @@ select_fixture_mailbox (const WyreboxDaemonRequestIdentity *identity,
   g_assert_null (request->mailbox_name);
   *was_called = TRUE;
 
+  return wyrebox_daemon_mailbox_select_result_init (out_result,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+      "mailbox-inbox", "INBOX", 77, 42, 123, error);
+}
+
+static gboolean
+status_fixture_mailbox (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMailboxSelectRequest *request,
+    WyreboxDaemonMailboxSelectResult *out_result,
+    gpointer user_data, GError **error)
+{
+  gboolean *was_called = user_data;
+
+  g_assert_cmpstr (identity->request_id, ==, "request-status");
+  g_assert_cmpstr (identity->caller_identity, ==, "dovecot");
+  g_assert_cmpstr (identity->account_identity, ==, "account-1");
+  g_assert_cmpstr (request->account_identity, ==, "account-1");
+  g_assert_cmpstr (request->mailbox_id, ==, "mailbox-inbox");
+  g_assert_null (request->mailbox_name);
+
+  *was_called = TRUE;
   return wyrebox_daemon_mailbox_select_result_init (out_result,
       WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
       "mailbox-inbox", "INBOX", 77, 42, 123, error);
@@ -942,6 +964,48 @@ test_request_router_routes_mailbox_select (void)
 }
 
 static void
+test_request_router_routes_mailbox_status (void)
+{
+  gboolean was_called = FALSE;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonMailboxSelectService) service = NULL;
+  g_auto (WyreboxDaemonMailboxStatusRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_mailbox_status_request_init (&request,
+          "account-1", "mailbox-inbox", NULL, &error));
+  g_assert_no_error (error);
+
+  request_frame.request_id = "request-status";
+  request_frame.caller_identity = "dovecot";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "dovecot-storage";
+  request_frame.correlation_id = "imap-status-1";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_STATUS;
+  request_frame.mailbox_status = &request;
+
+  service = wyrebox_daemon_mailbox_select_service_new (status_fixture_mailbox,
+      &was_called, NULL);
+  g_assert_nonnull (service);
+
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, service,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_true (was_called);
+  g_assert_cmpint (frame.kind, ==,
+      WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_SELECT);
+  g_assert_cmpstr (frame.request_id, ==, "request-status");
+  g_assert_cmpstr (frame.correlation_id, ==, "imap-status-1");
+  g_assert_cmpstr (frame.mailbox_select.mailbox_id, ==, "mailbox-inbox");
+  g_assert_cmpstr (frame.mailbox_select.mailbox_name, ==, "INBOX");
+  g_assert_cmpuint (frame.mailbox_select.uid_validity, ==, 77);
+  g_assert_cmpuint (frame.mailbox_select.uid_next, ==, 42);
+  g_assert_cmpuint (frame.mailbox_select.message_count, ==, 123);
+}
+
+static void
 test_request_router_rejects_missing_mailbox_select_payload (void)
 {
   gboolean was_called = FALSE;
@@ -1000,6 +1064,36 @@ test_request_router_rejects_missing_mailbox_select_service (void)
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
   g_assert_cmpstr (frame.request_id, ==, "request-select");
+  g_assert_cmpint (frame.error.error_class, ==,
+      WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+}
+
+static void
+test_request_router_rejects_missing_mailbox_status_service (void)
+{
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxDaemonMailboxStatusRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+  g_assert_true (wyrebox_daemon_mailbox_status_request_init (&request,
+          "account-1", "mailbox-inbox", NULL, &error));
+  g_assert_no_error (error);
+
+  request_frame.request_id = "request-status";
+  request_frame.caller_identity = "dovecot";
+  request_frame.account_identity = "account-1";
+  request_frame.tool_identity = "dovecot-storage";
+  request_frame.correlation_id = "imap-status-1";
+  request_frame.operation =
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_STATUS;
+  request_frame.mailbox_status = &request;
+
+  g_assert_true (wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL,
+          NULL, NULL, NULL, &request_frame, &frame, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpstr (frame.request_id, ==, "request-status");
   g_assert_cmpint (frame.error.error_class, ==,
       WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
 }
@@ -1689,12 +1783,17 @@ main (int argc, char **argv)
       test_request_router_converts_silent_mailbox_list_failure_to_error_frame);
   g_test_add_func ("/daemon-api/request-router/routes-mailbox-select",
       test_request_router_routes_mailbox_select);
+  g_test_add_func ("/daemon-api/request-router/routes-mailbox-status",
+      test_request_router_routes_mailbox_status);
   g_test_add_func ("/daemon-api/request-router/"
       "rejects-missing-mailbox-select-payload",
       test_request_router_rejects_missing_mailbox_select_payload);
   g_test_add_func ("/daemon-api/request-router/"
       "rejects-missing-mailbox-select-service",
       test_request_router_rejects_missing_mailbox_select_service);
+  g_test_add_func ("/daemon-api/request-router/"
+      "rejects-missing-mailbox-status-service",
+      test_request_router_rejects_missing_mailbox_status_service);
   g_test_add_func ("/daemon-api/request-router/routes-message-fetch",
       test_request_router_routes_message_fetch);
   g_test_add_func ("/daemon-api/request-router/"

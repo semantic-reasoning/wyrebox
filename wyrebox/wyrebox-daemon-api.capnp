@@ -7,6 +7,7 @@ struct RequestFrame {
     deliveryIngestion @1 :DeliveryIngestionRequest;
     mailboxList @2 :MailboxListRequest;
     mailboxSelect @3 :MailboxSelectRequest;
+    mailboxStatus @11 :MailboxStatusRequest;
     messageFetch @4 :MessageFetchRequest;
     messageSearch @5 :MessageSearchRequest;
     flagKeywordUpdate @6 :FlagKeywordUpdateRequest;
@@ -112,6 +113,12 @@ enum MailboxListChildState {
 }
 
 struct MailboxSelectRequest {
+  accountIdentity @0 :Text;
+  mailboxId @1 :Text;
+  mailboxName @2 :Text;
+}
+
+struct MailboxStatusRequest {
   accountIdentity @0 :Text;
   mailboxId @1 :Text;
   mailboxName @2 :Text;

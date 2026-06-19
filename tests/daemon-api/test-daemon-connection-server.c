@@ -309,6 +309,7 @@ blocking_route_decode (const WyreboxDaemonPeerCredentials *peer_credentials,
   out_request->operation = WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_NONE;
   out_request->mailbox_list = NULL;
   out_request->mailbox_select = NULL;
+  out_request->mailbox_status = NULL;
   out_request->fact_mutation = NULL;
   out_request->fact_batch_import = NULL;
   out_request->message_fetch = NULL;
@@ -522,6 +523,8 @@ fake_adapter_decode (const WyreboxDaemonPeerCredentials *peer_credentials,
   out_request->correlation_id = "correlation";
   out_request->operation = WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_NONE;
   out_request->mailbox_list = NULL;
+  out_request->mailbox_select = NULL;
+  out_request->mailbox_status = NULL;
   out_request->fact_mutation = NULL;
 
   if (out_decoded_state != NULL && out_decoded_state_clear != NULL) {
