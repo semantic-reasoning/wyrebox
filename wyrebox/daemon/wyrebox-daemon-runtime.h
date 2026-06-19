@@ -43,6 +43,20 @@ void wyrebox_daemon_object_reachability_report_clear (
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDaemonObjectReachabilityReport,
     wyrebox_daemon_object_reachability_report_clear)
 
+typedef struct {
+  guint64 total_object_count;
+  guint64 gc_candidate_count;
+  guint64 gc_reclaimable_bytes;
+  guint64 gc_reachable_bytes;
+} WyreboxDaemonGarbageCollectionDryRunReport;
+
+void wyrebox_daemon_garbage_collection_dry_run_report_clear (
+    WyreboxDaemonGarbageCollectionDryRunReport *report);
+
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (
+    WyreboxDaemonGarbageCollectionDryRunReport,
+    wyrebox_daemon_garbage_collection_dry_run_report_clear)
+
 typedef enum {
   WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_NONE,
   WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_INVALID_ARGUMENT,
@@ -80,6 +94,11 @@ gboolean wyrebox_daemon_runtime_load_object_reachability_report (
     const char *catalog_path,
     const char *object_id,
     WyreboxDaemonObjectReachabilityReport *out_report,
+    GError **error);
+
+gboolean wyrebox_daemon_runtime_load_garbage_collection_dry_run_report (
+    const char *catalog_path,
+    WyreboxDaemonGarbageCollectionDryRunReport *out_report,
     GError **error);
 
 /*

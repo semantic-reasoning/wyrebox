@@ -1018,6 +1018,58 @@ test_runtime_load_object_reachability_report_rejects_invalid_args (void)
 }
 
 static void
+test_runtime_load_garbage_collection_dry_run_report_returns_summary (void)
+{
+  g_autofree char *catalog_path = create_object_reachability_catalog_path ();
+  WyreboxDaemonGarbageCollectionDryRunReport report = { 0 };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_nonnull (catalog_path);
+  g_assert_true (wyrebox_daemon_runtime_load_garbage_collection_dry_run_report
+      (catalog_path, &report, &error));
+  g_assert_no_error (error);
+  g_assert_cmpuint (report.total_object_count, ==, 6);
+  g_assert_cmpuint (report.gc_candidate_count, ==, 3);
+  g_assert_cmpuint (report.gc_reclaimable_bytes, ==, 310);
+  g_assert_cmpuint (report.gc_reachable_bytes, ==, 311);
+
+  wyrebox_daemon_garbage_collection_dry_run_report_clear (&report);
+  remove_catalog_path (catalog_path);
+}
+
+static void
+    test_runtime_load_garbage_collection_dry_run_report_rejects_invalid_args
+    (void)
+{
+  WyreboxDaemonGarbageCollectionDryRunReport report = {
+    .total_object_count = 7,
+    .gc_candidate_count = 5,
+    .gc_reclaimable_bytes = 99,
+    .gc_reachable_bytes = 123,
+  };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_false
+      (wyrebox_daemon_runtime_load_garbage_collection_dry_run_report (NULL,
+          &report, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpuint (report.total_object_count, ==, 7);
+  g_assert_cmpuint (report.gc_candidate_count, ==, 5);
+  g_assert_cmpuint (report.gc_reclaimable_bytes, ==, 99);
+  g_assert_cmpuint (report.gc_reachable_bytes, ==, 123);
+  g_clear_error (&error);
+
+  g_assert_false (wyrebox_daemon_runtime_load_garbage_collection_dry_run_report
+      ("", &report, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_cmpuint (report.total_object_count, ==, 7);
+  g_assert_cmpuint (report.gc_candidate_count, ==, 5);
+  g_assert_cmpuint (report.gc_reclaimable_bytes, ==, 99);
+  g_assert_cmpuint (report.gc_reachable_bytes, ==, 123);
+  wyrebox_daemon_garbage_collection_dry_run_report_clear (&report);
+}
+
+static void
     test_runtime_validate_delivery_storage_prefers_object_root_failure_over_unsafe_journal_suffix
     (void)
 {
@@ -1714,6 +1766,12 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/runtime/object-reachability/invalid-args",
       test_runtime_load_object_reachability_report_rejects_invalid_args);
+  g_test_add_func
+      ("/daemon-api/runtime/garbage-collection-dry-run/returns-summary",
+      test_runtime_load_garbage_collection_dry_run_report_returns_summary);
+  g_test_add_func
+      ("/daemon-api/runtime/garbage-collection-dry-run/invalid-args",
+      test_runtime_load_garbage_collection_dry_run_report_rejects_invalid_args);
   g_test_add_func
       ("/daemon-api/runtime/recover-and-validate-delivery-storage/torn-suffix",
       test_runtime_recover_and_validate_delivery_storage_recovers_torn_suffix);
