@@ -637,6 +637,16 @@ set_materialization_manifest_fields (WyreboxMaterializationManifest *manifest)
 }
 
 static void
+set_materialization_manifest_fields_for_run (WyreboxMaterializationManifest
+    *manifest, const gchar *run_id, guint64 created_at_unix_us)
+{
+  set_materialization_manifest_fields (manifest);
+  g_free (manifest->run_id);
+  manifest->run_id = g_strdup (run_id);
+  manifest->created_at_unix_us = created_at_unix_us;
+}
+
+static void
 set_failed_materialization_manifest_fields (WyreboxMaterializationManifest
     *manifest)
 {
@@ -899,6 +909,75 @@ test_duckdb_store_materialization_manifest_roundtrip (void)
 
   (void) duckdb_disconnect (&connection);
   (void) duckdb_close (&database);
+  remove_directory_tree (root);
+}
+
+static void
+test_load_latest_materialization_manifest_roundtrip (void)
+{
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxMaterializationManifest) older = { 0 };
+  g_auto (WyreboxMaterializationManifest) newer = { 0 };
+  g_auto (WyreboxMaterializationManifest) loaded = { 0 };
+
+  store = wyrebox_schema_metadata_store_new_memory ();
+  g_assert_nonnull (store);
+
+  set_materialization_manifest_fields_for_run (&older,
+      "run-20260619-0001", 1718760000000000ULL);
+  set_materialization_manifest_fields_for_run (&newer,
+      "run-20260619-0002", 1718760001000000ULL);
+
+  g_assert_true (wyrebox_schema_metadata_store_save_materialization_manifest
+      (store, &older, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_save_materialization_manifest
+      (store, &newer, &error));
+  g_assert_no_error (error);
+
+  g_clear_error (&error);
+  g_assert_true
+      (wyrebox_schema_metadata_store_load_latest_materialization_manifest
+      (store, &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_materialization_manifest_equal (&newer, &loaded));
+}
+
+static void
+test_duckdb_store_load_latest_materialization_manifest_roundtrip (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *path = make_duckdb_path (&root);
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+  g_autoptr (GError) error = NULL;
+  g_auto (WyreboxMaterializationManifest) older = { 0 };
+  g_auto (WyreboxMaterializationManifest) newer = { 0 };
+  g_auto (WyreboxMaterializationManifest) loaded = { 0 };
+
+  store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  set_materialization_manifest_fields_for_run (&older,
+      "run-20260619-0001", 1718760000000000ULL);
+  set_materialization_manifest_fields_for_run (&newer,
+      "run-20260619-0002", 1718760001000000ULL);
+
+  g_assert_true (wyrebox_schema_metadata_store_save_materialization_manifest
+      (store, &older, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_schema_metadata_store_save_materialization_manifest
+      (store, &newer, &error));
+  g_assert_no_error (error);
+
+  g_clear_error (&error);
+  g_assert_true
+      (wyrebox_schema_metadata_store_load_latest_materialization_manifest
+      (store, &loaded, &error));
+  g_assert_no_error (error);
+  g_assert_true (wyrebox_materialization_manifest_equal (&newer, &loaded));
+
   remove_directory_tree (root);
 }
 
@@ -1945,8 +2024,14 @@ main (int argc, char **argv)
       ("/migration/schema-metadata-store/materialization-manifest-roundtrip",
       test_save_and_load_materialization_manifest_roundtrip);
   g_test_add_func
+      ("/migration/schema-metadata-store/materialization-manifest-latest-roundtrip",
+      test_load_latest_materialization_manifest_roundtrip);
+  g_test_add_func
       ("/migration/schema-metadata-store/duckdb-materialization-manifest-roundtrip",
       test_duckdb_store_materialization_manifest_roundtrip);
+  g_test_add_func
+      ("/migration/schema-metadata-store/duckdb-materialization-manifest-latest-roundtrip",
+      test_duckdb_store_load_latest_materialization_manifest_roundtrip);
   g_test_add_func
       ("/migration/schema-metadata-store/materialization-manifest-validation-missing-inputs",
       test_materialization_manifest_validation_rejects_missing_inputs);

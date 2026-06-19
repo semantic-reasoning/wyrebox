@@ -90,6 +90,10 @@ struct _WyreboxSchemaMetadataStoreClass
       const gchar *run_id,
       WyreboxMaterializationManifest *out_manifest,
       GError **error);
+  gboolean (*load_latest_materialization_manifest) (
+      WyreboxSchemaMetadataStore *self,
+      WyreboxMaterializationManifest *out_manifest,
+      GError **error);
   gboolean (*save_materialization_manifest) (
       WyreboxSchemaMetadataStore *self,
       const WyreboxMaterializationManifest *manifest,
@@ -170,6 +174,11 @@ gboolean wyrebox_schema_metadata_store_save (
 gboolean wyrebox_schema_metadata_store_load_materialization_manifest (
     WyreboxSchemaMetadataStore *self,
     const gchar *run_id,
+    WyreboxMaterializationManifest *out_manifest,
+    GError **error);
+
+gboolean wyrebox_schema_metadata_store_load_latest_materialization_manifest (
+    WyreboxSchemaMetadataStore *self,
     WyreboxMaterializationManifest *out_manifest,
     GError **error);
 
