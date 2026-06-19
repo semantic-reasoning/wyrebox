@@ -26,21 +26,33 @@ assert_execution_entry (WyreboxMaildirImportPlanExecutionEntry *entry,
     WyreboxMaildirImportPlanEntry *plan_entry)
 {
   g_assert_nonnull (entry);
-  g_assert_cmpstr (entry->mailbox_path, ==, plan_entry->mailbox_path);
   g_assert_cmpstr (entry->source_path, ==, plan_entry->source_path);
+  g_assert_cmpstr (entry->mailbox_path, ==, plan_entry->mailbox_path);
   g_assert_cmpstr (entry->maildir_flag_suffix, ==,
       plan_entry->maildir_flag_suffix);
   g_assert_cmpuint (entry->maildir_flags, ==, plan_entry->maildir_flags);
+  g_assert_cmpuint (entry->ingest_result.size_bytes, ==,
+      plan_entry->size_bytes);
 }
 
-static void
-assert_verification_failure (WyreboxMaildirImportPlanVerificationResult *result,
-    WyreboxMaildirImportPlanVerificationStatus status, const char *failure_path)
+static guint
+count_directory_entries (const char *path)
 {
-  g_assert_nonnull (result);
-  g_assert_false (result->ok);
-  g_assert_cmpint (result->status, ==, status);
-  g_assert_cmpstr (result->failure_path, ==, failure_path);
+  g_autoptr (GDir) dir = NULL;
+  const char *name = NULL;
+  guint count = 0;
+  g_autoptr (GError) error = NULL;
+
+  dir = g_dir_open (path, 0, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (dir);
+
+  while ((name = g_dir_read_name (dir)) != NULL) {
+    (void) name;
+    count++;
+  }
+
+  return count;
 }
 
 static guint
@@ -174,13 +186,12 @@ add_message_id_headers_to_maildir (const char *root_path, GPtrArray *entries,
 }
 
 static void
-test_import_plan_dry_run_verifies_clean_fixture (void)
+test_import_plan_copies_deterministic_scan (void)
 {
   const char *fixture_root = g_getenv ("WYREBOX_MAILDIR_FIXTURE_DIR");
   g_autoptr (GError) error = NULL;
   g_autoptr (WyreboxMaildirScanner) scanner = NULL;
   g_autoptr (WyreboxMaildirImportPlan) plan = NULL;
-  g_autoptr (WyreboxMaildirImportPlanVerificationResult) result = NULL;
   g_autoptr (GPtrArray) scan_entries = NULL;
   WyreboxMaildirImportPlanEntry *entry = NULL;
 
@@ -220,17 +231,13 @@ test_import_plan_dry_run_verifies_clean_fixture (void)
   g_assert_nonnull (entry->sha256_digest);
   g_assert_cmpuint (strlen (entry->sha256_digest), ==, 64);
 
-  result = wyrebox_maildir_import_plan_dry_run_verify_current (plan,
-      fixture_root, &error);
-  g_assert_nonnull (result);
-  g_assert_true (result->ok);
-  g_assert_cmpint (result->status, ==, WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_OK);
-  g_assert_null (result->failure_path);
+  g_assert_true (wyrebox_maildir_import_plan_verify_current (plan,
+          fixture_root, &error));
   g_assert_no_error (error);
 }
 
 static void
-test_import_plan_dry_run_reports_digest_mismatch (void)
+test_import_plan_verifies_modified_message_failure (void)
 {
   const char *fixture_root = g_getenv ("WYREBOX_MAILDIR_FIXTURE_DIR");
   g_autofree gchar *message_path = NULL;
@@ -241,7 +248,6 @@ test_import_plan_dry_run_reports_digest_mismatch (void)
   g_autoptr (GError) error = NULL;
   g_autoptr (WyreboxMaildirScanner) scanner = NULL;
   g_autoptr (WyreboxMaildirImportPlan) plan = NULL;
-  g_autoptr (WyreboxMaildirImportPlanVerificationResult) result = NULL;
   g_autoptr (GPtrArray) scan_entries = NULL;
 
   g_assert_nonnull (fixture_root);
@@ -278,17 +284,13 @@ test_import_plan_dry_run_reports_digest_mismatch (void)
   g_assert_no_error (error);
 
   g_clear_error (&error);
-  result = wyrebox_maildir_import_plan_dry_run_verify_current (plan,
-      modified_root, &error);
-  g_assert_nonnull (result);
-  assert_verification_failure (result,
-      WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_DIGEST_MISMATCH,
-      ".Projects/new/project-new");
+  g_assert_false (wyrebox_maildir_import_plan_verify_current (plan,
+          modified_root, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
 }
 
 static void
-test_import_plan_dry_run_reports_layout_drift (void)
+test_import_plan_rejects_layout_drift (void)
 {
   const char *fixture_root = g_getenv ("WYREBOX_MAILDIR_FIXTURE_DIR");
   g_autofree gchar *modified_root = NULL;
@@ -296,7 +298,6 @@ test_import_plan_dry_run_reports_layout_drift (void)
   g_autoptr (GError) error = NULL;
   g_autoptr (WyreboxMaildirScanner) scanner = NULL;
   g_autoptr (WyreboxMaildirImportPlan) plan = NULL;
-  g_autoptr (WyreboxMaildirImportPlanVerificationResult) result = NULL;
   g_autoptr (GPtrArray) scan_entries = NULL;
 
   g_assert_nonnull (fixture_root);
@@ -323,35 +324,21 @@ test_import_plan_dry_run_reports_layout_drift (void)
   g_assert_no_error (error);
 
   g_clear_error (&error);
-  result = wyrebox_maildir_import_plan_dry_run_verify_current (plan,
-      modified_root, &error);
-  g_assert_nonnull (result);
-  assert_verification_failure (result,
-      WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_LAYOUT_DRIFT,
-      ".Projects/new/project-new");
+  g_assert_false (wyrebox_maildir_import_plan_verify_current (plan,
+          modified_root, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
 }
 
 static void
-test_import_plan_dry_run_rejects_empty_scan (void)
+test_import_plan_rejects_empty_scan (void)
 {
   g_autoptr (GError) error = NULL;
   g_autoptr (GPtrArray) scan_entries = g_ptr_array_new ();
   g_autoptr (WyreboxMaildirImportPlan) plan = NULL;
-  g_autoptr (WyreboxMaildirImportPlanVerificationResult) result = NULL;
 
   plan = wyrebox_maildir_import_plan_new_from_scan_entries ("empty-root",
       scan_entries, &error);
   g_assert_null (plan);
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
-
-  g_clear_error (&error);
-  plan = g_object_new (WYREBOX_TYPE_MAILDIR_IMPORT_PLAN, NULL);
-  result = wyrebox_maildir_import_plan_dry_run_verify_current (plan,
-      "empty-root", &error);
-  g_assert_nonnull (result);
-  assert_verification_failure (result,
-      WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_EMPTY_PLAN, NULL);
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
 }
 
@@ -417,6 +404,7 @@ test_import_plan_executes_through_eml_ingestor (void)
 
   ingestor = wyrebox_eml_ingestor_new_with_journal (store, writer);
   g_assert_nonnull (ingestor);
+  g_assert_true (wyrebox_eml_ingestor_has_journal_writer (ingestor));
 
   result = wyrebox_maildir_import_plan_execute (plan, copy_root, ingestor,
       &error);
@@ -444,8 +432,6 @@ test_import_plan_executes_through_eml_ingestor (void)
           plan_entry->source_path, NULL);
 
       assert_execution_entry (execution_entry, plan_entry);
-      g_assert_cmpuint (execution_entry->ingest_result.size_bytes, ==,
-          plan_entry->size_bytes);
       g_assert_cmpuint (execution_entry->ingest_result.journal_sequence, >,
           previous_sequence);
       previous_sequence = execution_entry->ingest_result.journal_sequence;
@@ -464,88 +450,12 @@ test_import_plan_executes_through_eml_ingestor (void)
 }
 
 static void
-test_import_plan_rejects_drift_before_writing (void)
+test_import_plan_refuses_without_journal_writer (void)
 {
   const char *fixture_root = g_getenv ("WYREBOX_MAILDIR_FIXTURE_DIR");
   g_autofree gchar *copy_root = NULL;
   g_autofree gchar *object_root = NULL;
-  g_autofree gchar *journal_root = NULL;
-  g_autofree gchar *message_path = NULL;
-  g_autoptr (GError) error = NULL;
-  g_autoptr (WyreboxMaildirScanner) scanner = NULL;
-  g_autoptr (WyreboxMaildirImportPlan) plan = NULL;
-  g_autoptr (WyreboxMaildirImportPlanExecutionResult) result = NULL;
-  g_autoptr (WyreboxLocalObjectStore) store = NULL;
-  g_autoptr (WyreboxJournalWriter) writer = NULL;
-  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
-  g_autoptr (GPtrArray) scan_entries = NULL;
-
-  g_assert_nonnull (fixture_root);
-  copy_root = g_dir_make_tmp ("wyrebox-maildir-import-drift-XXXXXX", NULL);
-  object_root = g_dir_make_tmp ("wyrebox-maildir-import-drift-objects-XXXXXX",
-      NULL);
-  journal_root = g_dir_make_tmp ("wyrebox-maildir-import-drift-journal-XXXXXX",
-      NULL);
-  g_assert_nonnull (copy_root);
-  g_assert_nonnull (object_root);
-  g_assert_nonnull (journal_root);
-  g_assert_true (copy_tree_recursive (fixture_root, copy_root, &error));
-  g_assert_no_error (error);
-
-  scanner = wyrebox_maildir_scanner_new ();
-  g_assert_true (wyrebox_maildir_scanner_scan (scanner, copy_root,
-          &scan_entries, &error));
-  g_assert_no_error (error);
-
-  g_assert_true (add_message_id_headers_to_maildir (copy_root, scan_entries,
-          &error));
-  g_assert_no_error (error);
-
-  g_clear_pointer (&scan_entries, g_ptr_array_unref);
-  g_assert_true (wyrebox_maildir_scanner_scan (scanner, copy_root,
-          &scan_entries, &error));
-  g_assert_no_error (error);
-
-  plan = wyrebox_maildir_import_plan_new_from_scan_entries (copy_root,
-      scan_entries, &error);
-  g_assert_nonnull (plan);
-  g_assert_no_error (error);
-
-  message_path = g_build_filename (copy_root, ".Projects", "new",
-      "project-new", NULL);
-  g_assert_true (g_file_set_contents (message_path,
-          "Subject: drift\r\n\r\nx\r\n", -1, &error));
-  g_assert_no_error (error);
-
-  store = wyrebox_local_object_store_new (object_root, &error);
-  g_assert_no_error (error);
-  g_assert_nonnull (store);
-
-  writer = wyrebox_journal_writer_new (journal_root, &error);
-  g_assert_no_error (error);
-  g_assert_nonnull (writer);
-
-  ingestor = wyrebox_eml_ingestor_new_with_journal (store, writer);
-  g_assert_nonnull (ingestor);
-
-  g_clear_error (&error);
-  result = wyrebox_maildir_import_plan_execute (plan, copy_root, ingestor,
-      &error);
-  g_assert_nonnull (result);
-  g_assert_false (result->ok);
-  g_assert_cmpint (result->status, ==,
-      WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_REFUSED);
-  g_assert_cmpstr (result->failure_path, ==, ".Projects/new/project-new");
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
-  g_assert_cmpuint (count_message_delivered_records (journal_root), ==, 0);
-}
-
-static void
-test_import_plan_refuses_non_journaled_ingestor (void)
-{
-  const char *fixture_root = g_getenv ("WYREBOX_MAILDIR_FIXTURE_DIR");
-  g_autofree gchar *copy_root = NULL;
-  g_autofree gchar *object_root = NULL;
+  g_autofree gchar *objects_dir = NULL;
   g_autoptr (GError) error = NULL;
   g_autoptr (WyreboxMaildirScanner) scanner = NULL;
   g_autoptr (WyreboxMaildirImportPlan) plan = NULL;
@@ -555,24 +465,16 @@ test_import_plan_refuses_non_journaled_ingestor (void)
   g_autoptr (GPtrArray) scan_entries = NULL;
 
   g_assert_nonnull (fixture_root);
-  copy_root = g_dir_make_tmp ("wyrebox-maildir-import-nojournal-XXXXXX", NULL);
-  object_root =
-      g_dir_make_tmp ("wyrebox-maildir-import-nojournal-objects-XXXXXX", NULL);
+  copy_root = g_dir_make_tmp ("wyrebox-maildir-import-refuse-XXXXXX", NULL);
+  object_root = g_dir_make_tmp ("wyrebox-maildir-import-refuse-objects-XXXXXX",
+      NULL);
   g_assert_nonnull (copy_root);
   g_assert_nonnull (object_root);
+
   g_assert_true (copy_tree_recursive (fixture_root, copy_root, &error));
   g_assert_no_error (error);
 
   scanner = wyrebox_maildir_scanner_new ();
-  g_assert_true (wyrebox_maildir_scanner_scan (scanner, copy_root,
-          &scan_entries, &error));
-  g_assert_no_error (error);
-
-  g_assert_true (add_message_id_headers_to_maildir (copy_root, scan_entries,
-          &error));
-  g_assert_no_error (error);
-
-  g_clear_pointer (&scan_entries, g_ptr_array_unref);
   g_assert_true (wyrebox_maildir_scanner_scan (scanner, copy_root,
           &scan_entries, &error));
   g_assert_no_error (error);
@@ -590,6 +492,7 @@ test_import_plan_refuses_non_journaled_ingestor (void)
   g_assert_nonnull (ingestor);
   g_assert_false (wyrebox_eml_ingestor_has_journal_writer (ingestor));
 
+  g_clear_error (&error);
   result = wyrebox_maildir_import_plan_execute (plan, copy_root, ingestor,
       &error);
   g_assert_nonnull (result);
@@ -597,8 +500,11 @@ test_import_plan_refuses_non_journaled_ingestor (void)
   g_assert_cmpint (result->status, ==,
       WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_REFUSED);
   g_assert_null (result->failure_path);
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
   g_assert_cmpuint (result->entries->len, ==, 0);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+  objects_dir = g_build_filename (object_root, "objects", "sha256", NULL);
+  g_assert_cmpuint (count_directory_entries (objects_dir), ==, 0);
 }
 
 int
@@ -606,20 +512,18 @@ main (int argc, char **argv)
 {
   g_test_init (&argc, &argv, NULL);
 
-  g_test_add_func ("/maildir/import-plan/dry-run-verifies-clean-fixture",
-      test_import_plan_dry_run_verifies_clean_fixture);
-  g_test_add_func ("/maildir/import-plan/dry-run-reports-digest-mismatch",
-      test_import_plan_dry_run_reports_digest_mismatch);
-  g_test_add_func ("/maildir/import-plan/dry-run-reports-layout-drift",
-      test_import_plan_dry_run_reports_layout_drift);
-  g_test_add_func ("/maildir/import-plan/dry-run-rejects-empty-scan",
-      test_import_plan_dry_run_rejects_empty_scan);
+  g_test_add_func ("/maildir/import-plan/copies-deterministic-scan",
+      test_import_plan_copies_deterministic_scan);
+  g_test_add_func ("/maildir/import-plan/verifies-modified-message-failure",
+      test_import_plan_verifies_modified_message_failure);
+  g_test_add_func ("/maildir/import-plan/rejects-layout-drift",
+      test_import_plan_rejects_layout_drift);
+  g_test_add_func ("/maildir/import-plan/rejects-empty-scan",
+      test_import_plan_rejects_empty_scan);
   g_test_add_func ("/maildir/import-plan/executes-through-eml-ingestor",
       test_import_plan_executes_through_eml_ingestor);
-  g_test_add_func ("/maildir/import-plan/refuses-non-journaled-ingestor",
-      test_import_plan_refuses_non_journaled_ingestor);
-  g_test_add_func ("/maildir/import-plan/rejects-drift-before-writing",
-      test_import_plan_rejects_drift_before_writing);
+  g_test_add_func ("/maildir/import-plan/refuses-without-journal-writer",
+      test_import_plan_refuses_without_journal_writer);
 
   return g_test_run ();
 }

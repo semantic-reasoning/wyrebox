@@ -99,13 +99,6 @@ wyrebox_eml_ingestor_new_with_journal (WyreboxLocalObjectStore *object_store,
   return wyrebox_eml_ingestor_new_internal (object_store, journal_writer);
 }
 
-gboolean
-wyrebox_eml_ingestor_has_journal_writer (WyreboxEmlIngestor *self)
-{
-  g_return_val_if_fail (WYREBOX_IS_EML_INGESTOR (self), FALSE);
-
-  return self->journal_writer != NULL;
-}
 
 static char *
 compute_object_key (GBytes *bytes)
@@ -381,4 +374,12 @@ wyrebox_eml_ingestor_ingest_delivery_bytes (WyreboxEmlIngestor *self,
   result.journal_sequence = 0;
 
   return TRUE;
+}
+
+gboolean
+wyrebox_eml_ingestor_has_journal_writer (WyreboxEmlIngestor *self)
+{
+  g_return_val_if_fail (WYREBOX_IS_EML_INGESTOR (self), FALSE);
+
+  return self->journal_writer != NULL;
 }
