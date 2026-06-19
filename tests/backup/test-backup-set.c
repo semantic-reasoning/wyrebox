@@ -38,7 +38,8 @@ make_valid_set (void)
   WyreboxBackupSetEntry *entry = NULL;
 
   set.backup_id = g_strdup ("backup-20260619-0001");
-  set.entries = g_ptr_array_new ();
+  set.entries = g_ptr_array_new_with_free_func (
+      (GDestroyNotify) wyrebox_backup_set_entry_free);
 
   entry = g_new0 (WyreboxBackupSetEntry, 1);
   entry->unit_name = g_strdup ("raw-objects");

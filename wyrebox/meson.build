@@ -6,6 +6,7 @@ wyrebox_sources = files(
   'backup/wyrebox-backup-restore-plan.c',
   'backup/wyrebox-backup-set.c',
   'backup/wyrebox-backup-command.c',
+  'backup/wyrebox-backup-tool-main.c',
   'daemon/wyrebox-daemon-mailbox-list-request.c',
   'daemon/wyrebox-daemon-mailbox-list-result.c',
   'daemon/wyrebox-daemon-mailbox-list-service.c',
@@ -207,6 +208,12 @@ if capnp_serialization_found
   wyrebox_postfix_lmtp_listener = executable(
     'wyrebox-postfix-lmtp-listener',
     'postfix/wyrebox-postfix-lmtp-listener-main.c',
+    dependencies: [wyrebox_dep],
+    install: true,
+  )
+  wyrebox_backup_tool = executable(
+    'wyrebox-backup-tool',
+    'backup/wyrebox-backup-tool-main.c',
     dependencies: [wyrebox_dep],
     install: true,
   )
