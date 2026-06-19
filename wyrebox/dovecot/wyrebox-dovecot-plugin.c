@@ -750,6 +750,25 @@ wyrebox_dovecot_mailbox_refresh_select_result (struct mailbox *box,
   return TRUE;
 }
 
+static gboolean
+wyrebox_dovecot_mailbox_refresh_status_result (struct mailbox *box,
+    struct mailbox_status *status_r, GError **error)
+{
+  struct wyrebox_dovecot_storage *storage =
+      (struct wyrebox_dovecot_storage *) box->storage;
+  g_auto (WyreboxDaemonMailboxSelectResult) status_result = { 0 };
+
+  if (!wyrebox_dovecot_daemon_client_get_mailbox_status (storage->socket_path,
+          storage->account_identity, box->vname, &status_result, error)) {
+    return FALSE;
+  }
+
+  status_r->messages = status_result.message_count;
+  status_r->uidvalidity = status_result.uid_validity;
+  status_r->uidnext = status_result.uid_next;
+  return TRUE;
+}
+
 static void
 wyrebox_dovecot_mailbox_free (struct mailbox *box)
 {
@@ -783,7 +802,8 @@ wyrebox_dovecot_mailbox_get_status (struct mailbox *box,
   g_autoptr (GError) error = NULL;
 
   if (!wbox->select_result_valid
-      && !wyrebox_dovecot_mailbox_refresh_select_result (box, &error)) {
+      && !wyrebox_dovecot_mailbox_refresh_status_result (box, status_r,
+          &error)) {
     mail_storage_set_error (box->storage, MAIL_ERROR_NOTPOSSIBLE,
         wyrebox_dovecot_mailbox_error_message (error));
     return -1;
@@ -791,9 +811,12 @@ wyrebox_dovecot_mailbox_get_status (struct mailbox *box,
 
   (void) items;
 
-  status_r->messages = wbox->select_result.message_count;
-  status_r->uidvalidity = wbox->select_result.uid_validity;
-  status_r->uidnext = wbox->select_result.uid_next;
+  if (wbox->select_result_valid) {
+    status_r->messages = wbox->select_result.message_count;
+    status_r->uidvalidity = wbox->select_result.uid_validity;
+    status_r->uidnext = wbox->select_result.uid_next;
+  }
+
   return 0;
 }
 
