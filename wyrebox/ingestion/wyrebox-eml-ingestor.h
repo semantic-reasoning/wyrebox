@@ -71,7 +71,7 @@ WyreboxEmlIngestor *wyrebox_eml_ingestor_new_with_journal (
     WyreboxJournalWriter *journal_writer);
 
 /*
- * Returns: %TRUE when @self was constructed with a journal writer.
+ * Returns: whether a journal writer is configured.
  */
 gboolean wyrebox_eml_ingestor_has_journal_writer (WyreboxEmlIngestor *self);
 

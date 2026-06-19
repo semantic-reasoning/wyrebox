@@ -55,11 +55,11 @@ void wyrebox_maildir_import_plan_execution_entry_clear
   if (entry == NULL)
     return;
 
-  g_clear_pointer (&entry->mailbox_path, g_free);
   g_clear_pointer (&entry->source_path, g_free);
+  g_clear_pointer (&entry->mailbox_path, g_free);
   g_clear_pointer (&entry->maildir_flag_suffix, g_free);
-  entry->maildir_flags = 0;
   wyrebox_eml_ingest_result_clear (&entry->ingest_result);
+  entry->maildir_flags = 0;
 }
 
 void wyrebox_maildir_import_plan_execution_entry_free
@@ -242,36 +242,6 @@ wyrebox_maildir_import_plan_get_message_count (WyreboxMaildirImportPlan *self)
   return self->message_count;
 }
 
-static WyreboxMaildirImportPlanVerificationResult *
-verification_result_new (WyreboxMaildirImportPlanVerificationStatus status,
-    const gchar *failure_path)
-{
-  WyreboxMaildirImportPlanVerificationResult *result =
-      g_new0 (WyreboxMaildirImportPlanVerificationResult, 1);
-
-  result->ok = status == WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_OK;
-  result->status = status;
-  result->failure_path = g_strdup (failure_path);
-
-  return result;
-}
-
-static WyreboxMaildirImportPlanExecutionResult *
-execution_result_new (WyreboxMaildirImportPlanExecutionStatus status,
-    const gchar *failure_path)
-{
-  WyreboxMaildirImportPlanExecutionResult *result =
-      g_new0 (WyreboxMaildirImportPlanExecutionResult, 1);
-
-  result->ok = status == WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_OK;
-  result->status = status;
-  result->failure_path = g_strdup (failure_path);
-  result->entries = g_ptr_array_new_with_free_func (
-      (GDestroyNotify) wyrebox_maildir_import_plan_execution_entry_free);
-
-  return result;
-}
-
 static gboolean
 maildir_message_bytes_match_plan (const gchar *root_path,
     const WyreboxMaildirImportPlanEntry *entry, GBytes **out_bytes,
@@ -306,8 +276,38 @@ maildir_message_bytes_match_plan (const gchar *root_path,
   return TRUE;
 }
 
+static WyreboxMaildirImportPlanVerificationResult *
+verification_result_new (WyreboxMaildirImportPlanVerificationStatus status,
+    const gchar *failure_path)
+{
+  WyreboxMaildirImportPlanVerificationResult *result =
+      g_new0 (WyreboxMaildirImportPlanVerificationResult, 1);
+
+  result->ok = status == WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_OK;
+  result->status = status;
+  result->failure_path = g_strdup (failure_path);
+
+  return result;
+}
+
+static WyreboxMaildirImportPlanExecutionResult *
+execution_result_new (WyreboxMaildirImportPlanExecutionStatus status,
+    const gchar *failure_path)
+{
+  WyreboxMaildirImportPlanExecutionResult *result =
+      g_new0 (WyreboxMaildirImportPlanExecutionResult, 1);
+
+  result->ok = status == WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_OK;
+  result->status = status;
+  result->failure_path = g_strdup (failure_path);
+  result->entries = g_ptr_array_new_with_free_func (
+      (GDestroyNotify) wyrebox_maildir_import_plan_execution_entry_free);
+
+  return result;
+}
+
 static gboolean
-verify_scan_entry_against_plan (const gchar *root_path,
+verify_scan_entry_against_manifest (const gchar *root_path,
     const WyreboxMaildirScanEntry *scan_entry,
     const WyreboxMaildirImportPlanEntry *manifest_entry,
     WyreboxMaildirImportPlanVerificationResult **out_result, GError **error)
@@ -404,7 +404,7 @@ wyrebox_maildir_import_plan_dry_run_verify_current (WyreboxMaildirImportPlan
       WyreboxMaildirImportPlanEntry *entry = g_ptr_array_index (self->entries,
           index);
 
-      if (!verify_scan_entry_against_plan (root_path, scan_entry, entry,
+      if (!verify_scan_entry_against_manifest (root_path, scan_entry, entry,
               &result, error))
         return result;
     }
@@ -425,8 +425,7 @@ wyrebox_maildir_import_plan_dry_run_verify_current (WyreboxMaildirImportPlan
 
       g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
           "Maildir layout count changed");
-      return
-          verification_result_new
+      return verification_result_new
           (WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_LAYOUT_DRIFT, failure_path);
     }
   }
@@ -445,6 +444,41 @@ wyrebox_maildir_import_plan_verify_current (WyreboxMaildirImportPlan *self,
   return result != NULL && result->ok;
 }
 
+static gboolean
+set_execution_failure (WyreboxMaildirImportPlanExecutionResult *result,
+    WyreboxMaildirImportPlanExecutionStatus status, const gchar *failure_path)
+{
+  result->ok = FALSE;
+  result->status = status;
+  g_clear_pointer (&result->failure_path, g_free);
+  result->failure_path = g_strdup (failure_path);
+  return FALSE;
+}
+
+static gboolean
+append_execution_entry (WyreboxMaildirImportPlanExecutionResult *result,
+    const WyreboxMaildirImportPlanEntry *plan_entry,
+    WyreboxEmlIngestResult *ingest_result)
+{
+  WyreboxMaildirImportPlanExecutionEntry *execution_entry = NULL;
+
+  execution_entry = g_new0 (WyreboxMaildirImportPlanExecutionEntry, 1);
+  execution_entry->source_path = g_strdup (plan_entry->source_path);
+  execution_entry->mailbox_path = g_strdup (plan_entry->mailbox_path);
+  execution_entry->maildir_flag_suffix =
+      g_strdup (plan_entry->maildir_flag_suffix);
+  execution_entry->maildir_flags = plan_entry->maildir_flags;
+  execution_entry->ingest_result.object_key =
+      g_steal_pointer (&ingest_result->object_key);
+  execution_entry->ingest_result.size_bytes = ingest_result->size_bytes;
+  execution_entry->ingest_result.journal_offset = ingest_result->journal_offset;
+  execution_entry->ingest_result.journal_sequence =
+      ingest_result->journal_sequence;
+  g_ptr_array_add (result->entries, execution_entry);
+
+  return TRUE;
+}
+
 WyreboxMaildirImportPlanExecutionResult *
 wyrebox_maildir_import_plan_execute (WyreboxMaildirImportPlan *self,
     const gchar *root_path, WyreboxEmlIngestor *ingestor, GError **error)
@@ -459,7 +493,7 @@ wyrebox_maildir_import_plan_execute (WyreboxMaildirImportPlan *self,
 
   if (!wyrebox_eml_ingestor_has_journal_writer (ingestor)) {
     g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
-        "Maildir import execution requires a journaled ingestor");
+        "journal writer is required");
     return execution_result_new (WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_REFUSED,
         NULL);
   }
@@ -469,12 +503,9 @@ wyrebox_maildir_import_plan_execute (WyreboxMaildirImportPlan *self,
   if (verification == NULL)
     return NULL;
 
-  if (!verification->ok) {
-    result =
-        execution_result_new (WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_REFUSED,
+  if (!verification->ok)
+    return execution_result_new (WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_REFUSED,
         verification->failure_path);
-    return result;
-  }
 
   result =
       execution_result_new (WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_OK, NULL);
@@ -485,43 +516,27 @@ wyrebox_maildir_import_plan_execute (WyreboxMaildirImportPlan *self,
         index);
     g_autoptr (GBytes) bytes = NULL;
     g_auto (WyreboxEmlIngestResult) ingest_result = { 0 };
-    WyreboxMaildirImportPlanExecutionEntry *execution_entry = NULL;
 
     if (plan_entry->kind != WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE)
       continue;
 
     if (!maildir_message_bytes_match_plan (root_path, plan_entry, &bytes,
             error)) {
-      result->ok = FALSE;
-      result->status = WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_SOURCE_READ_FAILED;
-      g_clear_pointer (&result->failure_path, g_free);
-      result->failure_path = g_strdup (plan_entry->source_path);
+      set_execution_failure (result,
+          WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_SOURCE_READ_FAILED,
+          plan_entry->source_path);
       return result;
     }
 
-    if (!wyrebox_eml_ingestor_ingest_bytes (ingestor, bytes,
-            &ingest_result, error)) {
-      result->ok = FALSE;
-      result->status = WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_INGEST_FAILED;
-      g_clear_pointer (&result->failure_path, g_free);
-      result->failure_path = g_strdup (plan_entry->source_path);
+    if (!wyrebox_eml_ingestor_ingest_bytes (ingestor, bytes, &ingest_result,
+            error)) {
+      set_execution_failure (result,
+          WYREBOX_MAILDIR_IMPORT_PLAN_EXECUTION_INGEST_FAILED,
+          plan_entry->source_path);
       return result;
     }
 
-    execution_entry = g_new0 (WyreboxMaildirImportPlanExecutionEntry, 1);
-    execution_entry->mailbox_path = g_strdup (plan_entry->mailbox_path);
-    execution_entry->source_path = g_strdup (plan_entry->source_path);
-    execution_entry->maildir_flag_suffix =
-        g_strdup (plan_entry->maildir_flag_suffix);
-    execution_entry->maildir_flags = plan_entry->maildir_flags;
-    execution_entry->ingest_result.object_key =
-        g_steal_pointer (&ingest_result.object_key);
-    execution_entry->ingest_result.size_bytes = ingest_result.size_bytes;
-    execution_entry->ingest_result.journal_offset =
-        ingest_result.journal_offset;
-    execution_entry->ingest_result.journal_sequence =
-        ingest_result.journal_sequence;
-    g_ptr_array_add (result->entries, execution_entry);
+    append_execution_entry (result, plan_entry, &ingest_result);
   }
 
   return result;
