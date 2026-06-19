@@ -140,23 +140,27 @@ validate_payload (const WyreboxDaemonAuditPayload *payload,
       WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE ||
       payload->operation ==
       WYREBOX_DAEMON_AUDIT_OPERATION_WIRELOG_PREDICATE_QUERY) {
-    if (payload->outcome != WYREBOX_DAEMON_AUDIT_OUTCOME_FAILURE) {
+    if (payload->outcome != WYREBOX_DAEMON_AUDIT_OUTCOME_SUCCESS &&
+        payload->outcome != WYREBOX_DAEMON_AUDIT_OUTCOME_FAILURE) {
       g_set_error (error,
           G_IO_ERROR,
-          code, "DaemonAuditRecorded query audit outcome must be failure");
+          code, "DaemonAuditRecorded query audit outcome is invalid");
       return FALSE;
     }
 
     if (!validate_required_string ("query_id", payload->query_id, code,
             error) ||
         !validate_required_string ("template_id", payload->template_id, code,
-            error) ||
-        !validate_required_string ("error_domain", payload->error_domain,
-            code, error) ||
-        !validate_required_string ("error_class", payload->error_class, code,
-            error) ||
-        !validate_required_string ("error_message", payload->error_message,
-            code, error))
+            error))
+      return FALSE;
+
+    if (payload->outcome == WYREBOX_DAEMON_AUDIT_OUTCOME_FAILURE &&
+        (!validate_required_string ("error_domain", payload->error_domain,
+                code, error) ||
+            !validate_required_string ("error_class", payload->error_class,
+                code, error) ||
+            !validate_required_string ("error_message", payload->error_message,
+                code, error)))
       return FALSE;
   }
 

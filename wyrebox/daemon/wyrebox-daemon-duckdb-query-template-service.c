@@ -2097,6 +2097,48 @@ append_duckdb_query_failure_audit (WyreboxDaemonDuckDBQueryTemplateService
       &sequence, &ignored_error);
 }
 
+static void
+append_duckdb_query_success_audit (WyreboxDaemonDuckDBQueryTemplateService
+    *self, const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonDuckDBQueryTemplateRequest *request)
+{
+  g_autoptr (GError) ignored_error = NULL;
+  g_autoptr (GBytes) payload_bytes = NULL;
+  guint64 offset = 0;
+  guint64 sequence = 0;
+  WyreboxDaemonAuditPayload payload = {
+    .operation = WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE,
+    .outcome = WYREBOX_DAEMON_AUDIT_OUTCOME_SUCCESS,
+    .request_id = (gchar *) audit_required_value (identity->request_id,
+        "unknown-request"),
+    .correlation_id = identity->correlation_id,
+    .caller_identity = (gchar *) audit_required_value
+        (identity->caller_identity, "unknown"),
+    .account_identity = (gchar *) audit_required_value
+        (identity->account_identity, "unknown"),
+    .tool_identity = identity->tool_identity,
+    .scope_id = (gchar *) audit_required_value (request->scope_id,
+        identity->account_identity != NULL ? identity->account_identity :
+        "unknown"),
+    .query_id = (gchar *) audit_required_value (request->query_id,
+        "unknown-query"),
+    .template_id = (gchar *) audit_required_value (request->template_id,
+        "unknown-template"),
+  };
+
+  if (self->audit_writer == NULL)
+    return;
+
+  payload_bytes = wyrebox_daemon_audit_payload_encode (&payload,
+      &ignored_error);
+  if (payload_bytes == NULL)
+    return;
+
+  (void) wyrebox_journal_writer_append (self->audit_writer,
+      WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED, payload_bytes, &offset,
+      &sequence, &ignored_error);
+}
+
 gboolean
     wyrebox_daemon_duckdb_query_template_service_handle_identity
     (WyreboxDaemonDuckDBQueryTemplateService * self,
@@ -2155,6 +2197,11 @@ gboolean
           chunk.chunk_index, chunk.bytes, chunk.end_of_stream, error))
     return FALSE;
 
-  return wyrebox_daemon_response_frame_init_stream_chunk (out_frame,
-      &response_chunk, error);
+  if (!wyrebox_daemon_response_frame_init_stream_chunk (out_frame,
+          &response_chunk, error))
+    return FALSE;
+
+  append_duckdb_query_success_audit (self, identity, request);
+
+  return TRUE;
 }

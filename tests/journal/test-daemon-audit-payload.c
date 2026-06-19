@@ -289,27 +289,55 @@ test_daemon_audit_payload_rejects_invalid_encode (void)
 }
 
 static void
-test_daemon_audit_payload_rejects_duckdb_success_encode (void)
+test_daemon_audit_payload_roundtrips_duckdb_success_encode (void)
 {
+  g_auto (WyreboxDaemonAuditPayload) decoded = { 0 };
   g_autoptr (GError) error = NULL;
   g_autoptr (GBytes) encoded = NULL;
   WyreboxDaemonAuditPayload payload = {
     .operation = WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE,
     .outcome = WYREBOX_DAEMON_AUDIT_OUTCOME_SUCCESS,
     .request_id = "request-query",
+    .correlation_id = "correlation-query",
     .caller_identity = "admin-cli",
     .account_identity = "account-1",
+    .tool_identity = "duckdb-tool",
     .scope_id = "account-1",
     .query_id = "query-1",
     .template_id = "mailbox.uid_map.v1",
-    .error_domain = "g-io-error-quark",
-    .error_class = "internalError",
-    .error_message = "unexpected success",
   };
 
   encoded = wyrebox_daemon_audit_payload_encode (&payload, &error);
-  g_assert_null (encoded);
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+  g_assert_no_error (error);
+  g_assert_nonnull (encoded);
+  {
+    gsize size = 0;
+    const guint8 *data = g_bytes_get_data (encoded, &size);
+
+    g_assert_cmpuint (size, >, 8);
+    g_assert_cmpmem (data, 8, "WYREDAU2", 8);
+  }
+
+  g_assert_true (wyrebox_daemon_audit_payload_decode (encoded, &decoded,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.operation, ==,
+      WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE);
+  g_assert_cmpint (decoded.outcome, ==, WYREBOX_DAEMON_AUDIT_OUTCOME_SUCCESS);
+  g_assert_cmpstr (decoded.request_id, ==, "request-query");
+  g_assert_cmpstr (decoded.correlation_id, ==, "correlation-query");
+  g_assert_cmpstr (decoded.caller_identity, ==, "admin-cli");
+  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.tool_identity, ==, "duckdb-tool");
+  g_assert_cmpstr (decoded.scope_id, ==, "account-1");
+  g_assert_cmpuint (decoded.mutation_count, ==, 0);
+  g_assert_cmpuint (decoded.final_journal_sequence, ==, 0);
+  g_assert_cmpstr (decoded.query_id, ==, "query-1");
+  g_assert_cmpstr (decoded.template_id, ==, "mailbox.uid_map.v1");
+  g_assert_null (decoded.error_domain);
+  g_assert_cmpint (decoded.error_code, ==, 0);
+  g_assert_null (decoded.error_class);
+  g_assert_null (decoded.error_message);
 }
 
 static void
@@ -377,8 +405,8 @@ main (int argc, char **argv)
       test_daemon_audit_payload_roundtrips_wirelog_failure);
   g_test_add_func ("/journal/daemon-audit-payload/reject-invalid-encode",
       test_daemon_audit_payload_rejects_invalid_encode);
-  g_test_add_func ("/journal/daemon-audit-payload/reject-duckdb-success-encode",
-      test_daemon_audit_payload_rejects_duckdb_success_encode);
+  g_test_add_func ("/journal/daemon-audit-payload/roundtrip-duckdb-success",
+      test_daemon_audit_payload_roundtrips_duckdb_success_encode);
   g_test_add_func ("/journal/daemon-audit-payload/reject-truncated-decode",
       test_daemon_audit_payload_rejects_truncated_decode);
   g_test_add_func ("/journal/daemon-audit-payload/reject-trailing-bytes",
