@@ -45,6 +45,13 @@ gboolean wyrebox_dovecot_daemon_client_select_mailbox (
     WyreboxDaemonMailboxSelectResult *out_result,
     GError **error);
 
+gboolean wyrebox_dovecot_daemon_client_get_mailbox_status (
+    const char *socket_path,
+    const char *account_identity,
+    const char *mailbox_name,
+    WyreboxDaemonMailboxSelectResult *out_result,
+    GError **error);
+
 gboolean wyrebox_dovecot_daemon_client_list_mailboxes (
     const char *socket_path,
     const char *account_identity,
