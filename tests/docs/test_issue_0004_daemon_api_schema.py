@@ -60,10 +60,18 @@ REQUIRED_OPERATION_GROUPS = [
     "struct FlagKeywordUpdateRequest",
     "factMutation",
     "struct FactMutationRequest",
+    "mailEventStream",
+    "struct MailEventStreamRequest",
     "wirelogPredicateQuery",
     "struct WirelogPredicateQueryRequest",
     "duckDBQueryTemplate",
     "struct DuckDBQueryTemplateRequest",
+]
+
+REQUIRED_MAIL_EVENT_STREAM_REQUEST_FIELDS = [
+    "accountIdentity @0 :Text;",
+    "afterJournalOffset @1 :UInt64;",
+    "afterJournalSequence @2 :UInt64;",
 ]
 
 REQUIRED_STREAM_FIELDS = [
@@ -177,6 +185,18 @@ def assert_mailbox_list_response_fields(text: str) -> None:
     )
 
 
+def assert_mail_event_stream_request_fields(text: str) -> None:
+    stream_request_start = text.index("struct MailEventStreamRequest {")
+    stream_request_end = text.index("\n}", stream_request_start)
+    stream_request = text[stream_request_start:stream_request_end]
+
+    assert_contains_all(
+        stream_request,
+        REQUIRED_MAIL_EVENT_STREAM_REQUEST_FIELDS,
+        "mail event stream request fields",
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -258,6 +278,7 @@ def main() -> None:
     assert_contains_all(text, REQUIRED_OPERATION_GROUPS, "operation groups")
     assert_contains_all(text, REQUIRED_STREAM_FIELDS, "stream/chunk fields")
     assert_mailbox_list_response_fields(text)
+    assert_mail_event_stream_request_fields(text)
 
     forbidden = [term for term in FORBIDDEN_IMPLEMENTATION_TERMS if term in text]
     assert not forbidden, "schema contains forbidden terms: " + ", ".join(forbidden)
