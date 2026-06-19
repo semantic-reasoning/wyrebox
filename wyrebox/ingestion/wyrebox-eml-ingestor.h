@@ -71,6 +71,11 @@ WyreboxEmlIngestor *wyrebox_eml_ingestor_new_with_journal (
     WyreboxJournalWriter *journal_writer);
 
 /*
+ * Returns: %TRUE when @self was constructed with a journal writer.
+ */
+gboolean wyrebox_eml_ingestor_has_journal_writer (WyreboxEmlIngestor *self);
+
+/*
  * @bytes: (transfer none): raw RFC 5322 message bytes to ingest.
  * @out_result: (out): receives the object identity, raw byte size, and durable
  *   journal location when a journal writer is configured. The caller owns
