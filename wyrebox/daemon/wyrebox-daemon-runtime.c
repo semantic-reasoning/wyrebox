@@ -148,6 +148,15 @@ void wyrebox_daemon_object_reachability_report_clear
   report->is_gc_candidate = FALSE;
 }
 
+void wyrebox_daemon_garbage_collection_dry_run_report_clear
+    (WyreboxDaemonGarbageCollectionDryRunReport * report)
+{
+  if (report == NULL)
+    return;
+
+  memset (report, 0, sizeof (*report));
+}
+
 static void
     runtime_delivery_storage_report_apply_safe_prefix
     (WyreboxDaemonDeliveryStorageValidationReport * report,
@@ -608,6 +617,66 @@ static gboolean
   return TRUE;
 }
 
+static gboolean
+    runtime_garbage_collection_dry_run_report_load_row
+    (duckdb_connection connection,
+    WyreboxDaemonGarbageCollectionDryRunReport * out_report, GError ** error)
+{
+  g_auto (duckdb_result) result = { 0 };
+  g_auto (duckdb_prepared_statement) statement = NULL;
+
+  if (duckdb_prepare (connection,
+          "SELECT CAST(COUNT(*) AS UBIGINT) AS total_object_count, "
+          "CAST(COALESCE(SUM(CASE WHEN is_gc_candidate THEN 1 ELSE 0 END), 0) "
+          "AS UBIGINT) AS gc_candidate_count, "
+          "CAST(COALESCE(SUM(CASE WHEN is_gc_candidate THEN size_bytes ELSE 0 "
+          "END), 0) AS UBIGINT) AS gc_reclaimable_bytes, "
+          "CAST(COALESCE(SUM(CASE WHEN is_gc_reachable THEN size_bytes ELSE 0 "
+          "END), 0) AS UBIGINT) AS gc_reachable_bytes "
+          "FROM object_reachability;", &statement) != DuckDBSuccess) {
+    const char *detail = statement != NULL ?
+        duckdb_prepare_error (statement) : NULL;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "failed to prepare garbage collection dry-run query: %s",
+        detail != NULL && *detail != '\0' ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+    const char *detail = duckdb_result_error (&result);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "failed to query garbage collection dry-run report: %s",
+        detail != NULL && *detail != '\0' ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  if (duckdb_row_count (&result) != 1 || duckdb_column_count (&result) != 4) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "garbage collection dry-run query returned an unexpected shape");
+    return FALSE;
+  }
+
+  wyrebox_daemon_garbage_collection_dry_run_report_clear (out_report);
+  out_report->total_object_count =
+      (guint64) duckdb_value_uint64 (&result, 0, 0);
+  out_report->gc_candidate_count =
+      (guint64) duckdb_value_uint64 (&result, 1, 0);
+  out_report->gc_reclaimable_bytes =
+      (guint64) duckdb_value_uint64 (&result, 2, 0);
+  out_report->gc_reachable_bytes =
+      (guint64) duckdb_value_uint64 (&result, 3, 0);
+
+  return TRUE;
+}
+
 gboolean
 wyrebox_daemon_runtime_load_object_reachability_report (const char
     *catalog_path, const char *object_id,
@@ -639,6 +708,34 @@ wyrebox_daemon_runtime_load_object_reachability_report (const char
     return FALSE;
 
   return runtime_object_reachability_report_load_row (connection, object_id,
+      out_report, error);
+}
+
+gboolean
+wyrebox_daemon_runtime_load_garbage_collection_dry_run_report (const char
+    *catalog_path,
+    WyreboxDaemonGarbageCollectionDryRunReport *out_report, GError **error)
+{
+  g_auto (duckdb_database) database = NULL;
+  g_auto (duckdb_connection) connection = NULL;
+
+  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+  g_return_val_if_fail (out_report != NULL, FALSE);
+
+  if (catalog_path == NULL || *catalog_path == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT, "DuckDB catalog path is required");
+    return FALSE;
+  }
+
+  wyrebox_daemon_garbage_collection_dry_run_report_clear (out_report);
+
+  if (!runtime_open_catalog_read_only (catalog_path, &database, &connection,
+          error))
+    return FALSE;
+
+  return runtime_garbage_collection_dry_run_report_load_row (connection,
       out_report, error);
 }
 
