@@ -96,6 +96,9 @@ jobs:
     env:
       ASAN_OPTIONS: "abort_on_error=1:halt_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1"
       UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+      # DuckDB version built from source on architectures without a prebuilt.
+      DUCKDB_VERSION: v1.5.2
+      DUCKDB_ROOT: ${{ github.workspace }}/duckdb-install
 
     steps:
       - name: Check out sources
@@ -107,15 +110,48 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential \
             ca-certificates \
+            cmake \
+            git \
             libglib2.0-dev \
             meson \
             ninja-build \
             pkg-config \
             unzip
 
+      # arm64 has no bundled DuckDB prebuilt; build it from source and cache it
+      # so it is compiled at most once per DuckDB version.
+      - name: Cache source-built DuckDB
+        if: matrix.arch == 'arm64'
+        id: duckdb-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.DUCKDB_ROOT }}
+          key: duckdb-${{ env.DUCKDB_VERSION }}-${{ matrix.arch }}
+
+      - name: Build DuckDB from source
+        if: matrix.arch == 'arm64' && steps.duckdb-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$DUCKDB_VERSION" \
+            https://github.com/duckdb/duckdb.git duckdb-src
+          cmake -S duckdb-src -B duckdb-src/build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_UNITTESTS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$DUCKDB_ROOT"
+          cmake --build duckdb-src/build -j "$(nproc)"
+          cmake --install duckdb-src/build
+
       - name: Configure
         run: |
-          meson setup _build -Db_sanitize=address,undefined -Db_lundef=false
+          extra=()
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            extra+=("-Dduckdb_root=$DUCKDB_ROOT")
+          fi
+          meson setup _build \
+            -Db_sanitize=address,undefined \
+            -Db_lundef=false \
+            "${extra[@]}"
 
       - name: Build
         run: |
@@ -123,4 +159,5 @@ jobs:
 
       - name: Test
         run: |
+          export LD_LIBRARY_PATH="$DUCKDB_ROOT/lib:${LD_LIBRARY_PATH:-}"
           meson test -C _build --print-errorlogs

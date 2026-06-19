@@ -13,6 +13,14 @@ option(
 )
 
 option(
+  'duckdb_root',
+  type: 'string',
+  value: '',
+  description: 'Path to a source-built DuckDB (with include/ and lib/) for ' +
+    'architectures without a bundled prebuilt, e.g. arm64',
+)
+
+option(
   'wirelog_runtime',
   type: 'feature',
   value: 'enabled',
