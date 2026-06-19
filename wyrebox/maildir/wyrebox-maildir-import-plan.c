@@ -28,6 +28,27 @@ G_DEFINE_TYPE (WyreboxMaildirImportPlan, wyrebox_maildir_import_plan,
   entry->kind = 0;
 }
 
+void wyrebox_maildir_import_plan_verification_result_clear
+    (WyreboxMaildirImportPlanVerificationResult * result)
+{
+  if (result == NULL)
+    return;
+
+  result->ok = FALSE;
+  result->status = WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_UNKNOWN;
+  g_clear_pointer (&result->failure_path, g_free);
+}
+
+void wyrebox_maildir_import_plan_verification_result_free
+    (WyreboxMaildirImportPlanVerificationResult * result)
+{
+  if (result == NULL)
+    return;
+
+  wyrebox_maildir_import_plan_verification_result_clear (result);
+  g_free (result);
+}
+
 static void
 maildir_import_plan_entry_free (gpointer data)
 {
@@ -176,43 +197,31 @@ wyrebox_maildir_import_plan_get_message_count (WyreboxMaildirImportPlan *self)
   return self->message_count;
 }
 
+static WyreboxMaildirImportPlanVerificationResult *
+verification_result_new (WyreboxMaildirImportPlanVerificationStatus status,
+    const gchar *failure_path)
+{
+  WyreboxMaildirImportPlanVerificationResult *result =
+      g_new0 (WyreboxMaildirImportPlanVerificationResult, 1);
+
+  result->ok = status == WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_OK;
+  result->status = status;
+  result->failure_path = g_strdup (failure_path);
+
+  return result;
+}
+
 static gboolean
-verify_message_entry (const gchar *root_path,
-    const WyreboxMaildirImportPlanEntry *entry, GError **error)
+verify_scan_entry_against_plan (const gchar *root_path,
+    const WyreboxMaildirScanEntry *scan_entry,
+    const WyreboxMaildirImportPlanEntry *manifest_entry,
+    WyreboxMaildirImportPlanVerificationResult **out_result, GError **error)
 {
   g_autofree gchar *absolute_path = NULL;
   g_autofree gchar *contents = NULL;
   g_autofree gchar *digest = NULL;
   gsize contents_len = 0;
 
-  if (entry->kind != WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE)
-    return TRUE;
-
-  absolute_path = g_build_filename (root_path, entry->source_path, NULL);
-  if (!g_file_get_contents (absolute_path, &contents, &contents_len, error))
-    return FALSE;
-
-  if ((guint64) contents_len != entry->size_bytes) {
-    g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
-        "Maildir message size changed for %s", entry->source_path);
-    return FALSE;
-  }
-
-  digest = g_compute_checksum_for_data (G_CHECKSUM_SHA256,
-      (const guchar *) contents, contents_len);
-  if (g_strcmp0 (digest, entry->sha256_digest) != 0) {
-    g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
-        "Maildir message digest changed for %s", entry->source_path);
-    return FALSE;
-  }
-
-  return TRUE;
-}
-
-static gboolean
-scan_entry_matches_manifest (const WyreboxMaildirScanEntry *scan_entry,
-    const WyreboxMaildirImportPlanEntry *manifest_entry, GError **error)
-{
   if (scan_entry->kind != manifest_entry->kind ||
       g_strcmp0 (scan_entry->mailbox_path, manifest_entry->mailbox_path) != 0 ||
       g_strcmp0 (scan_entry->source_path, manifest_entry->source_path) != 0 ||
@@ -221,50 +230,122 @@ scan_entry_matches_manifest (const WyreboxMaildirScanEntry *scan_entry,
       scan_entry->maildir_flags != manifest_entry->maildir_flags) {
     g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
         "Maildir layout drift detected at %s", manifest_entry->source_path);
+    *out_result =
+        verification_result_new
+        (WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_LAYOUT_DRIFT,
+        manifest_entry->source_path);
+    return FALSE;
+  }
+
+  if (manifest_entry->kind != WYREBOX_MAILDIR_SCAN_ENTRY_MESSAGE)
+    return TRUE;
+
+  absolute_path = g_build_filename (root_path, manifest_entry->source_path,
+      NULL);
+  if (!g_file_get_contents (absolute_path, &contents, &contents_len, error)) {
+    *out_result =
+        verification_result_new
+        (WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_LAYOUT_DRIFT,
+        manifest_entry->source_path);
+    return FALSE;
+  }
+
+  if ((guint64) contents_len != manifest_entry->size_bytes) {
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+        "Maildir message size changed for %s", manifest_entry->source_path);
+    *out_result =
+        verification_result_new
+        (WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_SIZE_MISMATCH,
+        manifest_entry->source_path);
+    return FALSE;
+  }
+
+  digest = g_compute_checksum_for_data (G_CHECKSUM_SHA256,
+      (const guchar *) contents, contents_len);
+  if (g_strcmp0 (digest, manifest_entry->sha256_digest) != 0) {
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+        "Maildir message digest changed for %s", manifest_entry->source_path);
+    *out_result =
+        verification_result_new
+        (WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_DIGEST_MISMATCH,
+        manifest_entry->source_path);
     return FALSE;
   }
 
   return TRUE;
 }
 
-gboolean
-wyrebox_maildir_import_plan_verify_current (WyreboxMaildirImportPlan *self,
-    const gchar *root_path, GError **error)
+WyreboxMaildirImportPlanVerificationResult *
+wyrebox_maildir_import_plan_dry_run_verify_current (WyreboxMaildirImportPlan
+    *self, const gchar *root_path, GError **error)
 {
   g_autoptr (WyreboxMaildirScanner) scanner = NULL;
   g_autoptr (GPtrArray) current_entries = NULL;
-  g_return_val_if_fail (WYREBOX_IS_MAILDIR_IMPORT_PLAN (self), FALSE);
-  g_return_val_if_fail (root_path != NULL && root_path[0] != '\0', FALSE);
-  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+  WyreboxMaildirImportPlanVerificationResult *result = NULL;
+
+  g_return_val_if_fail (WYREBOX_IS_MAILDIR_IMPORT_PLAN (self), NULL);
+  g_return_val_if_fail (root_path != NULL && root_path[0] != '\0', NULL);
+  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
   if (self->entries == NULL || self->entries->len == 0) {
     g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
         "Maildir import plan is empty");
-    return FALSE;
+    return
+        verification_result_new (WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_EMPTY_PLAN,
+        NULL);
   }
 
   scanner = wyrebox_maildir_scanner_new ();
   if (!wyrebox_maildir_scanner_scan (scanner, root_path, &current_entries,
           error))
-    return FALSE;
+    return NULL;
 
-  if (current_entries->len != self->entries->len) {
-    g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
-        "Maildir layout count changed");
-    return FALSE;
+  {
+    guint matched_entries = MIN (self->entries->len, current_entries->len);
+
+    for (guint index = 0; index < matched_entries; index++) {
+      WyreboxMaildirScanEntry *scan_entry = g_ptr_array_index (current_entries,
+          index);
+      WyreboxMaildirImportPlanEntry *entry = g_ptr_array_index (self->entries,
+          index);
+
+      if (!verify_scan_entry_against_plan (root_path, scan_entry, entry,
+              &result, error))
+        return result;
+    }
+
+    if (current_entries->len != self->entries->len) {
+      const gchar *failure_path = NULL;
+      guint mismatch_index = matched_entries;
+
+      if (mismatch_index < self->entries->len) {
+        WyreboxMaildirImportPlanEntry *entry =
+            g_ptr_array_index (self->entries, mismatch_index);
+        failure_path = entry->source_path;
+      } else if (mismatch_index < current_entries->len) {
+        WyreboxMaildirScanEntry *scan_entry =
+            g_ptr_array_index (current_entries, mismatch_index);
+        failure_path = scan_entry->source_path;
+      }
+
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+          "Maildir layout count changed");
+      return
+          verification_result_new
+          (WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_LAYOUT_DRIFT, failure_path);
+    }
   }
 
-  for (guint index = 0; index < self->entries->len; index++) {
-    WyreboxMaildirScanEntry *scan_entry = g_ptr_array_index (current_entries,
-        index);
-    WyreboxMaildirImportPlanEntry *entry = g_ptr_array_index (self->entries,
-        index);
+  return verification_result_new (WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_OK, NULL);
+}
 
-    if (!scan_entry_matches_manifest (scan_entry, entry, error))
-      return FALSE;
-    if (!verify_message_entry (root_path, entry, error))
-      return FALSE;
-  }
+gboolean
+wyrebox_maildir_import_plan_verify_current (WyreboxMaildirImportPlan *self,
+    const gchar *root_path, GError **error)
+{
+  g_autoptr (WyreboxMaildirImportPlanVerificationResult) result = NULL;
 
-  return TRUE;
+  result = wyrebox_maildir_import_plan_dry_run_verify_current (self,
+      root_path, error);
+  return result != NULL && result->ok;
 }
