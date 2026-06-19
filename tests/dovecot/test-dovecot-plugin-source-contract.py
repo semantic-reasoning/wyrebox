@@ -298,6 +298,18 @@ def main() -> None:
         "mailbox SELECT refresh helper clears stale state and loads UID map",
     )
     require(
+        r"wyrebox_dovecot_mailbox_refresh_status_result\s*\(\s*struct\s+mailbox\s+\*box,\s*"
+        r"struct\s+mailbox_status\s+\*status_r,\s*GError\s+\*\*\s*\*?error\)\s*\{[\s\S]*?"
+        r"wyrebox_dovecot_daemon_client_get_mailbox_status\s*\(\s*"
+        r"storage->socket_path,\s*storage->account_identity,\s*box->vname,\s*"
+        r"&status_result,\s*error\)[\s\S]*?"
+        r"status_r->messages\s*=\s*status_result\.message_count;\s*[\s\S]*?"
+        r"status_r->uidvalidity\s*=\s*status_result\.uid_validity;\s*[\s\S]*?"
+        r"status_r->uidnext\s*=\s*status_result\.uid_next;",
+        text,
+        "mailbox STATUS helper queries daemon status directly",
+    )
+    require(
         r"wyrebox_dovecot_mailbox_open\s*\(\s*struct\s+mailbox\s+\*box\s*\)\s*\{[\s\S]*?"
         r"wyrebox_dovecot_mailbox_set_opened\s*\(\s*box,\s*FALSE\);\s*"
         r"[\s\S]*?if\s*\(\s*!\s*wyrebox_dovecot_mailbox_refresh_select_result\s*\(\s*box,\s*&error\)\)\s*\{[\s\S]*?"
@@ -453,23 +465,6 @@ def main() -> None:
         r"[\s\S]*?struct\s+mailbox_status\s+\*status_r\)",
         text,
         "mailbox get_status wrapper",
-    )
-    require(
-        r"if\s*\(!wbox->select_result_valid\s*&&\s*"
-        r"!\s*wyrebox_dovecot_mailbox_refresh_select_result\s*\(\s*box,\s*&error\)\)\s*\{[\s\S]*?"
-        r"mail_storage_set_error\s*\(\s*box->storage,\s*"
-        r"MAIL_ERROR_NOTPOSSIBLE,\s*"
-        r"wyrebox_dovecot_mailbox_error_message\s*\(\s*error\s*\)\s*\);\s*[\s\S]*?"
-        r"return\s+-1;\s*\}",
-        text,
-        "mailbox get_status lazily refreshes SELECT state",
-    )
-    require(
-        r"status_r->messages\s*=\s*wbox->select_result.message_count;\s*[\s\S]*?"
-        r"status_r->uidvalidity\s*=\s*wbox->select_result.uid_validity;\s*[\s\S]*?"
-        r"status_r->uidnext\s*=\s*wbox->select_result.uid_next;",
-        text,
-        "mailbox get_status reflects cached SELECT uid state",
     )
     require(
         r"wyrebox_dovecot_mailbox_alloc\s*\(\s*struct\s+mail_storage\s+\*storage\s*,"
@@ -630,6 +625,22 @@ def main() -> None:
         r"status_r->messages\s*=\s*wbox->select_result\.message_count;",
         text,
         "mailbox get_status reflects cached SELECT message count",
+    )
+    require(
+        r"wyrebox_dovecot_mailbox_get_status\s*\(\s*struct\s+mailbox\s+\*box,\s*"
+        r"enum\s+mailbox_status_items\s+items,\s*struct\s+mailbox_status\s+\*status_r\)\s*\{[\s\S]*?"
+        r"if\s*\(\s*!wbox->select_result_valid\s*&&\s*"
+        r"!\s*wyrebox_dovecot_mailbox_refresh_status_result\s*\(\s*box,\s*"
+        r"status_r,\s*&error\)\)\s*\{[\s\S]*?"
+        r"mail_storage_set_error\s*\(\s*box->storage,\s*MAIL_ERROR_NOTPOSSIBLE,\s*"
+        r"wyrebox_dovecot_mailbox_error_message\s*\(\s*error\s*\)\s*\);\s*"
+        r"[\s\S]*?return\s+-1;\s*\}\s*[\s\S]*?"
+        r"if\s*\(\s*wbox->select_result_valid\s*\)\s*\{[\s\S]*?"
+        r"status_r->messages\s*=\s*wbox->select_result\.message_count;\s*[\s\S]*?"
+        r"status_r->uidvalidity\s*=\s*wbox->select_result\.uid_validity;\s*[\s\S]*?"
+        r"status_r->uidnext\s*=\s*wbox->select_result\.uid_next;\s*[\s\S]*?\}",
+        text,
+        "mailbox get_status uses STATUS helper when cache is absent",
     )
     forbid(
         r"WyreBox mailbox open is not implemented yet",

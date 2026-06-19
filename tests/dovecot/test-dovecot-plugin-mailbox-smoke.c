@@ -60,6 +60,7 @@ const char *wyrebox_dovecot_test_daemon_socket_path;
 typedef enum
 {
   FAKE_SERVER_MAILBOX_SELECT_RESPONSE,
+  FAKE_SERVER_MAILBOX_STATUS_RESPONSE,
   FAKE_SERVER_DAEMON_ERROR_RESPONSE,
   FAKE_SERVER_MAILBOX_SELECT_THEN_UID_MAP_RESPONSE,
   FAKE_SERVER_MAILBOX_SELECT_THEN_UID_MAP_THEN_FETCH_RESPONSE,
@@ -592,6 +593,38 @@ assert_decoded_select_request (GBytes *request)
 }
 
 static char *
+assert_decoded_status_request (GBytes *request)
+{
+  g_autoptr (GError) error = NULL;
+  WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+  gpointer decoded_state = NULL;
+  GDestroyNotify decoded_state_clear = NULL;
+  char *request_id = NULL;
+
+  g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+          request, &decoded, &decoded_state, &decoded_state_clear, NULL,
+          &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (decoded.operation, ==,
+      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_STATUS);
+  g_assert_nonnull (decoded.mailbox_status);
+  g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
+  g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.tool_identity, ==, "dovecot-storage");
+  g_assert_cmpstr (decoded.request_id, !=, "");
+  g_assert_cmpstr (decoded.correlation_id, ==, "");
+  g_assert_cmpstr (decoded.mailbox_status->account_identity, ==, "account-1");
+  g_assert_cmpstr (decoded.mailbox_status->mailbox_id, ==, NULL);
+  g_assert_cmpstr (decoded.mailbox_status->mailbox_name, ==, "Projects");
+  g_assert_nonnull (decoded_state_clear);
+  g_assert_nonnull (decoded_state);
+  request_id = g_strdup (decoded.request_id);
+  decoded_state_clear (decoded_state);
+
+  return request_id;
+}
+
+static char *
 assert_decoded_uid_map_request (GBytes *request,
     const char *expected_mailbox_id,
     WyreboxDaemonMailboxListEntryKind expected_kind, char **out_query_id)
@@ -910,6 +943,14 @@ fake_server_thread_main (gpointer user_data)
       case FAKE_SERVER_MAILBOX_SELECT_RESPONSE:
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
         request_id = assert_decoded_select_request (request);
+        response = encode_mailbox_select_response (request_id);
+#else
+        g_assert_not_reached ();
+#endif
+        break;
+      case FAKE_SERVER_MAILBOX_STATUS_RESPONSE:
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
+        request_id = assert_decoded_status_request (request);
         response = encode_mailbox_select_response (request_id);
 #else
         g_assert_not_reached ();
@@ -2555,15 +2596,14 @@ test_open_and_get_status_after_open (void)
     .uidnext = 1,
     .messages = 1,
   };
-  const char *uid_map_csv =
-      "account_id,view_id,uidvalidity,uid,message_id,object_id,rule_version_hash\n"
-      "account-1,view-projects,77,42,message-1,object-1,hash-1\n";
   struct mail_storage *storage_class = NULL;
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
   g_autofree char *socket_path_local = make_socket_path (&socket_root);
   fake_server_start_default (&server, socket_path_local,
-      FAKE_SERVER_MAILBOX_SELECT_THEN_UID_MAP_RESPONSE, uid_map_csv,
+      FAKE_SERVER_MAILBOX_SELECT_THEN_UID_MAP_RESPONSE,
+      "account_id,view_id,uidvalidity,uid,message_id,object_id,rule_version_hash\n"
+      "account-1,view-projects,77,42,message-1,object-1,hash-1\n",
       "view-projects", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
   socket_path = g_steal_pointer (&socket_path_local);
 
@@ -2606,16 +2646,13 @@ test_lazy_status_before_open (void)
     .uidnext = 1,
     .messages = 1,
   };
-  const char *uid_map_csv =
-      "account_id,view_id,uidvalidity,uid,message_id,object_id,rule_version_hash\n"
-      "account-1,view-projects,77,42,message-1,object-1,hash-1\n";
   struct mail_storage *storage_class = NULL;
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
   g_autofree char *socket_path_local = make_socket_path (&socket_root);
   fake_server_start_default (&server, socket_path_local,
-      FAKE_SERVER_MAILBOX_SELECT_THEN_UID_MAP_RESPONSE, uid_map_csv,
-      "view-projects", WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
+      FAKE_SERVER_MAILBOX_STATUS_RESPONSE, NULL, NULL,
+      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
   socket_path = g_steal_pointer (&socket_path_local);
 
   wyrebox_dovecot_test_daemon_socket_path = socket_path;
@@ -2632,7 +2669,7 @@ test_lazy_status_before_open (void)
   g_assert_false (box->opened);
 
   fake_server_join (&server);
-  g_assert_cmpuint (server.request_count, ==, 2);
+  g_assert_cmpuint (server.request_count, ==, 1);
   remove_tree (socket_root);
 
   wyrebox_dovecot_test_daemon_socket_path = NULL;
