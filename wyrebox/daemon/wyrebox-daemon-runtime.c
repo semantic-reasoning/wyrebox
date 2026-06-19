@@ -322,6 +322,19 @@ wyrebox_daemon_runtime_recover_and_validate_delivery_storage (const char
     return FALSE;
   }
 
+  {
+    g_autoptr (WyreboxLocalObjectStore) recovery_object_store = NULL;
+
+    recovery_object_store =
+        wyrebox_local_object_store_open_existing (object_root_dir,
+        &recovery_error);
+    if (recovery_object_store == NULL) {
+      *out_report = report;
+      g_propagate_error (error, g_steal_pointer (&recovery_error));
+      return FALSE;
+    }
+  }
+
   if (!wyrebox_journal_writer_recover_torn_suffix (journal_root_dir,
           &safe_end_offset, &last_safe_sequence, &recovery_error)) {
     *out_report = report;
