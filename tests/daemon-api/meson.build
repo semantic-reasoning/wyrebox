@@ -82,6 +82,12 @@ daemon_export_job_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_export_schema_test = executable(
+  'test-daemon-export-schema',
+  'test-daemon-export-schema.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_mailbox_select_result_test = executable(
   'test-daemon-mailbox-select-result',
   'test-daemon-mailbox-select-result.c',
@@ -358,6 +364,7 @@ test('daemon derived view package', daemon_derived_view_package_test)
 test('daemon export request', daemon_export_request_test)
 test('daemon export dataset catalog', daemon_export_dataset_catalog_test)
 test('daemon export job', daemon_export_job_test)
+test('daemon export schema', daemon_export_schema_test)
 test('daemon mailbox select result', daemon_mailbox_select_result_test)
 test('daemon request router', daemon_request_router_test)
 test('daemon fact mutation request', daemon_fact_mutation_request_test)
