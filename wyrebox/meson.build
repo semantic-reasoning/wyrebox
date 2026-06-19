@@ -3,6 +3,7 @@ wyrebox_sources = files(
   'admin/wyrebox-admin-main.c',
   'admin/wyrebox-admin-health-status.c',
   'admin/wyrebox-admin-readiness-status.c',
+  'admin/wyrebox-admin-schema-version.c',
   'admin/wyrebox-admin-socket-status.c',
   'object-store/wyrebox-local-object-store.c',
   'backup/wyrebox-backup-manifest.c',
@@ -59,7 +60,6 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-fact-mutation-dispatcher.c',
   'daemon/wyrebox-daemon-fact-mutation-service.c',
   'daemon/wyrebox-daemon-fact-mutation-request.c',
-  'daemon/wyreboxd-main.c',
   'daemon/wyrebox-daemon-connection-server.c',
   'daemon/wyrebox-daemon-frame-io.c',
   'daemon/wyrebox-daemon-uds-client.c',
@@ -213,9 +213,9 @@ if capnp_serialization_found
     dependencies: [wyrebox_dep],
     install: true,
   )
-  wyrebox_postfix_lmtp_delivery = executable(
-    'wyrebox-postfix-lmtp-delivery',
-    'postfix/wyrebox-postfix-lmtp-delivery-main.c',
+  wyrebox_postfix_lmtp_listener = executable(
+    'wyrebox-postfix-lmtp-listener',
+    'postfix/wyrebox-postfix-lmtp-listener-main.c',
     dependencies: [wyrebox_dep],
     install: true,
   )
@@ -224,48 +224,6 @@ if capnp_serialization_found
     'backup/wyrebox-backup-tool-main.c',
     dependencies: [wyrebox_dep],
     install: true,
-  )
-  wyreboxd = executable(
-    'wyreboxd',
-    'daemon/wyreboxd-main.c',
-    dependencies: [wyrebox_dep],
-    install: true,
-  )
-
-  wyreboxd_service_config = configuration_data()
-  wyreboxd_service_config.set(
-    'WYREBOXD_BINDIR',
-    join_paths(get_option('prefix'), get_option('bindir')),
-  )
-  wyreboxd_service_config.set(
-    'WYREBOXD_CONFIG_PATH',
-    join_paths(get_option('prefix'), get_option('sysconfdir'),
-      'wyrebox', 'wyrebox.conf'),
-  )
-
-  wyreboxd_service_file = configure_file(
-    input: '../systemd/wyreboxd.service.in',
-    output: 'wyreboxd.service',
-    configuration: wyreboxd_service_config,
-    install: true,
-    install_dir: join_paths(
-      get_option('prefix'),
-      'lib',
-      'systemd',
-      'system',
-    ),
-  )
-
-  wyreboxd_sysusers_file = configure_file(
-    input: '../systemd/wyreboxd.sysusers.in',
-    output: 'wyreboxd.conf',
-    configuration: wyreboxd_service_config,
-    install: true,
-    install_dir: join_paths(
-      get_option('prefix'),
-      'lib',
-      'sysusers.d',
-    ),
   )
 
   wyrebox_postfix_pipe_master_cf_config = configuration_data()
@@ -277,23 +235,3 @@ if capnp_serialization_found
 
   wyrebox_postfix_pipe_master_cf = configure_file(
     input: '../examples/postfix/master.cf.wyrebox-pipe.in',
-    output: 'master.cf.wyrebox-pipe',
-    configuration: wyrebox_postfix_pipe_master_cf_config,
-  )
-
-  install_data(
-    files(
-      '../examples/postfix/README.md',
-      '../examples/postfix/transport.wyrebox-pipe',
-      '../examples/postfix/transport.wyrebox-pipe-regexp',
-    ),
-    wyrebox_postfix_pipe_master_cf,
-    install_dir: join_paths(
-      get_option('datadir'),
-      'doc',
-      meson.project_name(),
-      'examples',
-      'postfix',
-    ),
-  )
-endif

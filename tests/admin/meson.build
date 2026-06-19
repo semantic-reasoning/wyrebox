@@ -16,6 +16,12 @@ admin_readiness_status_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+admin_schema_version_test = executable(
+  'test-admin-schema-version',
+  'test-admin-schema-version.c',
+  dependencies: [wyrebox_dep],
+)
+
 test(
   'admin socket status',
   admin_socket_status_test,
@@ -35,6 +41,14 @@ test(
 test(
   'admin readiness status',
   admin_readiness_status_test,
+  env: {
+    'WYREBOX_ADMIN_EXECUTABLE': wyrebox_admin.full_path(),
+  },
+)
+
+test(
+  'admin schema version',
+  admin_schema_version_test,
   env: {
     'WYREBOX_ADMIN_EXECUTABLE': wyrebox_admin.full_path(),
   },

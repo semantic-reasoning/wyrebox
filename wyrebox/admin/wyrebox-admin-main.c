@@ -1,6 +1,7 @@
 #include "wyrebox-admin-health-status.h"
 #include "wyrebox-admin-readiness-status.h"
 #include "wyrebox-admin-health.h"
+#include "wyrebox-admin-schema-version.h"
 #include "wyrebox-admin-socket-status.h"
 
 #include <gio/gio.h>
@@ -162,7 +163,7 @@ static int
 print_usage (void)
 {
   g_printerr ("Usage: wyrebox-admin <socket-status|health-status|"
-      "readiness-status|health> "
+      "readiness-status|health|schema-version> "
       "[--socket-path PATH] [--json]\n");
   return WYREBOX_ADMIN_SOCKET_STATUS_EXIT_USAGE_ERROR;
 }
@@ -228,6 +229,45 @@ run_readiness_status (int argc, char **argv)
 }
 
 static int
+run_schema_version (int argc, char **argv)
+{
+  g_auto (WyreboxAdminSchemaVersionOptions) options = { 0 };
+  g_auto (WyreboxAdminSchemaVersionResult) result = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GString) json = NULL;
+  int exit_status = WYREBOX_ADMIN_SOCKET_STATUS_EXIT_USAGE_ERROR;
+
+  for (int index = 1; index < argc; index++) {
+    if (g_strcmp0 (argv[index], "--json") == 0) {
+      options.json = TRUE;
+      continue;
+    }
+
+    g_set_error (&error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_ARGUMENT,
+        "unexpected positional argument: %s", argv[index]);
+    return print_usage ();
+  }
+
+  exit_status = wyrebox_admin_schema_version_probe (&result);
+
+  if (options.json) {
+    json = g_string_new (NULL);
+    g_string_append (json, "{");
+    g_string_append_printf (json, "\"schema_version\":%" G_GUINT64_FORMAT,
+        result.schema_version);
+    g_string_append_c (json, '}');
+    g_print ("%s\n", json->str);
+  } else {
+    g_print ("schema-version version=%" G_GUINT64_FORMAT "\n",
+        result.schema_version);
+  }
+
+  return exit_status;
+}
+
+static int
 run_health (int argc, char **argv)
 {
   g_auto (WyreboxAdminHealthOptions) options = { 0 };
@@ -277,6 +317,9 @@ run_command (int argc, char **argv)
 
   if (g_strcmp0 (argv[1], "health") == 0)
     return run_health (argc - 2, argv + 2);
+
+  if (g_strcmp0 (argv[1], "schema-version") == 0)
+    return run_schema_version (argc - 1, argv + 1);
 
   return print_usage ();
 }
