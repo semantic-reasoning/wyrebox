@@ -3,6 +3,7 @@ wyrebox_sources = files(
   'admin/wyrebox-admin-socket-status.c',
   'object-store/wyrebox-local-object-store.c',
   'backup/wyrebox-backup-manifest.c',
+  'backup/wyrebox-backup-restore-plan.c',
   'daemon/wyrebox-daemon-mailbox-list-request.c',
   'daemon/wyrebox-daemon-mailbox-list-result.c',
   'daemon/wyrebox-daemon-mailbox-list-service.c',
