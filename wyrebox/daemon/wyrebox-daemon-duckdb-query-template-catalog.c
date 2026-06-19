@@ -26,6 +26,8 @@ static const char *const messages_subject_contains_parameters[] =
     { "subject_term", "limit", "offset", NULL };
 static const char *const messages_by_date_range_parameters[] =
     { "start_unix_us", "end_unix_us", "limit", "offset", NULL };
+static const char *const messages_by_journal_offset_range_parameters[] =
+    { "start_journal_offset", "end_journal_offset", "limit", "offset", NULL };
 static const char *const storage_object_statistics_parameters[] = { NULL };
 
 static const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor
@@ -129,6 +131,28 @@ static const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor
 
 static const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor
     message_search_result_schema[] = {
+  {"account_id", "VARCHAR", FALSE, "Message account identifier"},
+  {"message_id", "VARCHAR", FALSE, "Raw message identifier"},
+  {"object_id", "VARCHAR", FALSE, "Raw message object identifier"},
+  {"message_journal_offset", "UBIGINT", FALSE,
+      "Raw message journal offset"},
+  {"message_journal_sequence", "UBIGINT", FALSE,
+      "Raw message journal sequence"},
+  {"rfc_message_id", "VARCHAR", TRUE, "RFC 5322 message-id header"},
+  {"subject", "VARCHAR", TRUE, "Decoded subject header"},
+  {"from_addr", "VARCHAR", TRUE, "Decoded from header"},
+  {"to_addr", "VARCHAR", TRUE, "Decoded to header"},
+  {"cc_addr", "VARCHAR", TRUE, "Decoded cc header"},
+  {"bcc_addr", "VARCHAR", TRUE, "Decoded bcc header"},
+  {"date_raw", "VARCHAR", TRUE, "Decoded date header"},
+  {"header_journal_offset", "UBIGINT", TRUE,
+      "Header journal offset"},
+  {"header_journal_sequence", "UBIGINT", TRUE,
+      "Header journal sequence"},
+};
+
+static const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor
+    messages_by_journal_offset_range_result_schema[] = {
   {"account_id", "VARCHAR", FALSE, "Message account identifier"},
   {"message_id", "VARCHAR", FALSE, "Raw message identifier"},
   {"object_id", "VARCHAR", FALSE, "Raw message object identifier"},
@@ -273,6 +297,15 @@ static const WyreboxDaemonDuckDBQueryTemplateDescriptor catalog[] = {
         messages_subject_contains_parameters,
         G_N_ELEMENTS (message_search_result_schema),
       message_search_result_schema},
+  {
+        "messages.by_journal_offset_range.v1",
+        "messages by journal offset range",
+        "account_id",
+        "stream-chunk.duckdb-template.messages-by-journal-offset-range.v1",
+        4,
+        messages_by_journal_offset_range_parameters,
+        G_N_ELEMENTS (messages_by_journal_offset_range_result_schema),
+      messages_by_journal_offset_range_result_schema},
   {
         "messages.by_date_range.v1",
         "messages by date range",

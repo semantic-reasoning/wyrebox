@@ -1703,6 +1703,88 @@ static gboolean
 }
 
 static gboolean
+    duckdb_query_template_execute_messages_by_journal_offset_range
+    (DuckDBQueryTemplateExecutor * executor,
+    const WyreboxDaemonRequestIdentity * identity,
+    const WyreboxDaemonDuckDBQueryTemplateRequest * request,
+    WyreboxDaemonStreamChunkFrame * out_chunk, GError ** error)
+{
+  static const gchar *sql =
+      "SELECT m.account_id, m.message_id, m.object_id, "
+      "m.journal_offset AS message_journal_offset, "
+      "m.journal_sequence AS message_journal_sequence, mh.rfc_message_id, "
+      "mh.subject, mh.from_addr, mh.to_addr, mh.cc_addr, mh.bcc_addr, "
+      "mh.date_raw, mh.journal_offset AS header_journal_offset, "
+      "mh.journal_sequence AS header_journal_sequence "
+      "FROM messages m "
+      "JOIN message_headers mh ON mh.message_id = m.message_id "
+      "WHERE m.account_id = ? "
+      "AND m.journal_offset >= ? "
+      "AND m.journal_offset <= ? "
+      "ORDER BY m.journal_offset ASC, m.journal_sequence ASC, m.message_id ASC "
+      "LIMIT ? OFFSET ?;";
+  g_auto (duckdb_prepared_statement) statement = NULL;
+  g_auto (duckdb_result) result = { 0 };
+  g_autoptr (GString) csv = NULL;
+  g_autoptr (GBytes) bytes = NULL;
+  guint64 start_journal_offset = 0;
+  guint64 end_journal_offset = 0;
+  guint64 limit = 0;
+  guint64 offset = 0;
+
+  if (!duckdb_query_template_parse_uint64 (request->parameters[0],
+          "start_journal_offset", &start_journal_offset, error) ||
+      !duckdb_query_template_parse_uint64 (request->parameters[1],
+          "end_journal_offset", &end_journal_offset, error) ||
+      !duckdb_query_template_parse_uint64 (request->parameters[2], "limit",
+          &limit, error) ||
+      !duckdb_query_template_parse_uint64 (request->parameters[3], "offset",
+          &offset, error) ||
+      !duckdb_query_template_prepare (executor, sql, &statement, error) ||
+      !duckdb_query_template_bind_varchar (statement, 1, request->scope_id,
+          error) ||
+      !duckdb_query_template_bind_uint64 (statement, 2,
+          start_journal_offset, error) ||
+      !duckdb_query_template_bind_uint64 (statement, 3,
+          end_journal_offset, error) ||
+      !duckdb_query_template_bind_uint64 (statement, 4, limit, error) ||
+      !duckdb_query_template_bind_uint64 (statement, 5, offset, error))
+    return FALSE;
+
+  if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+    const char *detail = duckdb_result_error (&result);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB query template execution failed: %s",
+        detail != NULL ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  if (!duckdb_query_template_init_csv_for_request (request, &result, &csv,
+          error))
+    return FALSE;
+
+  for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+    if (!duckdb_query_template_append_message_by_id_row (csv, &result, row,
+            error))
+      return FALSE;
+  }
+
+  {
+    gsize csv_len = csv->len;
+    gchar *csv_data = g_string_free (g_steal_pointer (&csv), FALSE);
+
+    bytes = g_bytes_new_take (csv_data, csv_len);
+  }
+
+  return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+      identity->request_id,
+      NULL, request->query_id, identity->correlation_id, 0, bytes, TRUE, error);
+}
+
+static gboolean
     duckdb_query_template_execute_storage_object_statistics
     (DuckDBQueryTemplateExecutor * executor,
     const WyreboxDaemonRequestIdentity * identity,
@@ -1849,6 +1931,11 @@ duckdb_query_template_service_execute (const WyreboxDaemonRequestIdentity
   if (g_strcmp0 (request->template_id, "messages.by_date_range.v1") == 0)
     return duckdb_query_template_execute_messages_by_date_range (executor,
         identity, request, out_chunk, error);
+
+  if (g_strcmp0 (request->template_id,
+          "messages.by_journal_offset_range.v1") == 0)
+    return duckdb_query_template_execute_messages_by_journal_offset_range
+        (executor, identity, request, out_chunk, error);
 
   if (g_strcmp0 (request->template_id, "storage.object_statistics.v1") == 0)
     return duckdb_query_template_execute_storage_object_statistics (executor,

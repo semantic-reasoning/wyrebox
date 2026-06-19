@@ -233,6 +233,41 @@ seed_message_header (const gchar *path)
 }
 
 static void
+seed_messages_by_journal_offset_range_headers (const gchar *path)
+{
+  g_auto (duckdb_database) database = NULL;
+  g_auto (duckdb_connection) connection = NULL;
+
+  g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+  g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+
+  exec_sql (connection,
+      "INSERT INTO messages (message_id, account_id, object_id, "
+      "journal_offset, journal_sequence) VALUES "
+      "('message-1', 'account-1', 'object-1', 50, 1),"
+      "('message-2', 'account-1', 'object-2', 75, 2),"
+      "('message-3', 'account-2', 'object-3', 90, 3);");
+  exec_sql (connection,
+      "INSERT INTO message_headers ("
+      "message_id, rfc_message_id, duplicate_message_id_count, subject, "
+      "from_addr, to_addr, cc_addr, bcc_addr, date_raw, journal_offset, "
+      "journal_sequence, message_id_span_start, message_id_span_end, "
+      "subject_span_start, subject_span_end) VALUES "
+      "('message-1', '<message-1@example.test>', 0, 'Range One', "
+      "'Alice <alice@example.test>', 'Bob <bob@example.test>', "
+      "'Carol <carol@example.test>', 'Blind <blind@example.test>', "
+      "'Mon, 01 Jan 2024 00:00:00 +0000', 51, 11, 101, 109, 10, 18),"
+      "('message-2', '<message-2@example.test>', 0, 'Range Two', "
+      "'Alice <alice@example.test>', 'Bob <bob@example.test>', "
+      "'Carol <carol@example.test>', 'Blind <blind@example.test>', "
+      "'Mon, 01 Jan 2024 01:00:00 +0000', 76, 12, 111, 119, 20, 28),"
+      "('message-3', '<message-3@example.test>', 0, 'Range Three', "
+      "'Mallory <mallory@example.test>', 'Bob <bob@example.test>', "
+      "'Carol <carol@example.test>', 'Blind <blind@example.test>', "
+      "'Mon, 01 Jan 2024 02:00:00 +0000', 91, 13, 121, 129, 30, 38);");
+}
+
+static void
 seed_message_facts (const gchar *path)
 {
   g_auto (duckdb_database) database = NULL;
@@ -1220,6 +1255,43 @@ dispatch_messages_by_date_range_csv (const gchar *path,
 
   init_messages_by_date_range_request (&request, account_id, start_unix_us,
       end_unix_us);
+  g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
+          "request-1", "admin-cli", account_id, "duckdb-tool",
+          "correlation-1", &request, &frame, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpuint (frame.stream_chunk.chunk_index, ==, 0);
+  g_assert_true (frame.stream_chunk.end_of_stream);
+
+  data = g_bytes_get_data (frame.stream_chunk.bytes, &size);
+  return g_strndup (data, size);
+}
+
+static gchar *
+dispatch_messages_by_journal_offset_range_csv (const gchar *path,
+    const gchar *account_id, const gchar *start_journal_offset,
+    const gchar *end_journal_offset)
+{
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  gconstpointer data = NULL;
+  gsize size = 0;
+
+  service = wyrebox_daemon_duckdb_query_template_service_new_duckdb (path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (service);
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (&request,
+          "query-1", "messages.by_journal_offset_range.v1", account_id,
+          (const char *const[]) { start_journal_offset, end_journal_offset,
+            "20", "0", NULL
+          }, &error));
+  g_assert_no_error (error);
+
   g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
           "request-1", "admin-cli", account_id, "duckdb-tool",
           "correlation-1", &request, &frame, &error));
@@ -2480,6 +2552,33 @@ static void
 }
 
 static void
+test_duckdb_service_returns_messages_by_journal_offset_range_csv (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_messages_by_journal_offset_range_headers (path);
+
+  csv = dispatch_messages_by_journal_offset_range_csv (path, "account-1",
+      "45", "80");
+  g_assert_cmpstr (csv, ==,
+      "account_id,message_id,object_id,message_journal_offset,"
+      "message_journal_sequence,rfc_message_id,subject,from_addr,to_addr,"
+      "cc_addr,bcc_addr,date_raw,header_journal_offset,"
+      "header_journal_sequence\n"
+      "account-1,message-1,object-1,50,1,<message-1@example.test>,"
+      "Range One,Alice <alice@example.test>,Bob <bob@example.test>,"
+      "Carol <carol@example.test>,Blind <blind@example.test>,"
+      "\"Mon, 01 Jan 2024 00:00:00 +0000\",51,11\n"
+      "account-1,message-2,object-2,75,2,<message-2@example.test>,"
+      "Range Two,Alice <alice@example.test>,Bob <bob@example.test>,"
+      "Carol <carol@example.test>,Blind <blind@example.test>,"
+      "\"Mon, 01 Jan 2024 01:00:00 +0000\",76,12\n");
+  (void) g_remove (path);
+}
+
+static void
 test_duckdb_service_messages_by_date_range_excludes_null_dates (void)
 {
   g_autofree gchar *path = create_temp_catalog_path ();
@@ -2764,6 +2863,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/messages-by-date-range-null-exclusion",
       test_duckdb_service_messages_by_date_range_excludes_null_dates);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/messages-by-journal-offset-range-csv",
+      test_duckdb_service_returns_messages_by_journal_offset_range_csv);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/sql-looking-date-range-bound-rejected",
       test_duckdb_service_rejects_sql_looking_date_range_bound);
