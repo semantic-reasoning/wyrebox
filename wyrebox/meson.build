@@ -1,4 +1,6 @@
 wyrebox_sources = files(
+  'admin/wyrebox-admin-main.c',
+  'admin/wyrebox-admin-socket-status.c',
   'object-store/wyrebox-local-object-store.c',
   'daemon/wyrebox-daemon-mailbox-list-request.c',
   'daemon/wyrebox-daemon-mailbox-list-result.c',
@@ -100,6 +102,7 @@ configure_file(
 
 wyrebox_inc = include_directories(
   '.',
+  'admin',
   'object-store',
   'journal',
   'schema',
@@ -155,6 +158,13 @@ wyrebox_dep = declare_dependency(
   include_directories: wyrebox_inc_paths,
   link_with: wyrebox_lib,
   dependencies: wyrebox_link_deps,
+)
+
+wyrebox_admin = executable(
+  'wyrebox-admin',
+  'admin/wyrebox-admin-main.c',
+  dependencies: [wyrebox_dep],
+  install: true,
 )
 
 wyrebox_dovecot_plugin_module = []
