@@ -5,6 +5,7 @@ wyrebox_sources = files(
   'backup/wyrebox-backup-manifest.c',
   'backup/wyrebox-backup-restore-plan.c',
   'backup/wyrebox-backup-set.c',
+  'backup/wyrebox-backup-command.c',
   'daemon/wyrebox-daemon-mailbox-list-request.c',
   'daemon/wyrebox-daemon-mailbox-list-result.c',
   'daemon/wyrebox-daemon-mailbox-list-service.c',

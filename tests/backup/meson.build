@@ -16,6 +16,13 @@ backup_set_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+backup_command_test = executable(
+  'test-backup-command',
+  'test-backup-command.c',
+  dependencies: [wyrebox_dep],
+)
+
 test('backup manifest', backup_manifest_test)
 test('backup restore plan', backup_restore_plan_test)
 test('backup set', backup_set_test)
+test('backup command', backup_command_test)
