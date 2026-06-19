@@ -41,6 +41,32 @@ wyrebox_materialization_manifest_clear (WyreboxMaterializationManifest
   memset (manifest, 0, sizeof *manifest);
 }
 
+gboolean
+wyrebox_materialization_manifest_equal (const WyreboxMaterializationManifest
+    *left, const WyreboxMaterializationManifest *right)
+{
+  g_return_val_if_fail (left != NULL, FALSE);
+  g_return_val_if_fail (right != NULL, FALSE);
+
+  return g_strcmp0 (left->run_id, right->run_id) == 0 &&
+      left->start_journal_offset == right->start_journal_offset &&
+      left->start_journal_sequence == right->start_journal_sequence &&
+      left->end_journal_offset == right->end_journal_offset &&
+      left->end_journal_sequence == right->end_journal_sequence &&
+      left->materialized_schema_version == right->materialized_schema_version &&
+      g_strcmp0 (left->object_store_identity,
+      right->object_store_identity) == 0 &&
+      g_strcmp0 (left->rule_package_version,
+      right->rule_package_version) == 0 &&
+      g_strcmp0 (left->view_package_version,
+      right->view_package_version) == 0 &&
+      g_strcmp0 (left->engine_version, right->engine_version) == 0 &&
+      left->created_at_unix_us == right->created_at_unix_us &&
+      g_strcmp0 (left->completion_status,
+      right->completion_status) == 0 &&
+      g_strcmp0 (left->error_state, right->error_state) == 0;
+}
+
 static WyreboxMaterializationManifest *
 wyrebox_materialization_manifest_dup (const WyreboxMaterializationManifest
     *manifest)

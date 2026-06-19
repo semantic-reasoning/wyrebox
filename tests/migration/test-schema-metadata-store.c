@@ -829,6 +829,7 @@ test_save_and_load_materialization_manifest_roundtrip (void)
   g_assert_cmpuint (loaded.created_at_unix_us, ==, original.created_at_unix_us);
   g_assert_cmpstr (loaded.completion_status, ==, original.completion_status);
   g_assert_null (loaded.error_state);
+  g_assert_true (wyrebox_materialization_manifest_equal (&original, &loaded));
 }
 
 static void
@@ -905,6 +906,22 @@ static void
   g_assert_false (wyrebox_schema_metadata_store_save_materialization_manifest
       (store, &manifest, &error));
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+}
+
+static void
+test_materialization_manifest_equal_detects_drift (void)
+{
+  g_auto (WyreboxMaterializationManifest) left = { 0 };
+  g_auto (WyreboxMaterializationManifest) right = { 0 };
+
+  set_materialization_manifest_fields (&left);
+  set_materialization_manifest_fields (&right);
+
+  g_assert_true (wyrebox_materialization_manifest_equal (&left, &right));
+
+  g_free (right.engine_version);
+  right.engine_version = g_strdup ("duckdb-1.4.1");
+  g_assert_false (wyrebox_materialization_manifest_equal (&left, &right));
 }
 
 static void
@@ -1725,6 +1742,9 @@ main (int argc, char **argv)
   g_test_add_func
       ("/migration/schema-metadata-store/materialization-manifest-validation-failed-status-without-error",
       test_materialization_manifest_validation_rejects_failed_status_without_error);
+  g_test_add_func
+      ("/migration/schema-metadata-store/materialization-manifest-equal-detects-drift",
+      test_materialization_manifest_equal_detects_drift);
   g_test_add_func
       ("/migration/schema-metadata-store/transient-precondition-not-persisted",
       test_transient_checkpoint_precondition_is_not_persisted);

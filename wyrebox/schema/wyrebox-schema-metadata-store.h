@@ -39,6 +39,10 @@ typedef struct
 void wyrebox_materialization_manifest_clear (
     WyreboxMaterializationManifest *manifest);
 
+gboolean wyrebox_materialization_manifest_equal (
+    const WyreboxMaterializationManifest *left,
+    const WyreboxMaterializationManifest *right);
+
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxMaterializationManifest,
     wyrebox_materialization_manifest_clear)
 
