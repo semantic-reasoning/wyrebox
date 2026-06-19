@@ -664,6 +664,7 @@ test(
 )
 
 subdir('tests/object-store')
+subdir('tests/backup')
 subdir('tests/admin')
 subdir('tests/ingestion')
 subdir('tests/maildir')
