@@ -25,6 +25,37 @@ void wyrebox_maildir_import_plan_entry_clear (
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxMaildirImportPlanEntry,
     wyrebox_maildir_import_plan_entry_clear)
 
+typedef enum
+{
+  WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_UNKNOWN = 0,
+  WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_OK,
+  WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_EMPTY_PLAN,
+  WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_LAYOUT_DRIFT,
+  WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_SIZE_MISMATCH,
+  WYREBOX_MAILDIR_IMPORT_PLAN_VERIFY_DIGEST_MISMATCH,
+} WyreboxMaildirImportPlanVerificationStatus;
+
+typedef struct
+{
+  gboolean ok;
+  WyreboxMaildirImportPlanVerificationStatus status;
+  gchar *failure_path;
+} WyreboxMaildirImportPlanVerificationResult;
+
+void wyrebox_maildir_import_plan_verification_result_clear (
+    WyreboxMaildirImportPlanVerificationResult *result);
+
+void wyrebox_maildir_import_plan_verification_result_free (
+    WyreboxMaildirImportPlanVerificationResult *result);
+
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (
+    WyreboxMaildirImportPlanVerificationResult,
+    wyrebox_maildir_import_plan_verification_result_clear)
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (
+    WyreboxMaildirImportPlanVerificationResult,
+    wyrebox_maildir_import_plan_verification_result_free)
+
 #define WYREBOX_TYPE_MAILDIR_IMPORT_PLAN \
   (wyrebox_maildir_import_plan_get_type ())
 
@@ -60,6 +91,16 @@ guint wyrebox_maildir_import_plan_get_mailbox_count (
 
 guint wyrebox_maildir_import_plan_get_message_count (
     WyreboxMaildirImportPlan *self);
+
+/*
+ * Verifies that the current contents under @root_path still match the plan's
+ * recorded mailbox layout, message sizes, and SHA-256 digests.
+ */
+WyreboxMaildirImportPlanVerificationResult *
+wyrebox_maildir_import_plan_dry_run_verify_current (
+    WyreboxMaildirImportPlan *self,
+    const gchar *root_path,
+    GError **error);
 
 /*
  * Verifies that the current contents under @root_path still match the plan's
