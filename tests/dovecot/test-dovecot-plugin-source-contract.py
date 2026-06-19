@@ -177,6 +177,41 @@ def main() -> None:
         "mailbox open wrapper",
     )
     require(
+        r"wbox->mailbox\.v\.open\s*=\s*wyrebox_dovecot_mailbox_open;\s*"
+        r"[\s\S]*?wbox->mailbox\.v\.get_status\s*=\s*"
+        r"wyrebox_dovecot_mailbox_get_status;\s*"
+        r"[\s\S]*?wbox->mailbox\.v\.free\s*=\s*wyrebox_dovecot_mailbox_free;\s*"
+        r"[\s\S]*?wbox->mailbox\.v\.enable\s*=\s*"
+        r"wyrebox_dovecot_mailbox_enable;\s*"
+        r"[\s\S]*?wbox->mailbox\.v\.close\s*=\s*wyrebox_dovecot_mailbox_close;\s*"
+        r"[\s\S]*?wbox->mailbox\.v\.sync_init\s*=\s*"
+        r"wyrebox_dovecot_mailbox_sync_init;\s*"
+        r"[\s\S]*?wbox->mailbox\.v\.sync_next\s*=\s*"
+        r"wyrebox_dovecot_mailbox_sync_next;\s*"
+        r"[\s\S]*?wbox->mailbox\.v\.sync_deinit\s*=\s*"
+        r"wyrebox_dovecot_mailbox_sync_deinit;\s*"
+        r"[\s\S]*?wbox->mailbox\.v\.mail_alloc\s*=\s*"
+        r"wyrebox_dovecot_mail_alloc;",
+        text,
+        "read-only mailbox vfunc wiring",
+    )
+    for forbidden_vfunc in [
+        "create",
+        "delete",
+        "rename",
+        "subscribe",
+        "unsubscribe",
+        "append",
+        "copy",
+        "move",
+        "expunge",
+    ]:
+        forbid(
+            rf"wbox->mailbox\.v\.{forbidden_vfunc}\s*=",
+            text,
+            f"unsupported mailbox mutation vfunc wiring: {forbidden_vfunc}",
+        )
+    require(
         r"static\s+gboolean\s+wyrebox_dovecot_mailbox_refresh_select_result",
         text,
         "mailbox open uses shared SELECT refresh helper",
