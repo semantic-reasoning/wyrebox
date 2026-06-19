@@ -709,6 +709,48 @@ duckdb_query_template_append_message_fact_row (GString *csv,
 }
 
 static gboolean
+duckdb_query_template_append_storage_object_statistics_row (GString *csv,
+    duckdb_result *result, idx_t row, GError **error)
+{
+  g_auto (DuckDBOwnedString) account_id = NULL;
+
+  if (duckdb_value_is_null (result, 0, row) ||
+      duckdb_value_is_null (result, 1, row) ||
+      duckdb_value_is_null (result, 2, row) ||
+      duckdb_value_is_null (result, 3, row) ||
+      duckdb_value_is_null (result, 4, row) ||
+      duckdb_value_is_null (result, 5, row) ||
+      duckdb_value_is_null (result, 6, row) ||
+      duckdb_value_is_null (result, 7, row)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "DuckDB query template returned NULL in storage object statistics row");
+    return FALSE;
+  }
+
+  account_id = duckdb_value_varchar (result, 0, row);
+  csv_append_value (csv, account_id);
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 1, row));
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 2, row));
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 3, row));
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 4, row));
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 5, row));
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 6, row));
+  g_string_append_c (csv, ',');
+  csv_append_uint64 (csv, (guint64) duckdb_value_uint64 (result, 7, row));
+  g_string_append_c (csv, '\n');
+
+  return TRUE;
+}
+
+static gboolean
 duckdb_query_template_execute_derived_view_uid_map (DuckDBQueryTemplateExecutor
     *executor, const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonDuckDBQueryTemplateRequest *request,
@@ -1661,6 +1703,93 @@ static gboolean
 }
 
 static gboolean
+    duckdb_query_template_execute_storage_object_statistics
+    (DuckDBQueryTemplateExecutor * executor,
+    const WyreboxDaemonRequestIdentity * identity,
+    const WyreboxDaemonDuckDBQueryTemplateRequest * request,
+    WyreboxDaemonStreamChunkFrame * out_chunk, GError ** error)
+{
+  static const gchar *sql =
+      "SELECT account_id, "
+      "CAST(COUNT(*) AS UBIGINT) AS object_count, "
+      "CAST(COALESCE(SUM(size_bytes), 0) AS UBIGINT) AS object_size_bytes, "
+      "CAST(COUNT(message_id) AS UBIGINT) AS message_count, "
+      "CAST(COUNT(mailbox_membership_id) AS UBIGINT) AS "
+      "mailbox_membership_count, "
+      "CAST(COUNT(CASE WHEN mailbox_is_visible THEN 1 END) AS UBIGINT) AS "
+      "visible_mailbox_membership_count, "
+      "CAST(COUNT(derived_view_membership_id) AS UBIGINT) AS "
+      "derived_view_membership_count, "
+      "CAST(COUNT(CASE WHEN derived_view_is_visible THEN 1 END) AS UBIGINT) "
+      "AS visible_derived_view_membership_count "
+      "FROM ("
+      "SELECT m.account_id, o.size_bytes, "
+      "m.message_id, NULL::VARCHAR AS mailbox_membership_id, "
+      "NULL::BOOLEAN AS mailbox_is_visible, "
+      "NULL::VARCHAR AS derived_view_membership_id, "
+      "NULL::BOOLEAN AS derived_view_is_visible "
+      "FROM messages m "
+      "JOIN objects o ON o.object_id = m.object_id "
+      "UNION ALL "
+      "SELECT mm.account_id, 0::UBIGINT AS size_bytes, "
+      "NULL::VARCHAR AS message_id, mm.membership_id AS "
+      "mailbox_membership_id, mm.is_visible AS mailbox_is_visible, "
+      "NULL::VARCHAR AS derived_view_membership_id, "
+      "NULL::BOOLEAN AS derived_view_is_visible "
+      "FROM mailbox_memberships mm "
+      "UNION ALL "
+      "SELECT dvm.account_id, 0::UBIGINT AS size_bytes, "
+      "NULL::VARCHAR AS message_id, NULL::VARCHAR AS mailbox_membership_id, "
+      "NULL::BOOLEAN AS mailbox_is_visible, "
+      "dvm.membership_id AS derived_view_membership_id, "
+      "dvm.is_visible AS derived_view_is_visible "
+      "FROM derived_view_memberships dvm"
+      ") scoped "
+      "WHERE account_id = ? " "GROUP BY account_id " "ORDER BY account_id ASC;";
+  g_auto (duckdb_prepared_statement) statement = NULL;
+  g_auto (duckdb_result) result = { 0 };
+  g_autoptr (GString) csv = NULL;
+  g_autoptr (GBytes) bytes = NULL;
+
+  if (!duckdb_query_template_prepare (executor, sql, &statement, error) ||
+      !duckdb_query_template_bind_varchar (statement, 1, request->scope_id,
+          error))
+    return FALSE;
+
+  if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+    const char *detail = duckdb_result_error (&result);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB query template execution failed: %s",
+        detail != NULL ? detail : "unknown DuckDB error");
+    return FALSE;
+  }
+
+  if (!duckdb_query_template_init_csv_for_request (request, &result, &csv,
+          error))
+    return FALSE;
+
+  for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+    if (!duckdb_query_template_append_storage_object_statistics_row (csv,
+            &result, row, error))
+      return FALSE;
+  }
+
+  {
+    gsize csv_len = csv->len;
+    gchar *csv_data = g_string_free (g_steal_pointer (&csv), FALSE);
+
+    bytes = g_bytes_new_take (csv_data, csv_len);
+  }
+
+  return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+      identity->request_id,
+      NULL, request->query_id, identity->correlation_id, 0, bytes, TRUE, error);
+}
+
+static gboolean
 duckdb_query_template_service_execute (const WyreboxDaemonRequestIdentity
     *identity, const WyreboxDaemonDuckDBQueryTemplateRequest *request,
     WyreboxDaemonStreamChunkFrame *out_chunk, gpointer user_data,
@@ -1719,6 +1848,10 @@ duckdb_query_template_service_execute (const WyreboxDaemonRequestIdentity
 
   if (g_strcmp0 (request->template_id, "messages.by_date_range.v1") == 0)
     return duckdb_query_template_execute_messages_by_date_range (executor,
+        identity, request, out_chunk, error);
+
+  if (g_strcmp0 (request->template_id, "storage.object_statistics.v1") == 0)
+    return duckdb_query_template_execute_storage_object_statistics (executor,
         identity, request, out_chunk, error);
 
   g_set_error (error,

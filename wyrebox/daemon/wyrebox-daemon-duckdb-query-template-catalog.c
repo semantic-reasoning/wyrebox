@@ -26,6 +26,7 @@ static const char *const messages_subject_contains_parameters[] =
     { "subject_term", "limit", "offset", NULL };
 static const char *const messages_by_date_range_parameters[] =
     { "start_unix_us", "end_unix_us", "limit", "offset", NULL };
+static const char *const storage_object_statistics_parameters[] = { NULL };
 
 static const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor
     mailbox_uid_map_result_schema[] = {
@@ -148,6 +149,21 @@ static const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor
       "Header journal sequence"},
 };
 
+static const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor
+    storage_object_statistics_result_schema[] = {
+  {"account_id", "VARCHAR", FALSE, "Storage account identifier"},
+  {"object_count", "UBIGINT", FALSE, "Stored object count"},
+  {"object_size_bytes", "UBIGINT", FALSE, "Stored object byte total"},
+  {"message_count", "UBIGINT", FALSE, "Message count"},
+  {"mailbox_membership_count", "UBIGINT", FALSE, "Mailbox membership count"},
+  {"visible_mailbox_membership_count", "UBIGINT", FALSE,
+      "Visible mailbox membership count"},
+  {"derived_view_membership_count", "UBIGINT", FALSE,
+      "Derived view membership count"},
+  {"visible_derived_view_membership_count", "UBIGINT", FALSE,
+      "Visible derived view membership count"},
+};
+
 static const WyreboxDaemonDuckDBQueryTemplateDescriptor catalog[] = {
   {
         "mailbox.uid_map.v1",
@@ -266,6 +282,15 @@ static const WyreboxDaemonDuckDBQueryTemplateDescriptor catalog[] = {
         messages_by_date_range_parameters,
         G_N_ELEMENTS (message_search_result_schema),
       message_search_result_schema},
+  {
+        "storage.object_statistics.v1",
+        "storage object statistics",
+        "account_id",
+        "stream-chunk.duckdb-template.storage-object-statistics.v1",
+        0,
+        storage_object_statistics_parameters,
+        G_N_ELEMENTS (storage_object_statistics_result_schema),
+      storage_object_statistics_result_schema},
 };
 
 static gboolean

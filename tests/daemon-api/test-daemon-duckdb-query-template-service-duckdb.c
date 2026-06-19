@@ -108,6 +108,13 @@ seed_catalog (const gchar *path)
       "('message-other-mailbox', 'account-1', 'object-other-mailbox', 4, 4),"
       "('message-other-account', 'account-2', 'object-other-account', 5, 5);");
   exec_sql (connection,
+      "INSERT INTO objects (object_id, size_bytes) VALUES "
+      "('object-b', 101),"
+      "('object-a', 202),"
+      "('object-hidden', 303),"
+      "('object-other-mailbox', 404),"
+      "('object-other-account', 505)," "('object-unreferenced', 606);");
+  exec_sql (connection,
       "INSERT INTO mailbox_uid_state (account_id, namespace_kind, "
       "namespace_id, uidnext, uidvalidity) VALUES "
       "('account-1', 'mailbox', 'mailbox-inbox', 4, 77),"
@@ -786,6 +793,19 @@ init_messages_by_date_range_request (WyreboxDaemonDuckDBQueryTemplateRequest
   g_assert_no_error (error);
 }
 
+static void
+init_storage_object_statistics_request (WyreboxDaemonDuckDBQueryTemplateRequest
+    *request, const gchar *account_id)
+{
+  const gchar *parameters[] = { NULL };
+  g_autoptr (GError) error = NULL;
+
+  g_assert_true (wyrebox_daemon_duckdb_query_template_request_init (request,
+          "query-1", "storage.object_statistics.v1", account_id, parameters,
+          &error));
+  g_assert_no_error (error);
+}
+
 static gchar *
 dispatch_messages_by_sender_domain_csv (const gchar *path,
     const gchar *account_id, const gchar *sender_domain)
@@ -1200,6 +1220,36 @@ dispatch_messages_by_date_range_csv (const gchar *path,
 
   init_messages_by_date_range_request (&request, account_id, start_unix_us,
       end_unix_us);
+  g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
+          "request-1", "admin-cli", account_id, "duckdb-tool",
+          "correlation-1", &request, &frame, &error));
+  g_assert_no_error (error);
+
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+  g_assert_cmpuint (frame.stream_chunk.chunk_index, ==, 0);
+  g_assert_true (frame.stream_chunk.end_of_stream);
+
+  data = g_bytes_get_data (frame.stream_chunk.bytes, &size);
+  return g_strndup (data, size);
+}
+
+static gchar *
+dispatch_storage_object_statistics_csv (const gchar *path,
+    const gchar *account_id)
+{
+  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+  g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  gconstpointer data = NULL;
+  gsize size = 0;
+
+  service = wyrebox_daemon_duckdb_query_template_service_new_duckdb (path,
+      &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (service);
+
+  init_storage_object_statistics_request (&request, account_id);
   g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
           "request-1", "admin-cli", account_id, "duckdb-tool",
           "correlation-1", &request, &frame, &error));
@@ -2504,6 +2554,43 @@ test_duckdb_service_rejects_overflowing_date_range_bound (void)
 }
 
 static void
+test_duckdb_service_returns_storage_object_statistics_csv (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+
+  csv = dispatch_storage_object_statistics_csv (path, "account-1");
+  g_assert_cmpstr (csv, ==,
+      "account_id,object_count,object_size_bytes,message_count,"
+      "mailbox_membership_count,visible_mailbox_membership_count,"
+      "derived_view_membership_count,"
+      "visible_derived_view_membership_count\n"
+      "account-1,13,1010,4,5,4,4,3\n");
+  (void) g_remove (path);
+}
+
+static void
+test_duckdb_service_storage_object_statistics_is_scoped (void)
+{
+  g_autofree gchar *path = create_temp_catalog_path ();
+  g_autofree gchar *csv = NULL;
+
+  bootstrap_catalog (path);
+  seed_catalog (path);
+
+  csv = dispatch_storage_object_statistics_csv (path, "account-2");
+  g_assert_cmpstr (csv, ==,
+      "account_id,object_count,object_size_bytes,message_count,"
+      "mailbox_membership_count,visible_mailbox_membership_count,"
+      "derived_view_membership_count,"
+      "visible_derived_view_membership_count\n" "account-2,3,505,1,1,1,1,1\n");
+  (void) g_remove (path);
+}
+
+static void
 test_duckdb_service_missing_path_fails (void)
 {
   g_autofree gchar *path = create_temp_catalog_path ();
@@ -2686,6 +2773,12 @@ main (int argc, char **argv)
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/date-range-overflow-rejected",
       test_duckdb_service_rejects_overflowing_date_range_bound);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/storage-object-statistics-csv",
+      test_duckdb_service_returns_storage_object_statistics_csv);
+  g_test_add_func
+      ("/daemon-api/duckdb-query-template/service-duckdb/storage-object-statistics-scoped",
+      test_duckdb_service_storage_object_statistics_is_scoped);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/service-duckdb/missing-path-fails",
       test_duckdb_service_missing_path_fails);
