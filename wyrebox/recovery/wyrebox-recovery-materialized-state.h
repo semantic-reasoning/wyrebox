@@ -8,6 +8,7 @@
 #include <glib-object.h>
 
 #include "wyrebox-journal-reader.h"
+#include "wyrebox-local-object-store.h"
 #include "wyrebox-schema-migration.h"
 
 /* *INDENT-OFF* */
@@ -34,6 +35,7 @@ wyrebox_recovery_materialized_state_decider_new (void);
 gboolean wyrebox_recovery_materialized_state_decider_decide (
     WyreboxRecoveryMaterializedStateDecider *self,
     const gchar *object_store_root,
+    WyreboxLocalObjectStore *object_store,
     const gchar *catalog_path,
     WyreboxJournalReader *journal_reader,
     const WyreboxSchemaMigrationMetadataState *metadata_state,

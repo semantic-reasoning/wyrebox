@@ -1,5 +1,7 @@
 #include "wyrebox-recovery-materialized-state.h"
 
+#include "wyrebox-delivery-replay-validator.h"
+
 #include <glib/gstdio.h>
 
 struct _WyreboxRecoveryMaterializedStateDecider
@@ -36,11 +38,28 @@ path_exists (const gchar *path)
       && g_file_test (path, G_FILE_TEST_EXISTS);
 }
 
+static gboolean
+validate_canonical_objects (WyreboxLocalObjectStore *object_store,
+    WyreboxJournalReader *journal_reader, GError **error)
+{
+  g_autoptr (WyreboxDeliveryReplayValidator) validator = NULL;
+
+  if (object_store == NULL || journal_reader == NULL)
+    return TRUE;
+
+  validator =
+      wyrebox_delivery_replay_validator_new (journal_reader, object_store);
+  if (validator == NULL)
+    return FALSE;
+
+  return wyrebox_delivery_replay_validator_validate_all (validator, error);
+}
+
 gboolean
     wyrebox_recovery_materialized_state_decider_decide
     (WyreboxRecoveryMaterializedStateDecider * self,
-    const gchar * object_store_root, const gchar * catalog_path,
-    WyreboxJournalReader * journal_reader,
+    const gchar * object_store_root, WyreboxLocalObjectStore * object_store,
+    const gchar * catalog_path, WyreboxJournalReader * journal_reader,
     const WyreboxSchemaMigrationMetadataState * metadata_state,
     WyreboxRecoveryMaterializedStateDecision * out_decision, GError ** error)
 {
@@ -68,6 +87,10 @@ gboolean
         WYREBOX_RECOVERY_MATERIALIZED_STATE_DECISION_REBUILD_MATERIALIZED_STATE;
     return TRUE;
   }
+
+  if (journal_reader != NULL &&
+      !validate_canonical_objects (object_store, journal_reader, error))
+    return FALSE;
 
   if (journal_reader != NULL &&
       !wyrebox_schema_migration_validate_materialization_checkpoint
