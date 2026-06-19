@@ -1,5 +1,6 @@
 #include "wyrebox-daemon-duckdb-query-template-dispatcher.h"
 #include "wyrebox-daemon-duckdb-query-template-service.h"
+#include "wyrebox-benchmark-report.h"
 #include "wyrebox-schema-metadata-store.h"
 #include "wyrebox-schema-migration.h"
 
@@ -233,11 +234,11 @@ run_microbenchmark (void)
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
   g_autoptr (GError) error = NULL;
   g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
+  g_auto (WyreboxBenchmarkReport) report = { 0 };
   gconstpointer data = NULL;
   gsize size = 0;
   gint64 start_us = 0;
   gint64 end_us = 0;
-  gint64 elapsed_us = 0;
   g_autofree gchar *csv = NULL;
 
   temp_root.path = create_temp_catalog_root ();
@@ -255,6 +256,7 @@ run_microbenchmark (void)
   init_messages_subject_contains_request (&request, "account-1", "volume",
       "10", "95");
 
+  wyrebox_benchmark_report_init (&report);
   start_us = g_get_monotonic_time ();
   g_assert_true (wyrebox_daemon_duckdb_query_template_dispatch (service,
           "request-1", "admin-cli", "account-1", "duckdb-tool",
@@ -262,7 +264,8 @@ run_microbenchmark (void)
   end_us = g_get_monotonic_time ();
   g_assert_no_error (error);
 
-  elapsed_us = end_us - start_us;
+  report.elapsed_us = end_us - start_us;
+  wyrebox_benchmark_report_capture_rusage (&report);
 
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
   g_assert_cmpuint (frame.stream_chunk.chunk_index, ==, 0);
@@ -283,12 +286,10 @@ run_microbenchmark (void)
   g_assert_null (g_strstr_len (csv, -1, "message-nonmatching"));
   g_assert_null (g_strstr_len (csv, -1, "message-null-subject"));
 
-  g_print ("{\"schema\":\"wyrebox-benchmark-report/v1\",");
-  g_print ("\"suite\":\"duckdb-query-template\",");
-  g_print ("\"case\":\"messages-subject-contains\",");
-  g_print ("\"metric\":\"elapsed_us\",");
-  g_print ("\"value\":%" G_GINT64_FORMAT ",", elapsed_us);
-  g_print ("\"status\":\"ok\"}\n");
+  report.object_count = count_substring (csv, "object-volume-");
+  report.disk_bytes = size;
+  wyrebox_benchmark_report_print_json ("duckdb-query-template",
+      "messages-subject-contains", &report);
 }
 
 int

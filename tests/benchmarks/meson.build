@@ -55,7 +55,10 @@ benchmark(
 
 duckdb_query_template_subject_contains_benchmark = executable(
   'wyrebox-benchmark-duckdb-query-template-subject-contains',
-  'wyrebox-benchmark-duckdb-query-template-subject-contains.c',
+  [
+    'wyrebox-benchmark-duckdb-query-template-subject-contains.c',
+    'wyrebox-benchmark-report.c',
+  ],
   dependencies: [wyrebox_dep],
 )
 
