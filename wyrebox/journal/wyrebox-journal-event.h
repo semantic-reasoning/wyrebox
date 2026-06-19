@@ -15,6 +15,14 @@ typedef struct
   GBytes *payload;
 } WyreboxJournalEventRecord;
 
+typedef struct
+{
+  WyreboxJournalEventType event_type;
+  const char *event_type_name;
+  const char *payload_schema_version;
+  const char *description;
+} WyreboxJournalEventTypeDescriptor;
+
 void wyrebox_journal_event_record_clear (WyreboxJournalEventRecord *record);
 
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxJournalEventRecord,
@@ -26,6 +34,14 @@ gboolean wyrebox_journal_event_record_init_from_reader_record (
 
 const char *wyrebox_journal_event_record_get_event_type_name (
     const WyreboxJournalEventRecord *record);
+
+const WyreboxJournalEventTypeDescriptor *
+wyrebox_journal_event_type_catalog_lookup (WyreboxJournalEventType event_type);
+
+gsize wyrebox_journal_event_type_catalog_size (void);
+
+const WyreboxJournalEventTypeDescriptor *
+wyrebox_journal_event_type_catalog_at (gsize index);
 
 G_END_DECLS
 /* *INDENT-ON* */

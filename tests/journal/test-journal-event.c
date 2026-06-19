@@ -3,28 +3,41 @@
 #include <gio/gio.h>
 
 static void
-test_event_record_wraps_journal_record (void)
+test_event_type_catalog_is_enumerable (void)
 {
-  g_auto (WyreboxJournalEventRecord) event = { 0 };
-  g_auto (WyreboxJournalRecord) journal = { 0 };
-  g_autoptr (GBytes) payload = NULL;
-  g_autoptr (GError) error = NULL;
-  const guint8 bytes[] = { 0x01, 0x02, 0x03 };
+  g_assert_cmpuint (wyrebox_journal_event_type_catalog_size (), ==, 7);
+  g_assert_nonnull (wyrebox_journal_event_type_catalog_at (0));
+  g_assert_nonnull (wyrebox_journal_event_type_catalog_at (6));
+  g_assert_null (wyrebox_journal_event_type_catalog_at (7));
+}
 
-  payload = g_bytes_new_static (bytes, sizeof bytes);
-  journal.offset = 4096;
-  journal.sequence = 7;
-  journal.event_type = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
-  journal.payload = g_bytes_ref (payload);
+static void
+test_event_type_catalog_resolves_known_event_types (void)
+{
+  const WyreboxJournalEventTypeDescriptor *descriptor = NULL;
 
-  g_assert_true (wyrebox_journal_event_record_init_from_reader_record (&event,
-          &journal, &error));
-  g_assert_no_error (error);
-  g_assert_cmpuint (event.journal_offset, ==, 4096);
-  g_assert_cmpuint (event.journal_sequence, ==, 7);
-  g_assert_cmpstr (wyrebox_journal_event_record_get_event_type_name (&event),
-      ==, "MessageDelivered");
-  g_assert_true (g_bytes_equal (event.payload, payload));
+  descriptor = wyrebox_journal_event_type_catalog_lookup
+      (WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED);
+  g_assert_nonnull (descriptor);
+  g_assert_cmpstr (descriptor->event_type_name, ==, "MessageDelivered");
+  g_assert_cmpstr (descriptor->payload_schema_version, ==,
+      "journal.payload.message-delivered.v1");
+
+  descriptor = wyrebox_journal_event_type_catalog_lookup
+      (WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED);
+  g_assert_nonnull (descriptor);
+  g_assert_cmpstr (descriptor->event_type_name, ==, "DaemonAuditRecorded");
+}
+
+static void
+test_event_type_catalog_preserves_string_names (void)
+{
+  const WyreboxJournalEventTypeDescriptor *descriptor = NULL;
+
+  descriptor = wyrebox_journal_event_type_catalog_at (2);
+  g_assert_nonnull (descriptor);
+  g_assert_cmpstr (descriptor->event_type_name, ==, "KeywordChanged");
+  g_assert_cmpstr (descriptor->description, ==, "Keyword mutation event");
 }
 
 int
@@ -32,8 +45,12 @@ main (int argc, char **argv)
 {
   g_test_init (&argc, &argv, NULL);
 
-  g_test_add_func ("/journal/event-record/wraps-journal-record",
-      test_event_record_wraps_journal_record);
+  g_test_add_func ("/journal/event-type-catalog/is-enumerable",
+      test_event_type_catalog_is_enumerable);
+  g_test_add_func ("/journal/event-type-catalog/resolves-known-event-types",
+      test_event_type_catalog_resolves_known_event_types);
+  g_test_add_func ("/journal/event-type-catalog/preserves-string-names",
+      test_event_type_catalog_preserves_string_names);
 
   return g_test_run ();
 }
