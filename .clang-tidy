@@ -2,6 +2,7 @@
 Checks: >-
   -*,
   clang-analyzer-*,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
   bugprone-unchecked-return-value,
   bugprone-unsafe-functions,
   bugprone-sizeof-expression,

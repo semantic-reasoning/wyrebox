@@ -1,7 +1,6 @@
 #include "wyrebox-backup-manifest.h"
 
 #include <gio/gio.h>
-#include <string.h>
 
 void
 wyrebox_backup_manifest_clear (WyreboxBackupManifest *manifest)
@@ -15,7 +14,8 @@ wyrebox_backup_manifest_clear (WyreboxBackupManifest *manifest)
   g_clear_pointer (&manifest->schema_version, g_free);
   g_clear_pointer (&manifest->rule_package_version, g_free);
   g_clear_pointer (&manifest->view_package_version, g_free);
-  memset (manifest, 0, sizeof *manifest);
+  *manifest = (WyreboxBackupManifest) {
+  0};
 }
 
 const char *
