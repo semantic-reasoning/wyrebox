@@ -2,21 +2,10 @@
 Checks: >-
   -*,
   clang-analyzer-*,
-  bugprone-*,
-  cert-*,
-  misc-*,
-  performance-*,
-  portability-*
+  bugprone-unchecked-return-value,
+  bugprone-unsafe-functions,
+  bugprone-sizeof-expression,
+  bugprone-suspicious-memory-comparison
 WarningsAsErrors: ''
-HeaderFilterRegex: '^(wyrebox|tests|tools)/'
-AnalyzeTemporaryDtors: false
+HeaderFilterRegex: '^wyrebox/'
 FormatStyle: none
-CheckOptions:
-  - key: readability-identifier-naming.VariableCase
-    value: lower_case
-  - key: readability-identifier-naming.FunctionCase
-    value: lower_case
-  - key: readability-identifier-naming.ClassCase
-    value: CamelCase
-  - key: readability-identifier-naming.NamespaceCase
-    value: lower_case

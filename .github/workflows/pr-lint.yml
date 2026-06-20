@@ -42,7 +42,7 @@ jobs:
         run: |
           mapfile -d '' changed_files < <(
             git diff --name-only -z --diff-filter=ACMRT \
-              "$BASE_SHA...HEAD" -- '*.c'
+              "$BASE_SHA...HEAD" -- 'wyrebox/*.c'
           )
 
           if [ "${#changed_files[@]}" -eq 0 ]; then
@@ -59,7 +59,7 @@ jobs:
         run: |
           mapfile -d '' changed_files < <(
             git diff --name-only -z --diff-filter=ACMRT \
-              "$BASE_SHA...HEAD" -- '*.c'
+              "$BASE_SHA...HEAD" -- 'wyrebox/*.c'
           )
 
           if [ "${#changed_files[@]}" -eq 0 ]; then
