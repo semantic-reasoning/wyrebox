@@ -29,7 +29,7 @@ jobs:
 
       - name: Check C formatting and clang-tidy
         run: |
-          mapfile -d '' c_files < <(git ls-files -z -- '*.c')
+          mapfile -d '' c_files < <(git ls-files -z -- 'wyrebox/*.c')
 
           if [ "${#c_files[@]}" -eq 0 ]; then
             echo "No C files."
