@@ -12,8 +12,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  lint:
-    name: Lint
+  formatting:
+    name: Formatting
     runs-on: ubuntu-24.04
 
     steps:
@@ -23,17 +23,9 @@ jobs:
       - name: Install formatter
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            clang-tidy \
-            indent \
-            libglib2.0-dev \
-            meson \
-            ninja-build \
-            pkg-config \
-            unzip
+          sudo apt-get install -y --no-install-recommends indent
 
-      - name: Check C formatting and clang-tidy
+      - name: Check C formatting
         run: |
           mapfile -d '' c_files < <(git ls-files -z -- 'wyrebox/*.c')
 
@@ -45,6 +37,38 @@ jobs:
           ./tools/gst-indent "${c_files[@]}"
           git diff --exit-code -- "${c_files[@]}"
 
+  clang-tidy:
+    name: Clang Tidy
+    runs-on: ubuntu-24.04
+    needs: formatting
+    continue-on-error: true
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            clang-tidy \
+            libglib2.0-dev \
+            meson \
+            ninja-build \
+            pkg-config \
+            unzip
+
+      - name: Check C with clang-tidy
+        run: |
+          mapfile -d '' c_files < <(git ls-files -z -- 'wyrebox/*.c')
+
+          if [ "${#c_files[@]}" -eq 0 ]; then
+            echo "No C files."
+            exit 0
+          fi
+
           meson setup _build
           for file in "${c_files[@]}"; do
             clang-tidy -p _build "$file" --warnings-as-errors='*'
@@ -53,7 +77,7 @@ jobs:
   build:
     name: Build (${{ matrix.compiler }})
     runs-on: ubuntu-24.04
-    needs: lint
+    needs: formatting
 
     strategy:
       fail-fast: false
