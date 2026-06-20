@@ -23,9 +23,11 @@ jobs:
       - name: Install formatter
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends indent
+          sudo apt-get install -y --no-install-recommends \
+            clang-tidy \
+            indent
 
-      - name: Check C formatting
+      - name: Check C formatting and clang-tidy
         run: |
           mapfile -d '' c_files < <(git ls-files -z -- '*.c')
 
@@ -36,6 +38,11 @@ jobs:
 
           ./tools/gst-indent "${c_files[@]}"
           git diff --exit-code -- "${c_files[@]}"
+
+          meson setup _build
+          for file in "${c_files[@]}"; do
+            clang-tidy -p _build "$file" --warnings-as-errors='*'
+          done
 
   build:
     name: Build (${{ matrix.compiler }})
