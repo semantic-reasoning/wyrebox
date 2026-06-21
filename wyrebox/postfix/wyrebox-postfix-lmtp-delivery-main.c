@@ -9,15 +9,15 @@
 #include <errno.h>
 #include <string.h>
 
-#define WYREBOX_POSTFIX_LMTP_LISTENER_DEFAULT_DAEMON_SOCKET \
+#define WYREBOX_POSTFIX_LMTP_DELIVERY_DEFAULT_DAEMON_SOCKET \
   "/run/wyrebox/wyrebox.sock"
-#define WYREBOX_POSTFIX_LMTP_LISTENER_DEFAULT_LISTEN_SOCKET \
+#define WYREBOX_POSTFIX_LMTP_DELIVERY_DEFAULT_LISTEN_SOCKET \
   "/run/wyrebox/wyrebox-lmtp.sock"
-#define WYREBOX_POSTFIX_LMTP_LISTENER_CALLER_IDENTITY "postfix"
-#define WYREBOX_POSTFIX_LMTP_LISTENER_TOOL_IDENTITY \
-  "wyrebox-postfix-lmtp-listener"
-#define WYREBOX_POSTFIX_LMTP_LISTENER_MAX_LINE_BYTES 8192
-#define WYREBOX_POSTFIX_LMTP_LISTENER_DEFAULT_MAX_MESSAGE_BYTES \
+#define WYREBOX_POSTFIX_LMTP_DELIVERY_CALLER_IDENTITY "postfix"
+#define WYREBOX_POSTFIX_LMTP_DELIVERY_TOOL_IDENTITY \
+  "wyrebox-postfix-lmtp-delivery"
+#define WYREBOX_POSTFIX_LMTP_DELIVERY_MAX_LINE_BYTES 8192
+#define WYREBOX_POSTFIX_LMTP_DELIVERY_DEFAULT_MAX_MESSAGE_BYTES \
   ((guint64) 64 * 1024 * 1024)
 
 typedef struct
@@ -61,7 +61,9 @@ listener_transaction_clear (ListenerTransaction *transaction)
     return;
 
   g_clear_pointer (&transaction->sender, g_free);
+  /* NOLINTNEXTLINE(bugprone-sizeof-expression) */
   g_clear_pointer (&transaction->recipients, g_ptr_array_unref);
+  /* NOLINTNEXTLINE(bugprone-sizeof-expression) */
   g_clear_pointer (&transaction->message, g_byte_array_unref);
 }
 
@@ -137,13 +139,13 @@ parse_options (int argc, char **argv, ListenerOptions *options, GError **error)
 
   if (options->listen_socket_path == NULL)
     options->listen_socket_path =
-        g_strdup (WYREBOX_POSTFIX_LMTP_LISTENER_DEFAULT_LISTEN_SOCKET);
+        g_strdup (WYREBOX_POSTFIX_LMTP_DELIVERY_DEFAULT_LISTEN_SOCKET);
   if (options->daemon_socket_path == NULL)
     options->daemon_socket_path =
-        g_strdup (WYREBOX_POSTFIX_LMTP_LISTENER_DEFAULT_DAEMON_SOCKET);
+        g_strdup (WYREBOX_POSTFIX_LMTP_DELIVERY_DEFAULT_DAEMON_SOCKET);
   if (options->max_message_bytes == 0)
     options->max_message_bytes =
-        WYREBOX_POSTFIX_LMTP_LISTENER_DEFAULT_MAX_MESSAGE_BYTES;
+        WYREBOX_POSTFIX_LMTP_DELIVERY_DEFAULT_MAX_MESSAGE_BYTES;
   if (options->max_message_bytes < 0) {
     g_set_error (error,
         G_IO_ERROR,
@@ -190,7 +192,7 @@ read_crlf_line (GInputStream *input, GByteArray *line, GError **error)
       if (byte == '\n')
         return TRUE;
 
-      if (line->len >= WYREBOX_POSTFIX_LMTP_LISTENER_MAX_LINE_BYTES) {
+      if (line->len >= WYREBOX_POSTFIX_LMTP_DELIVERY_MAX_LINE_BYTES) {
         g_set_error (error,
             G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "LMTP line is too long");
         return FALSE;
@@ -204,7 +206,7 @@ read_crlf_line (GInputStream *input, GByteArray *line, GError **error)
       continue;
     }
 
-    if (line->len >= WYREBOX_POSTFIX_LMTP_LISTENER_MAX_LINE_BYTES) {
+    if (line->len >= WYREBOX_POSTFIX_LMTP_DELIVERY_MAX_LINE_BYTES) {
       g_set_error (error,
           G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "LMTP line is too long");
       return FALSE;
@@ -335,9 +337,9 @@ build_delivery_request (const ListenerOptions *options,
   request_id = build_request_id (delivery_id);
   if (!wyrebox_daemon_request_identity_init (identity,
           request_id,
-          WYREBOX_POSTFIX_LMTP_LISTENER_CALLER_IDENTITY,
+          WYREBOX_POSTFIX_LMTP_DELIVERY_CALLER_IDENTITY,
           options->account_id,
-          WYREBOX_POSTFIX_LMTP_LISTENER_TOOL_IDENTITY, request_id, error))
+          WYREBOX_POSTFIX_LMTP_DELIVERY_TOOL_IDENTITY, request_id, error))
     return FALSE;
 
   {
@@ -454,6 +456,7 @@ reset_transaction (ListenerTransaction *transaction)
   g_clear_pointer (&transaction->sender, g_free);
   if (transaction->recipients != NULL)
     g_ptr_array_set_size (transaction->recipients, 0);
+  /* NOLINTNEXTLINE(bugprone-sizeof-expression) */
   g_clear_pointer (&transaction->message, g_byte_array_unref);
   transaction->seen_mail = FALSE;
 }
@@ -544,6 +547,7 @@ handle_connection (const ListenerOptions *options,
         continue;
       }
 
+      /* NOLINTNEXTLINE(bugprone-sizeof-expression) */
       g_clear_pointer (&transaction.message, g_byte_array_unref);
       transaction.message = g_byte_array_new ();
 
@@ -638,12 +642,12 @@ main (int argc, char **argv)
   g_autoptr (GError) error = NULL;
 
   if (!parse_options (argc, argv, &options, &error)) {
-    g_printerr ("wyrebox-postfix-lmtp-listener: %s\n", error->message);
+    g_printerr ("wyrebox-postfix-lmtp-delivery: %s\n", error->message);
     return 64;
   }
 
   if (!run_listener_once (&options, &error)) {
-    g_printerr ("wyrebox-postfix-lmtp-listener: %s\n", error->message);
+    g_printerr ("wyrebox-postfix-lmtp-delivery: %s\n", error->message);
     (void) g_unlink (options.listen_socket_path);
     return 75;
   }

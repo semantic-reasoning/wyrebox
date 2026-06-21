@@ -55,7 +55,7 @@ static char *
 make_temp_root (void)
 {
   g_autofree char *root =
-      g_dir_make_tmp ("wyrebox-postfix-lmtp-listener-XXXXXX", NULL);
+      g_dir_make_tmp ("wyrebox-postfix-lmtp-delivery-XXXXXX", NULL);
 
   g_assert_nonnull (root);
   return g_steal_pointer (&root);
@@ -64,7 +64,7 @@ make_temp_root (void)
 static const char *
 listener_executable_path (void)
 {
-  const char *path = g_getenv ("WYREBOX_POSTFIX_LMTP_LISTENER_EXECUTABLE");
+  const char *path = g_getenv ("WYREBOX_POSTFIX_LMTP_DELIVERY_EXECUTABLE");
 
   g_assert_nonnull (path);
   g_assert_cmpstr (path, !=, "");
@@ -240,7 +240,7 @@ fake_server_thread_main (gpointer user_data)
     g_assert_cmpstr (decoded.caller_identity, ==, "postfix");
     g_assert_cmpstr (decoded.account_identity, ==, "account-1");
     g_assert_cmpstr (decoded.tool_identity, ==,
-        "wyrebox-postfix-lmtp-listener");
+        "wyrebox-postfix-lmtp-delivery");
     g_assert_cmpstr (decoded.delivery_ingestion->delivery_id, ==,
         expected_delivery_id);
     g_assert_cmpstr (decoded.delivery_ingestion->envelope_sender, ==,
@@ -330,7 +330,7 @@ fake_server_start_sequence (FakeServer *server,
   g_assert_no_error (error);
 
   server->thread =
-      g_thread_new ("fake-postfix-lmtp-listener-daemon",
+      g_thread_new ("fake-postfix-lmtp-delivery-daemon",
       fake_server_thread_main, server);
 }
 
@@ -1111,33 +1111,33 @@ main (int argc, char **argv)
 {
   g_test_init (&argc, &argv, NULL);
 
-  g_test_add_func ("/postfix/lmtp-listener/successful-single-recipient",
+  g_test_add_func ("/postfix/lmtp-delivery/successful-single-recipient",
       test_successful_single_recipient_transaction);
-  g_test_add_func ("/postfix/lmtp-listener/closes-before-second-mail",
+  g_test_add_func ("/postfix/lmtp-delivery/closes-before-second-mail",
       test_successful_transaction_closes_before_second_mail);
-  g_test_add_func ("/postfix/lmtp-listener/daemon-unavailable",
+  g_test_add_func ("/postfix/lmtp-delivery/daemon-unavailable",
       test_daemon_unavailable_returns_temporary_failure);
-  g_test_add_func ("/postfix/lmtp-listener/daemon-permanent-failure",
+  g_test_add_func ("/postfix/lmtp-delivery/daemon-permanent-failure",
       test_daemon_permanent_failure_returns_permanent_reply);
-  g_test_add_func ("/postfix/lmtp-listener/successful-multi-recipient",
+  g_test_add_func ("/postfix/lmtp-delivery/successful-multi-recipient",
       test_successful_multi_recipient_transaction);
-  g_test_add_func ("/postfix/lmtp-listener/multi-recipient-mixed-replies",
+  g_test_add_func ("/postfix/lmtp-delivery/multi-recipient-mixed-replies",
       test_multi_recipient_mixed_daemon_replies_preserve_rcpt_order);
-  g_test_add_func ("/postfix/lmtp-listener/reject-invalid-later-recipient",
+  g_test_add_func ("/postfix/lmtp-delivery/reject-invalid-later-recipient",
       test_invalid_later_recipient_is_rejected_before_data);
-  g_test_add_func ("/postfix/lmtp-listener/multi-recipient-permanent-failure",
+  g_test_add_func ("/postfix/lmtp-delivery/multi-recipient-permanent-failure",
       test_multi_recipient_daemon_permanent_failure_fans_out);
-  g_test_add_func ("/postfix/lmtp-listener/multi-recipient-daemon-unavailable",
+  g_test_add_func ("/postfix/lmtp-delivery/multi-recipient-daemon-unavailable",
       test_multi_recipient_daemon_unavailable_fans_out);
-  g_test_add_func ("/postfix/lmtp-listener/multi-recipient-size-limit",
+  g_test_add_func ("/postfix/lmtp-delivery/multi-recipient-size-limit",
       test_multi_recipient_message_size_limit_fans_out);
-  g_test_add_func ("/postfix/lmtp-listener/multi-recipient-empty-data",
+  g_test_add_func ("/postfix/lmtp-delivery/multi-recipient-empty-data",
       test_multi_recipient_empty_data_local_failure_fans_out);
-  g_test_add_func ("/postfix/lmtp-listener/rset-clears-multi-recipient",
+  g_test_add_func ("/postfix/lmtp-delivery/rset-clears-multi-recipient",
       test_rset_clears_multi_recipient_state);
-  g_test_add_func ("/postfix/lmtp-listener/message-size-limit",
+  g_test_add_func ("/postfix/lmtp-delivery/message-size-limit",
       test_message_size_limit_rejects_oversized_data);
-  g_test_add_func ("/postfix/lmtp-listener/message-size-exact-limit",
+  g_test_add_func ("/postfix/lmtp-delivery/message-size-exact-limit",
       test_message_size_limit_allows_exact_limit);
 
   return g_test_run ();

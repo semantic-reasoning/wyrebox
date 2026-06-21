@@ -209,9 +209,9 @@ if capnp_serialization_found
     dependencies: [wyrebox_dep],
     install: true,
   )
-  wyrebox_postfix_lmtp_listener = executable(
-    'wyrebox-postfix-lmtp-listener',
-    'postfix/wyrebox-postfix-lmtp-listener-main.c',
+  wyrebox_postfix_lmtp_delivery = executable(
+    'wyrebox-postfix-lmtp-delivery',
+    'postfix/wyrebox-postfix-lmtp-delivery-main.c',
     dependencies: [wyrebox_dep],
     install: true,
   )
