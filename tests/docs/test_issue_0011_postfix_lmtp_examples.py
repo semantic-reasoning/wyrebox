@@ -64,7 +64,7 @@ def main() -> None:
     combined = "\n".join(examples.values())
 
     assert "`wyrebox-postfix-lmtp`" in examples[README_PATH]
-    assert "Postfix LMTP transport requires a WyreBox LMTP listener endpoint" in (
+    assert "Postfix LMTP transport requires a WyreBox LMTP delivery endpoint" in (
         examples[README_PATH]
     )
     assert "wyrebox-lmtp:unix:/run/wyrebox/wyrebox-lmtp.sock" in (

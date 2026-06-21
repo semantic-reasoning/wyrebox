@@ -50,10 +50,10 @@ if capnp_serialization_found
     dependencies: [wyrebox_dep, capnp_dep, kj_dep],
     include_directories: [daemon_api_capnp_schema_include],
   )
-  postfix_lmtp_listener_test = executable(
-    'test-postfix-lmtp-listener',
+  postfix_lmtp_delivery_test = executable(
+    'test-postfix-lmtp-delivery',
     [
-      'test-postfix-lmtp-listener.cc',
+      'test-postfix-lmtp-delivery.cc',
       daemon_api_capnp_schema,
     ],
     dependencies: [wyrebox_dep, capnp_dep, kj_dep],
@@ -83,12 +83,12 @@ if capnp_serialization_found
     },
   )
   test(
-    'postfix lmtp listener',
-    postfix_lmtp_listener_test,
-    depends: wyrebox_postfix_lmtp_listener,
+    'postfix lmtp delivery',
+    postfix_lmtp_delivery_test,
+    depends: wyrebox_postfix_lmtp_delivery,
     env: {
-      'WYREBOX_POSTFIX_LMTP_LISTENER_EXECUTABLE':
-          wyrebox_postfix_lmtp_listener.full_path(),
+      'WYREBOX_POSTFIX_LMTP_DELIVERY_EXECUTABLE':
+        wyrebox_postfix_lmtp_delivery.full_path(),
     },
   )
 endif

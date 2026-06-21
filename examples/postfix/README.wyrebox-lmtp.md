@@ -1,7 +1,7 @@
 # WyreBox Postfix LMTP Examples
 
 These examples define the Postfix LMTP handoff contract for a WyreBox LMTP
-socket listener.
+delivery helper.
 
 The installed `wyrebox-postfix-lmtp` executable is a transcript helper used by
 tests and supervised adapters. It reads a complete LMTP transcript from
@@ -11,10 +11,10 @@ writes sanitized operational context on standard error. It is not a Postfix
 `lmtp(8)` transport command and must not be installed as `argv=` in
 `master.cf`.
 
-Postfix LMTP transport requires a WyreBox LMTP listener endpoint. Once that
-listener is available, run it on `/run/wyrebox/wyrebox-lmtp.sock` and let the
-Postfix `lmtp(8)` client connect to that socket. The listener should use the
-WyreBox daemon API at `/run/wyrebox/wyrebox.sock` for durable ingestion.
+Postfix LMTP transport requires a WyreBox LMTP delivery endpoint. Once that
+delivery helper is available, run it on `/run/wyrebox/wyrebox-lmtp.sock` and
+let the Postfix `lmtp(8)` client connect to that socket. The helper should use
+the WyreBox daemon API at `/run/wyrebox/wyrebox.sock` for durable ingestion.
 
 The current LMTP helper supports one accepted recipient per LMTP transaction.
 Postfix must split recipients before delivery with the transport-specific
@@ -59,8 +59,8 @@ log raw message bytes, daemon free-form error text, or local parser error text.
 
 The example `master.cf` disables chroot for the LMTP client service so
 `/run/wyrebox/wyrebox-lmtp.sock` resolves as a normal host path. If chroot is
-enabled, the LMTP listener socket must be visible inside the Postfix chroot.
-The daemon API socket is used by the WyreBox listener or helper process, not by
+enabled, the LMTP delivery socket must be visible inside the Postfix chroot.
+The daemon API socket is used by the WyreBox delivery helper process, not by
 the Postfix `lmtp(8)` client.
 
 See `master.cf.wyrebox-lmtp` for the service shape and
