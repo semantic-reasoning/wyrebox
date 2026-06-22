@@ -1,4 +1,5 @@
 #include "wyrebox-daemon-config.h"
+#include "wyrebox-daemon-capnp-codec.h"
 #include "wyrebox-daemon-connection-server.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-runtime.h"
@@ -76,32 +77,17 @@ decode_request_frame (const WyreboxDaemonPeerCredentials *peer_credentials,
     gpointer *out_decoded_state, GDestroyNotify *out_decoded_state_clear,
     gpointer user_data, GError **error)
 {
-  (void) user_data;
-  (void) peer_credentials;
-  (void) request;
-  (void) out_request_frame;
-  (void) out_decoded_state;
-  (void) out_decoded_state_clear;
-
-  g_set_error (error,
-      G_IO_ERROR,
-      G_IO_ERROR_NOT_SUPPORTED,
-      "wyreboxd request framing is not available in the startup slice");
-  return FALSE;
+  return wyrebox_daemon_capnp_codec_decode_request_frame (peer_credentials,
+      request, out_request_frame, out_decoded_state,
+      out_decoded_state_clear, user_data, error);
 }
 
 static GBytes *
 encode_response_frame (const WyreboxDaemonResponseFrame *response_frame,
     gpointer user_data, GError **error)
 {
-  (void) user_data;
-  (void) response_frame;
-
-  g_set_error (error,
-      G_IO_ERROR,
-      G_IO_ERROR_NOT_SUPPORTED,
-      "wyreboxd response framing is not available in the startup slice");
-  return NULL;
+  return wyrebox_daemon_capnp_codec_encode_response_frame (response_frame,
+      user_data, error);
 }
 
 static gboolean
