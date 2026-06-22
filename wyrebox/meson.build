@@ -229,6 +229,42 @@ if capnp_serialization_found
     install: true,
   )
 
+  wyreboxd_service_config = configuration_data()
+  wyreboxd_service_config.set(
+    'WYREBOXD_BINDIR',
+    join_paths(get_option('prefix'), get_option('bindir')),
+  )
+  wyreboxd_service_config.set(
+    'WYREBOXD_CONFIG_PATH',
+    join_paths(get_option('prefix'), get_option('sysconfdir'),
+      'wyrebox', 'wyrebox.conf'),
+  )
+
+  wyreboxd_service_file = configure_file(
+    input: '../systemd/wyreboxd.service.in',
+    output: 'wyreboxd.service',
+    configuration: wyreboxd_service_config,
+    install: true,
+    install_dir: join_paths(
+      get_option('prefix'),
+      'lib',
+      'systemd',
+      'system',
+    ),
+  )
+
+  wyreboxd_sysusers_file = configure_file(
+    input: '../systemd/wyreboxd.sysusers.in',
+    output: 'wyreboxd.sysusers',
+    configuration: wyreboxd_service_config,
+    install: true,
+    install_dir: join_paths(
+      get_option('prefix'),
+      'lib',
+      'sysusers.d',
+    ),
+  )
+
   wyrebox_postfix_pipe_master_cf_config = configuration_data()
   wyrebox_postfix_pipe_master_cf_config.set(
     'WYREBOX_POSTFIX_PIPE',
