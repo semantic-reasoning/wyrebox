@@ -3,7 +3,10 @@
 #include <glib/gstdio.h>
 
 #include "wyrebox-daemon-frame-io.h"
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \
+    WYREBOX_HAVE_CAPNP_SERIALIZATION
 #include "wyrebox-daemon-capnp-codec.h"
+#endif
 
 #include <signal.h>
 #include <sys/stat.h>
@@ -51,6 +54,8 @@ wait_for_socket (const char *socket_path)
   return FALSE;
 }
 
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \
+    WYREBOX_HAVE_CAPNP_SERIALIZATION
 static GBytes *
 build_delivery_request (void)
 {
@@ -138,6 +143,7 @@ roundtrip_request (const char *socket_path, GBytes *request)
 
   return g_steal_pointer (&response);
 }
+#endif
 
 static void
 test_wyreboxd_accepts_config_and_starts_socket (void)
@@ -202,6 +208,8 @@ test_wyreboxd_rejects_invalid_config_path (void)
 static void
 test_wyreboxd_roundtrips_delivery_request_over_socket (void)
 {
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \
+    WYREBOX_HAVE_CAPNP_SERIALIZATION
   g_autofree char *root = make_temp_root ();
   g_autofree char *run_dir = g_build_filename (root, "run", "wyrebox", NULL);
   g_autofree char *config_path = NULL;
@@ -240,6 +248,9 @@ test_wyreboxd_roundtrips_delivery_request_over_socket (void)
   g_assert_true (g_subprocess_wait (subprocess, NULL, &error));
   g_assert_no_error (error);
   g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==, 0);
+#else
+  g_test_skip ("Cap'n Proto serialization is not available in this build");
+#endif
 }
 
 int
