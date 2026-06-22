@@ -255,7 +255,7 @@ if capnp_serialization_found
 
   wyreboxd_sysusers_file = configure_file(
     input: '../systemd/wyreboxd.sysusers.in',
-    output: 'wyreboxd.sysusers',
+    output: 'wyreboxd.conf',
     configuration: wyreboxd_service_config,
     install: true,
     install_dir: join_paths(
