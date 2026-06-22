@@ -1,5 +1,7 @@
 #include "wyrebox-daemon-config.h"
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
 #include "wyrebox-daemon-capnp-codec.h"
+#endif
 #include "wyrebox-daemon-connection-server.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-runtime.h"
@@ -77,17 +79,43 @@ decode_request_frame (const WyreboxDaemonPeerCredentials *peer_credentials,
     gpointer *out_decoded_state, GDestroyNotify *out_decoded_state_clear,
     gpointer user_data, GError **error)
 {
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
   return wyrebox_daemon_capnp_codec_decode_request_frame (peer_credentials,
       request, out_request_frame, out_decoded_state,
       out_decoded_state_clear, user_data, error);
+#else
+  (void) peer_credentials;
+  (void) request;
+  (void) out_request_frame;
+  (void) out_decoded_state;
+  (void) out_decoded_state_clear;
+  (void) user_data;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_NOT_SUPPORTED,
+      "wyreboxd request framing is not available without Cap'n Proto");
+  return FALSE;
+#endif
 }
 
 static GBytes *
 encode_response_frame (const WyreboxDaemonResponseFrame *response_frame,
     gpointer user_data, GError **error)
 {
+#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
   return wyrebox_daemon_capnp_codec_encode_response_frame (response_frame,
       user_data, error);
+#else
+  (void) response_frame;
+  (void) user_data;
+
+  g_set_error (error,
+      G_IO_ERROR,
+      G_IO_ERROR_NOT_SUPPORTED,
+      "wyreboxd response framing is not available without Cap'n Proto");
+  return NULL;
+#endif
 }
 
 static gboolean
