@@ -258,6 +258,12 @@ daemon_config_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+wyreboxd_main_test = executable(
+  'test-wyreboxd-main',
+  'test-wyreboxd-main.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_runtime_test = executable(
   'test-daemon-runtime',
   'test-daemon-runtime.c',
@@ -428,6 +434,16 @@ test('daemon flag keyword update request', daemon_flag_keyword_update_request_te
 test('daemon flag keyword update dispatcher',
   daemon_flag_keyword_update_dispatcher_test)
 test('daemon config', daemon_config_test)
+if capnp_serialization_found
+  test(
+    'wyreboxd main',
+    wyreboxd_main_test,
+    depends: wyreboxd,
+    env: {
+      'WYREBOXD_EXECUTABLE': wyreboxd.full_path(),
+    },
+  )
+endif
 test('daemon runtime', daemon_runtime_test)
 test('daemon socket listener', daemon_socket_listener_test)
 test('daemon error', daemon_error_test)

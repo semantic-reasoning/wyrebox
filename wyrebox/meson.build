@@ -58,6 +58,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-fact-mutation-dispatcher.c',
   'daemon/wyrebox-daemon-fact-mutation-service.c',
   'daemon/wyrebox-daemon-fact-mutation-request.c',
+  'daemon/wyreboxd-main.c',
   'daemon/wyrebox-daemon-connection-server.c',
   'daemon/wyrebox-daemon-frame-io.c',
   'daemon/wyrebox-daemon-uds-client.c',
@@ -218,6 +219,12 @@ if capnp_serialization_found
   wyrebox_backup_tool = executable(
     'wyrebox-backup-tool',
     'backup/wyrebox-backup-tool-main.c',
+    dependencies: [wyrebox_dep],
+    install: true,
+  )
+  wyreboxd = executable(
+    'wyreboxd',
+    'daemon/wyreboxd-main.c',
     dependencies: [wyrebox_dep],
     install: true,
   )
