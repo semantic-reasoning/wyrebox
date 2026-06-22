@@ -1,0 +1,19 @@
+[Unit]
+Description=WyreBox daemon
+Documentation=man:wyreboxd(8)
+After=network.target
+
+[Service]
+Type=simple
+User=wyrebox
+Group=wyrebox
+RuntimeDirectory=wyrebox
+StateDirectory=wyrebox
+CacheDirectory=wyrebox
+UMask=0007
+ExecStart=@WYREBOXD_BINDIR@/wyreboxd --config @WYREBOXD_CONFIG_PATH@
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target
