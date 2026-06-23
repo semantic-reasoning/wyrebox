@@ -2,6 +2,7 @@
 
 #include "wyrebox-daemon-fact-mutation-dispatcher.h"
 #include "wyrebox-daemon-message-fetch-dispatcher.h"
+#include "wyrebox-daemon-mail-event-stream-service.h"
 #include "wyrebox-daemon-mailbox-list-dispatcher.h"
 #include "wyrebox-daemon-mailbox-select-dispatcher.h"
 #include "wyrebox-daemon-mailbox-status-request.h"
@@ -23,6 +24,7 @@ typedef enum {
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_STATUS,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_FETCH,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_SEARCH,
+  WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAIL_EVENT_STREAM,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_MUTATION,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_BATCH_IMPORT,
@@ -47,6 +49,7 @@ typedef struct
   const WyreboxDaemonFactBatchImportRequest *fact_batch_import;
   const WyreboxDaemonMessageFetchRequest *message_fetch;
   const WyreboxDaemonMessageSearchRequest *message_search;
+  const WyreboxDaemonMailEventStreamRequest *mail_event_stream;
   const WyreboxDaemonDeliveryIngestionRequest *delivery_ingestion;
   const WyreboxDaemonFlagKeywordUpdateRequest *flag_keyword_update;
   const WyreboxDaemonWirelogPredicateQueryRequest *wirelog_predicate_query;
