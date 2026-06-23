@@ -4,6 +4,7 @@
 #include "wyrebox-daemon-capnp-codec.h"
 #endif
 #include "wyrebox-daemon-connection-server.h"
+#include "wyrebox-daemon-mailbox-catalog-duckdb.h"
 #include "wyrebox-daemon-delivery-ingestion-service.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-runtime.h"
@@ -136,6 +137,9 @@ run_daemon (int argc, char **argv)
   g_auto (WyreboxdOptions) options = { 0 };
   g_autoptr (GError) error = NULL;
   g_autoptr (WyreboxDaemonConfig) config = NULL;
+  g_autoptr (WyreboxDaemonMailboxCatalogDuckDB) mailbox_catalog = NULL;
+  g_autoptr (WyreboxDaemonMailboxListService) mailbox_list_service = NULL;
+  g_autoptr (WyreboxDaemonMailboxSelectService) mailbox_select_service = NULL;
   g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
   g_autoptr (WyreboxJournalWriter) journal_writer = NULL;
   g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
@@ -162,6 +166,29 @@ run_daemon (int argc, char **argv)
   }
 
   socket_path = g_strdup (wyrebox_daemon_config_get_socket_path (config));
+  mailbox_catalog = wyrebox_daemon_mailbox_catalog_duckdb_new
+      (wyrebox_daemon_config_get_catalog_path (config), &error);
+  if (mailbox_catalog == NULL) {
+    g_printerr ("wyreboxd: %s\n", error->message);
+    return EX_OSERR;
+  }
+
+  mailbox_list_service =
+      wyrebox_daemon_mailbox_catalog_duckdb_new_list_service
+      (wyrebox_daemon_config_get_catalog_path (config), &error);
+  if (mailbox_list_service == NULL) {
+    g_printerr ("wyreboxd: %s\n", error->message);
+    return EX_OSERR;
+  }
+
+  mailbox_select_service =
+      wyrebox_daemon_mailbox_catalog_duckdb_new_select_service
+      (wyrebox_daemon_config_get_catalog_path (config), &error);
+  if (mailbox_select_service == NULL) {
+    g_printerr ("wyreboxd: %s\n", error->message);
+    return EX_OSERR;
+  }
+
   object_store = wyrebox_local_object_store_new
       (wyrebox_daemon_config_get_object_root_dir (config), &error);
   if (object_store == NULL) {
@@ -181,8 +208,8 @@ run_daemon (int argc, char **argv)
   delivery_service =
       wyrebox_daemon_delivery_ingestion_service_new_with_ingestor (ingestor);
   request_adapter = wyrebox_daemon_request_adapter_new (delivery_service, NULL,
-      NULL, NULL, NULL, NULL, NULL, NULL, decode_request_frame, NULL, NULL,
-      encode_response_frame, NULL, NULL);
+      mailbox_list_service, mailbox_select_service, NULL, NULL, NULL, NULL,
+      decode_request_frame, NULL, NULL, encode_response_frame, NULL, NULL);
   server = wyrebox_daemon_connection_server_new (socket_path, request_adapter);
 
   if (!wyrebox_daemon_connection_server_start (server, &error)) {
