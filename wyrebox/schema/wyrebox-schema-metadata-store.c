@@ -2497,7 +2497,7 @@ static gboolean
 {
   g_auto (duckdb_prepared_statement) statement = NULL;
   g_auto (duckdb_result) result = { 0 };
-  WyreboxSchemaMetadataStore *store = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
   g_auto (WyreboxMaterializationManifest) manifest = { 0 };
 
   g_return_val_if_fail (checksum != NULL, FALSE);
