@@ -47,6 +47,10 @@ assert_config_loads (const char *config_path)
       config_path);
   g_assert_cmpstr (wyrebox_daemon_config_get_socket_path (config), ==,
       WYREBOX_DAEMON_DEFAULT_SOCKET_PATH);
+  g_assert_cmpstr (wyrebox_daemon_config_get_journal_root_dir (config), ==,
+      WYREBOX_DAEMON_DEFAULT_JOURNAL_ROOT_DIR);
+  g_assert_cmpstr (wyrebox_daemon_config_get_object_root_dir (config), ==,
+      WYREBOX_DAEMON_DEFAULT_OBJECT_ROOT_DIR);
 }
 
 static void
@@ -54,7 +58,10 @@ test_daemon_config_loads_canonical_config (void)
 {
   g_autofree char *dir = create_config_fixture_dir ();
   g_autofree char *config_path = write_config_fixture (dir,
-      "[daemon]\n" "socket_path=/run/wyrebox/wyrebox.sock\n",
+      "[daemon]\n"
+      "socket_path=/run/wyrebox/wyrebox.sock\n"
+      "journal_root_dir=/run/wyrebox/journal\n"
+      "object_root_dir=/run/wyrebox/object-store\n",
       0600);
 
   assert_config_loads (config_path);
@@ -65,7 +72,10 @@ test_daemon_config_validate_for_startup_accepts_absolute_socket_path (void)
 {
   g_autofree char *dir = create_config_fixture_dir ();
   g_autofree char *config_path = write_config_fixture (dir,
-      "[daemon]\n" "socket_path=/tmp/wyrebox.sock\n",
+      "[daemon]\n"
+      "socket_path=/tmp/wyrebox.sock\n"
+      "journal_root_dir=/tmp/wyrebox-journal\n"
+      "object_root_dir=/tmp/wyrebox-object-store\n",
       0600);
   g_autoptr (GError) error = NULL;
   g_autoptr (WyreboxDaemonConfig) config = NULL;
@@ -120,7 +130,10 @@ test_daemon_config_accepts_non_canonical_absolute_socket_path (void)
 {
   g_autofree char *dir = create_config_fixture_dir ();
   g_autofree char *config_path = write_config_fixture (dir,
-      "[daemon]\n" "socket_path=/tmp/wyrebox.sock\n",
+      "[daemon]\n"
+      "socket_path=/tmp/wyrebox.sock\n"
+      "journal_root_dir=/tmp/wyrebox-journal\n"
+      "object_root_dir=/tmp/wyrebox-object-store\n",
       0600);
   g_autoptr (GError) error = NULL;
   g_autoptr (WyreboxDaemonConfig) config = NULL;
@@ -165,7 +178,10 @@ test_daemon_config_rejects_insecure_permissions (void)
 {
   g_autofree char *dir = create_config_fixture_dir ();
   g_autofree char *config_path = write_config_fixture (dir,
-      "[daemon]\n" "socket_path=/run/wyrebox/wyrebox.sock\n",
+      "[daemon]\n"
+      "socket_path=/run/wyrebox/wyrebox.sock\n"
+      "journal_root_dir=/run/wyrebox/journal\n"
+      "object_root_dir=/run/wyrebox/object-store\n",
       0664);
   g_autoptr (GError) error = NULL;
 

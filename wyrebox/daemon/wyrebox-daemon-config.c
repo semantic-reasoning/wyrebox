@@ -14,6 +14,8 @@ struct _WyreboxDaemonConfig
 
   char *config_path;
   char *socket_path;
+  char *journal_root_dir;
+  char *object_root_dir;
 };
 
 G_DEFINE_TYPE (WyreboxDaemonConfig, wyrebox_daemon_config, G_TYPE_OBJECT);
@@ -66,12 +68,17 @@ config_line_is_comment_or_blank (const char *line)
 
 static gboolean
 parse_daemon_config_file (const char *config_path, const char *contents,
-    char **out_socket_path, GError **error)
+    char **out_socket_path, char **out_journal_root_dir,
+    char **out_object_root_dir, GError **error)
 {
   g_auto (GStrv) lines = NULL;
   gboolean in_daemon_section = FALSE;
   gboolean seen_socket_path = FALSE;
+  gboolean seen_journal_root_dir = FALSE;
+  gboolean seen_object_root_dir = FALSE;
   char *socket_path = NULL;
+  char *journal_root_dir = NULL;
+  char *object_root_dir = NULL;
 
   lines = g_strsplit (contents, "\n", -1);
 
@@ -157,6 +164,36 @@ parse_daemon_config_file (const char *config_path, const char *contents,
       continue;
     }
 
+    if (g_strcmp0 (key, "journal_root_dir") == 0) {
+      if (seen_journal_root_dir) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config '%s' defines journal_root_dir more than once",
+            config_path);
+        goto out;
+      }
+
+      journal_root_dir = g_strdup (value);
+      seen_journal_root_dir = TRUE;
+      continue;
+    }
+
+    if (g_strcmp0 (key, "object_root_dir") == 0) {
+      if (seen_object_root_dir) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config '%s' defines object_root_dir more than once",
+            config_path);
+        goto out;
+      }
+
+      object_root_dir = g_strdup (value);
+      seen_object_root_dir = TRUE;
+      continue;
+    }
+
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_DATA,
@@ -173,10 +210,14 @@ parse_daemon_config_file (const char *config_path, const char *contents,
   }
 
   *out_socket_path = g_steal_pointer (&socket_path);
+  *out_journal_root_dir = g_steal_pointer (&journal_root_dir);
+  *out_object_root_dir = g_steal_pointer (&object_root_dir);
   return TRUE;
 
 out:
   g_clear_pointer (&socket_path, g_free);
+  g_clear_pointer (&journal_root_dir, g_free);
+  g_clear_pointer (&object_root_dir, g_free);
   return FALSE;
 }
 
@@ -187,6 +228,8 @@ wyrebox_daemon_config_finalize (GObject *object)
 
   g_clear_pointer (&self->config_path, g_free);
   g_clear_pointer (&self->socket_path, g_free);
+  g_clear_pointer (&self->journal_root_dir, g_free);
+  g_clear_pointer (&self->object_root_dir, g_free);
 
   G_OBJECT_CLASS (wyrebox_daemon_config_parent_class)->finalize (object);
 }
@@ -234,6 +277,38 @@ wyrebox_daemon_config_validate_for_startup (const WyreboxDaemonConfig *self,
     return FALSE;
   }
 
+  if (self->journal_root_dir == NULL || *self->journal_root_dir == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA, "daemon config journal_root_dir is required");
+    return FALSE;
+  }
+
+  if (!g_path_is_absolute (self->journal_root_dir)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon config journal_root_dir must be absolute: %s",
+        self->journal_root_dir);
+    return FALSE;
+  }
+
+  if (self->object_root_dir == NULL || *self->object_root_dir == '\0') {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA, "daemon config object_root_dir is required");
+    return FALSE;
+  }
+
+  if (!g_path_is_absolute (self->object_root_dir)) {
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon config object_root_dir must be absolute: %s",
+        self->object_root_dir);
+    return FALSE;
+  }
+
   return TRUE;
 }
 
@@ -242,6 +317,8 @@ wyrebox_daemon_config_new_from_file (const char *config_path, GError **error)
 {
   g_autofree char *contents = NULL;
   g_autofree char *socket_path = NULL;
+  g_autofree char *journal_root_dir = NULL;
+  g_autofree char *object_root_dir = NULL;
   WyreboxDaemonConfig *self = NULL;
 
   g_return_val_if_fail (error == NULL || *error == NULL, NULL);
@@ -267,12 +344,20 @@ wyrebox_daemon_config_new_from_file (const char *config_path, GError **error)
   if (!g_file_get_contents (config_path, &contents, NULL, error))
     return NULL;
 
-  if (!parse_daemon_config_file (config_path, contents, &socket_path, error))
+  if (!parse_daemon_config_file (config_path, contents,
+          &socket_path, &journal_root_dir, &object_root_dir, error))
     return NULL;
 
   self = g_object_new (WYREBOX_TYPE_DAEMON_CONFIG, NULL);
   self->config_path = g_strdup (config_path);
   self->socket_path = g_steal_pointer (&socket_path);
+  self->journal_root_dir = g_steal_pointer (&journal_root_dir);
+  self->object_root_dir = g_steal_pointer (&object_root_dir);
+
+  if (self->journal_root_dir == NULL)
+    self->journal_root_dir = g_strdup (WYREBOX_DAEMON_DEFAULT_JOURNAL_ROOT_DIR);
+  if (self->object_root_dir == NULL)
+    self->object_root_dir = g_strdup (WYREBOX_DAEMON_DEFAULT_OBJECT_ROOT_DIR);
 
   if (!wyrebox_daemon_config_validate_for_startup (self, error)) {
     g_object_unref (self);
@@ -297,4 +382,20 @@ wyrebox_daemon_config_get_config_path (WyreboxDaemonConfig *self)
   g_return_val_if_fail (WYREBOX_IS_DAEMON_CONFIG (self), NULL);
 
   return self->config_path;
+}
+
+const char *
+wyrebox_daemon_config_get_journal_root_dir (WyreboxDaemonConfig *self)
+{
+  g_return_val_if_fail (WYREBOX_IS_DAEMON_CONFIG (self), NULL);
+
+  return self->journal_root_dir;
+}
+
+const char *
+wyrebox_daemon_config_get_object_root_dir (WyreboxDaemonConfig *self)
+{
+  g_return_val_if_fail (WYREBOX_IS_DAEMON_CONFIG (self), NULL);
+
+  return self->object_root_dir;
 }

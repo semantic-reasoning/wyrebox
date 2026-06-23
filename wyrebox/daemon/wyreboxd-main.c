@@ -1,10 +1,15 @@
+#include "wyrebox-build-config.h"
 #include "wyrebox-daemon-config.h"
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && WYREBOX_HAVE_CAPNP_SERIALIZATION
 #include "wyrebox-daemon-capnp-codec.h"
 #endif
 #include "wyrebox-daemon-connection-server.h"
+#include "wyrebox-daemon-delivery-ingestion-service.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-runtime.h"
+#include "wyrebox-eml-ingestor.h"
+#include "wyrebox-journal-writer.h"
+#include "wyrebox-local-object-store.h"
 
 #include <gio/gio.h>
 #include <glib.h>
@@ -131,6 +136,10 @@ run_daemon (int argc, char **argv)
   g_auto (WyreboxdOptions) options = { 0 };
   g_autoptr (GError) error = NULL;
   g_autoptr (WyreboxDaemonConfig) config = NULL;
+  g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
+  g_autoptr (WyreboxJournalWriter) journal_writer = NULL;
+  g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+  g_autoptr (WyreboxDaemonDeliveryIngestionService) delivery_service = NULL;
   g_autoptr (WyreboxDaemonRequestAdapter) request_adapter = NULL;
   g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
   g_autoptr (GMainLoop) loop = NULL;
@@ -153,8 +162,26 @@ run_daemon (int argc, char **argv)
   }
 
   socket_path = g_strdup (wyrebox_daemon_config_get_socket_path (config));
-  request_adapter = wyrebox_daemon_request_adapter_new (NULL, NULL, NULL, NULL,
-      NULL, NULL, NULL, NULL, decode_request_frame, NULL, NULL,
+  object_store = wyrebox_local_object_store_new
+      (wyrebox_daemon_config_get_object_root_dir (config), &error);
+  if (object_store == NULL) {
+    g_printerr ("wyreboxd: %s\n", error->message);
+    return EX_OSERR;
+  }
+
+  journal_writer = wyrebox_journal_writer_new
+      (wyrebox_daemon_config_get_journal_root_dir (config), &error);
+  if (journal_writer == NULL) {
+    g_printerr ("wyreboxd: %s\n", error->message);
+    return EX_OSERR;
+  }
+
+  ingestor = wyrebox_eml_ingestor_new_with_journal (object_store,
+      journal_writer);
+  delivery_service =
+      wyrebox_daemon_delivery_ingestion_service_new_with_ingestor (ingestor);
+  request_adapter = wyrebox_daemon_request_adapter_new (delivery_service, NULL,
+      NULL, NULL, NULL, NULL, NULL, NULL, decode_request_frame, NULL, NULL,
       encode_response_frame, NULL, NULL);
   server = wyrebox_daemon_connection_server_new (socket_path, request_adapter);
 
