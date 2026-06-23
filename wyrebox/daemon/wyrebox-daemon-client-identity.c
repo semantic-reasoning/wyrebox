@@ -69,3 +69,11 @@ gboolean
   return identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI
       || identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_TRUSTED_TOOL;
 }
+
+gboolean
+    wyrebox_daemon_client_identity_can_read_mail_events
+    (WyreboxDaemonClientIdentityClass identity_class) {
+  return identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI
+      || identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_TRUSTED_TOOL
+      || identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN;
+}

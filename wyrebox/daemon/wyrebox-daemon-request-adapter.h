@@ -2,6 +2,7 @@
 
 #include "wyrebox-daemon-fact-mutation-service.h"
 #include "wyrebox-daemon-delivery-ingestion-service.h"
+#include "wyrebox-daemon-mail-event-stream-service.h"
 #include "wyrebox-daemon-mailbox-list-service.h"
 #include "wyrebox-daemon-message-fetch-service.h"
 #include "wyrebox-daemon-flag-keyword-update-service.h"

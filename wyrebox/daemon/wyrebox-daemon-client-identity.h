@@ -36,5 +36,8 @@ gboolean wyrebox_daemon_client_identity_can_mutate_facts (
 gboolean wyrebox_daemon_client_identity_can_export_datasets (
     WyreboxDaemonClientIdentityClass identity_class);
 
+gboolean wyrebox_daemon_client_identity_can_read_mail_events (
+    WyreboxDaemonClientIdentityClass identity_class);
+
 G_END_DECLS
 /* *INDENT-ON* */

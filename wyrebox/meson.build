@@ -29,6 +29,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-mailbox-select-result.c',
   'daemon/wyrebox-daemon-mailbox-select-service.c',
   'daemon/wyrebox-daemon-mail-event-stream-request.c',
+  'daemon/wyrebox-daemon-mail-event-stream-service.c',
   'daemon/wyrebox-daemon-client-identity.c',
   'daemon/wyrebox-daemon-connection-session.c',
   'daemon/wyrebox-daemon-mailbox-list-dispatcher.c',
@@ -215,9 +216,15 @@ if capnp_serialization_found
     dependencies: [wyrebox_dep],
     install: true,
   )
-  wyrebox_postfix_lmtp_listener = executable(
-    'wyrebox-postfix-lmtp-listener',
-    'postfix/wyrebox-postfix-lmtp-listener-main.c',
+  wyrebox_postfix_lmtp_delivery = executable(
+    'wyrebox-postfix-lmtp-delivery',
+    'postfix/wyrebox-postfix-lmtp-delivery-main.c',
+    dependencies: [wyrebox_dep],
+    install: true,
+  )
+  wyreboxd = executable(
+    'wyreboxd',
+    'daemon/wyreboxd-main.c',
     dependencies: [wyrebox_dep],
     install: true,
   )
@@ -237,3 +244,23 @@ if capnp_serialization_found
 
   wyrebox_postfix_pipe_master_cf = configure_file(
     input: '../examples/postfix/master.cf.wyrebox-pipe.in',
+    output: 'master.cf.wyrebox-pipe',
+    configuration: wyrebox_postfix_pipe_master_cf_config,
+  )
+
+  install_data(
+    files(
+      '../examples/postfix/README.md',
+      '../examples/postfix/transport.wyrebox-pipe',
+      '../examples/postfix/transport.wyrebox-pipe-regexp',
+    ),
+    wyrebox_postfix_pipe_master_cf,
+    install_dir: join_paths(
+      get_option('datadir'),
+      'doc',
+      meson.project_name(),
+      'examples',
+      'postfix',
+    ),
+  )
+endif
