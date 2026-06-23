@@ -282,6 +282,7 @@ if capnp_serialization_found
     files(
       '../examples/postfix/README.md',
       '../examples/postfix/transport.wyrebox-pipe',
+      '../examples/postfix/transport.wyrebox-pipe-regexp',
     ),
     wyrebox_postfix_pipe_master_cf,
     install_dir: join_paths(
