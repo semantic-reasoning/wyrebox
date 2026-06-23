@@ -3,6 +3,7 @@
 #include "wyrebox-journal-reader.h"
 #include "wyrebox-local-object-store.h"
 #include "wyrebox-message-delivered-payload.h"
+#include "wyrebox-schema-metadata-store.h"
 
 #include <gio/gio.h>
 #include <glib.h>
@@ -79,16 +80,35 @@ postfix_pipe_executable (void)
 
 static void
 write_config (const char *path, const char *socket_path,
-    const char *journal_root_dir, const char *object_root_dir)
+    const char *journal_root_dir, const char *object_root_dir,
+    const char *catalog_path)
 {
   g_autofree char *contents = g_strdup_printf ("[daemon]\n"
-      "socket_path=%s\n" "journal_root_dir=%s\n" "object_root_dir=%s\n",
-      socket_path, journal_root_dir, object_root_dir);
+      "socket_path=%s\n" "journal_root_dir=%s\n" "object_root_dir=%s\n"
+      "catalog_path=%s\n", socket_path, journal_root_dir, object_root_dir,
+      catalog_path);
   g_autoptr (GError) error = NULL;
 
   g_assert_true (g_file_set_contents (path, contents, -1, &error));
   g_assert_no_error (error);
   g_assert_cmpint (chmod (path, 0600), ==, 0);
+}
+
+static void
+bootstrap_catalog (const char *catalog_path)
+{
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+
+  store = wyrebox_schema_metadata_store_new_duckdb (catalog_path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (store);
+
+  g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation
+      (store,
+          WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
+          0, 1, &error));
+  g_assert_no_error (error);
 }
 
 static void
@@ -207,6 +227,8 @@ test_pipe_helper_delivers_through_wyreboxd_and_persists_journal (void)
   g_autofree char *run_dir = g_build_filename (root, "run", "wyrebox", NULL);
   g_autofree char *journal_dir = g_build_filename (root, "journal", NULL);
   g_autofree char *object_dir = g_build_filename (root, "objects", NULL);
+  g_autofree char *catalog_path = g_build_filename (root, "catalog.duckdb",
+      NULL);
   g_autofree char *config_path = g_build_filename (root, "wyrebox.conf", NULL);
   g_autofree char *socket_path = g_build_filename (run_dir, "wyrebox.sock",
       NULL);
@@ -224,7 +246,9 @@ test_pipe_helper_delivers_through_wyreboxd_and_persists_journal (void)
   g_assert_cmpint (g_mkdir_with_parents (run_dir, 0750), ==, 0);
   g_assert_cmpint (g_mkdir_with_parents (journal_dir, 0750), ==, 0);
   g_assert_cmpint (g_mkdir_with_parents (object_dir, 0750), ==, 0);
-  write_config (config_path, socket_path, journal_dir, object_dir);
+  bootstrap_catalog (catalog_path);
+  write_config (config_path, socket_path, journal_dir, object_dir,
+      catalog_path);
   message_bytes = g_bytes_new_static (message, sizeof (message) - 1);
 
   const char *daemon_argv[] = {

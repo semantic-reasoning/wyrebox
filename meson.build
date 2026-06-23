@@ -677,6 +677,12 @@ if fs.is_file('/usr/lib/dovecot/libdovecot-storage.so')
     python,
     args: files('tests/docs/test_issue_0293_dovecot_imap_fetch_recipe.py'),
   )
+
+  test(
+    'docs issue 0292 postfix to dovecot e2e recipe',
+    python,
+    args: files('tests/docs/test_issue_0292_postfix_to_dovecot_e2e_recipe.py'),
+  )
 endif
 
 test(
