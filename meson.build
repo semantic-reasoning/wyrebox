@@ -665,6 +665,12 @@ test(
   args: files('tests/docs/test_issue_0011_postfix_lmtp_examples.py'),
 )
 
+test(
+  'docs issue 0029 postfix dovecot e2e recipe',
+  python,
+  args: files('tests/docs/test_issue_0289_postfix_dovecot_e2e_recipe.py'),
+)
+
 subdir('tests/object-store')
 subdir('tests/backup')
 subdir('tests/admin')
