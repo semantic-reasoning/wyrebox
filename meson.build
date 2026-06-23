@@ -677,6 +677,12 @@ test(
   args: files('tests/docs/test_issue_0293_dovecot_imap_fetch_recipe.py'),
 )
 
+test(
+  'docs issue 0298 dovecot fixture bundle contract',
+  python,
+  args: files('tests/docs/test_issue_0298_dovecot_fixture_bundle_contract.py'),
+)
+
 subdir('tests/object-store')
 subdir('tests/backup')
 subdir('tests/admin')
