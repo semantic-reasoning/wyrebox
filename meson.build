@@ -131,17 +131,19 @@ if duckdb_root != ''
   )
   duckdb_api_name = 'DuckDB C API via source-built duckdb_root'
   duckdb_summary = 'enabled via source-built DuckDB at ' + duckdb_root
-elif host_machine.cpu_family() == 'x86_64'
-  # Use the wrapped DuckDB subproject directly: dependency fallback can resolve a
-  # system provider, which this build intentionally avoids.
-  duckdb_subproject = subproject('duckdb-prebuilt-linux')
-  duckdb_subproject_dep = duckdb_subproject.get_variable('duckdb_dep')
-  duckdb_api_name = 'DuckDB C API via linux prebuilt subproject'
-  duckdb_summary = 'enabled via linux prebuilt subproject wrap'
 else
-  error('DuckDB is required, but the bundled DuckDB prebuilt subproject ' +
-    'supports Linux x86_64 only; on other architectures build DuckDB from ' +
-    'source and pass -Dduckdb_root=<dir> (containing include/ and lib/).')
+  if host_machine.cpu_family() == 'x86_64'
+    # Use the wrapped DuckDB subproject directly: dependency fallback can
+    # resolve a system provider, which this build intentionally avoids.
+    duckdb_subproject = subproject('duckdb-prebuilt-linux')
+    duckdb_subproject_dep = duckdb_subproject.get_variable('duckdb_dep')
+    duckdb_api_name = 'DuckDB C API via linux prebuilt subproject'
+    duckdb_summary = 'enabled via linux prebuilt subproject wrap'
+  else
+    error('DuckDB is required, but the bundled DuckDB prebuilt subproject ' +
+      'supports Linux x86_64 only; on other architectures build DuckDB from ' +
+      'source and pass -Dduckdb_root=<dir> (containing include/ and lib/).')
+  endif
 endif
 
 duckdb_api_usable = cc.links(
