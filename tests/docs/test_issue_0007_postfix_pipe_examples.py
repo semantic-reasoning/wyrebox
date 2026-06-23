@@ -148,9 +148,15 @@ def main() -> None:
         examples[README_PATH]
     )
 
-    assert "distro-compatible transport map" in examples[README_PATH]
+    assert "Two transport-map examples are provided" in examples[README_PATH]
+    assert "`transport.wyrebox-pipe` for the traditional `hash:` workflow" in (
+        examples[README_PATH]
+    )
     assert "transport.wyrebox-pipe-regexp" in examples[README_PATH]
-    assert "hash:/etc/postfix/transport" not in examples[README_PATH]
+    assert "does not require Berkeley DB-backed transport-map support" in (
+        examples[README_PATH]
+    )
+    assert "hash:/etc/postfix/transport" in examples[TRANSPORT_PATH]
     assert "regexp:/etc/postfix/transport" in examples[REGEXP_TRANSPORT_PATH]
     assert "wyrebox-pipe:" in examples[REGEXP_TRANSPORT_PATH]
 
