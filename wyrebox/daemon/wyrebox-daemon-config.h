@@ -7,8 +7,8 @@ G_BEGIN_DECLS
 
 #define WYREBOX_DAEMON_DEFAULT_CONFIG_DIR "/etc/wyrebox"
 #define WYREBOX_DAEMON_DEFAULT_CONFIG_PATH "/etc/wyrebox/wyrebox.conf"
-#define WYREBOX_DAEMON_DEFAULT_JOURNAL_ROOT_DIR "/run/wyrebox/journal"
-#define WYREBOX_DAEMON_DEFAULT_OBJECT_ROOT_DIR "/run/wyrebox/object-store"
+#define WYREBOX_DAEMON_DEFAULT_JOURNAL_ROOT_DIR "/var/lib/wyrebox/journal"
+#define WYREBOX_DAEMON_DEFAULT_OBJECT_ROOT_DIR "/var/lib/wyrebox/object-store"
 
 #define WYREBOX_TYPE_DAEMON_CONFIG (wyrebox_daemon_config_get_type())
 G_DECLARE_FINAL_TYPE (WyreboxDaemonConfig, wyrebox_daemon_config, WYREBOX,

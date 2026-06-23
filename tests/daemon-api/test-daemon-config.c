@@ -60,8 +60,8 @@ test_daemon_config_loads_canonical_config (void)
   g_autofree char *config_path = write_config_fixture (dir,
       "[daemon]\n"
       "socket_path=/run/wyrebox/wyrebox.sock\n"
-      "journal_root_dir=/run/wyrebox/journal\n"
-      "object_root_dir=/run/wyrebox/object-store\n",
+      "journal_root_dir=/var/lib/wyrebox/journal\n"
+      "object_root_dir=/var/lib/wyrebox/object-store\n",
       0600);
 
   assert_config_loads (config_path);
@@ -180,8 +180,8 @@ test_daemon_config_rejects_insecure_permissions (void)
   g_autofree char *config_path = write_config_fixture (dir,
       "[daemon]\n"
       "socket_path=/run/wyrebox/wyrebox.sock\n"
-      "journal_root_dir=/run/wyrebox/journal\n"
-      "object_root_dir=/run/wyrebox/object-store\n",
+      "journal_root_dir=/var/lib/wyrebox/journal\n"
+      "object_root_dir=/var/lib/wyrebox/object-store\n",
       0664);
   g_autoptr (GError) error = NULL;
 

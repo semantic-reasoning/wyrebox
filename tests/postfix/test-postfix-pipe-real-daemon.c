@@ -133,7 +133,12 @@ static void
 assert_stream_contains (GBytes *bytes, const char *needle)
 {
   gsize size = 0;
-  const char *text = (const char *) g_bytes_get_data (bytes, &size);
+  g_autofree char *text = NULL;
+  const guint8 *data = NULL;
+
+  g_assert_nonnull (bytes);
+  data = g_bytes_get_data (bytes, &size);
+  text = g_strndup ((const char *) data, size);
 
   g_assert_nonnull (strstr (text, needle));
 }
@@ -142,7 +147,12 @@ static void
 assert_stream_omits (GBytes *bytes, const char *needle)
 {
   gsize size = 0;
-  const char *text = (const char *) g_bytes_get_data (bytes, &size);
+  g_autofree char *text = NULL;
+  const guint8 *data = NULL;
+
+  g_assert_nonnull (bytes);
+  data = g_bytes_get_data (bytes, &size);
+  text = g_strndup ((const char *) data, size);
 
   g_assert_null (strstr (text, needle));
 }
@@ -269,6 +279,11 @@ test_pipe_helper_delivers_through_wyreboxd_and_persists_journal (void)
   object_data = (const guint8 *) g_bytes_get_data (object_bytes, &object_size);
   g_assert_cmpuint (object_size, ==, sizeof (message) - 1);
   g_assert_cmpmem (object_data, object_size, message, sizeof (message) - 1);
+
+  g_subprocess_send_signal (daemon, SIGTERM);
+  g_assert_true (g_subprocess_wait (daemon, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (g_subprocess_get_exit_status (daemon), ==, 0);
 }
 
 int
