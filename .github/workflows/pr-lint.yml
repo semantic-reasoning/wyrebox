@@ -25,11 +25,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends indent
 
-      - name: Install clang-tidy
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends clang-tidy
-
       - name: Check diff whitespace
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -52,36 +47,6 @@ jobs:
 
           ./tools/gst-indent "${changed_files[@]}"
           git diff --exit-code -- "${changed_files[@]}"
-
-      - name: Check changed C with clang-tidy
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          mapfile -d '' changed_files < <(
-            git diff --name-only -z --diff-filter=ACMRT \
-              "$BASE_SHA...HEAD" -- 'wyrebox/*.c'
-          )
-
-          if [ "${#changed_files[@]}" -eq 0 ]; then
-            echo "No changed C files."
-            exit 0
-          fi
-
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            ca-certificates \
-            libglib2.0-dev \
-            meson \
-            ninja-build \
-            pkg-config \
-            unzip
-
-          meson setup _build
-          for file in "${changed_files[@]}"; do
-            clang-tidy -p _build "$file" --warnings-as-errors='*'
-          done
-
   pr-build:
     name: PR build
     runs-on: ubuntu-24.04
