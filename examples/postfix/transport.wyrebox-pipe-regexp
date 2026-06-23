@@ -1,12 +1,12 @@
 # Example Postfix transport map entries for WyreBox pipe delivery.
 #
-# Use the regexp example for distro builds where Berkeley DB-backed hash maps
-# are unavailable.
+# Use this regexp map on distro builds where Berkeley DB-backed hash maps are
+# unavailable.
 #
 # Configure main.cf with:
 #   transport_maps = regexp:/etc/postfix/transport
 #
 # The right-hand side names the master.cf service in
 # master.cf.wyrebox-pipe.
-example.com wyrebox-pipe:
-.example.com wyrebox-pipe:
+/^example\.com$/ wyrebox-pipe:
+/^.*\.example\.com$/ wyrebox-pipe:

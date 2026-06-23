@@ -61,4 +61,5 @@ cannot tell whether a request reached the daemon, it returns temporary failure;
 Postfix may retry the delivery.
 
 See `master.cf.wyrebox-pipe` for the pipe service shape and
-`transport.wyrebox-pipe` for a transport map example.
+`transport.wyrebox-pipe-regexp` for a distro-compatible transport map
+example that does not require Berkeley DB-backed transport-map support.

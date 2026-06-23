@@ -9,6 +9,7 @@ EXAMPLE_DIR = REPO_ROOT / "examples" / "postfix"
 README_PATH = EXAMPLE_DIR / "README.md"
 MASTER_CF_PATH = EXAMPLE_DIR / "master.cf.wyrebox-pipe"
 TRANSPORT_PATH = EXAMPLE_DIR / "transport.wyrebox-pipe"
+REGEXP_TRANSPORT_PATH = EXAMPLE_DIR / "transport.wyrebox-pipe-regexp"
 
 SUPPORTED_OPTIONS = {
     "--account-id",
@@ -32,7 +33,12 @@ FORBIDDEN_CLAIMS = [
 
 
 def read_examples() -> dict[Path, str]:
-    paths = [README_PATH, MASTER_CF_PATH, TRANSPORT_PATH]
+    paths = [
+        README_PATH,
+        MASTER_CF_PATH,
+        TRANSPORT_PATH,
+        REGEXP_TRANSPORT_PATH,
+    ]
     for path in paths:
         assert path.is_file(), f"missing example file: {path}"
     return {path: path.read_text(encoding="utf-8") for path in paths}
@@ -141,6 +147,12 @@ def main() -> None:
     assert "Duplicate and idempotency policy is owned by daemon ingestion" in (
         examples[README_PATH]
     )
+
+    assert "distro-compatible transport map" in examples[README_PATH]
+    assert "transport.wyrebox-pipe-regexp" in examples[README_PATH]
+    assert "hash:/etc/postfix/transport" not in examples[README_PATH]
+    assert "regexp:/etc/postfix/transport" in examples[REGEXP_TRANSPORT_PATH]
+    assert "wyrebox-pipe:" in examples[REGEXP_TRANSPORT_PATH]
 
     for claim in FORBIDDEN_CLAIMS:
         assert claim not in lower_combined, f"forbidden claim present: {claim}"
