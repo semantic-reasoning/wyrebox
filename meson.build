@@ -671,11 +671,13 @@ test(
   args: files('tests/docs/test_issue_0025_backup_restore_workflow_contract.py'),
 )
 
-test(
-  'docs issue 0293 dovecot imap fetch recipe',
-  python,
-  args: files('tests/docs/test_issue_0293_dovecot_imap_fetch_recipe.py'),
-)
+if fs.is_file('/usr/lib/dovecot/libdovecot-storage.so')
+  test(
+    'docs issue 0293 dovecot imap fetch recipe',
+    python,
+    args: files('tests/docs/test_issue_0293_dovecot_imap_fetch_recipe.py'),
+  )
+endif
 
 test(
   'docs issue 0298 dovecot fixture bundle contract',
