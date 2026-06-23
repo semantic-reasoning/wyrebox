@@ -10,6 +10,7 @@ INSTALL_FILES = [
     "../examples/postfix/README.md",
     "../examples/postfix/master.cf.wyrebox-pipe.in",
     "../examples/postfix/transport.wyrebox-pipe",
+    "../examples/postfix/transport.wyrebox-pipe-regexp",
 ]
 
 

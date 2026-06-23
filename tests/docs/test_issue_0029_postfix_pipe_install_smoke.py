@@ -59,8 +59,23 @@ def main() -> None:
             / "postfix"
             / "master.cf.wyrebox-pipe"
         )
+        expected_regexp_transport = (
+            prefix
+            / "share"
+            / "doc"
+            / "wyrebox"
+            / "examples"
+            / "postfix"
+            / "transport.wyrebox-pipe-regexp"
+        )
         staged_master_cf = (
             destdir / expected_master_cf.relative_to(expected_master_cf.anchor)
+        )
+        staged_regexp_transport = (
+            destdir
+            / expected_regexp_transport.relative_to(
+                expected_regexp_transport.anchor
+            )
         )
 
         assert staged_helper.is_file(), f"missing helper binary: {staged_helper}"
@@ -75,6 +90,13 @@ def main() -> None:
         assert f"argv={expected_helper}" in master_cf, (
             "installed master.cf does not reference the configured helper path"
         )
+
+        assert staged_regexp_transport.is_file(), (
+            f"missing installed regexp transport example: {staged_regexp_transport}"
+        )
+        regexp_transport = staged_regexp_transport.read_text(encoding="utf-8")
+        assert "transport_maps = regexp:/etc/postfix/transport" in regexp_transport
+        assert "wyrebox-pipe:" in regexp_transport
 
 
 if __name__ == "__main__":
