@@ -93,7 +93,7 @@ build_delivery_request (void)
 }
 
 static void
-assert_error_response_roundtrip (GBytes *response)
+assert_success_response_roundtrip (GBytes *response)
 {
   g_autoptr (GError) error = NULL;
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
@@ -101,7 +101,7 @@ assert_error_response_roundtrip (GBytes *response)
   g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (response,
           &frame, &error));
   g_assert_no_error (error);
-  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+  g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
   g_assert_nonnull (frame.request_id);
 }
 
@@ -150,6 +150,8 @@ test_wyreboxd_accepts_config_and_starts_socket (void)
 {
   g_autofree char *root = make_temp_root ();
   g_autofree char *run_dir = g_build_filename (root, "run", "wyrebox", NULL);
+  g_autofree char *journal_dir = g_build_filename (root, "journal", NULL);
+  g_autofree char *object_dir = g_build_filename (root, "objects", NULL);
   g_autofree char *config_path = NULL;
   g_autofree char *socket_path = NULL;
   g_autofree char *config_contents = NULL;
@@ -157,9 +159,13 @@ test_wyreboxd_accepts_config_and_starts_socket (void)
   g_autoptr (GError) error = NULL;
 
   g_assert_cmpint (g_mkdir_with_parents (run_dir, 0750), ==, 0);
+  g_assert_cmpint (g_mkdir_with_parents (journal_dir, 0750), ==, 0);
+  g_assert_cmpint (g_mkdir_with_parents (object_dir, 0750), ==, 0);
   socket_path = g_build_filename (run_dir, "wyrebox.sock", NULL);
   config_contents = g_strdup_printf ("[daemon]\n"
-      "socket_path=%s\n", socket_path);
+      "socket_path=%s\n"
+      "journal_root_dir=%s\n"
+      "object_root_dir=%s\n", socket_path, journal_dir, object_dir);
   config_path = write_config (root, config_contents);
 
   const char *argv[] = {
@@ -212,6 +218,8 @@ test_wyreboxd_roundtrips_delivery_request_over_socket (void)
     WYREBOX_HAVE_CAPNP_SERIALIZATION
   g_autofree char *root = make_temp_root ();
   g_autofree char *run_dir = g_build_filename (root, "run", "wyrebox", NULL);
+  g_autofree char *journal_dir = g_build_filename (root, "journal", NULL);
+  g_autofree char *object_dir = g_build_filename (root, "objects", NULL);
   g_autofree char *config_path = NULL;
   g_autofree char *socket_path = NULL;
   g_autofree char *config_contents = NULL;
@@ -221,9 +229,13 @@ test_wyreboxd_roundtrips_delivery_request_over_socket (void)
   g_autoptr (GBytes) response = NULL;
 
   g_assert_cmpint (g_mkdir_with_parents (run_dir, 0750), ==, 0);
+  g_assert_cmpint (g_mkdir_with_parents (journal_dir, 0750), ==, 0);
+  g_assert_cmpint (g_mkdir_with_parents (object_dir, 0750), ==, 0);
   socket_path = g_build_filename (run_dir, "wyrebox.sock", NULL);
   config_contents = g_strdup_printf ("[daemon]\n"
-      "socket_path=%s\n", socket_path);
+      "socket_path=%s\n"
+      "journal_root_dir=%s\n"
+      "object_root_dir=%s\n", socket_path, journal_dir, object_dir);
   config_path = write_config (root, config_contents);
 
   const char *argv[] = {
@@ -242,7 +254,7 @@ test_wyreboxd_roundtrips_delivery_request_over_socket (void)
   g_assert_true (wait_for_socket (socket_path));
   request = build_delivery_request ();
   response = roundtrip_request (socket_path, request);
-  assert_error_response_roundtrip (response);
+  assert_success_response_roundtrip (response);
 
   g_subprocess_send_signal (subprocess, SIGTERM);
   g_assert_true (g_subprocess_wait (subprocess, NULL, &error));
