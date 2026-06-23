@@ -71,7 +71,8 @@ query_template_fixture (const WyreboxDaemonRequestIdentity *identity,
 }
 
 static void
-assert_journal_is_empty (const gchar *root)
+assert_one_duckdb_success_audit (const gchar *root,
+    WyreboxDaemonAuditPayload *out_audit)
 {
   g_autoptr (GError) error = NULL;
   g_autoptr (WyreboxJournalReader) reader = NULL;
@@ -80,6 +81,18 @@ assert_journal_is_empty (const gchar *root)
 
   reader = wyrebox_journal_reader_new (root, &error);
   g_assert_no_error (error);
+  g_assert_true (wyrebox_journal_reader_read_next (reader,
+          &record, &eof, &error));
+  g_assert_no_error (error);
+  g_assert_false (eof);
+  g_assert_cmpint (record.event_type, ==,
+      WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED);
+  g_assert_cmpuint (record.sequence, ==, 1);
+  g_assert_true (wyrebox_daemon_audit_payload_decode (record.payload,
+          out_audit, &error));
+  g_assert_no_error (error);
+
+  wyrebox_journal_record_clear (&record);
   g_assert_false (wyrebox_journal_reader_read_next (reader,
           &record, &eof, &error));
   g_assert_no_error (error);
@@ -252,13 +265,14 @@ test_duckdb_query_template_dispatcher_rejects_dovecot_message_by_id (void)
 }
 
 static void
-test_duckdb_query_template_dispatcher_success_writes_no_audit (void)
+test_duckdb_query_template_dispatcher_success_writes_audit (void)
 {
   DuckDBQueryTemplateFixture fixture = { 0 };
   g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
   g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
   g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
   g_autoptr (WyreboxJournalWriter) writer = NULL;
+  g_auto (WyreboxDaemonAuditPayload) audit = { 0 };
   g_autoptr (GError) error = NULL;
   g_autofree gchar *root =
       g_dir_make_tmp ("wyrebox-duckdb-query-audit-XXXXXX", NULL);
@@ -280,7 +294,19 @@ test_duckdb_query_template_dispatcher_success_writes_no_audit (void)
   g_assert_no_error (error);
   g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
 
-  assert_journal_is_empty (root);
+  assert_one_duckdb_success_audit (root, &audit);
+  g_assert_cmpint (audit.operation, ==,
+      WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE);
+  g_assert_cmpint (audit.outcome, ==, WYREBOX_DAEMON_AUDIT_OUTCOME_SUCCESS);
+  g_assert_cmpstr (audit.request_id, ==, "request-1");
+  g_assert_cmpstr (audit.correlation_id, ==, "correlation-1");
+  g_assert_cmpstr (audit.caller_identity, ==, "admin-cli");
+  g_assert_cmpstr (audit.account_identity, ==, "account-1");
+  g_assert_cmpstr (audit.tool_identity, ==, "duckdb-tool");
+  g_assert_cmpstr (audit.scope_id, ==, "account-1");
+  g_assert_cmpstr (audit.query_id, ==, "query-1");
+  g_assert_cmpstr (audit.template_id, ==, "mailbox.uid_map.v1");
+
   remove_tree (root);
 }
 
@@ -655,8 +681,8 @@ main (int argc, char **argv)
       ("/daemon-api/duckdb-query-template/dispatcher/rejects-dovecot-message-by-id",
       test_duckdb_query_template_dispatcher_rejects_dovecot_message_by_id);
   g_test_add_func
-      ("/daemon-api/duckdb-query-template/dispatcher/success-writes-no-audit",
-      test_duckdb_query_template_dispatcher_success_writes_no_audit);
+      ("/daemon-api/duckdb-query-template/dispatcher/success-writes-audit",
+      test_duckdb_query_template_dispatcher_success_writes_audit);
   g_test_add_func
       ("/daemon-api/duckdb-query-template/dispatcher/audits-unauthorized-caller",
       test_duckdb_query_template_dispatcher_audits_unauthorized_caller);
