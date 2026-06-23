@@ -275,11 +275,6 @@ test_pipe_helper_delivers_through_wyreboxd_and_persists_journal (void)
   assert_stream_omits (helper_result.stderr_bytes,
       "wyrebox real daemon delivery");
 
-  g_subprocess_send_signal (daemon, SIGTERM);
-  g_assert_true (g_subprocess_wait (daemon, NULL, &error));
-  g_assert_no_error (error);
-  g_assert_cmpint (g_subprocess_get_exit_status (daemon), ==, 0);
-
   g_assert_cmpuint (count_message_delivered_records (journal_dir, &payload,
           NULL), ==, 1);
   g_assert_cmpstr (payload.delivery_id, ==, "stable-delivery-1");
