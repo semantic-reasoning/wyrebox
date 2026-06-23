@@ -3086,11 +3086,14 @@ wyrebox_schema_metadata_store_new_duckdb (const gchar *path, GError **error)
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_FAILED, "DuckDB schema metadata store connect failed");
+    duckdb_close (&self->database);
     return NULL;
   }
 
-  if (!duckdb_store_create_schema (self, error))
+  if (!duckdb_store_create_schema (self, error)) {
+    duckdb_close (&self->database);
     return NULL;
+  }
 
   return g_steal_pointer (&store);
 }
