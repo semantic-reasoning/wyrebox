@@ -111,9 +111,14 @@ Every delivery ingestion request carries ingress identity fields:
 
 - required `request_id`;
 - required `delivery_id`;
+- required caller account identity naming the account whose INBOX receives
+  the delivery;
 - queue ID when the Postfix caller has one available;
 - envelope sender; and
 - one or more recipients.
+
+A request without a non-empty account identity is a permanent validation
+failure, rejected before anything is stored or journaled.
 
 The raw RFC 5322 message payload has an explicit transfer boundary. The caller
 sends the exact payload bytes through the API framing, and `wyreboxd` stores
