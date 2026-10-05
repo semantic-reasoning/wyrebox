@@ -413,26 +413,29 @@ fake_server_thread_main (gpointer user_data)
     g_autofree char *query_id = NULL;
     GInputStream *input = NULL;
     GOutputStream *output = NULL;
-    const char *expected_mailbox_id = server->expected_uid_map_mailbox_id !=
-        NULL
-      ? server->expected_uid_map_mailbox_id : "mailbox-inbox";
-    const char *fetch_message_id =
-        server->message_fetch_response_message_id != NULL
-      ? server->message_fetch_response_message_id : "message-1";
+    const char *expected_mailbox_id = NULL;
+    const char *fetch_message_id = NULL;
     const char *fetch_payload_string = "RFC5322 test body";
     gsize fetch_payload_size = strlen (fetch_payload_string);
-    const guint8 *fetch_payload =
-        server->message_fetch_response_payload != NULL
-      ? server->message_fetch_response_payload
-      : (const guint8 *)fetch_payload_string;
-
-    if (server->message_fetch_response_payload != NULL)
-        fetch_payload_size = server->message_fetch_response_payload_size;
+    const guint8 *fetch_payload = (const guint8 *)fetch_payload_string;
 
     connection = g_socket_listener_accept (server->listener, NULL, NULL,
             &error);
     g_assert_no_error (error);
     g_assert_nonnull (connection);
+
+    /*
+     * Tests adjust the server fields after fake_server_start() returns but
+     * before their client connects, so read them only after accept().
+     */
+    expected_mailbox_id = server->expected_uid_map_mailbox_id != NULL
+      ? server->expected_uid_map_mailbox_id : "mailbox-inbox";
+    fetch_message_id = server->message_fetch_response_message_id != NULL
+      ? server->message_fetch_response_message_id : "message-1";
+    if (server->message_fetch_response_payload != NULL) {
+        fetch_payload = server->message_fetch_response_payload;
+        fetch_payload_size = server->message_fetch_response_payload_size;
+    }
 
     input = g_io_stream_get_input_stream (G_IO_STREAM (connection));
     output = g_io_stream_get_output_stream (G_IO_STREAM (connection));
