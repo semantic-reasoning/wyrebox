@@ -271,6 +271,7 @@ run_daemon (int argc, char **argv)
 
     if (!wyrebox_daemon_connection_server_start (server, &error)) {
         g_printerr ("wyreboxd: %s\n", error->message);
+        wyrebox_daemon_delivery_materialization_stop (materialization);
         return EX_OSERR;
     }
 

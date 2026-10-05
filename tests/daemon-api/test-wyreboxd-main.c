@@ -524,16 +524,27 @@ seed_unselectable_inbox (const DaemonRoot *daemon_root)
 }
 
 static void
-test_wyreboxd_fails_startup_on_unselectable_inbox (void)
+test_wyreboxd_starts_with_held_account (void)
 {
     g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) subprocess = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autofree char *stderr_text = NULL;
 
     daemon_root_init (&daemon_root);
     seed_unselectable_inbox (&daemon_root);
     journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
 
-    assert_daemon_startup_fails (&daemon_root, EX_DATAERR,
-        "delivery materialization failed");
+    subprocess = spawn_daemon (&daemon_root, G_SUBPROCESS_FLAGS_STDERR_PIPE);
+    g_assert_true (wait_for_socket (subprocess, daemon_root.socket_path));
+    g_subprocess_send_signal (subprocess, SIGTERM);
+    g_assert_true (g_subprocess_communicate_utf8 (subprocess, NULL, NULL, NULL,
+        &stderr_text, &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==, 0);
+    g_assert_nonnull (strstr (stderr_text,
+        "delivery materialization held account account-1"));
+    g_assert_nonnull (strstr (stderr_text, "retry in 5000 ms"));
 }
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \
@@ -642,8 +653,8 @@ test_wyreboxd_acknowledges_delivery_when_materialization_fails (void)
     g_assert_no_error (error);
     g_assert_cmpint (g_subprocess_get_exit_status (failing), ==, 0);
     g_assert_nonnull (strstr (stderr_text,
-        "delivery materialization failed"));
-    g_assert_nonnull (strstr (stderr_text, "retry scheduled"));
+        "delivery materialization held account account-1"));
+    g_assert_nonnull (strstr (stderr_text, "retry in 5000 ms"));
 
     exec_catalog_sql (daemon_root.catalog_path,
         "UPDATE mailboxes SET is_selectable = TRUE "
@@ -706,8 +717,8 @@ main (int argc, char **argv)
     g_test_add_func
         ("/daemon-api/wyreboxd/fails-startup-on-delivery-without-account",
         test_wyreboxd_fails_startup_on_delivery_without_account);
-    g_test_add_func ("/daemon-api/wyreboxd/fails-startup-on-unselectable-inbox",
-        test_wyreboxd_fails_startup_on_unselectable_inbox);
+    g_test_add_func ("/daemon-api/wyreboxd/starts-with-held-account",
+        test_wyreboxd_starts_with_held_account);
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \
     WYREBOX_HAVE_CAPNP_SERIALIZATION
     g_test_add_func
