@@ -50,6 +50,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-wirelog-predicate-query-request.c',
   'daemon/wyrebox-daemon-wirelog-predicate-query-service.c',
   'daemon/wyrebox-daemon-delivery-ingestion-dispatcher.c',
+  'daemon/wyrebox-daemon-delivery-materialization.c',
   'daemon/wyrebox-daemon-delivery-ingestion-service.c',
   'daemon/wyrebox-daemon-delivery-ingestion-request.c',
   'daemon/wyrebox-daemon-flag-keyword-update-dispatcher.c',
