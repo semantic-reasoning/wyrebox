@@ -1,5 +1,15 @@
 name: PR Gates
 
+# Configuration coverage:
+# - pr-build and pr-sanitize require Cap'n Proto (-Dcapnp=enabled,
+#   -Dcapnp_serialization=enabled), so wyreboxd, the Postfix helpers and
+#   their process tests always build and run; a missing toolchain fails
+#   meson setup instead of silently skipping them.
+# - pr-build-minimal disables Cap'n Proto to keep the non-serialization
+#   fallback configuration compiling and passing its tests.
+# - main-ci.yml repeats the Cap'n Proto-enabled build on gcc and clang and the
+#   sanitizer run on x86_64 and arm64.
+
 on:
   pull_request:
 
@@ -62,7 +72,44 @@ jobs:
 
       - name: Configure
         run: |
-          meson setup _build
+          meson setup _build \
+            -Dcapnp=enabled \
+            -Dcapnp_serialization=enabled
+
+      - name: Build
+        run: |
+          meson compile -C _build
+
+      - name: Test
+        run: |
+          meson test -C _build --print-errorlogs
+
+  pr-build-minimal:
+    name: PR build (no Cap'n Proto)
+    runs-on: ubuntu-24.04
+    needs: pr-lint
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            libglib2.0-dev \
+            meson \
+            ninja-build \
+            pkg-config \
+            unzip
+
+      - name: Configure
+        run: |
+          meson setup _build \
+            -Dcapnp=disabled \
+            -Dcapnp_serialization=disabled
 
       - name: Build
         run: |
@@ -101,7 +148,11 @@ jobs:
 
       - name: Configure
         run: |
-          meson setup _build -Db_sanitize=address,undefined -Db_lundef=false
+          meson setup _build \
+            -Dcapnp=enabled \
+            -Dcapnp_serialization=enabled \
+            -Db_sanitize=address,undefined \
+            -Db_lundef=false
 
       - name: Build
         run: |

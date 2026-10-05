@@ -704,6 +704,12 @@ test(
   args: files('tests/docs/test_issue_0298_dovecot_fixture_bundle_contract.py'),
 )
 
+test(
+  'docs issue 0326 ci capnp configurations',
+  python,
+  args: files('tests/docs/test_issue_0326_ci_capnp_configurations.py'),
+)
+
 # Activate the committed hook through a worktree-relative hooksPath. Source
 # archives and unpacked sources nested below another repository deliberately
 # skip this developer setup.

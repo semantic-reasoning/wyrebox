@@ -1,5 +1,10 @@
 name: Main CI
 
+# Every build and sanitize job requires Cap'n Proto (-Dcapnp=enabled,
+# -Dcapnp_serialization=enabled) so a missing toolchain fails meson setup.
+# The Cap'n Proto-disabled configuration is covered by pr-build-minimal in
+# pr-lint.yml.
+
 on:
   push:
     branches:
@@ -64,7 +69,9 @@ jobs:
 
       - name: Configure
         run: |
-          meson setup _build
+          meson setup _build \
+            -Dcapnp=enabled \
+            -Dcapnp_serialization=enabled
 
       - name: Build
         run: |
@@ -146,6 +153,8 @@ jobs:
             extra+=("-Dduckdb_root=$DUCKDB_ROOT")
           fi
           meson setup _build \
+            -Dcapnp=enabled \
+            -Dcapnp_serialization=enabled \
             -Db_sanitize=address,undefined \
             -Db_lundef=false \
             "${extra[@]}"
