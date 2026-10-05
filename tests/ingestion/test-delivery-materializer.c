@@ -7,6 +7,7 @@
 #include <gio/gio.h>
 #include <glib.h>
 #include <glib/gstdio.h>
+#include <string.h>
 
 typedef char *TestDuckdbOwnedString;
 
@@ -1380,6 +1381,88 @@ test_later_record_failure_rolls_back_apply (void)
     remove_catalog (path);
 }
 
+static void
+test_apply_to_inbox_without_checkpoint_keeps_checkpoint (void)
+{
+    g_autofree gchar *path = create_bootstrap_catalog ();
+    g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+    TestDuckdbFixture duckdb = { 0 };
+
+    append_projection_record (&projection, "sha256:first", 101, 1001, 11, 1);
+    append_projection_record (&projection, "sha256:second", 202, 1002, 22, 2);
+
+    open_duckdb_fixture (path, &duckdb);
+    execute_sql (duckdb.connection,
+        "INSERT INTO materialization_checkpoint ("
+        "checkpoint_key, journal_offset, journal_sequence"
+        ") VALUES ('materialization', 5, 1);");
+    close_duckdb_fixture (&duckdb);
+
+    materializer = wyrebox_delivery_materializer_new_duckdb (path, &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_delivery_materializer_apply_to_inbox_full (
+            materializer, "account-1", &projection, FALSE, &error));
+    g_assert_no_error (error);
+    g_clear_object (&materializer);
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_table_count (duckdb.connection, "mailbox_memberships", 2);
+    g_assert_cmpuint (query_uint64 (duckdb.connection,
+        "SELECT uidnext FROM mailbox_uid_state WHERE "
+        "account_id = 'account-1' AND namespace_id = 'inbox:account-1';"), ==,
+        3);
+    assert_materialization_checkpoint (duckdb.connection, 5, 1);
+    close_duckdb_fixture (&duckdb);
+
+    remove_catalog (path);
+}
+
+static void
+test_apply_to_inbox_constraint_violation_is_invalid_data (void)
+{
+    g_autofree gchar *path = create_bootstrap_catalog ();
+    g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+    TestDuckdbFixture duckdb = { 0 };
+
+    append_projection_record (&projection, "sha256:first", 101, 1001, 11, 1);
+
+    /*
+     * A membership owned by another account occupies UID 1 of the INBOX that
+     * will be created for account-a, so inserting account-a's first membership
+     * violates UNIQUE(mailbox_id, uid).
+     */
+    open_duckdb_fixture (path, &duckdb);
+    execute_sql (duckdb.connection,
+        "INSERT INTO mailbox_memberships ("
+        "membership_id, account_id, mailbox_id, message_id, uid, "
+        "internal_date_unix_us, journal_offset, journal_sequence, is_visible"
+        ") VALUES ('foreign', 'account-x', 'inbox:account-a', 'journal:5:1', "
+        "1, 1000, 5, 1, TRUE);");
+    close_duckdb_fixture (&duckdb);
+
+    materializer = wyrebox_delivery_materializer_new_duckdb (path, &error);
+    g_assert_no_error (error);
+    g_assert_false (wyrebox_delivery_materializer_apply_to_inbox (materializer,
+        "account-a", &projection, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_assert_nonnull (strstr (error->message, "Constraint Error"));
+    g_clear_object (&materializer);
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_table_count (duckdb.connection, "accounts", 0);
+    assert_table_count (duckdb.connection, "mailboxes", 0);
+    assert_table_count (duckdb.connection, "messages", 0);
+    assert_table_count (duckdb.connection, "mailbox_memberships", 1);
+    assert_table_count (duckdb.connection, "materialization_checkpoint", 0);
+    close_duckdb_fixture (&duckdb);
+
+    remove_catalog (path);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1409,6 +1492,12 @@ main (int argc, char **argv)
         test_apply_to_inbox_creates_account_inbox);
     g_test_add_func ("/ingestion/delivery-materializer/inbox-reused",
         test_apply_to_inbox_reuses_existing_inbox_row);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/inbox-without-checkpoint",
+        test_apply_to_inbox_without_checkpoint_keeps_checkpoint);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/inbox-constraint-invalid",
+        test_apply_to_inbox_constraint_violation_is_invalid_data);
     g_test_add_func ("/ingestion/delivery-materializer/membership-attributes",
         test_duplicate_object_allows_membership_scoped_attributes);
     g_test_add_func ("/ingestion/delivery-materializer/divergent-mailbox",
