@@ -109,4 +109,6 @@ jobs:
 
       - name: Test
         run: |
-          meson test -C _build --print-errorlogs
+          # Sanitizer-instrumented runs are several times slower; match the
+          # main sanitize job so slow-but-progressing tests are not killed.
+          meson test -C _build --timeout-multiplier 6 --print-errorlogs
