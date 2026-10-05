@@ -157,6 +157,10 @@ A persisted per-account hold or per-account checkpoint table was rejected:
   object read failure at startup exits with `EX_DATAERR`.
 - Catalog migration precondition failures use `G_IO_ERROR_FAILED` and exit
   with `EX_TEMPFAIL` although retrying does not fix them.
+- DuckDB open failures are not split into lock conflicts and corrupt or
+  incompatible catalog files, so a corrupt catalog also exits with
+  `EX_TEMPFAIL` and systemd keeps restarting until its start rate limit stops
+  it.
 - Delivery storage recovery and validation, which runs before catalog
   preparation, keeps exiting with `EX_DATAERR` for every error, including
   transient journal or object I/O errors, so systemd does not restart after

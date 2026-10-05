@@ -294,6 +294,12 @@ daemon_delivery_materialization_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_exit_code_test = executable(
+  'test-daemon-exit-code',
+  'test-daemon-exit-code.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_socket_listener_test = executable(
   'test-daemon-socket-listener',
   'test-daemon-socket-listener.c',
@@ -483,6 +489,7 @@ test(
     / 'object-store' / 'fixtures',
   },
 )
+test('daemon exit code', daemon_exit_code_test)
 test('daemon socket listener', daemon_socket_listener_test)
 test('daemon error', daemon_error_test)
 test('daemon error frame', daemon_error_frame_test)

@@ -106,7 +106,10 @@ Delivery materialization for an account held under
 `docs/adr/0003-delivery-materialization-isolation.md` may remain incomplete
 after startup; `wyreboxd` serves other accounts and retries the held account.
 Permanent startup materialization and catalog failures exit with `EX_DATAERR`
-(65) and transient ones with `EX_TEMPFAIL` (75).
+(65) and transient ones with `EX_TEMPFAIL` (75). The shipped
+`wyreboxd.service` sets `RestartPreventExitStatus=65`, so systemd restarts
+`wyreboxd` after transient failures, within its default start rate limit, but
+not after permanent ones.
 
 Clients reconnect to the socket after restart. A Postfix helper must not
 report delivery success unless it received a durable success response from

@@ -13,6 +13,7 @@ CacheDirectory=wyrebox
 UMask=0007
 ExecStart=@WYREBOXD_BINDIR@/wyreboxd --config @WYREBOXD_CONFIG_PATH@
 Restart=on-failure
+RestartPreventExitStatus=65
 RestartSec=2s
 
 [Install]
