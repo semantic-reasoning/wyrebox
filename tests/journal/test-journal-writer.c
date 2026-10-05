@@ -1521,6 +1521,81 @@ test_fd_scoped_scan_uses_open_segment_after_path_replaced (void)
     remove_tree (root);
 }
 
+static gboolean
+provide_payload (const char *journal_root_dir, gpointer user_data,
+    GBytes **out_payload, guint64 *out_offset, guint64 *out_sequence,
+    GError **error)
+{
+    *out_payload = g_bytes_ref (user_data);
+    return TRUE;
+}
+
+static gboolean
+append_in_flight_bytes_and_fail (const char *journal_root_dir,
+    gpointer user_data, GError **error)
+{
+    g_autofree char *segment_path = segment_path_for_root (journal_root_dir);
+    g_autofd int fd = open (segment_path, O_WRONLY | O_APPEND | O_CLOEXEC);
+
+    g_assert_cmpint (fd, >=, 0);
+    g_assert_cmpint (write (fd, JOURNAL_MAGIC, 5), ==, 5);
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "injected failure");
+    return FALSE;
+}
+
+static void
+test_durable_end_tracks_committed_records (void)
+{
+    const guint8 payload[] = { 0x6f, 0x6e, 0x65 };
+    g_autofree char *root =
+        g_dir_make_tmp ("wyrebox-journal-writer-XXXXXX", NULL);
+    g_autofree char *segment_path = NULL;
+    g_autofree guint8 *segment = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxJournalWriter) writer = NULL;
+    g_autoptr (GBytes) bytes = g_bytes_new_static (payload, sizeof (payload));
+    gsize segment_size = 0;
+    guint64 offset = 0;
+    guint64 sequence = 0;
+    guint64 committed_end = 0;
+
+    g_assert_nonnull (root);
+    segment_path = segment_path_for_root (root);
+
+    writer = wyrebox_journal_writer_new (root, &error);
+    g_assert_no_error (error);
+    g_assert_cmpuint (wyrebox_journal_writer_get_durable_end (writer), ==, 0);
+
+    g_assert_true (wyrebox_journal_writer_append (writer,
+        WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED, bytes, &offset, &sequence,
+        &error));
+    g_assert_no_error (error);
+    read_segment (segment_path, &segment, &segment_size);
+    committed_end = segment_size;
+    g_assert_cmpuint (wyrebox_journal_writer_get_durable_end (writer), ==,
+        committed_end);
+    g_clear_object (&writer);
+
+    writer = wyrebox_journal_writer_new (root, &error);
+    g_assert_no_error (error);
+    g_assert_cmpuint (wyrebox_journal_writer_get_durable_end (writer), ==,
+        committed_end);
+
+    wyrebox_journal_writer_set_test_append_hook (writer,
+        append_in_flight_bytes_and_fail, NULL, NULL);
+    g_assert_false (wyrebox_journal_writer_append_guarded (writer,
+        WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED, provide_payload, bytes,
+        &offset, &sequence, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_clear_pointer (&segment, g_free);
+    read_segment (segment_path, &segment, &segment_size);
+    g_assert_cmpuint (segment_size, ==, committed_end + 5);
+    g_assert_cmpuint (wyrebox_journal_writer_get_durable_end (writer), ==,
+        committed_end);
+
+    remove_tree (root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1590,6 +1665,8 @@ main (int argc, char **argv)
     g_test_add_func
         ("/journal-writer/fd-scoped-scan-uses-open-segment-after-path-replaced",
         test_fd_scoped_scan_uses_open_segment_after_path_replaced);
+    g_test_add_func ("/journal-writer/durable-end-tracks-committed-records",
+        test_durable_end_tracks_committed_records);
 
     return g_test_run ();
 }

@@ -420,6 +420,14 @@ wyrebox_journal_record_clear (WyreboxJournalRecord *record)
 WyreboxJournalReader *
 wyrebox_journal_reader_new (const char *journal_root_dir, GError **error)
 {
+    return wyrebox_journal_reader_new_with_limit (journal_root_dir, G_MAXUINT64,
+               error);
+}
+
+WyreboxJournalReader *
+wyrebox_journal_reader_new_with_limit (const char *journal_root_dir,
+    guint64 limit, GError **error)
+{
     g_autoptr (WyreboxJournalReader) self = NULL;
     g_autofree char *segment_path = NULL;
     struct stat segment_stat = { 0 };
@@ -484,7 +492,7 @@ wyrebox_journal_reader_new (const char *journal_root_dir, GError **error)
     self->fd = fd;
     fd = -1;
     if (self->fd >= 0)
-        self->file_size = (gsize)segment_stat.st_size;
+        self->file_size = (gsize)MIN ((guint64)segment_stat.st_size, limit);
 
     return g_steal_pointer (&self);
 }
