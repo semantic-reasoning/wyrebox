@@ -23,7 +23,8 @@ jobs:
       - name: Install formatter
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends indent
+          sudo apt-get install -y --no-install-recommends uncrustify
+          uncrustify --version
 
       - name: Check diff whitespace
         env:
@@ -31,22 +32,22 @@ jobs:
         run: |
           git diff --check "$BASE_SHA...HEAD"
 
-      - name: Check changed C formatting
+      - name: Check changed C/H formatting
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           mapfile -d '' changed_files < <(
             git diff --name-only -z --diff-filter=ACMRT \
-              "$BASE_SHA...HEAD" -- 'wyrebox/*.c'
+              "$BASE_SHA...HEAD" -- 'wyrebox/*.c' 'wyrebox/*.h' \
+              'tests/*.c' 'tests/*.h' ':!:tests/*/fixtures/*'
           )
 
           if [ "${#changed_files[@]}" -eq 0 ]; then
-            echo "No changed C files."
+            echo "No changed C/H files."
             exit 0
           fi
 
-          ./tools/gst-indent "${changed_files[@]}"
-          git diff --exit-code -- "${changed_files[@]}"
+          ./tools/uncrustify-format --check "${changed_files[@]}"
   pr-build:
     name: PR build
     runs-on: ubuntu-24.04

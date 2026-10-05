@@ -23,19 +23,12 @@ jobs:
       - name: Install formatter
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends indent
+          sudo apt-get install -y --no-install-recommends uncrustify
+          uncrustify --version
 
-      - name: Check C formatting
+      - name: Check C/H formatting
         run: |
-          mapfile -d '' c_files < <(git ls-files -z -- 'wyrebox/*.c')
-
-          if [ "${#c_files[@]}" -eq 0 ]; then
-            echo "No C files."
-            exit 0
-          fi
-
-          ./tools/gst-indent "${c_files[@]}"
-          git diff --exit-code -- "${c_files[@]}"
+          ./tools/uncrustify-format --check
   build:
     name: Build (${{ matrix.compiler }})
     runs-on: ubuntu-24.04

@@ -96,7 +96,7 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Formatting And Style",
-        r"tools/gst-indent",
+        r"tools/uncrustify-format",
     )
     assert_section_matches(
         sections,
