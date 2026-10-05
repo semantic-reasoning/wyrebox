@@ -114,8 +114,8 @@ promptly.
 - The daemon exposes the materialization state (OK, retrying, or held), the
   consecutive failure count, the next retry interval, the held accounts, and
   the last error through a GObject status getter. An operator-facing status
-  operation is follow-up work; until then the warnings are the operator
-  interface.
+  operation is follow-up work (#330); until then the warnings are the
+  operator interface.
 
 ### Startup policy and exit codes
 
@@ -165,6 +165,9 @@ A persisted per-account hold or per-account checkpoint table was rejected:
   preparation, keeps exiting with `EX_DATAERR` for every error, including
   transient journal or object I/O errors, so systemd does not restart after
   them.
+- The object, catalog, and storage recovery gaps above are tracked in #331.
 - `wyrebox-admin materialization-checkpoint` reports the latest
   materialization manifest, not the delivery `materialization_checkpoint`
-  row, and cannot open the catalog while `wyreboxd` runs.
+  row, and cannot open the catalog while `wyreboxd` runs (#332).
+- There is no supported catalog rebuild command; the troubleshooting runbook
+  describes a manual rebuild (#333).
