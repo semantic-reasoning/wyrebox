@@ -967,6 +967,14 @@ seed_account_b_inbox (const gchar *catalog_path, gboolean selectable)
     execute_catalog_sql (catalog_path, sql);
 }
 
+static void
+make_account_b_inbox_selectable_in (const gchar *catalog_path)
+{
+    execute_catalog_sql (catalog_path,
+        "UPDATE mailboxes SET is_selectable = TRUE "
+        "WHERE mailbox_id = 'inbox-b';");
+}
+
 static gboolean
 run_isolated_catchup (const gchar *catalog_path, const gchar *object_root,
     const gchar *journal_root, WyreboxDeliveryCatchupReport *out_report,
@@ -994,6 +1002,37 @@ run_isolated_catchup (const gchar *catalog_path, const gchar *object_root,
 
     return wyrebox_delivery_catchup_materialize_account_inboxes_isolated (
         metadata_store, reader, object_store, materializer, out_report, error);
+}
+
+static gboolean
+run_resumed_catchup (const gchar *catalog_path, const gchar *object_root,
+    const gchar *journal_root, const WyreboxDeliveryCatchupCursor *resume_after,
+    const GPtrArray *prior_holds, WyreboxDeliveryCatchupReport *out_report,
+    GError **error)
+{
+    g_autoptr (WyreboxSchemaMetadataStore) metadata_store = NULL;
+    g_autoptr (WyreboxJournalReader) reader = NULL;
+    g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
+    g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+
+    metadata_store = wyrebox_schema_metadata_store_new_duckdb (catalog_path,
+            error);
+    if (metadata_store == NULL)
+        return FALSE;
+    reader = wyrebox_journal_reader_new (journal_root, error);
+    if (reader == NULL)
+        return FALSE;
+    object_store = wyrebox_local_object_store_new (object_root, error);
+    if (object_store == NULL)
+        return FALSE;
+    materializer = wyrebox_delivery_materializer_new_duckdb (catalog_path,
+            error);
+    if (materializer == NULL)
+        return FALSE;
+
+    return wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
+        metadata_store, reader, object_store, materializer, resume_after,
+        prior_holds, out_report, error);
 }
 
 static guint64
@@ -1243,6 +1282,205 @@ test_account_catchup_without_report_fails_on_hold (InterleavedFixture
 }
 
 static void
+assert_scanned_through (const WyreboxDeliveryCatchupReport *report,
+    const WyreboxEmlIngestResult *last)
+{
+    g_assert_true (report->scanned_through.present);
+    g_assert_cmpuint (report->scanned_through.journal_offset, ==,
+        last->journal_offset);
+    g_assert_cmpuint (report->scanned_through.journal_sequence, ==,
+        last->journal_sequence);
+}
+
+static void
+test_account_catchup_resume_skips_scanned_backlog (InterleavedFixture
+    *fixture, gconstpointer user_data)
+{
+    g_auto (WyreboxDeliveryCatchupReport) full = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) resumed = { 0 };
+    g_auto (WyreboxEmlIngestResult) a4 = { 0 };
+    g_auto (WyreboxEmlIngestResult) b3 = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (run_isolated_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &full, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (full.records_scanned, ==, 5);
+    assert_scanned_through (&full, &fixture->a3);
+    assert_single_hold (&full, "account-b", &fixture->b1);
+
+    make_account_b_inbox_selectable_in (fixture->catalog_path);
+    ingest_delivery_fixture (fixture->ingestor, "html-message.eml",
+        "delivery-a4", "account-a", &a4);
+    ingest_delivery_fixture (fixture->ingestor, "simple-crlf.eml",
+        "delivery-b3", "account-b", &b3);
+
+    g_assert_true (run_resumed_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &full.scanned_through,
+        full.holds, &resumed, &error));
+    g_assert_no_error (error);
+
+    g_assert_cmpuint (resumed.records_scanned, ==, 2);
+    assert_scanned_through (&resumed, &b3);
+    assert_single_hold (&resumed, "account-b", &fixture->b1);
+    g_assert_cmpuint (account_inbox_uid (fixture->catalog_path, "account-a",
+        &a4), ==, 4);
+    g_assert_cmpuint (account_inbox_membership_count (fixture->catalog_path,
+        "account-b"), ==, 0);
+    assert_catalog_checkpoint (fixture->catalog_path, &fixture->a1);
+}
+
+static void
+test_account_catchup_resume_past_checkpoint_keeps_checkpoint (
+    InterleavedFixture *fixture, gconstpointer user_data)
+{
+    g_auto (WyreboxDeliveryCatchupReport) full = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) resumed = { 0 };
+    g_auto (WyreboxEmlIngestResult) a4 = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (run_isolated_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &full, &error));
+    g_assert_no_error (error);
+    ingest_delivery_fixture (fixture->ingestor, "html-message.eml",
+        "delivery-a4", "account-a", &a4);
+
+    g_assert_true (run_resumed_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &full.scanned_through,
+        NULL, &resumed, &error));
+    g_assert_no_error (error);
+
+    g_assert_cmpuint (resumed.records_scanned, ==, 1);
+    g_assert_cmpuint (resumed.holds->len, ==, 0);
+    g_assert_cmpuint (account_inbox_uid (fixture->catalog_path, "account-a",
+        &a4), ==, 4);
+    assert_catalog_checkpoint (fixture->catalog_path, &fixture->a1);
+}
+
+static void
+test_account_catchup_resume_without_new_records_keeps_cursor (
+    InterleavedFixture *fixture, gconstpointer user_data)
+{
+    g_auto (WyreboxDeliveryCatchupReport) full = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) resumed = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (run_isolated_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &full, &error));
+    g_assert_no_error (error);
+
+    g_assert_true (run_resumed_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &full.scanned_through,
+        full.holds, &resumed, &error));
+    g_assert_no_error (error);
+
+    g_assert_cmpuint (resumed.records_scanned, ==, 0);
+    assert_scanned_through (&resumed, &fixture->a3);
+    assert_single_hold (&resumed, "account-b", &fixture->b1);
+}
+
+static void
+test_account_catchup_resume_adds_new_hold_after_prior (InterleavedFixture
+    *fixture, gconstpointer user_data)
+{
+    g_auto (WyreboxDeliveryCatchupReport) full = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) resumed = { 0 };
+    g_auto (WyreboxEmlIngestResult) c1 = { 0 };
+    g_autoptr (GError) error = NULL;
+    const WyreboxDeliveryCatchupHold *hold = NULL;
+
+    execute_catalog_sql (fixture->catalog_path,
+        "INSERT INTO accounts (account_id) VALUES ('account-c');");
+    execute_catalog_sql (fixture->catalog_path,
+        "INSERT INTO mailboxes (mailbox_id, account_id, imap_name, "
+        "is_selectable, is_visible) VALUES "
+        "('inbox-c', 'account-c', 'INBOX', FALSE, TRUE);");
+    g_assert_true (run_isolated_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &full, &error));
+    g_assert_no_error (error);
+    ingest_delivery_fixture (fixture->ingestor, "html-message.eml",
+        "delivery-c1", "account-c", &c1);
+
+    g_assert_true (run_resumed_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &full.scanned_through,
+        full.holds, &resumed, &error));
+    g_assert_no_error (error);
+
+    g_assert_cmpuint (resumed.holds->len, ==, 2);
+    hold = g_ptr_array_index (resumed.holds, 0);
+    g_assert_cmpstr (hold->account_id, ==, "account-b");
+    g_assert_cmpuint (hold->journal_offset, ==, fixture->b1.journal_offset);
+    hold = g_ptr_array_index (resumed.holds, 1);
+    g_assert_cmpstr (hold->account_id, ==, "account-c");
+    g_assert_cmpuint (hold->journal_offset, ==, c1.journal_offset);
+    g_assert_error (hold->error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    assert_catalog_checkpoint (fixture->catalog_path, &fixture->a1);
+}
+
+static void
+test_account_catchup_stale_cursor_aborts (InterleavedFixture *fixture,
+    gconstpointer user_data)
+{
+    g_auto (WyreboxDeliveryCatchupReport) report = { 0 };
+    g_autoptr (GError) error = NULL;
+    WyreboxDeliveryCatchupCursor stale = {
+        .present = TRUE,
+        .journal_offset = fixture->a3.journal_offset,
+        .journal_sequence = fixture->a3.journal_sequence + 1,
+    };
+
+    g_assert_false (run_resumed_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &stale, NULL, &report,
+        &error));
+    g_assert_nonnull (error);
+    g_assert_true (g_str_has_prefix (error->message, "scan cursor: "));
+    g_assert_null (report.holds);
+}
+
+static void
+test_account_catchup_resume_at_checkpoint_advances (void)
+{
+    g_autofree gchar *object_root =
+        g_dir_make_tmp ("wyrebox-delivery-catchup-objects-XXXXXX", NULL);
+    g_autofree gchar *journal_root =
+        g_dir_make_tmp ("wyrebox-delivery-catchup-journal-XXXXXX", NULL);
+    g_autofree gchar *catalog_path = create_bootstrap_catalog ();
+    g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
+    g_autoptr (WyreboxJournalWriter) writer = NULL;
+    g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+    g_auto (WyreboxEmlIngestResult) a1 = { 0 };
+    g_auto (WyreboxEmlIngestResult) a2 = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) full = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) resumed = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    ingestor = create_ingestor (object_root, journal_root, &object_store,
+            &writer);
+    ingest_delivery_fixture (ingestor, "simple-crlf.eml", "delivery-a1",
+        "account-a", &a1);
+    g_assert_true (run_isolated_catchup (catalog_path, object_root,
+        journal_root, &full, &error));
+    g_assert_no_error (error);
+    assert_scanned_through (&full, &a1);
+    assert_catalog_checkpoint (catalog_path, &a1);
+
+    ingest_delivery_fixture (ingestor, "html-message.eml", "delivery-a2",
+        "account-a", &a2);
+    g_assert_true (run_resumed_catchup (catalog_path, object_root,
+        journal_root, &full.scanned_through, NULL, &resumed, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (resumed.records_scanned, ==, 1);
+    assert_catalog_checkpoint (catalog_path, &a2);
+
+    g_clear_object (&ingestor);
+    g_clear_object (&writer);
+    g_clear_object (&object_store);
+    remove_tree (object_root);
+    remove_tree (journal_root);
+    remove_catalog (catalog_path);
+}
+
+static void
 test_account_catchup_hold_on_first_record_keeps_no_checkpoint (void)
 {
     g_autofree gchar *object_root =
@@ -1319,6 +1557,46 @@ main (int argc, char **argv)
         test_account_catchup_without_report_fails_on_hold,
         (void (*)(InterleavedFixture *, gconstpointer))
         interleaved_fixture_tear_down);
+    g_test_add ("/ingestion/delivery-catchup/accounts/resume-skips-backlog",
+        InterleavedFixture, NULL,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_set_up,
+        test_account_catchup_resume_skips_scanned_backlog,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_tear_down);
+    g_test_add ("/ingestion/delivery-catchup/accounts/"
+        "resume-past-checkpoint-keeps-checkpoint",
+        InterleavedFixture, NULL,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_set_up,
+        test_account_catchup_resume_past_checkpoint_keeps_checkpoint,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_tear_down);
+    g_test_add ("/ingestion/delivery-catchup/accounts/"
+        "resume-without-new-records-keeps-cursor",
+        InterleavedFixture, NULL,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_set_up,
+        test_account_catchup_resume_without_new_records_keeps_cursor,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_tear_down);
+    g_test_add ("/ingestion/delivery-catchup/accounts/resume-adds-new-hold",
+        InterleavedFixture, NULL,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_set_up,
+        test_account_catchup_resume_adds_new_hold_after_prior,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_tear_down);
+    g_test_add ("/ingestion/delivery-catchup/accounts/stale-cursor-aborts",
+        InterleavedFixture, NULL,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_set_up,
+        test_account_catchup_stale_cursor_aborts,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_tear_down);
+    g_test_add_func ("/ingestion/delivery-catchup/accounts/"
+        "resume-at-checkpoint-advances",
+        test_account_catchup_resume_at_checkpoint_advances);
     g_test_add_func ("/ingestion/delivery-catchup/accounts/first-record-held",
         test_account_catchup_hold_on_first_record_keeps_no_checkpoint);
 

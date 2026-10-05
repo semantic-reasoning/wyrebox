@@ -82,14 +82,22 @@ fail_if_journal_has_unsafe_suffix (WyreboxJournalReader *journal_reader,
     return FALSE;
 }
 
+/*
+ * Replays the records after @resume_after, or after the persisted checkpoint
+ * when @resume_after is NULL or not present. @out_from_checkpoint tells
+ * whether the replay started at the persisted checkpoint.
+ */
 static gboolean
-replay_pending_deliveries (WyreboxSchemaMetadataStore *metadata_store,
+replay_deliveries_after (WyreboxSchemaMetadataStore *metadata_store,
     WyreboxJournalReader *journal_reader,
     WyreboxLocalObjectStore *object_store,
-    WyreboxDeliveryProjectionList *out_list, GError **error)
+    const WyreboxDeliveryCatchupCursor *resume_after,
+    WyreboxDeliveryProjectionList *out_list, gboolean *out_from_checkpoint,
+    GError **error)
 {
     g_auto (WyreboxSchemaMigrationMetadataState) metadata = { 0 };
     g_autoptr (WyreboxDeliveryProjection) projection = NULL;
+    WyreboxDeliveryCatchupCursor start = { 0 };
 
     if (!wyrebox_schema_metadata_store_load (metadata_store, &metadata, error))
         return FALSE;
@@ -97,11 +105,25 @@ replay_pending_deliveries (WyreboxSchemaMetadataStore *metadata_store,
     if (!fail_if_journal_has_unsafe_suffix (journal_reader, error))
         return FALSE;
 
-    if (metadata.materialization_checkpoint_present &&
+    start.present = metadata.materialization_checkpoint_present;
+    start.journal_offset = metadata.materialization_checkpoint_journal_offset;
+    start.journal_sequence = metadata.materialization_checkpoint_sequence;
+    if (resume_after != NULL && resume_after->present) {
+        *out_from_checkpoint = start.present &&
+            start.journal_offset == resume_after->journal_offset &&
+            start.journal_sequence == resume_after->journal_sequence;
+        start = *resume_after;
+    } else {
+        *out_from_checkpoint = TRUE;
+    }
+
+    if (start.present &&
         !wyrebox_journal_reader_seek_after_checkpoint (journal_reader,
-        metadata.materialization_checkpoint_journal_offset,
-        metadata.materialization_checkpoint_sequence, error))
+        start.journal_offset, start.journal_sequence, error)) {
+        if (!*out_from_checkpoint)
+            g_prefix_error (error, "scan cursor: ");
         return FALSE;
+    }
 
     projection = wyrebox_delivery_projection_new (journal_reader, object_store);
     if (projection == NULL)
@@ -118,6 +140,7 @@ wyrebox_delivery_catchup_materialize_inbox (WyreboxSchemaMetadataStore
     GError **error)
 {
     g_auto (WyreboxDeliveryProjectionList) list = { 0 };
+    gboolean from_checkpoint = FALSE;
 
     g_return_val_if_fail (WYREBOX_IS_SCHEMA_METADATA_STORE (metadata_store),
         FALSE);
@@ -128,8 +151,8 @@ wyrebox_delivery_catchup_materialize_inbox (WyreboxSchemaMetadataStore
     g_return_val_if_fail (account_id != NULL, FALSE);
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-    if (!replay_pending_deliveries (metadata_store, journal_reader,
-        object_store, &list, error))
+    if (!replay_deliveries_after (metadata_store, journal_reader,
+        object_store, NULL, &list, &from_checkpoint, error))
         return FALSE;
 
     return wyrebox_delivery_materializer_apply_to_mailbox (materializer,
@@ -170,6 +193,22 @@ wyrebox_delivery_catchup_hold_free (WyreboxDeliveryCatchupHold *hold)
     g_free (hold);
 }
 
+WyreboxDeliveryCatchupHold *
+wyrebox_delivery_catchup_hold_copy (const WyreboxDeliveryCatchupHold *hold)
+{
+    WyreboxDeliveryCatchupHold *copy = NULL;
+
+    g_return_val_if_fail (hold != NULL, NULL);
+
+    copy = g_new0 (WyreboxDeliveryCatchupHold, 1);
+    copy->account_id = g_strdup (hold->account_id);
+    copy->journal_offset = hold->journal_offset;
+    copy->journal_sequence = hold->journal_sequence;
+    copy->error = hold->error != NULL ? g_error_copy (hold->error) : NULL;
+
+    return copy;
+}
+
 void
 wyrebox_delivery_catchup_report_clear (WyreboxDeliveryCatchupReport *report)
 {
@@ -206,15 +245,19 @@ add_hold (GPtrArray *holds, const WyreboxDeliveryProjectionRecord *first,
 }
 
 gboolean
-wyrebox_delivery_catchup_materialize_account_inboxes_isolated (
+wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
     WyreboxSchemaMetadataStore *metadata_store,
     WyreboxJournalReader *journal_reader,
     WyreboxLocalObjectStore *object_store,
     WyreboxDeliveryMaterializer *materializer,
-    WyreboxDeliveryCatchupReport *out_report, GError **error)
+    const WyreboxDeliveryCatchupCursor *resume_after,
+    const GPtrArray *prior_holds, WyreboxDeliveryCatchupReport *out_report,
+    GError **error)
 {
     g_auto (WyreboxDeliveryProjectionList) list = { 0 };
     g_autoptr (GPtrArray) holds = NULL;
+    WyreboxDeliveryCatchupCursor scanned_through = { 0 };
+    gboolean from_checkpoint = FALSE;
     guint run_start = 0;
 
     g_return_val_if_fail (WYREBOX_IS_SCHEMA_METADATA_STORE (metadata_store),
@@ -227,13 +270,29 @@ wyrebox_delivery_catchup_materialize_account_inboxes_isolated (
         FALSE);
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-    if (!replay_pending_deliveries (metadata_store, journal_reader,
-        object_store, &list, error) ||
+    if (!replay_deliveries_after (metadata_store, journal_reader,
+        object_store, resume_after, &list, &from_checkpoint, error) ||
         !fail_if_any_record_lacks_account (&list, error))
         return FALSE;
 
     holds = g_ptr_array_new_with_free_func (
         (GDestroyNotify)wyrebox_delivery_catchup_hold_free);
+    for (guint i = 0; prior_holds != NULL && i < prior_holds->len; i++) {
+        g_ptr_array_add (holds,
+            wyrebox_delivery_catchup_hold_copy (g_ptr_array_index (prior_holds,
+            i)));
+    }
+
+    if (list.records->len > 0) {
+        const WyreboxDeliveryProjectionRecord *last =
+            g_ptr_array_index (list.records, list.records->len - 1);
+
+        scanned_through.present = TRUE;
+        scanned_through.journal_offset = last->journal_offset;
+        scanned_through.journal_sequence = last->journal_sequence;
+    } else if (resume_after != NULL) {
+        scanned_through = *resume_after;
+    }
 
     while (run_start < list.records->len) {
         const WyreboxDeliveryProjectionRecord *first =
@@ -259,7 +318,8 @@ wyrebox_delivery_catchup_materialize_account_inboxes_isolated (
             continue;
 
         if (wyrebox_delivery_materializer_apply_to_inbox_full (materializer,
-            first->account_identity, &run, holds->len == 0, &run_error))
+            first->account_identity, &run,
+            from_checkpoint && holds->len == 0, &run_error))
             continue;
 
         if (!g_error_matches (run_error, G_IO_ERROR,
@@ -272,7 +332,22 @@ wyrebox_delivery_catchup_materialize_account_inboxes_isolated (
     }
 
     out_report->holds = g_steal_pointer (&holds);
+    out_report->records_scanned = list.records->len;
+    out_report->scanned_through = scanned_through;
     return TRUE;
+}
+
+gboolean
+wyrebox_delivery_catchup_materialize_account_inboxes_isolated (
+    WyreboxSchemaMetadataStore *metadata_store,
+    WyreboxJournalReader *journal_reader,
+    WyreboxLocalObjectStore *object_store,
+    WyreboxDeliveryMaterializer *materializer,
+    WyreboxDeliveryCatchupReport *out_report, GError **error)
+{
+    return wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
+        metadata_store, journal_reader, object_store, materializer, NULL, NULL,
+        out_report, error);
 }
 
 gboolean

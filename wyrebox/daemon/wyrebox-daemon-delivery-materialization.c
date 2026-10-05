@@ -41,7 +41,8 @@ struct _WyreboxDaemonDeliveryMaterialization
     guint consecutive_failures;
     gboolean aborted;
     gboolean stopped;
-    GStrv held_accounts;
+    GPtrArray *holds;
+    WyreboxDeliveryCatchupCursor cursor;
     gchar *last_error;
     gchar *warned_signature;
     gint64 warned_at;
@@ -57,8 +58,17 @@ typedef struct
     GSource *cancelled_retry;
 } PassOutcome;
 
+static const WyreboxDeliveryCatchupCursor no_cursor = { 0 };
+
 G_DEFINE_TYPE (WyreboxDaemonDeliveryMaterialization,
     wyrebox_daemon_delivery_materialization, G_TYPE_OBJECT)
+
+static GPtrArray *
+new_hold_array (void)
+{
+    return g_ptr_array_new_with_free_func (
+        (GDestroyNotify)wyrebox_delivery_catchup_hold_free);
+}
 
 static gint64
 monotonic_clock (gpointer user_data)
@@ -119,7 +129,7 @@ wyrebox_daemon_delivery_materialization_finalize (GObject *object)
         WYREBOX_DAEMON_DELIVERY_MATERIALIZATION (object);
 
     g_clear_pointer (&self->journal_root_dir, g_free);
-    g_clear_pointer (&self->held_accounts, g_strfreev);
+    g_clear_pointer (&self->holds, g_ptr_array_unref);
     g_clear_pointer (&self->last_error, g_free);
     g_clear_pointer (&self->warned_signature, g_free);
     g_mutex_clear (&self->lock);
@@ -147,7 +157,7 @@ wyrebox_daemon_delivery_materialization_init (
     self->retry_initial_ms = DEFAULT_RETRY_INITIAL_MS;
     self->retry_max_ms = DEFAULT_RETRY_MAX_MS;
     self->retry_interval_ms = DEFAULT_RETRY_INITIAL_MS;
-    self->held_accounts = g_new0 (gchar *, 1);
+    self->holds = new_hold_array ();
 }
 
 WyreboxDaemonDeliveryMaterialization *
@@ -183,12 +193,23 @@ wyrebox_daemon_delivery_materialization_new (const char *catalog_path,
     return g_steal_pointer (&self);
 }
 
+/*
+ * Post-ingest passes continue from the scan cursor with the current holds;
+ * every other pass is a full pass from the checkpoint with no holds.
+ */
 static gboolean
-run_pass_locked (WyreboxDaemonDeliveryMaterialization *self,
+run_pass_locked (WyreboxDaemonDeliveryMaterialization *self, PassKind kind,
     WyreboxDeliveryCatchupReport *out_report, GError **error)
 {
     g_autoptr (WyreboxJournalReader) reader = NULL;
     guint64 durable_end = 0;
+    gboolean resume = kind == PASS_POST_INGEST;
+
+    /*
+     * A resumed pass carries the holds into its report, so it can never be
+     * mistaken for a clean pass from the checkpoint.
+     */
+    g_assert (!self->cursor.present || self->holds->len > 0);
 
     durable_end = wyrebox_journal_writer_get_durable_end (self->journal_writer);
     reader = wyrebox_journal_reader_new_with_limit (self->journal_root_dir,
@@ -196,9 +217,10 @@ run_pass_locked (WyreboxDaemonDeliveryMaterialization *self,
     if (reader == NULL)
         return FALSE;
 
-    return wyrebox_delivery_catchup_materialize_account_inboxes_isolated (
+    return wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
         self->metadata_store, reader, self->object_store, self->materializer,
-        out_report, error);
+        resume ? &self->cursor : NULL, resume ? self->holds : NULL, out_report,
+        error);
 }
 
 static gboolean retry_catch_up (gpointer user_data);
@@ -278,13 +300,12 @@ describe_failure (const WyreboxDeliveryCatchupReport *report,
 }
 
 static GStrv
-held_account_list (const WyreboxDeliveryCatchupReport *report)
+held_account_list (const GPtrArray *holds)
 {
-    GStrv accounts = g_new0 (gchar *, report->holds->len + 1);
+    GStrv accounts = g_new0 (gchar *, holds->len + 1);
 
-    for (guint i = 0; i < report->holds->len; i++) {
-        const WyreboxDeliveryCatchupHold *hold =
-            g_ptr_array_index (report->holds, i);
+    for (guint i = 0; i < holds->len; i++) {
+        const WyreboxDeliveryCatchupHold *hold = g_ptr_array_index (holds, i);
 
         accounts[i] = g_strdup (hold->account_id);
     }
@@ -304,20 +325,22 @@ finish_clean_pass_locked (WyreboxDaemonDeliveryMaterialization *self,
     self->consecutive_failures = 0;
     self->aborted = FALSE;
     self->retry_interval_ms = self->retry_initial_ms;
-    g_strfreev (self->held_accounts);
-    self->held_accounts = g_new0 (gchar *, 1);
+    g_ptr_array_set_size (self->holds, 0);
+    self->cursor = no_cursor;
     g_clear_pointer (&self->last_error, g_free);
     g_clear_pointer (&self->warned_signature, g_free);
     outcome->cancelled_retry = g_steal_pointer (&self->retry_source);
 }
 
 /*
- * Records a failed pass. @report is the completed pass with holds, or NULL
- * when @abort_error aborted it; an aborted pass keeps the previous holds.
+ * Records a failed pass. @report is the completed pass with holds, which
+ * replace the current ones and move the scan cursor to the end of the pass, or
+ * NULL when @abort_error aborted it; an aborted pass keeps the current holds
+ * and resets the cursor to the checkpoint.
  */
 static void
 finish_failed_pass_locked (WyreboxDaemonDeliveryMaterialization *self,
-    PassKind kind, const WyreboxDeliveryCatchupReport *report,
+    PassKind kind, WyreboxDeliveryCatchupReport *report,
     const GError *abort_error, PassOutcome *outcome)
 {
     g_autofree gchar *signature = failure_signature (report, abort_error);
@@ -325,12 +348,15 @@ finish_failed_pass_locked (WyreboxDaemonDeliveryMaterialization *self,
     gboolean warn = FALSE;
 
     self->aborted = abort_error != NULL;
-    if (report != NULL) {
-        g_strfreev (self->held_accounts);
-        self->held_accounts = held_account_list (report);
-    }
     g_free (self->last_error);
     self->last_error = describe_failure (report, abort_error);
+    if (report != NULL) {
+        g_ptr_array_unref (self->holds);
+        self->holds = g_steal_pointer (&report->holds);
+        self->cursor = report->scanned_through;
+    } else {
+        self->cursor = no_cursor;
+    }
 
     if (kind == PASS_RETRY) {
         self->consecutive_failures++;
@@ -366,7 +392,7 @@ finish_failed_pass_locked (WyreboxDaemonDeliveryMaterialization *self,
 
 static void
 finish_pass_locked (WyreboxDaemonDeliveryMaterialization *self,
-    PassKind kind, const WyreboxDeliveryCatchupReport *report,
+    PassKind kind, WyreboxDeliveryCatchupReport *report,
     const GError *abort_error, PassOutcome *outcome)
 {
     if (abort_error == NULL && report->holds->len == 0)
@@ -403,7 +429,7 @@ run_and_finish_pass_locked (WyreboxDaemonDeliveryMaterialization *self,
     g_auto (WyreboxDeliveryCatchupReport) report = { 0 };
     g_autoptr (GError) error = NULL;
 
-    if (run_pass_locked (self, &report, &error))
+    if (run_pass_locked (self, kind, &report, &error))
         finish_pass_locked (self, kind, &report, NULL, outcome);
     else
         finish_pass_locked (self, kind, NULL, error, outcome);
@@ -421,7 +447,8 @@ wyrebox_daemon_delivery_materialization_catch_up (
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
     g_mutex_lock (&self->lock);
-    if (!run_pass_locked (self, &report, error)) {
+    if (!run_pass_locked (self, PASS_CATCH_UP, &report, error)) {
+        self->cursor = no_cursor;
         g_mutex_unlock (&self->lock);
         return FALSE;
     }
@@ -520,7 +547,7 @@ wyrebox_daemon_delivery_materialization_get_status (
         out_status->state = WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_HELD;
     out_status->consecutive_failures = self->consecutive_failures;
     out_status->next_retry_interval_ms = self->retry_interval_ms;
-    out_status->held_accounts = g_strdupv (self->held_accounts);
+    out_status->held_accounts = held_account_list (self->holds);
     out_status->last_error = g_strdup (self->last_error);
     g_mutex_unlock (&self->lock);
 }

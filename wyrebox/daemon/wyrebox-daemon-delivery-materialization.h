@@ -91,8 +91,10 @@ typedef gint64 (*WyreboxDaemonDeliveryMaterializationClockFunc) (
     gpointer user_data);
 
 /*
- * Materializes every durable delivery past the persisted checkpoint, as
- * described by wyrebox_delivery_catchup_materialize_account_inboxes_isolated().
+ * Runs a full pass: materializes every durable delivery past the persisted
+ * checkpoint, as described by
+ * wyrebox_delivery_catchup_materialize_account_inboxes_isolated(), and
+ * replaces the current holds with the pass's holds.
  *
  * An account whose INBOX run fails with G_IO_ERROR_INVALID_DATA, for example
  * because its existing INBOX is not selectable or its UIDVALIDITY differs, is
@@ -116,12 +118,20 @@ gboolean wyrebox_daemon_delivery_materialization_catch_up (
     GError **error);
 
 /*
- * Runs a catch-up pass after a delivery. When the pass aborts or holds an
- * account, logs a warning and, unless one is already pending, schedules a
- * retry; a pending retry is never postponed. Every abort is treated as
- * temporary here; deliveries stay durable in the journal regardless.
+ * Runs a catch-up pass after a delivery. While accounts are held, the pass
+ * continues after the last delivery the previous pass replayed and skips the
+ * held accounts, so they stay held until a full pass. An aborted pass keeps
+ * the holds and makes the next pass start at the checkpoint again.
  *
- * Each retry is a one-shot full pass. A failed retry schedules the next one
+ * When the pass aborts or holds an account, logs a warning and, unless one is
+ * already pending, schedules a retry; a pending retry is never postponed.
+ * Every abort is treated as temporary here; deliveries stay durable in the
+ * journal regardless.
+ *
+ * Each retry is a one-shot full pass from the checkpoint whose holds replace
+ * the current ones, like
+ * wyrebox_daemon_delivery_materialization_catch_up(). A failed retry schedules
+ * the next one
  * with twice the previous delay, capped at the maximum interval. A clean pass
  * cancels any pending retry, resets the interval, and logs the recovery.
  * Warnings carry each held account with the journal offset and sequence of

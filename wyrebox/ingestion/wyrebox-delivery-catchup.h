@@ -52,15 +52,38 @@ typedef struct
 void wyrebox_delivery_catchup_hold_free (WyreboxDeliveryCatchupHold *hold);
 
 /*
+ * Returns: (transfer full): a deep copy of @hold.
+ */
+WyreboxDeliveryCatchupHold *wyrebox_delivery_catchup_hold_copy (
+    const WyreboxDeliveryCatchupHold *hold);
+
+/*
+ * A journal record position, identified by its offset and sequence.
+ */
+typedef struct
+{
+  gboolean present;
+  guint64 journal_offset;
+  guint64 journal_sequence;
+} WyreboxDeliveryCatchupCursor;
+
+/*
  * Result of an isolated catch-up pass.
  *
  * @holds: (owned) (element-type WyreboxDeliveryCatchupHold): held accounts in
- *   journal order of their first unmaterialized record; empty when every
- *   pending record was materialized.
+ *   journal order of their first unmaterialized record, including holds
+ *   carried into a resumed pass; empty when every pending record was
+ *   materialized.
+ * @records_scanned: delivery records replayed by the pass.
+ * @scanned_through: the last delivery record replayed by the pass, or the
+ *   position the pass resumed after when it replayed none; not present when a
+ *   pass from the checkpoint replayed nothing.
  */
 typedef struct
 {
   GPtrArray *holds;
+  guint records_scanned;
+  WyreboxDeliveryCatchupCursor scanned_through;
 } WyreboxDeliveryCatchupReport;
 
 void wyrebox_delivery_catchup_report_clear (
@@ -100,6 +123,33 @@ gboolean wyrebox_delivery_catchup_materialize_account_inboxes_isolated (
     WyreboxJournalReader *journal_reader,
     WyreboxLocalObjectStore *object_store,
     WyreboxDeliveryMaterializer *materializer,
+    WyreboxDeliveryCatchupReport *out_report,
+    GError **error);
+
+/*
+ * Like wyrebox_delivery_catchup_materialize_account_inboxes_isolated(), but
+ * replays only the records after @resume_after and treats @prior_holds as
+ * already held: their runs are skipped and they are copied into @out_report
+ * ahead of new holds.
+ *
+ * The checkpoint advances only when @prior_holds is empty and @resume_after
+ * is NULL, not present, or equal to the persisted checkpoint, so resuming past
+ * records that were skipped for a hold never moves the checkpoint over them.
+ * A @resume_after that no longer matches the journal aborts the pass with an
+ * error prefixed "scan cursor".
+ *
+ * @resume_after: (nullable): a record previously reported as
+ *   @scanned_through; NULL or not present replays from the checkpoint.
+ * @prior_holds: (nullable) (element-type WyreboxDeliveryCatchupHold): holds
+ *   from the pass that reported @resume_after; not modified.
+ */
+gboolean wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
+    WyreboxSchemaMetadataStore *metadata_store,
+    WyreboxJournalReader *journal_reader,
+    WyreboxLocalObjectStore *object_store,
+    WyreboxDeliveryMaterializer *materializer,
+    const WyreboxDeliveryCatchupCursor *resume_after,
+    const GPtrArray *prior_holds,
     WyreboxDeliveryCatchupReport *out_report,
     GError **error);
 
