@@ -46,15 +46,67 @@ wyrebox_daemon_delivery_materialization_new (
     WyreboxLocalObjectStore *object_store,
     GError **error);
 
+typedef enum
+{
+  WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_OK,
+  WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_RETRYING,
+  WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_HELD,
+} WyreboxDaemonDeliveryMaterializationState;
+
 /*
- * Materializes every durable delivery past the persisted checkpoint.
+ * Snapshot of the materialization failure state.
  *
- * Fails with G_IO_ERROR_INVALID_DATA when a pending delivery has no account
- * identity, or when the account's existing INBOX mailbox does not match the
- * materialized state WyreBox requires (for example it is not selectable, or
- * its UIDVALIDITY differs). Runs committed before a failure stay committed and
- * the checkpoint never moves past uncommitted work, so calling again after the
- * cause is fixed resumes where it stopped.
+ * @state: OK after a clean pass, RETRYING after a pass aborted, HELD after a
+ *   pass completed with held accounts.
+ * @consecutive_failures: failures since the last clean pass, counting the
+ *   first failure and each failed retry; 0 when @state is OK.
+ * @next_retry_interval_ms: delay of the pending retry, or of the next one to
+ *   be scheduled; still reported after
+ *   wyrebox_daemon_delivery_materialization_stop(), although no retry is
+ *   scheduled then.
+ * @held_accounts: (owned): NULL-terminated held accounts, in journal order of
+ *   their first unmaterialized delivery; kept after an aborted pass.
+ * @last_error: (owned) (nullable): description of the last failure, NULL
+ *   when @state is OK.
+ */
+typedef struct
+{
+  WyreboxDaemonDeliveryMaterializationState state;
+  guint consecutive_failures;
+  guint next_retry_interval_ms;
+  GStrv held_accounts;
+  gchar *last_error;
+} WyreboxDaemonDeliveryMaterializationStatus;
+
+void wyrebox_daemon_delivery_materialization_status_clear (
+    WyreboxDaemonDeliveryMaterializationStatus *status);
+
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDaemonDeliveryMaterializationStatus,
+    wyrebox_daemon_delivery_materialization_status_clear)
+
+/*
+ * Monotonic clock in microseconds, used to rate-limit failure warnings.
+ */
+typedef gint64 (*WyreboxDaemonDeliveryMaterializationClockFunc) (
+    gpointer user_data);
+
+/*
+ * Materializes every durable delivery past the persisted checkpoint, as
+ * described by wyrebox_delivery_catchup_materialize_account_inboxes_isolated().
+ *
+ * An account whose INBOX run fails with G_IO_ERROR_INVALID_DATA, for example
+ * because its existing INBOX is not selectable or its UIDVALIDITY differs, is
+ * held: other accounts keep materializing, the hold is logged and a retry is
+ * scheduled as described for
+ * wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry(), and
+ * the call still returns TRUE.
+ *
+ * Returns FALSE with @error set when the pass aborts, for example when a
+ * pending delivery has no account identity (G_IO_ERROR_INVALID_DATA) or the
+ * catalog cannot be written. Nothing is logged or scheduled then, and the
+ * status is unchanged. Committed runs stay committed and the checkpoint never
+ * moves past uncommitted work, so calling again after the cause is fixed
+ * resumes where it stopped.
  *
  * Must not be called while holding the journal writer's append lock, for
  * example from a WyreboxJournalWriterGuardedAppendFunc.
@@ -64,18 +116,26 @@ gboolean wyrebox_daemon_delivery_materialization_catch_up (
     GError **error);
 
 /*
- * Runs wyrebox_daemon_delivery_materialization_catch_up(). On failure, logs a
- * warning and, unless one is already pending, schedules a retry that repeats
- * every retry interval until a catch-up succeeds. Every failure is treated as
+ * Runs a catch-up pass after a delivery. When the pass aborts or holds an
+ * account, logs a warning and, unless one is already pending, schedules a
+ * retry; a pending retry is never postponed. Every abort is treated as
  * temporary here; deliveries stay durable in the journal regardless.
+ *
+ * Each retry is a one-shot full pass. A failed retry schedules the next one
+ * with twice the previous delay, capped at the maximum interval. A clean pass
+ * cancels any pending retry, resets the interval, and logs the recovery.
+ * Warnings carry each held account with the journal offset and sequence of
+ * its first unmaterialized delivery. A warning is logged when the failure
+ * changes and otherwise at most once per maximum interval; repeated identical
+ * failures are logged at debug level.
  *
  * Safe to call from any thread, with the same append-lock restriction as
  * wyrebox_daemon_delivery_materialization_catch_up(). Callers on other threads
  * and the scheduled retry contend for the same internal lock, so a call can
  * block for the duration of an in-progress catch-up.
  *
- * After wyrebox_daemon_delivery_materialization_stop(), failures are logged
- * but no retry is scheduled.
+ * After wyrebox_daemon_delivery_materialization_stop(), every failure is
+ * logged as a warning but no retry is scheduled.
  */
 void wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
     WyreboxDaemonDeliveryMaterialization *self);
@@ -92,12 +152,34 @@ gboolean wyrebox_daemon_delivery_materialization_is_retry_pending (
     WyreboxDaemonDeliveryMaterialization *self);
 
 /*
- * Sets the retry interval in milliseconds used for retries scheduled after
- * this call. Defaults to 5000.
+ * Fills @out_status with a snapshot of the failure state. Safe to call from
+ * any thread.
+ *
+ * @out_status: (out caller-allocates): zero-initialized status; clear it with
+ *   wyrebox_daemon_delivery_materialization_status_clear().
  */
-void wyrebox_daemon_delivery_materialization_set_retry_interval (
+void wyrebox_daemon_delivery_materialization_get_status (
     WyreboxDaemonDeliveryMaterialization *self,
-    guint interval_ms);
+    WyreboxDaemonDeliveryMaterializationStatus *out_status);
+
+/*
+ * Sets the first retry delay and the cap in milliseconds; @max_ms is also the
+ * warning rate-limit window. Defaults to 5000 and 300000. Call before the
+ * first catch-up.
+ */
+void wyrebox_daemon_delivery_materialization_set_retry_backoff (
+    WyreboxDaemonDeliveryMaterialization *self,
+    guint initial_ms,
+    guint max_ms);
+
+/*
+ * Replaces the clock used to rate-limit warnings; defaults to
+ * g_get_monotonic_time(). @user_data is not owned and must outlive @self.
+ */
+void wyrebox_daemon_delivery_materialization_set_clock (
+    WyreboxDaemonDeliveryMaterialization *self,
+    WyreboxDaemonDeliveryMaterializationClockFunc clock,
+    gpointer user_data);
 
 G_END_DECLS
 /* *INDENT-ON* */

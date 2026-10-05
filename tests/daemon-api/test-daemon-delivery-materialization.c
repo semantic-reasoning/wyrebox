@@ -214,6 +214,87 @@ assert_checkpoint (const gchar *catalog_path,
 }
 
 static void
+seed_unselectable_account_b_inbox (const Fixture *fixture)
+{
+    exec_catalog_sql (fixture->catalog_path,
+        "INSERT INTO accounts (account_id) VALUES ('account-b');");
+    exec_catalog_sql (fixture->catalog_path,
+        "INSERT INTO mailboxes ("
+        "mailbox_id, account_id, imap_name, is_selectable, is_visible"
+        ") VALUES ('inbox-b', 'account-b', 'INBOX', FALSE, TRUE);");
+}
+
+static void
+make_account_b_inbox_selectable (const Fixture *fixture)
+{
+    exec_catalog_sql (fixture->catalog_path,
+        "UPDATE mailboxes SET is_selectable = TRUE "
+        "WHERE mailbox_id = 'inbox-b';");
+}
+
+static guint64
+account_membership_count (const gchar *catalog_path, const gchar *account_id)
+{
+    g_autofree gchar *sql = g_strdup_printf ("SELECT COUNT(*) FROM "
+            "mailbox_memberships WHERE account_id = '%s';", account_id);
+
+    return query_catalog_uint64 (catalog_path, sql);
+}
+
+static void
+assert_status (WyreboxDaemonDeliveryMaterialization *materialization,
+    WyreboxDaemonDeliveryMaterializationState state,
+    guint consecutive_failures, guint next_retry_interval_ms,
+    const gchar *held_account)
+{
+    g_auto (WyreboxDaemonDeliveryMaterializationStatus) status = { 0 };
+
+    wyrebox_daemon_delivery_materialization_get_status (materialization,
+        &status);
+    g_assert_cmpint (status.state, ==, state);
+    g_assert_cmpuint (status.consecutive_failures, ==, consecutive_failures);
+    g_assert_cmpuint (status.next_retry_interval_ms, ==,
+        next_retry_interval_ms);
+    g_assert_nonnull (status.held_accounts);
+    if (held_account == NULL) {
+        g_assert_cmpuint (g_strv_length (status.held_accounts), ==, 0);
+    } else {
+        g_assert_cmpuint (g_strv_length (status.held_accounts), ==, 1);
+        g_assert_cmpstr (status.held_accounts[0], ==, held_account);
+    }
+    if (state == WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_OK)
+        g_assert_null (status.last_error);
+    else
+        g_assert_nonnull (status.last_error);
+}
+
+static void
+wait_for_consecutive_failures (WyreboxDaemonDeliveryMaterialization
+    *materialization, guint expected)
+{
+    gint64 deadline = g_get_monotonic_time () + 10 * G_TIME_SPAN_SECOND;
+
+    for (;;) {
+        g_auto (WyreboxDaemonDeliveryMaterializationStatus) status = { 0 };
+
+        wyrebox_daemon_delivery_materialization_get_status (materialization,
+            &status);
+        if (status.consecutive_failures >= expected) {
+            g_assert_cmpuint (status.consecutive_failures, ==, expected);
+            return;
+        }
+        g_assert_cmpint (g_get_monotonic_time (), <, deadline);
+        g_main_context_iteration (NULL, TRUE);
+    }
+}
+
+static gint64
+fake_clock (gpointer user_data)
+{
+    return *(const gint64 *)user_data;
+}
+
+static void
 test_catch_up_materializes_into_account_inbox (Fixture *fixture,
     gconstpointer user_data)
 {
@@ -289,35 +370,35 @@ test_retry_resumes_after_failed_run (Fixture *fixture, gconstpointer user_data)
     g_autoptr (GError) error = NULL;
     gint64 deadline = 0;
 
-    exec_catalog_sql (fixture->catalog_path,
-        "INSERT INTO accounts (account_id) VALUES ('account-b');");
-    exec_catalog_sql (fixture->catalog_path,
-        "INSERT INTO mailboxes ("
-        "mailbox_id, account_id, imap_name, is_selectable, is_visible"
-        ") VALUES ('inbox-b', 'account-b', 'INBOX', FALSE, TRUE);");
+    seed_unselectable_account_b_inbox (fixture);
 
     materialization = new_materialization (fixture, fixture->catalog_path);
-    wyrebox_daemon_delivery_materialization_set_retry_interval (
-        materialization, 10);
+    wyrebox_daemon_delivery_materialization_set_retry_backoff (
+        materialization, 10, 40);
     ingest (fixture, "simple-crlf.eml", "delivery-1", "account-a", &first);
     ingest (fixture, "duplicate-message-id.eml", "delivery-2", "account-b",
         &second);
     ingest (fixture, "simple-crlf.eml", "delivery-3", "account-a", &third);
 
     g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
-        "*delivery materialization failed*inbox-b*");
+        "*delivery materialization held account account-b*journal offset*"
+        "sequence*inbox-b*retry in 10 ms*");
     wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
         materialization);
     g_test_assert_expected_messages ();
     g_assert_true (wyrebox_daemon_delivery_materialization_is_retry_pending (
             materialization));
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_HELD, 1, 10, "account-b");
     g_assert_cmpuint (inbox_uid (fixture->catalog_path, "account-a", &first),
         ==, 1);
+    g_assert_cmpuint (inbox_uid (fixture->catalog_path, "account-a", &third),
+        ==, 2);
+    g_assert_cmpuint (account_membership_count (fixture->catalog_path,
+        "account-b"), ==, 0);
     assert_checkpoint (fixture->catalog_path, &first);
 
-    exec_catalog_sql (fixture->catalog_path,
-        "UPDATE mailboxes SET is_selectable = TRUE "
-        "WHERE mailbox_id = 'inbox-b';");
+    make_account_b_inbox_selectable (fixture);
 
     deadline = g_get_monotonic_time () + 10 * G_TIME_SPAN_SECOND;
     while (wyrebox_daemon_delivery_materialization_is_retry_pending (
@@ -326,6 +407,8 @@ test_retry_resumes_after_failed_run (Fixture *fixture, gconstpointer user_data)
         g_main_context_iteration (NULL, TRUE);
     }
 
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_OK, 0, 10, NULL);
     g_assert_cmpuint (inbox_uid (fixture->catalog_path, "account-b", &second),
         ==, 1);
     g_assert_cmpuint (inbox_uid (fixture->catalog_path, "account-a", &third),
@@ -404,12 +487,7 @@ test_stop_cancels_retry_and_releases_reference (Fixture *fixture,
     WyreboxDaemonDeliveryMaterialization *materialization = NULL;
     g_auto (WyreboxEmlIngestResult) delivered = { 0 };
 
-    exec_catalog_sql (fixture->catalog_path,
-        "INSERT INTO accounts (account_id) VALUES ('account-b');");
-    exec_catalog_sql (fixture->catalog_path,
-        "INSERT INTO mailboxes ("
-        "mailbox_id, account_id, imap_name, is_selectable, is_visible"
-        ") VALUES ('inbox-b', 'account-b', 'INBOX', FALSE, TRUE);");
+    seed_unselectable_account_b_inbox (fixture);
     ingest (fixture, "simple-crlf.eml", "delivery-1", "account-b", &delivered);
 
     materialization = new_materialization (fixture, fixture->catalog_path);
@@ -417,7 +495,8 @@ test_stop_cancels_retry_and_releases_reference (Fixture *fixture,
         (gpointer *)&materialization);
 
     g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
-        "*delivery materialization failed*inbox-b*");
+        "*delivery materialization held account account-b*inbox-b*"
+        "retry in 5000 ms*");
     wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
         materialization);
     g_test_assert_expected_messages ();
@@ -429,7 +508,8 @@ test_stop_cancels_retry_and_releases_reference (Fixture *fixture,
             materialization));
 
     g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
-        "*delivery materialization failed*inbox-b*");
+        "*delivery materialization held account account-b*inbox-b*"
+        "service stopped, no retry scheduled*");
     wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
         materialization);
     g_test_assert_expected_messages ();
@@ -438,6 +518,188 @@ test_stop_cancels_retry_and_releases_reference (Fixture *fixture,
 
     g_object_unref (materialization);
     g_assert_null (materialization);
+}
+
+static void
+test_catch_up_with_held_account_schedules_retry (Fixture *fixture,
+    gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonDeliveryMaterialization) materialization = NULL;
+    g_auto (WyreboxEmlIngestResult) held = { 0 };
+    g_auto (WyreboxEmlIngestResult) healthy = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    seed_unselectable_account_b_inbox (fixture);
+    ingest (fixture, "simple-crlf.eml", "delivery-1", "account-b", &held);
+    ingest (fixture, "duplicate-message-id.eml", "delivery-2", "account-a",
+        &healthy);
+    materialization = new_materialization (fixture, fixture->catalog_path);
+
+    g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
+        "*delivery materialization held account account-b*inbox-b*");
+    g_assert_true (wyrebox_daemon_delivery_materialization_catch_up (
+            materialization, &error));
+    g_assert_no_error (error);
+    g_test_assert_expected_messages ();
+
+    g_assert_true (wyrebox_daemon_delivery_materialization_is_retry_pending (
+            materialization));
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_HELD, 1, 5000,
+        "account-b");
+    g_assert_cmpuint (inbox_uid (fixture->catalog_path, "account-a",
+        &healthy), ==, 1);
+
+    wyrebox_daemon_delivery_materialization_stop (materialization);
+}
+
+static void
+test_held_account_does_not_block_later_deliveries (Fixture *fixture,
+    gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonDeliveryMaterialization) materialization = NULL;
+    g_auto (WyreboxEmlIngestResult) a1 = { 0 };
+    g_auto (WyreboxEmlIngestResult) b1 = { 0 };
+    g_auto (WyreboxEmlIngestResult) a2 = { 0 };
+    g_auto (WyreboxEmlIngestResult) b2 = { 0 };
+
+    seed_unselectable_account_b_inbox (fixture);
+    materialization = new_materialization (fixture, fixture->catalog_path);
+
+    ingest (fixture, "simple-crlf.eml", "delivery-a1", "account-a", &a1);
+    ingest (fixture, "duplicate-message-id.eml", "delivery-b1", "account-b",
+        &b1);
+    g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
+        "*delivery materialization held account account-b*");
+    wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
+        materialization);
+    g_test_assert_expected_messages ();
+
+    ingest (fixture, "simple-crlf.eml", "delivery-a2", "account-a", &a2);
+    ingest (fixture, "duplicate-message-id.eml", "delivery-b2", "account-b",
+        &b2);
+    wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
+        materialization);
+
+    g_assert_cmpuint (inbox_uid (fixture->catalog_path, "account-a", &a1), ==,
+        1);
+    g_assert_cmpuint (inbox_uid (fixture->catalog_path, "account-a", &a2), ==,
+        2);
+    g_assert_cmpuint (account_membership_count (fixture->catalog_path,
+        "account-b"), ==, 0);
+    assert_checkpoint (fixture->catalog_path, &a1);
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_HELD, 1, 5000,
+        "account-b");
+
+    wyrebox_daemon_delivery_materialization_stop (materialization);
+}
+
+static void
+test_retry_backoff_doubles_and_caps (Fixture *fixture,
+    gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonDeliveryMaterialization) materialization = NULL;
+    g_auto (WyreboxEmlIngestResult) held = { 0 };
+    gint64 now = 0;
+
+    seed_unselectable_account_b_inbox (fixture);
+    ingest (fixture, "simple-crlf.eml", "delivery-1", "account-b", &held);
+    materialization = new_materialization (fixture, fixture->catalog_path);
+    wyrebox_daemon_delivery_materialization_set_retry_backoff (
+        materialization, 10, 40);
+    wyrebox_daemon_delivery_materialization_set_clock (materialization,
+        fake_clock, &now);
+
+    g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
+        "*delivery materialization held account account-b*retry in 10 ms*");
+    wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
+        materialization);
+    g_test_assert_expected_messages ();
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_HELD, 1, 10, "account-b");
+
+    wait_for_consecutive_failures (materialization, 2);
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_HELD, 2, 20, "account-b");
+    wait_for_consecutive_failures (materialization, 3);
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_HELD, 3, 40, "account-b");
+    wait_for_consecutive_failures (materialization, 4);
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_HELD, 4, 40, "account-b");
+
+    wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
+        materialization);
+    g_assert_true (wyrebox_daemon_delivery_materialization_is_retry_pending (
+            materialization));
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_HELD, 4, 40, "account-b");
+
+    now = 40 * G_TIME_SPAN_MILLISECOND;
+    g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
+        "*delivery materialization held account account-b*retry in 40 ms*");
+    wait_for_consecutive_failures (materialization, 5);
+    g_test_assert_expected_messages ();
+
+    wyrebox_daemon_delivery_materialization_stop (materialization);
+}
+
+static void
+test_clean_pass_cancels_retry_and_resets_backoff (Fixture *fixture,
+    gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonDeliveryMaterialization) materialization = NULL;
+    g_auto (WyreboxEmlIngestResult) held = { 0 };
+
+    seed_unselectable_account_b_inbox (fixture);
+    ingest (fixture, "simple-crlf.eml", "delivery-1", "account-b", &held);
+    materialization = new_materialization (fixture, fixture->catalog_path);
+    wyrebox_daemon_delivery_materialization_set_retry_backoff (
+        materialization, 10, 40);
+
+    g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
+        "*delivery materialization held account account-b*");
+    wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
+        materialization);
+    g_test_assert_expected_messages ();
+    wait_for_consecutive_failures (materialization, 2);
+
+    make_account_b_inbox_selectable (fixture);
+    wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
+        materialization);
+
+    g_assert_false (wyrebox_daemon_delivery_materialization_is_retry_pending (
+            materialization));
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_OK, 0, 10, NULL);
+    g_assert_cmpuint (inbox_uid (fixture->catalog_path, "account-b", &held),
+        ==, 1);
+    assert_checkpoint (fixture->catalog_path, &held);
+}
+
+static void
+test_aborted_pass_schedules_retry (Fixture *fixture, gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonDeliveryMaterialization) materialization = NULL;
+    g_auto (WyreboxEmlIngestResult) legacy = { 0 };
+
+    ingest (fixture, "simple-crlf.eml", NULL, NULL, &legacy);
+    materialization = new_materialization (fixture, fixture->catalog_path);
+
+    g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
+        "*delivery materialization failed*no account identity*"
+        "retry in 5000 ms*");
+    wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
+        materialization);
+    g_test_assert_expected_messages ();
+
+    g_assert_true (wyrebox_daemon_delivery_materialization_is_retry_pending (
+            materialization));
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_RETRYING, 1, 5000, NULL);
+
+    wyrebox_daemon_delivery_materialization_stop (materialization);
 }
 
 int
@@ -471,6 +733,30 @@ main (int argc, char **argv)
         "stop-cancels-retry-and-releases-reference",
         Fixture, NULL, (void (*)(Fixture *, gconstpointer)) fixture_set_up,
         test_stop_cancels_retry_and_releases_reference,
+        (void (*)(Fixture *, gconstpointer)) fixture_tear_down);
+    g_test_add ("/daemon/delivery-materialization/"
+        "catch-up-with-held-account-schedules-retry",
+        Fixture, NULL, (void (*)(Fixture *, gconstpointer)) fixture_set_up,
+        test_catch_up_with_held_account_schedules_retry,
+        (void (*)(Fixture *, gconstpointer)) fixture_tear_down);
+    g_test_add ("/daemon/delivery-materialization/"
+        "held-account-does-not-block-later-deliveries",
+        Fixture, NULL, (void (*)(Fixture *, gconstpointer)) fixture_set_up,
+        test_held_account_does_not_block_later_deliveries,
+        (void (*)(Fixture *, gconstpointer)) fixture_tear_down);
+    g_test_add (
+        "/daemon/delivery-materialization/retry-backoff-doubles-and-caps",
+        Fixture, NULL, (void (*)(Fixture *, gconstpointer)) fixture_set_up,
+        test_retry_backoff_doubles_and_caps,
+        (void (*)(Fixture *, gconstpointer)) fixture_tear_down);
+    g_test_add ("/daemon/delivery-materialization/"
+        "clean-pass-cancels-retry-and-resets-backoff",
+        Fixture, NULL, (void (*)(Fixture *, gconstpointer)) fixture_set_up,
+        test_clean_pass_cancels_retry_and_resets_backoff,
+        (void (*)(Fixture *, gconstpointer)) fixture_tear_down);
+    g_test_add ("/daemon/delivery-materialization/aborted-pass-schedules-retry",
+        Fixture, NULL, (void (*)(Fixture *, gconstpointer)) fixture_set_up,
+        test_aborted_pass_schedules_retry,
         (void (*)(Fixture *, gconstpointer)) fixture_tear_down);
 
     return g_test_run ();
