@@ -120,6 +120,99 @@ Dovecot fetch and search operations interrupted by restart return an
 IMAP-visible temporary backend failure. Dovecot code must not bypass the daemon
 to read mutable state during restart.
 
+## Delivery Materialization Troubleshooting
+
+This section is the operator runbook for
+`docs/adr/0003-delivery-materialization-isolation.md`. Until a daemon status
+operation exists, `wyreboxd` log lines are the operator interface.
+
+Symptoms and log lines:
+
+- A held account keeps accepting deliveries, but new mail does not appear in
+  its INBOX. Other accounts are unaffected. `wyreboxd` logs a warning:
+  `delivery materialization held account <account> at journal offset <offset>
+  sequence <sequence>: <error>; retry in <n> ms`. The offset and sequence
+  identify the first delivery of that account that the pass could not apply,
+  and `<error>` names the cause. Several held accounts appear in one line,
+  separated by `; `.
+- A pass that cannot complete, for example because of a journaled delivery
+  without an account or a catalog write failure, logs
+  `delivery materialization failed: <error>; retry in <n> ms`. While it lasts,
+  at least the deliveries from the failing point on, and possibly every
+  delivery after the checkpoint, are not materialized for any account.
+- `<n>` is the delay the pending retry was scheduled with, not the time left.
+- The same failure is logged as a warning when it first appears or changes,
+  and then at most once per maximum retry interval (5 minutes). Repeats in
+  between are debug messages.
+- During shutdown the suffix is `service stopped, no retry scheduled`.
+- When a later pass succeeds, `wyreboxd` logs
+  `delivery materialization recovered`.
+- A startup failure is printed to stderr as
+  `wyreboxd: delivery materialization failed: <error>` or
+  `wyreboxd: catalog preparation failed: <error>`, without a retry suffix, and
+  `wyreboxd` exits.
+
+Diagnosis:
+
+`wyreboxd` keeps the catalog open. Stop `wyreboxd` before inspecting the
+catalog; Postfix defers deliveries while it is down. Read the restart caveat
+under Recovery first: while `delivery materialization failed` warnings
+continue, `wyreboxd` may not start again until the cause is fixed. A copy of
+the catalog file and its `.wal` file taken while `wyreboxd` runs is not
+consistent and may not open. Query the catalog with the DuckDB CLI in
+read-only mode:
+
+```sql
+SELECT mailbox_id, imap_name, is_selectable, is_visible
+FROM mailboxes WHERE account_id = '<account>';
+SELECT namespace_id, uidvalidity, uidnext
+FROM mailbox_uid_state
+WHERE account_id = '<account>' AND namespace_kind = 'mailbox';
+SELECT journal_offset, journal_sequence
+FROM materialization_checkpoint WHERE checkpoint_key = 'materialization';
+```
+
+Common hold causes are an existing INBOX row that is not selectable or not
+visible, and INBOX `mailbox_uid_state` that is missing, stale, or has an
+unexpected UIDVALIDITY. The checkpoint stays just before the earliest held
+delivery.
+
+Recovery:
+
+- `wyreboxd` retries automatically: the first retry runs after 5 s, each
+  failed retry doubles the delay, and the delay is capped at 5 minutes. New
+  deliveries do not retry a held account.
+- `wyreboxd` is the only catalog writer. Do not edit catalog rows by hand.
+  The catalog is materialized from the journal, so the supported repair is a
+  rebuild: stop `wyreboxd`, move the catalog file and its `.wal` file aside
+  together and keep them until the rebuild is verified, then start `wyreboxd`.
+  Startup replays the whole journal into a new catalog before it serves
+  requests, and Postfix defers deliveries until then. Never remove the catalog
+  file while leaving its `.wal` file in place. A rebuild does not clear a hold
+  or failure caused by the journal data itself.
+- Restarting `wyreboxd` runs a full pass immediately. This is safe when only
+  hold warnings are logged: a hold that remains is logged again and does not
+  stop startup. While `delivery materialization failed` warnings continue, a
+  restart turns the runtime retry into a fatal startup failure, so fix the
+  cause first.
+
+Startup exit codes:
+
+- `EX_DATAERR` (65) means a permanent problem: corrupt or account-less journal
+  data, an unsafe journal suffix, or a catalog schema newer than this build
+  supports. systemd does not restart `wyreboxd`. Read the `wyreboxd` journal
+  for `catalog preparation failed`, `delivery materialization failed`, or
+  `delivery storage is invalid`, and fix the cause before starting again.
+- `EX_TEMPFAIL` (75) means a failure that may clear by itself, such as another
+  process holding the catalog open or an I/O error. systemd restarts
+  `wyreboxd` within its start rate limit. If restarts keep failing, look for
+  processes holding the catalog and check disk space and permissions.
+- `EX_OSERR` (71) means `wyreboxd` could not open its object store, journal,
+  catalog services, or socket, and `EX_CONFIG` (78) means the configuration is
+  invalid. systemd restarts after both, within its start rate limit.
+- The ADR lists the known misclassifications, for example corrupt catalog
+  files exiting with 75 and transient object read errors exiting with 65.
+
 ## Permission Mismatch Behavior
 
 A permission mismatch exists when the socket owner, group, or mode differs
