@@ -159,14 +159,62 @@ fail_if_any_record_lacks_account (const WyreboxDeliveryProjectionList *list,
     return TRUE;
 }
 
+void
+wyrebox_delivery_catchup_hold_free (WyreboxDeliveryCatchupHold *hold)
+{
+    if (hold == NULL)
+        return;
+
+    g_free (hold->account_id);
+    g_clear_error (&hold->error);
+    g_free (hold);
+}
+
+void
+wyrebox_delivery_catchup_report_clear (WyreboxDeliveryCatchupReport *report)
+{
+    if (report == NULL)
+        return;
+
+    g_clear_pointer (&report->holds, g_ptr_array_unref);
+}
+
+static gboolean
+is_account_held (const GPtrArray *holds, const gchar *account_id)
+{
+    for (guint i = 0; i < holds->len; i++) {
+        const WyreboxDeliveryCatchupHold *hold = g_ptr_array_index (holds, i);
+
+        if (g_strcmp0 (hold->account_id, account_id) == 0)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static void
+add_hold (GPtrArray *holds, const WyreboxDeliveryProjectionRecord *first,
+    GError *error)
+{
+    WyreboxDeliveryCatchupHold *hold = g_new0 (WyreboxDeliveryCatchupHold, 1);
+
+    hold->account_id = g_strdup (first->account_identity);
+    hold->journal_offset = first->journal_offset;
+    hold->journal_sequence = first->journal_sequence;
+    hold->error = error;
+    g_ptr_array_add (holds, hold);
+}
+
 gboolean
-wyrebox_delivery_catchup_materialize_account_inboxes (
+wyrebox_delivery_catchup_materialize_account_inboxes_isolated (
     WyreboxSchemaMetadataStore *metadata_store,
     WyreboxJournalReader *journal_reader,
     WyreboxLocalObjectStore *object_store,
-    WyreboxDeliveryMaterializer *materializer, GError **error)
+    WyreboxDeliveryMaterializer *materializer,
+    WyreboxDeliveryCatchupReport *out_report, GError **error)
 {
     g_auto (WyreboxDeliveryProjectionList) list = { 0 };
+    g_autoptr (GPtrArray) holds = NULL;
     guint run_start = 0;
 
     g_return_val_if_fail (WYREBOX_IS_SCHEMA_METADATA_STORE (metadata_store),
@@ -175,6 +223,8 @@ wyrebox_delivery_catchup_materialize_account_inboxes (
     g_return_val_if_fail (WYREBOX_IS_LOCAL_OBJECT_STORE (object_store), FALSE);
     g_return_val_if_fail (WYREBOX_IS_DELIVERY_MATERIALIZER (materializer),
         FALSE);
+    g_return_val_if_fail (out_report != NULL && out_report->holds == NULL,
+        FALSE);
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
     if (!replay_pending_deliveries (metadata_store, journal_reader,
@@ -182,10 +232,14 @@ wyrebox_delivery_catchup_materialize_account_inboxes (
         !fail_if_any_record_lacks_account (&list, error))
         return FALSE;
 
+    holds = g_ptr_array_new_with_free_func (
+        (GDestroyNotify)wyrebox_delivery_catchup_hold_free);
+
     while (run_start < list.records->len) {
         const WyreboxDeliveryProjectionRecord *first =
             g_ptr_array_index (list.records, run_start);
         g_auto (WyreboxDeliveryProjectionList) run = { 0 };
+        g_autoptr (GError) run_error = NULL;
         guint run_end = run_start;
 
         run.records = g_ptr_array_new ();
@@ -199,13 +253,47 @@ wyrebox_delivery_catchup_materialize_account_inboxes (
             g_ptr_array_add (run.records, record);
             run_end++;
         }
-
-        if (!wyrebox_delivery_materializer_apply_to_inbox (materializer,
-            first->account_identity, &run, error))
-            return FALSE;
-
         run_start = run_end;
+
+        if (is_account_held (holds, first->account_identity))
+            continue;
+
+        if (wyrebox_delivery_materializer_apply_to_inbox_full (materializer,
+            first->account_identity, &run, holds->len == 0, &run_error))
+            continue;
+
+        if (!g_error_matches (run_error, G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA)) {
+            g_propagate_error (error, g_steal_pointer (&run_error));
+            return FALSE;
+        }
+
+        add_hold (holds, first, g_steal_pointer (&run_error));
     }
 
+    out_report->holds = g_steal_pointer (&holds);
     return TRUE;
+}
+
+gboolean
+wyrebox_delivery_catchup_materialize_account_inboxes (
+    WyreboxSchemaMetadataStore *metadata_store,
+    WyreboxJournalReader *journal_reader,
+    WyreboxLocalObjectStore *object_store,
+    WyreboxDeliveryMaterializer *materializer, GError **error)
+{
+    g_auto (WyreboxDeliveryCatchupReport) report = { 0 };
+    const WyreboxDeliveryCatchupHold *hold = NULL;
+
+    if (!wyrebox_delivery_catchup_materialize_account_inboxes_isolated (
+            metadata_store, journal_reader, object_store, materializer,
+            &report, error))
+        return FALSE;
+
+    if (report.holds->len == 0)
+        return TRUE;
+
+    hold = g_ptr_array_index (report.holds, 0);
+    g_propagate_error (error, g_error_copy (hold->error));
+    return FALSE;
 }
