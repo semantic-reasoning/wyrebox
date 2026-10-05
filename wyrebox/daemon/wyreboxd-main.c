@@ -7,6 +7,7 @@
 #include "wyrebox-daemon-connection-server.h"
 #include "wyrebox-daemon-delivery-ingestion-service.h"
 #include "wyrebox-daemon-delivery-materialization.h"
+#include "wyrebox-daemon-exit-code.h"
 #include "wyrebox-daemon-mailbox-catalog-duckdb.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-runtime.h"
@@ -212,7 +213,7 @@ run_daemon (int argc, char **argv)
         catalog_path, FALSE, &error)) {
         g_printerr ("wyreboxd: catalog preparation failed: %s\n",
             error->message);
-        return EX_DATAERR;
+        return wyrebox_daemon_exit_code_for_startup_error (error);
     }
 
     mailbox_catalog = wyrebox_daemon_mailbox_catalog_duckdb_new (catalog_path,
@@ -250,7 +251,7 @@ run_daemon (int argc, char **argv)
         &error)) {
         g_printerr ("wyreboxd: delivery materialization failed: %s\n",
             error->message);
-        return EX_DATAERR;
+        return wyrebox_daemon_exit_code_for_startup_error (error);
     }
 
     ingestor = wyrebox_eml_ingestor_new_with_journal (object_store,

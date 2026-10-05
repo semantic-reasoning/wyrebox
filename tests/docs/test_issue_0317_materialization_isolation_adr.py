@@ -85,6 +85,13 @@ def main() -> None:
     assert_section_matches(sections, decision,
         r"`RestartPreventExitStatus=65`")
 
+    service_text = (REPO_ROOT / "systemd" / "wyreboxd.service.in").read_text(
+        encoding="utf-8")
+    assert re.search(r"^RestartPreventExitStatus=65$", service_text,
+                     re.MULTILINE), (
+        "wyreboxd.service.in must not restart after permanent failures"
+    )
+
     backup_text = (CONTRACTS_DIR / "backup-restore-workflow.md").read_text(
         encoding="utf-8")
     assert "materialization holds are not persisted" in backup_text, (

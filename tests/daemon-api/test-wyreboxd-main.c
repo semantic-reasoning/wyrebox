@@ -502,6 +502,38 @@ test_wyreboxd_fails_startup_on_delivery_without_account (void)
         "has no account identity");
 }
 
+static void
+test_wyreboxd_exits_tempfail_when_catalog_is_locked (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_auto (duckdb_database) database = NULL;
+
+    daemon_root_init (&daemon_root);
+    g_assert_cmpint (duckdb_open (daemon_root.catalog_path, &database), ==,
+        DuckDBSuccess);
+
+    assert_daemon_startup_fails (&daemon_root, EX_TEMPFAIL,
+        "catalog preparation failed");
+}
+
+static void
+test_wyreboxd_exits_dataerr_on_newer_catalog_schema (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    daemon_root_init (&daemon_root);
+    g_assert_true (wyrebox_daemon_runtime_prepare_catalog
+            (daemon_root.journal_dir, daemon_root.catalog_path, FALSE,
+        &error));
+    g_assert_no_error (error);
+    exec_catalog_sql (daemon_root.catalog_path,
+        "UPDATE schema_metadata SET schema_version = schema_version + 1;");
+
+    assert_daemon_startup_fails (&daemon_root, EX_DATAERR,
+        "catalog preparation failed");
+}
+
 /*
  * Prepares the catalog offline with an unselectable account-1 INBOX that
  * WyreBox refuses to materialize into.
@@ -717,6 +749,12 @@ main (int argc, char **argv)
     g_test_add_func
         ("/daemon-api/wyreboxd/fails-startup-on-delivery-without-account",
         test_wyreboxd_fails_startup_on_delivery_without_account);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/exits-tempfail-when-catalog-is-locked",
+        test_wyreboxd_exits_tempfail_when_catalog_is_locked);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/exits-dataerr-on-newer-catalog-schema",
+        test_wyreboxd_exits_dataerr_on_newer_catalog_schema);
     g_test_add_func ("/daemon-api/wyreboxd/starts-with-held-account",
         test_wyreboxd_starts_with_held_account);
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \
