@@ -96,7 +96,7 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Formatting And Style",
-        r"tools/uncrustify-format",
+        r"tools/format-c",
     )
     assert_section_matches(
         sections,

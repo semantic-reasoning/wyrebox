@@ -34,9 +34,13 @@ WyreBox provides:
   - 4-space indentation.
   - No tabs.
   - 80-column line target.
-  - Run `./tools/uncrustify-format <changed-c-or-h-files>` on changed C/H files.
-  - Run `./tools/uncrustify-format --check` to verify formatting.
+  - Uncrustify 0.83.0 is required; install it with
+    `./tools/install-uncrustify.sh <absolute-prefix>`.
+  - Run `./tools/format-c <changed-c-or-h-files>` on changed C/H files.
+  - Run `./tools/check-format.sh --all` to verify formatting.
   - `tests/*/fixtures/` mirror external sources and are not formatted.
+  - The committed `hooks/pre-commit` runs `./tools/check-format.sh --staged`.
+    `meson setup` activates it, or run `./tools/setup-git-hooks.sh`.
 - Daemon socket: `/run/wyrebox/wyrebox.sock`.
 - Daemon API wire format: Cap'n Proto over Unix domain sockets.
 - Canonical write path: append-only write-ahead journal.
@@ -71,8 +75,7 @@ WyreBox provides:
 - Prefer GLib primitives for errors, logging, main-loop integration, collections, and
   memory ownership where they fit.
 - Do not add manual cleanup ladders when `g_auto*` can express ownership clearly.
-- Keep C and header files formatted with `./tools/uncrustify-format` before
-  committing.
+- Keep C and header files formatted with `./tools/format-c` before committing.
 - Keep Dovecot ABI and allocation rules in mind. Use GObject wrappers at WyreBox
   boundaries where compatible, but do not fight Dovecot's required ownership model.
 

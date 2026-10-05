@@ -697,6 +697,42 @@ test(
   args: files('tests/docs/test_issue_0298_dovecot_fixture_bundle_contract.py'),
 )
 
+# Activate the committed hook through a worktree-relative hooksPath. Source
+# archives and unpacked sources nested below another repository deliberately
+# skip this developer setup.
+git_program = find_program('git', required: false)
+if git_program.found()
+  posix_sh = find_program('sh')
+  git_toplevel = run_command(
+    git_program,
+    '-C', meson.project_source_root(),
+    'rev-parse', '--show-toplevel',
+    check: false,
+  )
+  physical_source_root = run_command(
+    posix_sh,
+    '-c', 'CDPATH= cd "$1" && pwd -P',
+    'sh', meson.project_source_root(),
+    check: false,
+  )
+  if git_toplevel.returncode() == 0 and \
+      physical_source_root.returncode() == 0
+    physical_git_toplevel = run_command(
+      posix_sh,
+      '-c', 'CDPATH= cd "$1" && pwd -P',
+      'sh', git_toplevel.stdout().strip(),
+      check: false,
+    )
+    if physical_git_toplevel.returncode() == 0 and \
+        physical_git_toplevel.stdout().strip() == \
+        physical_source_root.stdout().strip()
+      git_hook_setup = find_program('tools/setup-git-hooks.sh')
+      message('Activating committed git hooks')
+      run_command(git_hook_setup, check: true)
+    endif
+  endif
+endif
+
 subdir('tests/object-store')
 subdir('tests/backup')
 subdir('tests/admin')
