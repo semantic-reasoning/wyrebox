@@ -21,24 +21,36 @@ struct _WyreboxDaemonDeliveryMaterialization
     GMainContext *context;
 
     /*
-     * Serializes catch-ups and guards retry_source and retry_interval_ms.
+     * Serializes catch-ups and guards retry_source, retry_interval_ms and
+     * stopped.
      */
     GMutex lock;
     GSource *retry_source;
     guint retry_interval_ms;
+    gboolean stopped;
 };
 
 G_DEFINE_TYPE (WyreboxDaemonDeliveryMaterialization,
     wyrebox_daemon_delivery_materialization, G_TYPE_OBJECT)
 
+/*
+ * Destroying the source may drop the last reference to @self, so it must
+ * happen without holding self->lock.
+ */
 static void
-clear_retry_source_locked (WyreboxDaemonDeliveryMaterialization *self)
+stop_retries (WyreboxDaemonDeliveryMaterialization *self)
 {
-    if (self->retry_source == NULL)
-        return;
+    GSource *source = NULL;
 
-    g_source_destroy (self->retry_source);
-    g_clear_pointer (&self->retry_source, g_source_unref);
+    g_mutex_lock (&self->lock);
+    self->stopped = TRUE;
+    source = g_steal_pointer (&self->retry_source);
+    g_mutex_unlock (&self->lock);
+
+    if (source != NULL) {
+        g_source_destroy (source);
+        g_source_unref (source);
+    }
 }
 
 static void
@@ -47,9 +59,7 @@ wyrebox_daemon_delivery_materialization_dispose (GObject *object)
     WyreboxDaemonDeliveryMaterialization *self =
         WYREBOX_DAEMON_DELIVERY_MATERIALIZATION (object);
 
-    g_mutex_lock (&self->lock);
-    clear_retry_source_locked (self);
-    g_mutex_unlock (&self->lock);
+    stop_retries (self);
 
     g_clear_object (&self->materializer);
     g_clear_object (&self->metadata_store);
@@ -194,15 +204,32 @@ wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
         return;
     }
 
+    if (self->stopped) {
+        g_mutex_unlock (&self->lock);
+        g_warning ("delivery materialization failed: %s; service stopped, "
+            "no retry scheduled", error->message);
+        return;
+    }
+
     if (self->retry_source == NULL) {
         self->retry_source = g_timeout_source_new (self->retry_interval_ms);
-        g_source_set_callback (self->retry_source, retry_catch_up, self, NULL);
+        g_source_set_callback (self->retry_source, retry_catch_up,
+            g_object_ref (self), g_object_unref);
         g_source_attach (self->retry_source, self->context);
     }
     g_mutex_unlock (&self->lock);
 
     g_warning ("delivery materialization failed: %s; retry scheduled",
         error->message);
+}
+
+void
+wyrebox_daemon_delivery_materialization_stop (
+    WyreboxDaemonDeliveryMaterialization *self)
+{
+    g_return_if_fail (WYREBOX_IS_DAEMON_DELIVERY_MATERIALIZATION (self));
+
+    stop_retries (self);
 }
 
 gboolean

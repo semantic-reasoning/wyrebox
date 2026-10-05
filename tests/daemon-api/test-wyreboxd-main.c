@@ -2,7 +2,7 @@
 #include <glib.h>
 #include <glib/gstdio.h>
 
-#include "wyrebox-daemon-mailbox-catalog-duckdb.h"
+#include "wyrebox-build-config.h"
 #include "wyrebox-daemon-frame-io.h"
 #include "wyrebox-daemon-mailbox-list-result.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
@@ -10,12 +10,19 @@
     WYREBOX_HAVE_CAPNP_SERIALIZATION
 #include "wyrebox-daemon-capnp-codec.h"
 #endif
-#include "wyrebox-schema-metadata-store.h"
+#include "wyrebox-daemon-runtime.h"
 #include "wyrebox-dovecot-daemon-client.h"
+#include "wyrebox-eml-ingestor.h"
+#include "wyrebox-journal-writer.h"
+#include "wyrebox-local-object-store.h"
 
 #include <signal.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <duckdb.h>
+#include <sysexits.h>
+
+#define JOURNAL_SEGMENT_NAME "00000000000000000000.wbj"
 
 static void
 duckdb_connection_clear (duckdb_connection *connection)
@@ -37,90 +44,91 @@ duckdb_database_clear (duckdb_database *database)
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_database, duckdb_database_clear)
 /* *INDENT-ON* */
 
-static char *
-make_temp_root (void)
+typedef struct
 {
-    g_autofree char *root = g_dir_make_tmp ("wyreboxd-main-test-XXXXXX", NULL);
+    char *root;
+    char *journal_dir;
+    char *object_dir;
+    char *catalog_path;
+    char *socket_path;
+    char *config_path;
+} DaemonRoot;
 
-    g_assert_nonnull (root);
-    return g_steal_pointer (&root);
+static void
+remove_tree (const char *path)
+{
+    g_autoptr (GDir) dir = g_dir_open (path, 0, NULL);
+    const char *name = NULL;
+
+    if (dir == NULL) {
+        (void)g_remove (path);
+        return;
+    }
+
+    while ((name = g_dir_read_name (dir)) != NULL) {
+        g_autofree char *child = g_build_filename (path, name, NULL);
+
+        remove_tree (child);
+    }
+
+    (void)g_rmdir (path);
 }
 
-static char *
-write_config (const char *dir, const char *contents)
+static void
+daemon_root_clear (DaemonRoot *daemon_root)
 {
-    g_autofree char *path = g_build_filename (dir, "wyrebox.conf", NULL);
+    if (daemon_root->root != NULL)
+        remove_tree (daemon_root->root);
+    g_clear_pointer (&daemon_root->root, g_free);
+    g_clear_pointer (&daemon_root->journal_dir, g_free);
+    g_clear_pointer (&daemon_root->object_dir, g_free);
+    g_clear_pointer (&daemon_root->catalog_path, g_free);
+    g_clear_pointer (&daemon_root->socket_path, g_free);
+    g_clear_pointer (&daemon_root->config_path, g_free);
+}
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (DaemonRoot, daemon_root_clear)
+/* *INDENT-ON* */
+
+static void
+daemon_root_init (DaemonRoot *daemon_root)
+{
+    g_autofree char *run_dir = NULL;
+    g_autofree char *config_contents = NULL;
     g_autoptr (GError) error = NULL;
 
-    g_assert_true (g_file_set_contents (path, contents, -1, &error));
+    daemon_root->root = g_dir_make_tmp ("wyreboxd-main-test-XXXXXX", NULL);
+    g_assert_nonnull (daemon_root->root);
+    run_dir = g_build_filename (daemon_root->root, "run", "wyrebox", NULL);
+    daemon_root->journal_dir = g_build_filename (daemon_root->root, "journal",
+            NULL);
+    daemon_root->object_dir = g_build_filename (daemon_root->root, "objects",
+            NULL);
+    daemon_root->catalog_path = g_build_filename (daemon_root->root,
+            "catalog.duckdb", NULL);
+    daemon_root->socket_path = g_build_filename (run_dir, "wyrebox.sock",
+            NULL);
+    daemon_root->config_path = g_build_filename (daemon_root->root,
+            "wyrebox.conf", NULL);
+
+    g_assert_cmpint (g_mkdir_with_parents (run_dir, 0750), ==, 0);
+    g_assert_cmpint (g_mkdir_with_parents (daemon_root->journal_dir, 0750), ==,
+        0);
+    g_assert_cmpint (g_mkdir_with_parents (daemon_root->object_dir, 0750), ==,
+        0);
+
+    config_contents = g_strdup_printf ("[daemon]\n"
+            "socket_path=%s\n"
+            "journal_root_dir=%s\n"
+            "object_root_dir=%s\n"
+            "catalog_path=%s\n", daemon_root->socket_path,
+            daemon_root->journal_dir, daemon_root->object_dir,
+            daemon_root->catalog_path);
+    g_assert_true (g_file_set_contents (daemon_root->config_path,
+        config_contents, -1, &error));
     g_assert_no_error (error);
-    g_assert_cmpint (chmod (path, 0600), ==, 0);
-    return g_steal_pointer (&path);
-}
-
-static void
-exec_sql (duckdb_connection connection, const char *sql)
-{
-    duckdb_result result = { 0 };
-    duckdb_state state = duckdb_query (connection, sql, &result);
-
-    if (state != DuckDBSuccess)
-        g_error ("duckdb query failed: %s", duckdb_result_error (&result));
-
-    duckdb_destroy_result (&result);
-}
-
-static char *
-create_catalog_path (const char *dir)
-{
-    return g_build_filename (dir, "catalog.duckdb", NULL);
-}
-
-static void
-bootstrap_catalog (const char *catalog_path)
-{
-    g_autoptr (GError) error = NULL;
-    g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
-
-    store = wyrebox_schema_metadata_store_new_duckdb (catalog_path, &error);
-    g_assert_no_error (error);
-    g_assert_nonnull (store);
-
-    g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation
-            (store,
-        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
-        0, 1, &error));
-    g_assert_no_error (error);
-}
-
-static void
-seed_mailbox_catalog (const char *catalog_path)
-{
-    g_auto (duckdb_database) database = NULL;
-    g_auto (duckdb_connection) connection = NULL;
-
-    g_assert_cmpint (duckdb_open (catalog_path, &database), ==, DuckDBSuccess);
-    g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
-
-    exec_sql (connection,
-        "INSERT INTO accounts (account_id) VALUES ('account-1');");
-    exec_sql (connection,
-        "INSERT INTO mailboxes (mailbox_id, account_id, imap_name, "
-        "is_selectable, is_visible) VALUES "
-        "('mailbox-inbox', 'account-1', 'INBOX', TRUE, TRUE);");
-    exec_sql (connection,
-        "INSERT INTO mailbox_uid_state (account_id, namespace_kind, "
-        "namespace_id, uidnext, uidvalidity) VALUES "
-        "('account-1', 'mailbox', 'mailbox-inbox', 2, 77);");
-    exec_sql (connection,
-        "INSERT INTO messages (message_id, account_id, object_id, "
-        "journal_offset, journal_sequence) VALUES "
-        "('message-1', 'account-1', 'object-1', 1, 1);");
-    exec_sql (connection,
-        "INSERT INTO mailbox_memberships (membership_id, account_id, "
-        "mailbox_id, message_id, uid, internal_date_unix_us, journal_offset, "
-        "journal_sequence, is_visible) VALUES "
-        "('membership-1', 'account-1', 'mailbox-inbox', 'message-1', 1, 1, 1, 1, TRUE);");
+    g_assert_cmpint (chmod (daemon_root->config_path, 0600), ==, 0);
 }
 
 static const char *
@@ -131,6 +139,28 @@ wyreboxd_executable (void)
     g_assert_nonnull (path);
     g_assert_cmpstr (path, !=, "");
     return path;
+}
+
+static GSubprocess *
+spawn_daemon (const DaemonRoot *daemon_root, GSubprocessFlags stderr_flag)
+{
+    g_autoptr (GError) error = NULL;
+    GSubprocess *subprocess = NULL;
+    const char *argv[] = {
+        wyreboxd_executable (),
+        "--config",
+        daemon_root->config_path,
+        NULL
+    };
+
+    (void)g_remove (daemon_root->socket_path);
+    subprocess = g_subprocess_newv (argv,
+            (GSubprocessFlags)(G_SUBPROCESS_FLAGS_STDOUT_SILENCE | stderr_flag),
+            &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (subprocess);
+
+    return subprocess;
 }
 
 static gboolean
@@ -145,20 +175,164 @@ wait_for_socket (const char *socket_path)
     return FALSE;
 }
 
+static GSubprocess *
+start_daemon (const DaemonRoot *daemon_root)
+{
+    GSubprocess *subprocess = spawn_daemon (daemon_root,
+            G_SUBPROCESS_FLAGS_STDERR_SILENCE);
+
+    g_assert_true (wait_for_socket (daemon_root->socket_path));
+    return subprocess;
+}
+
+static void
+stop_daemon (GSubprocess *subprocess)
+{
+    g_autoptr (GError) error = NULL;
+
+    g_subprocess_send_signal (subprocess, SIGTERM);
+    g_assert_true (g_subprocess_wait (subprocess, NULL, &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==, 0);
+}
+
+static void
+assert_daemon_startup_fails (const DaemonRoot *daemon_root, int exit_status,
+    const char *stderr_substring)
+{
+    g_autoptr (GSubprocess) subprocess = spawn_daemon (daemon_root,
+            G_SUBPROCESS_FLAGS_STDERR_PIPE);
+    g_autoptr (GError) error = NULL;
+    g_autofree char *stderr_text = NULL;
+
+    g_assert_true (g_subprocess_communicate_utf8 (subprocess, NULL, NULL,
+        NULL, &stderr_text, &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==,
+        exit_status);
+    g_assert_nonnull (strstr (stderr_text, stderr_substring));
+    g_assert_false (g_file_test (daemon_root->socket_path, G_FILE_TEST_EXISTS));
+}
+
+static GBytes *
+build_message (const char *subject)
+{
+    g_autofree char *message = g_strdup_printf (
+        "From: sender@example.com\r\n"
+        "To: recipient@example.com\r\n"
+        "Subject: %s\r\n" "\r\n" "body\r\n", subject);
+    gsize length = strlen (message);
+
+    return g_bytes_new_take (g_steal_pointer (&message), length);
+}
+
+/*
+ * Appends a delivery to the journal from the test process while wyreboxd is
+ * not running. A NULL @account_id records a pre-delivery-identity payload.
+ */
+static void
+journal_delivery_offline (const DaemonRoot *daemon_root,
+    const char *delivery_id, const char *account_id)
+{
+    const gchar *const recipients[] = { "recipient@example.com", NULL };
+    g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
+    g_autoptr (WyreboxJournalWriter) writer = NULL;
+    g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+    g_autoptr (GBytes) message = build_message (delivery_id);
+    g_auto (WyreboxEmlIngestResult) result = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    object_store = wyrebox_local_object_store_new (daemon_root->object_dir,
+            &error);
+    g_assert_no_error (error);
+    writer = wyrebox_journal_writer_new (daemon_root->journal_dir, &error);
+    g_assert_no_error (error);
+    ingestor = wyrebox_eml_ingestor_new_with_journal (object_store, writer);
+
+    if (account_id == NULL) {
+        g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, message,
+            &result, &error));
+    } else {
+        g_assert_true (wyrebox_eml_ingestor_ingest_delivery_bytes (ingestor,
+            message, delivery_id, NULL, account_id, "sender@example.com",
+            recipients, &result, &error));
+    }
+    g_assert_no_error (error);
+}
+
+static void
+exec_catalog_sql (const char *catalog_path, const char *sql)
+{
+    g_auto (duckdb_database) database = NULL;
+    g_auto (duckdb_connection) connection = NULL;
+    duckdb_result result = { 0 };
+
+    g_assert_cmpint (duckdb_open (catalog_path, &database), ==, DuckDBSuccess);
+    g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+    if (duckdb_query (connection, sql, &result) != DuckDBSuccess)
+        g_error ("duckdb query failed: %s", duckdb_result_error (&result));
+    duckdb_destroy_result (&result);
+}
+
+static char *
+query_catalog_string (const char *catalog_path, const char *sql)
+{
+    g_auto (duckdb_database) database = NULL;
+    g_auto (duckdb_connection) connection = NULL;
+    duckdb_result result = { 0 };
+    char *value = NULL;
+    char *copy = NULL;
+
+    g_assert_cmpint (duckdb_open (catalog_path, &database), ==, DuckDBSuccess);
+    g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+    if (duckdb_query (connection, sql, &result) != DuckDBSuccess)
+        g_error ("duckdb query failed: %s", duckdb_result_error (&result));
+    g_assert_cmpuint (duckdb_row_count (&result), ==, 1);
+    value = duckdb_value_varchar (&result, 0, 0);
+    copy = g_strdup (value != NULL ? value : "");
+    duckdb_free (value);
+    duckdb_destroy_result (&result);
+
+    return copy;
+}
+
+/*
+ * Summarizes every mailbox membership, UID namespace state and the
+ * materialization checkpoint, so catalogs can be compared after a rebuild.
+ */
+static char *
+catalog_snapshot (const char *catalog_path)
+{
+    g_autofree char *memberships = query_catalog_string (catalog_path,
+            "SELECT string_agg(b.account_id || '/' || b.imap_name || '/' || "
+            "b.mailbox_id || '@' || m.journal_offset || ':' || "
+            "m.journal_sequence || '=' || m.uid, ';' "
+            "ORDER BY m.journal_offset) FROM mailbox_memberships m "
+            "JOIN mailboxes b ON b.mailbox_id = m.mailbox_id;");
+    g_autofree char *uid_state = query_catalog_string (catalog_path,
+            "SELECT string_agg(namespace_id || ' next=' || uidnext || "
+            "' validity=' || uidvalidity, ';' ORDER BY namespace_id) "
+            "FROM mailbox_uid_state;");
+    g_autofree char *checkpoint = query_catalog_string (catalog_path,
+            "SELECT journal_offset || ':' || journal_sequence "
+            "FROM materialization_checkpoint "
+            "WHERE checkpoint_key = 'materialization';");
+
+    return g_strdup_printf ("memberships[%s] uid_state[%s] checkpoint[%s]",
+               memberships, uid_state, checkpoint);
+}
+
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \
     WYREBOX_HAVE_CAPNP_SERIALIZATION
 static GBytes *
-build_delivery_request (void)
+build_delivery_request (const char *delivery_id)
 {
     g_autoptr (GError) error = NULL;
     g_autoptr (GBytes) encoded = NULL;
+    g_autoptr (GBytes) message = build_message (delivery_id);
     g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
     g_auto (WyreboxDaemonDeliveryIngestionRequest) request = { 0 };
     const gchar *const recipients[] = { "recipient@example.com", NULL };
-    const guint8 payload[] =
-        "From: sender@example.com\r\n"
-        "To: recipient@example.com\r\n"
-        "Subject: wyreboxd roundtrip\r\n" "\r\n" "body\r\n";
 
     g_assert_true (wyrebox_daemon_request_identity_init (&identity,
         "request-wyreboxd-1",
@@ -167,11 +341,9 @@ build_delivery_request (void)
     g_assert_no_error (error);
 
     g_assert_true (wyrebox_daemon_delivery_ingestion_request_init (&request,
-        "delivery-wyreboxd-1",
+        delivery_id,
         "queue-wyreboxd-1",
-        "sender@example.com",
-        recipients,
-        g_bytes_new_static (payload, sizeof (payload) - 1), &error));
+        "sender@example.com", recipients, message, &error));
     g_assert_no_error (error);
 
     encoded =
@@ -235,54 +407,55 @@ roundtrip_request (const char *socket_path, GBytes *request)
 
     return g_steal_pointer (&response);
 }
+
+static void
+deliver (const DaemonRoot *daemon_root, const char *delivery_id)
+{
+    g_autoptr (GBytes) request = build_delivery_request (delivery_id);
+    g_autoptr (GBytes) response = roundtrip_request (daemon_root->socket_path,
+            request);
+
+    assert_success_response_roundtrip (response);
+}
+
+static void
+assert_mailbox_inbox_state (const DaemonRoot *daemon_root,
+    const char *mailbox_id, guint64 uid_next, guint64 message_count)
+{
+    g_auto (WyreboxDaemonMailboxSelectResult) select_result = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (daemon_root->socket_path, "account-1", "INBOX", &select_result,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (select_result.kind, ==,
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+    g_assert_cmpstr (select_result.mailbox_id, ==, mailbox_id);
+    g_assert_cmpstr (select_result.mailbox_name, ==, "INBOX");
+    g_assert_cmpuint (select_result.uid_validity, ==, 1);
+    g_assert_cmpuint (select_result.uid_next, ==, uid_next);
+    g_assert_cmpuint (select_result.message_count, ==, message_count);
+}
+
+static void
+assert_inbox_state (const DaemonRoot *daemon_root, guint64 uid_next,
+    guint64 message_count)
+{
+    assert_mailbox_inbox_state (daemon_root, "inbox:account-1", uid_next,
+        message_count);
+}
 #endif
 
 static void
 test_wyreboxd_accepts_config_and_starts_socket (void)
 {
-    g_autofree char *root = make_temp_root ();
-    g_autofree char *run_dir = g_build_filename (root, "run", "wyrebox", NULL);
-    g_autofree char *journal_dir = g_build_filename (root, "journal", NULL);
-    g_autofree char *object_dir = g_build_filename (root, "objects", NULL);
-    g_autofree char *catalog_path = NULL;
-    g_autofree char *config_path = NULL;
-    g_autofree char *socket_path = NULL;
-    g_autofree char *config_contents = NULL;
+    g_auto (DaemonRoot) daemon_root = { 0 };
     g_autoptr (GSubprocess) subprocess = NULL;
-    g_autoptr (GError) error = NULL;
 
-    g_assert_cmpint (g_mkdir_with_parents (run_dir, 0750), ==, 0);
-    g_assert_cmpint (g_mkdir_with_parents (journal_dir, 0750), ==, 0);
-    g_assert_cmpint (g_mkdir_with_parents (object_dir, 0750), ==, 0);
-    socket_path = g_build_filename (run_dir, "wyrebox.sock", NULL);
-    catalog_path = create_catalog_path (root);
-    bootstrap_catalog (catalog_path);
-    config_contents = g_strdup_printf ("[daemon]\n"
-            "socket_path=%s\n"
-            "journal_root_dir=%s\n"
-            "object_root_dir=%s\n"
-            "catalog_path=%s\n", socket_path, journal_dir, object_dir,
-            catalog_path);
-    config_path = write_config (root, config_contents);
-
-    const char *argv[] = {
-        wyreboxd_executable (),
-        "--config",
-        config_path,
-        NULL
-    };
-
-    subprocess = g_subprocess_newv (argv,
-            (GSubprocessFlags)(G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
-            G_SUBPROCESS_FLAGS_STDERR_PIPE), &error);
-    g_assert_no_error (error);
-    g_assert_nonnull (subprocess);
-
-    g_assert_true (wait_for_socket (socket_path));
-    g_subprocess_send_signal (subprocess, SIGTERM);
-    g_assert_true (g_subprocess_wait (subprocess, NULL, &error));
-    g_assert_no_error (error);
-    g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==, 0);
+    daemon_root_init (&daemon_root);
+    subprocess = start_daemon (&daemon_root);
+    stop_daemon (subprocess);
 }
 
 static void
@@ -308,140 +481,209 @@ test_wyreboxd_rejects_invalid_config_path (void)
     g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==, 78);
 }
 
+static void
+test_wyreboxd_fails_startup_on_delivery_without_account (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+
+    daemon_root_init (&daemon_root);
+    journal_delivery_offline (&daemon_root, "delivery-legacy", NULL);
+
+    assert_daemon_startup_fails (&daemon_root, EX_DATAERR,
+        "has no account identity");
+}
+
+/*
+ * Prepares the catalog offline with an unselectable account-1 INBOX that
+ * WyreBox refuses to materialize into.
+ */
+static void
+seed_unselectable_inbox (const DaemonRoot *daemon_root)
+{
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (wyrebox_daemon_runtime_prepare_catalog
+            (daemon_root->journal_dir, daemon_root->catalog_path, FALSE,
+        &error));
+    g_assert_no_error (error);
+    exec_catalog_sql (daemon_root->catalog_path,
+        "INSERT INTO accounts (account_id) VALUES ('account-1');");
+    exec_catalog_sql (daemon_root->catalog_path,
+        "INSERT INTO mailboxes (mailbox_id, account_id, imap_name, "
+        "is_selectable, is_visible) VALUES "
+        "('mailbox-inbox', 'account-1', 'INBOX', FALSE, TRUE);");
+}
+
+static void
+test_wyreboxd_fails_startup_on_unselectable_inbox (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+
+    daemon_root_init (&daemon_root);
+    seed_unselectable_inbox (&daemon_root);
+    journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
+
+    assert_daemon_startup_fails (&daemon_root, EX_DATAERR,
+        "delivery materialization failed");
+}
+
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \
     WYREBOX_HAVE_CAPNP_SERIALIZATION
 static void
-test_wyreboxd_exposes_catalog_backed_list_and_select (void)
+test_wyreboxd_materializes_delivery_before_receipt (void)
 {
-    g_autofree char *root = make_temp_root ();
-    g_autofree char *run_dir = g_build_filename (root, "run", "wyrebox", NULL);
-    g_autofree char *journal_dir = g_build_filename (root, "journal", NULL);
-    g_autofree char *object_dir = g_build_filename (root, "objects", NULL);
-    g_autofree char *catalog_path = NULL;
-    g_autofree char *config_path = NULL;
-    g_autofree char *socket_path = NULL;
-    g_autofree char *config_contents = NULL;
-    const char *argv[] = {
-        wyreboxd_executable (),
-        "--config",
-        NULL,
-    };
+    g_auto (DaemonRoot) daemon_root = { 0 };
     g_autoptr (GSubprocess) subprocess = NULL;
-    g_autoptr (GError) error = NULL;
     g_auto (WyreboxDaemonMailboxListResult) list_result = { 0 };
-    g_auto (WyreboxDaemonMailboxSelectResult) select_result = { 0 };
+    g_autoptr (GError) error = NULL;
 
-    g_assert_cmpint (g_mkdir_with_parents (run_dir, 0750), ==, 0);
-    g_assert_cmpint (g_mkdir_with_parents (journal_dir, 0750), ==, 0);
-    g_assert_cmpint (g_mkdir_with_parents (object_dir, 0750), ==, 0);
-    socket_path = g_build_filename (run_dir, "wyrebox.sock", NULL);
-    catalog_path = create_catalog_path (root);
-    bootstrap_catalog (catalog_path);
-    seed_mailbox_catalog (catalog_path);
+    daemon_root_init (&daemon_root);
+    subprocess = start_daemon (&daemon_root);
 
-    config_contents = g_strdup_printf ("[daemon]\n"
-            "socket_path=%s\n"
-            "journal_root_dir=%s\n"
-            "object_root_dir=%s\n"
-            "catalog_path=%s\n", socket_path, journal_dir, object_dir,
-            catalog_path);
-    config_path = write_config (root, config_contents);
-    argv[2] = config_path;
+    deliver (&daemon_root, "delivery-1");
+    assert_inbox_state (&daemon_root, 2, 1);
 
-    subprocess = g_subprocess_newv (argv,
-            (GSubprocessFlags)(G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
-            G_SUBPROCESS_FLAGS_STDERR_PIPE), &error);
-    g_assert_no_error (error);
-    g_assert_nonnull (subprocess);
-
-    g_assert_true (wait_for_socket (socket_path));
-
-    g_assert_true (wyrebox_dovecot_daemon_client_list_mailboxes (socket_path,
-        "account-1", "", list_result, &error));
+    g_assert_true (wyrebox_dovecot_daemon_client_list_mailboxes
+            (daemon_root.socket_path, "account-1", "", &list_result, &error));
     g_assert_no_error (error);
     g_assert_cmpuint (wyrebox_daemon_mailbox_list_result_get_n_entries
-            (list_result), ==, 1);
-    g_assert_cmpstr (wyrebox_daemon_mailbox_list_result_get_entry (list_result,
-        0)->mailbox_name, ==, "INBOX");
-    g_assert_cmpstr (wyrebox_daemon_mailbox_list_result_get_entry (list_result,
-        0)->mailbox_id, ==, "mailbox-inbox");
+            (&list_result), ==, 1);
+    g_assert_cmpstr (wyrebox_daemon_mailbox_list_result_get_entry (&list_result,
+        0)->mailbox_id, ==, "inbox:account-1");
 
-    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox (socket_path,
-        "account-1", "INBOX", select_result, &error));
-    g_assert_no_error (error);
-    g_assert_cmpint (select_result->kind, ==,
-        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
-    g_assert_cmpstr (select_result->mailbox_id, ==, "mailbox-inbox");
-    g_assert_cmpstr (select_result->mailbox_name, ==, "INBOX");
-    g_assert_cmpuint (select_result->uid_validity, ==, 77);
-    g_assert_cmpuint (select_result->uid_next, ==, 2);
-    g_assert_cmpuint (select_result->message_count, ==, 1);
+    deliver (&daemon_root, "delivery-2");
+    assert_inbox_state (&daemon_root, 3, 2);
 
-    g_subprocess_send_signal (subprocess, SIGTERM);
-    g_assert_true (g_subprocess_wait (subprocess, NULL, &error));
-    g_assert_no_error (error);
-    g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==, 0);
+    stop_daemon (subprocess);
 }
-#endif
 
 static void
-test_wyreboxd_roundtrips_delivery_request_over_socket (void)
+test_wyreboxd_catches_up_journal_on_startup (void)
 {
-#if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \
-    WYREBOX_HAVE_CAPNP_SERIALIZATION
-    g_autofree char *root = make_temp_root ();
-    g_autofree char *run_dir = g_build_filename (root, "run", "wyrebox", NULL);
-    g_autofree char *journal_dir = g_build_filename (root, "journal", NULL);
-    g_autofree char *object_dir = g_build_filename (root, "objects", NULL);
-    g_autofree char *catalog_path = NULL;
-    g_autofree char *config_path = NULL;
-    g_autofree char *socket_path = NULL;
-    g_autofree char *config_contents = NULL;
+    g_auto (DaemonRoot) daemon_root = { 0 };
     g_autoptr (GSubprocess) subprocess = NULL;
-    g_autoptr (GError) error = NULL;
-    g_autoptr (GBytes) request = NULL;
-    g_autoptr (GBytes) response = NULL;
 
-    g_assert_cmpint (g_mkdir_with_parents (run_dir, 0750), ==, 0);
-    g_assert_cmpint (g_mkdir_with_parents (journal_dir, 0750), ==, 0);
-    g_assert_cmpint (g_mkdir_with_parents (object_dir, 0750), ==, 0);
-    socket_path = g_build_filename (run_dir, "wyrebox.sock", NULL);
-    catalog_path = create_catalog_path (root);
-    bootstrap_catalog (catalog_path);
-    config_contents = g_strdup_printf ("[daemon]\n"
-            "socket_path=%s\n"
-            "journal_root_dir=%s\n"
-            "object_root_dir=%s\n"
-            "catalog_path=%s\n", socket_path, journal_dir, object_dir,
-            catalog_path);
-    config_path = write_config (root, config_contents);
+    daemon_root_init (&daemon_root);
+    journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
+    journal_delivery_offline (&daemon_root, "delivery-2", "account-1");
 
-    const char *argv[] = {
-        wyreboxd_executable (),
-        "--config",
-        config_path,
-        NULL
-    };
-
-    subprocess = g_subprocess_newv (argv,
-            (GSubprocessFlags)(G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
-            G_SUBPROCESS_FLAGS_STDERR_PIPE), &error);
-    g_assert_no_error (error);
-    g_assert_nonnull (subprocess);
-
-    g_assert_true (wait_for_socket (socket_path));
-    request = build_delivery_request ();
-    response = roundtrip_request (socket_path, request);
-    assert_success_response_roundtrip (response);
-
-    g_subprocess_send_signal (subprocess, SIGTERM);
-    g_assert_true (g_subprocess_wait (subprocess, NULL, &error));
-    g_assert_no_error (error);
-    g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==, 0);
-#else
-    g_test_skip ("Cap'n Proto serialization is not available in this build");
-#endif
+    subprocess = start_daemon (&daemon_root);
+    assert_inbox_state (&daemon_root, 3, 2);
+    deliver (&daemon_root, "delivery-3");
+    assert_inbox_state (&daemon_root, 4, 3);
+    stop_daemon (subprocess);
 }
+
+static void
+test_wyreboxd_rebuilds_identical_catalog_after_restart (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) first = NULL;
+    g_autoptr (GSubprocess) restarted = NULL;
+    g_autoptr (GSubprocess) rebuilt = NULL;
+    g_autofree char *before = NULL;
+    g_autofree char *after_restart = NULL;
+    g_autofree char *after_rebuild = NULL;
+    g_autofree char *catalog_wal_path = NULL;
+
+    daemon_root_init (&daemon_root);
+    catalog_wal_path = g_strconcat (daemon_root.catalog_path, ".wal", NULL);
+    first = start_daemon (&daemon_root);
+    deliver (&daemon_root, "delivery-1");
+    deliver (&daemon_root, "delivery-2");
+    stop_daemon (first);
+    before = catalog_snapshot (daemon_root.catalog_path);
+    g_assert_nonnull (strstr (before, "account-1/INBOX/inbox:account-1@"));
+    g_assert_nonnull (strstr (before, "=2]"));
+    g_assert_null (strstr (before, "checkpoint[]"));
+
+    restarted = start_daemon (&daemon_root);
+    assert_inbox_state (&daemon_root, 3, 2);
+    stop_daemon (restarted);
+    after_restart = catalog_snapshot (daemon_root.catalog_path);
+    g_assert_cmpstr (after_restart, ==, before);
+
+    g_assert_cmpint (g_remove (daemon_root.catalog_path), ==, 0);
+    (void)g_remove (catalog_wal_path);
+    rebuilt = start_daemon (&daemon_root);
+    assert_inbox_state (&daemon_root, 3, 2);
+    stop_daemon (rebuilt);
+    after_rebuild = catalog_snapshot (daemon_root.catalog_path);
+    g_assert_cmpstr (after_rebuild, ==, before);
+}
+
+static void
+test_wyreboxd_acknowledges_delivery_when_materialization_fails (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) failing = NULL;
+    g_autoptr (GSubprocess) restarted = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autofree char *stderr_text = NULL;
+
+    daemon_root_init (&daemon_root);
+    seed_unselectable_inbox (&daemon_root);
+
+    failing = spawn_daemon (&daemon_root, G_SUBPROCESS_FLAGS_STDERR_PIPE);
+    g_assert_true (wait_for_socket (daemon_root.socket_path));
+    deliver (&daemon_root, "delivery-1");
+    g_subprocess_send_signal (failing, SIGTERM);
+    g_assert_true (g_subprocess_communicate_utf8 (failing, NULL, NULL, NULL,
+        &stderr_text, &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (g_subprocess_get_exit_status (failing), ==, 0);
+    g_assert_nonnull (strstr (stderr_text,
+        "delivery materialization failed"));
+    g_assert_nonnull (strstr (stderr_text, "retry scheduled"));
+
+    exec_catalog_sql (daemon_root.catalog_path,
+        "UPDATE mailboxes SET is_selectable = TRUE "
+        "WHERE mailbox_id = 'mailbox-inbox';");
+    restarted = start_daemon (&daemon_root);
+    assert_mailbox_inbox_state (&daemon_root, "mailbox-inbox", 2, 1);
+    stop_daemon (restarted);
+}
+
+static void
+test_wyreboxd_recovers_torn_journal_suffix (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) first = NULL;
+    g_autoptr (GSubprocess) recovered = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autofree char *segment_path = NULL;
+    g_autofree char *contents = NULL;
+    gsize length = 0;
+    gsize committed_length = 0;
+
+    daemon_root_init (&daemon_root);
+    first = start_daemon (&daemon_root);
+    deliver (&daemon_root, "delivery-1");
+    stop_daemon (first);
+
+    segment_path = g_build_filename (daemon_root.journal_dir,
+            JOURNAL_SEGMENT_NAME, NULL);
+    g_assert_true (g_file_get_contents (segment_path, &contents,
+        &committed_length, &error));
+    g_assert_no_error (error);
+    g_clear_pointer (&contents, g_free);
+
+    journal_delivery_offline (&daemon_root, "delivery-torn", "account-1");
+    g_assert_true (g_file_get_contents (segment_path, &contents, &length,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (length, >, committed_length + 1);
+    g_assert_true (g_file_set_contents (segment_path, contents,
+        (gssize)(length - 1), &error));
+    g_assert_no_error (error);
+
+    recovered = start_daemon (&daemon_root);
+    assert_inbox_state (&daemon_root, 2, 1);
+    deliver (&daemon_root, "delivery-2");
+    assert_inbox_state (&daemon_root, 3, 2);
+    stop_daemon (recovered);
+}
+#endif
 
 int
 main (int argc, char **argv)
@@ -452,15 +694,27 @@ main (int argc, char **argv)
         test_wyreboxd_accepts_config_and_starts_socket);
     g_test_add_func ("/daemon-api/wyreboxd/rejects-invalid-config-path",
         test_wyreboxd_rejects_invalid_config_path);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/fails-startup-on-delivery-without-account",
+        test_wyreboxd_fails_startup_on_delivery_without_account);
+    g_test_add_func ("/daemon-api/wyreboxd/fails-startup-on-unselectable-inbox",
+        test_wyreboxd_fails_startup_on_unselectable_inbox);
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \
     WYREBOX_HAVE_CAPNP_SERIALIZATION
     g_test_add_func
-        ("/daemon-api/wyreboxd/catalog-backed-list-and-select",
-        test_wyreboxd_exposes_catalog_backed_list_and_select);
-#endif
+        ("/daemon-api/wyreboxd/materializes-delivery-before-receipt",
+        test_wyreboxd_materializes_delivery_before_receipt);
+    g_test_add_func ("/daemon-api/wyreboxd/catches-up-journal-on-startup",
+        test_wyreboxd_catches_up_journal_on_startup);
     g_test_add_func
-        ("/daemon-api/wyreboxd/roundtrips-delivery-request-over-socket",
-        test_wyreboxd_roundtrips_delivery_request_over_socket);
+        ("/daemon-api/wyreboxd/rebuilds-identical-catalog-after-restart",
+        test_wyreboxd_rebuilds_identical_catalog_after_restart);
+    g_test_add_func ("/daemon-api/wyreboxd/recovers-torn-journal-suffix",
+        test_wyreboxd_recovers_torn_journal_suffix);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/acknowledges-delivery-when-materialization-fails",
+        test_wyreboxd_acknowledges_delivery_when_materialization_fails);
+#endif
 
     return g_test_run ();
 }

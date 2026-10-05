@@ -5,8 +5,9 @@
 #include "wyrebox-daemon-capnp-codec.h"
 #endif
 #include "wyrebox-daemon-connection-server.h"
-#include "wyrebox-daemon-mailbox-catalog-duckdb.h"
 #include "wyrebox-daemon-delivery-ingestion-service.h"
+#include "wyrebox-daemon-delivery-materialization.h"
+#include "wyrebox-daemon-mailbox-catalog-duckdb.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-runtime.h"
 #include "wyrebox-eml-ingestor.h"
@@ -134,6 +135,16 @@ quit_main_loop_on_signal (gpointer user_data)
     return G_SOURCE_REMOVE;
 }
 
+static void
+materialize_after_ingest (const WyreboxEmlIngestResult *result,
+    gpointer user_data)
+{
+    (void)result;
+
+    wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry
+        (user_data);
+}
+
 static int
 run_daemon (int argc, char **argv)
 {
@@ -145,12 +156,17 @@ run_daemon (int argc, char **argv)
     g_autoptr (WyreboxDaemonMailboxSelectService) mailbox_select_service = NULL;
     g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
     g_autoptr (WyreboxJournalWriter) journal_writer = NULL;
+    g_autoptr (WyreboxDaemonDeliveryMaterialization) materialization = NULL;
     g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
     g_autoptr (WyreboxDaemonDeliveryIngestionService) delivery_service = NULL;
     g_autoptr (WyreboxDaemonRequestAdapter) request_adapter = NULL;
     g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
     g_autoptr (GMainLoop) loop = NULL;
     g_autofree char *socket_path = NULL;
+    WyreboxDaemonDeliveryStorageValidationReport storage_report = { 0 };
+    const char *catalog_path = NULL;
+    const char *journal_root_dir = NULL;
+    const char *object_root_dir = NULL;
 
     if (!parse_options (argc, argv, &options, &error)) {
         g_printerr ("wyreboxd: %s\n", error->message);
@@ -169,47 +185,81 @@ run_daemon (int argc, char **argv)
     }
 
     socket_path = g_strdup (wyrebox_daemon_config_get_socket_path (config));
-    mailbox_catalog = wyrebox_daemon_mailbox_catalog_duckdb_new
-            (wyrebox_daemon_config_get_catalog_path (config), &error);
+    catalog_path = wyrebox_daemon_config_get_catalog_path (config);
+    journal_root_dir = wyrebox_daemon_config_get_journal_root_dir (config);
+    object_root_dir = wyrebox_daemon_config_get_object_root_dir (config);
+
+    object_store = wyrebox_local_object_store_new (object_root_dir, &error);
+    if (object_store == NULL) {
+        g_printerr ("wyreboxd: %s\n", error->message);
+        return EX_OSERR;
+    }
+
+    if (!wyrebox_daemon_runtime_recover_and_validate_delivery_storage
+            (journal_root_dir, object_root_dir, &storage_report, &error)) {
+        g_printerr ("wyreboxd: delivery storage is invalid: %s\n",
+            error->message);
+        return EX_DATAERR;
+    }
+
+    journal_writer = wyrebox_journal_writer_new (journal_root_dir, &error);
+    if (journal_writer == NULL) {
+        g_printerr ("wyreboxd: %s\n", error->message);
+        return EX_OSERR;
+    }
+
+    if (!wyrebox_daemon_runtime_prepare_catalog (journal_root_dir,
+        catalog_path, FALSE, &error)) {
+        g_printerr ("wyreboxd: catalog preparation failed: %s\n",
+            error->message);
+        return EX_DATAERR;
+    }
+
+    mailbox_catalog = wyrebox_daemon_mailbox_catalog_duckdb_new (catalog_path,
+            &error);
     if (mailbox_catalog == NULL) {
         g_printerr ("wyreboxd: %s\n", error->message);
         return EX_OSERR;
     }
 
     mailbox_list_service =
-        wyrebox_daemon_mailbox_catalog_duckdb_new_list_service
-            (wyrebox_daemon_config_get_catalog_path (config), &error);
+        wyrebox_daemon_mailbox_catalog_duckdb_new_list_service (catalog_path,
+            &error);
     if (mailbox_list_service == NULL) {
         g_printerr ("wyreboxd: %s\n", error->message);
         return EX_OSERR;
     }
 
     mailbox_select_service =
-        wyrebox_daemon_mailbox_catalog_duckdb_new_select_service
-            (wyrebox_daemon_config_get_catalog_path (config), &error);
+        wyrebox_daemon_mailbox_catalog_duckdb_new_select_service (catalog_path,
+            &error);
     if (mailbox_select_service == NULL) {
         g_printerr ("wyreboxd: %s\n", error->message);
         return EX_OSERR;
     }
 
-    object_store = wyrebox_local_object_store_new
-            (wyrebox_daemon_config_get_object_root_dir (config), &error);
-    if (object_store == NULL) {
+    materialization = wyrebox_daemon_delivery_materialization_new
+            (catalog_path, journal_root_dir, journal_writer, object_store,
+            &error);
+    if (materialization == NULL) {
         g_printerr ("wyreboxd: %s\n", error->message);
         return EX_OSERR;
     }
 
-    journal_writer = wyrebox_journal_writer_new
-            (wyrebox_daemon_config_get_journal_root_dir (config), &error);
-    if (journal_writer == NULL) {
-        g_printerr ("wyreboxd: %s\n", error->message);
-        return EX_OSERR;
+    if (!wyrebox_daemon_delivery_materialization_catch_up (materialization,
+        &error)) {
+        g_printerr ("wyreboxd: delivery materialization failed: %s\n",
+            error->message);
+        return EX_DATAERR;
     }
 
     ingestor = wyrebox_eml_ingestor_new_with_journal (object_store,
             journal_writer);
     delivery_service =
         wyrebox_daemon_delivery_ingestion_service_new_with_ingestor (ingestor);
+    wyrebox_daemon_delivery_ingestion_service_set_post_ingest_hook
+        (delivery_service, materialize_after_ingest,
+        g_object_ref (materialization), g_object_unref);
     request_adapter = wyrebox_daemon_request_adapter_new (delivery_service,
             NULL,
             mailbox_list_service, mailbox_select_service, NULL, NULL, NULL,
@@ -228,6 +278,7 @@ run_daemon (int argc, char **argv)
     (void)g_unix_signal_add (SIGTERM, quit_main_loop_on_signal, loop);
     (void)g_unix_signal_add (SIGINT, quit_main_loop_on_signal, loop);
     g_main_loop_run (loop);
+    wyrebox_daemon_delivery_materialization_stop (materialization);
 
     if (!wyrebox_daemon_connection_server_stop (server, &error)) {
         g_printerr ("wyreboxd: %s\n", error->message);
