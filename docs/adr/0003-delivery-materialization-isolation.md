@@ -85,7 +85,8 @@ in-memory scan cursor at the last record it processed:
   accounts, and may hold more accounts. They advance the checkpoint only while
   no account is held and the cursor equals the checkpoint.
 - The retry timer runs a full pass from the persisted checkpoint with an empty
-  hold set, which replaces the hold set and resets the cursor.
+  hold set, which replaces the hold set and moves the cursor to the end of
+  that pass, or clears it when the pass is clean.
 - A pass that aborts resets the cursor to the persisted checkpoint and keeps
   the previous hold set.
 - The cursor and hold set are lost on restart; the startup pass is a full pass.
