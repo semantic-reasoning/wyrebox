@@ -288,6 +288,12 @@ daemon_runtime_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_delivery_materialization_test = executable(
+  'test-daemon-delivery-materialization',
+  'test-daemon-delivery-materialization.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_socket_listener_test = executable(
   'test-daemon-socket-listener',
   'test-daemon-socket-listener.c',
@@ -469,6 +475,14 @@ if capnp_serialization_found
   )
 endif
 test('daemon runtime', daemon_runtime_test)
+test(
+  'daemon delivery materialization',
+  daemon_delivery_materialization_test,
+  env: {
+    'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() / 'tests'
+    / 'object-store' / 'fixtures',
+  },
+)
 test('daemon socket listener', daemon_socket_listener_test)
 test('daemon error', daemon_error_test)
 test('daemon error frame', daemon_error_frame_test)
