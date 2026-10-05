@@ -163,12 +163,21 @@ spawn_daemon (const DaemonRoot *daemon_root, GSubprocessFlags stderr_flag)
     return subprocess;
 }
 
+/*
+ * Startup validates storage, prepares the catalog and catches up before the
+ * socket appears, which is slow under sanitizers, so allow a generous bound
+ * but stop as soon as the daemon exits.
+ */
 static gboolean
-wait_for_socket (const char *socket_path)
+wait_for_socket (GSubprocess *subprocess, const char *socket_path)
 {
-    for (guint i = 0; i < 200; i++) {
+    gint64 deadline = g_get_monotonic_time () + 30 * G_TIME_SPAN_SECOND;
+
+    while (g_get_monotonic_time () < deadline) {
         if (g_file_test (socket_path, G_FILE_TEST_EXISTS))
             return TRUE;
+        if (g_subprocess_get_identifier (subprocess) == NULL)
+            return FALSE;
         g_usleep (10 * 1000);
     }
 
@@ -181,7 +190,7 @@ start_daemon (const DaemonRoot *daemon_root)
     GSubprocess *subprocess = spawn_daemon (daemon_root,
             G_SUBPROCESS_FLAGS_STDERR_SILENCE);
 
-    g_assert_true (wait_for_socket (daemon_root->socket_path));
+    g_assert_true (wait_for_socket (subprocess, daemon_root->socket_path));
     return subprocess;
 }
 
@@ -625,7 +634,7 @@ test_wyreboxd_acknowledges_delivery_when_materialization_fails (void)
     seed_unselectable_inbox (&daemon_root);
 
     failing = spawn_daemon (&daemon_root, G_SUBPROCESS_FLAGS_STDERR_PIPE);
-    g_assert_true (wait_for_socket (daemon_root.socket_path));
+    g_assert_true (wait_for_socket (failing, daemon_root.socket_path));
     deliver (&daemon_root, "delivery-1");
     g_subprocess_send_signal (failing, SIGTERM);
     g_assert_true (g_subprocess_communicate_utf8 (failing, NULL, NULL, NULL,
