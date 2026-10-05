@@ -652,10 +652,16 @@ test(
 )
 
 if capnp_serialization_found
+  postfix_pipe_install_smoke_args = [
+    files('tests/docs/test_issue_0029_postfix_pipe_install_smoke.py'),
+  ]
+  if duckdb_root != ''
+    postfix_pipe_install_smoke_args += ['-Dduckdb_root=' + duckdb_root]
+  endif
   test(
     'docs issue 0029 postfix pipe install smoke',
     python,
-    args: files('tests/docs/test_issue_0029_postfix_pipe_install_smoke.py'),
+    args: postfix_pipe_install_smoke_args,
     timeout: 600,
   )
 endif

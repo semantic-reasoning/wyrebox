@@ -3,6 +3,7 @@
 from pathlib import Path
 import stat
 import subprocess
+import sys
 import tempfile
 
 
@@ -16,6 +17,10 @@ def run(command: list[str], cwd: Path) -> None:
 
 
 def main() -> None:
+    # Extra arguments are Meson -D options from the enclosing build, such as
+    # -Dduckdb_root on architectures without a bundled DuckDB prebuilt.
+    setup_options = sys.argv[1:]
+
     with tempfile.TemporaryDirectory(prefix="wyrebox-postfix-pipe-install-") as tmp:
         tempdir = Path(tmp)
         builddir = tempdir / "build"
@@ -30,6 +35,7 @@ def main() -> None:
                 str(prefix),
                 "--bindir",
                 INSTALL_BINDIR,
+                *setup_options,
                 str(builddir),
                 str(REPO_ROOT),
             ],
