@@ -41,6 +41,7 @@ jobs:
 
     env:
       CC: ${{ matrix.compiler }}
+      CXX: ${{ matrix.compiler == 'clang' && 'clang++' || 'g++' }}
 
     steps:
       - name: Check out sources
@@ -52,7 +53,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential \
             ca-certificates \
+            capnproto \
             ${{ matrix.compiler }} \
+            libcapnp-dev \
             libglib2.0-dev \
             meson \
             ninja-build \
@@ -102,8 +105,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential \
             ca-certificates \
+            capnproto \
             cmake \
             git \
+            libcapnp-dev \
             libglib2.0-dev \
             meson \
             ninja-build \
