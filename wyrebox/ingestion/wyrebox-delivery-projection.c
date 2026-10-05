@@ -64,6 +64,7 @@ wyrebox_delivery_projection_record_clear (WyreboxDeliveryProjectionRecord
         return;
 
     g_clear_pointer (&record->object_key, g_free);
+    g_clear_pointer (&record->account_identity, g_free);
     g_clear_pointer (&record->rfc_message_id, g_free);
     g_clear_pointer (&record->subject, g_free);
     g_clear_pointer (&record->from, g_free);
@@ -121,6 +122,7 @@ append_delivered_record (WyreboxDeliveryProjectionList *out_projection,
     projection.journal_offset = record->offset;
     projection.journal_sequence = record->sequence;
     projection.object_key = g_steal_pointer (&payload->object_key);
+    projection.account_identity = g_steal_pointer (&payload->account_identity);
     projection.size_bytes = payload->size_bytes;
     projection.internal_date_unix_us = payload->internal_date_unix_us;
     projection.duplicate_message_id_count = payload->duplicate_message_id_count;

@@ -794,6 +794,65 @@ test_hash_mismatch_clears_partial_projection (void)
     remove_tree (journal_root);
 }
 
+static void
+test_replay_exposes_delivery_account_identity (void)
+{
+    const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+    g_autofree char *object_root =
+        g_dir_make_tmp ("wyrebox-delivery-projection-objects-XXXXXX", NULL);
+    g_autofree char *journal_root =
+        g_dir_make_tmp ("wyrebox-delivery-projection-journal-XXXXXX", NULL);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) first_input = NULL;
+    g_autoptr (GBytes) second_input = NULL;
+    g_autoptr (WyreboxLocalObjectStore) store = NULL;
+    g_autoptr (WyreboxJournalWriter) writer = NULL;
+    g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+    g_auto (WyreboxEmlIngestResult) first_result = { 0 };
+    g_auto (WyreboxEmlIngestResult) second_result = { 0 };
+    g_autoptr (WyreboxJournalReader) reader = NULL;
+    g_autoptr (WyreboxDeliveryProjection) projection = NULL;
+    g_auto (WyreboxDeliveryProjectionList) list = { 0 };
+    const gchar *const recipients[] = { "user@example.com", NULL };
+    WyreboxDeliveryProjectionRecord *first = NULL;
+    WyreboxDeliveryProjectionRecord *second = NULL;
+
+    g_assert_nonnull (fixture_dir);
+
+    first_input = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
+    second_input = load_fixture_bytes (fixture_dir, "duplicate-message-id.eml");
+
+    store = wyrebox_local_object_store_new (object_root, &error);
+    g_assert_no_error (error);
+    writer = wyrebox_journal_writer_new (journal_root, &error);
+    g_assert_no_error (error);
+    ingestor = wyrebox_eml_ingestor_new_with_journal (store, writer);
+
+    g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, first_input,
+        &first_result, &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_eml_ingestor_ingest_delivery_bytes (ingestor,
+        second_input, "delivery-1", "queue-1", "account-7",
+        "sender@example.com", recipients, &second_result, &error));
+    g_assert_no_error (error);
+
+    reader = wyrebox_journal_reader_new (journal_root, &error);
+    g_assert_no_error (error);
+    projection = wyrebox_delivery_projection_new (reader, store);
+    g_assert_true (wyrebox_delivery_projection_replay_all (projection, &list,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (list.records->len, ==, 2);
+
+    first = g_ptr_array_index (list.records, 0);
+    second = g_ptr_array_index (list.records, 1);
+    g_assert_null (first->account_identity);
+    g_assert_cmpstr (second->account_identity, ==, "account-7");
+
+    remove_tree (object_root);
+    remove_tree (journal_root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -824,6 +883,9 @@ main (int argc, char **argv)
     g_test_add_func ("/ingestion/delivery-projection/"
         "hash-mismatch-clears-partial-projection",
         test_hash_mismatch_clears_partial_projection);
+    g_test_add_func ("/ingestion/delivery-projection/"
+        "exposes-delivery-account-identity",
+        test_replay_exposes_delivery_account_identity);
 
     return g_test_run ();
 }
