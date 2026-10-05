@@ -57,6 +57,9 @@ clear error.
 If the DuckDB catalog is missing or a materialization checkpoint is missing,
 recovery must prefer rebuild over data loss.
 
+Delivery materialization holds are not persisted; `wyreboxd` rediscovers them
+after a restore.
+
 If the journal suffix is unsafe or a committed message references a missing raw
 object, recovery must fail.
 

@@ -705,6 +705,12 @@ test(
 )
 
 test(
+  'docs issue 0317 materialization isolation adr',
+  python,
+  args: files('tests/docs/test_issue_0317_materialization_isolation_adr.py'),
+)
+
+test(
   'docs issue 0326 ci capnp configurations',
   python,
   args: files('tests/docs/test_issue_0326_ci_capnp_configurations.py'),

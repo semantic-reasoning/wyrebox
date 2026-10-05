@@ -146,6 +146,16 @@ This operation does not expose arbitrary SQL, write SQL, DuckDB mutation,
 Wirelog fact mutation, object-store metadata mutation, or direct journal append
 surfaces to helpers. It accepts delivery-ingestion inputs only.
 
+After a durable success, `wyreboxd` materializes the delivery into the
+account's INBOX before returning the response when it can. Materialization is
+not part of the success condition. If an account's INBOX cannot be
+materialized, that account is held and other accounts keep materializing; held
+accounts and other failures are retried with exponential backoff from 5 s up
+to 5 minutes. A held account at startup does not stop `wyreboxd`. A startup
+materialization or catalog preparation failure exits with `EX_DATAERR` when it
+is permanent and `EX_TEMPFAIL` when it is transient
+(`docs/adr/0003-delivery-materialization-isolation.md`).
+
 ## Mailbox List Select Operation Contract
 
 Mailbox LIST and SELECT are the first Dovecot-facing LIST and SELECT calls over
