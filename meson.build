@@ -174,7 +174,7 @@ if wirelog_force_fallback
   wirelog_dep = disabler()
 else
   wirelog_dep = dependency('wirelog',
-    version: '==0.51.0',
+    version: '==0.70.0',
     required: false,
     allow_fallback: false)
 endif
