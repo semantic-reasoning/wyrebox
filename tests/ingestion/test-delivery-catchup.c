@@ -731,10 +731,228 @@ test_bad_checkpoint_seek_fails_without_materializing (void)
     remove_catalog (catalog_path);
 }
 
+static void
+ingest_delivery_fixture (WyreboxEmlIngestor *ingestor,
+    const gchar *fixture_name, const gchar *delivery_id,
+    const gchar *account_id, WyreboxEmlIngestResult *out_result)
+{
+    const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+    const gchar *const recipients[] = { "user@example.test", NULL };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) input = NULL;
+
+    g_assert_nonnull (fixture_dir);
+
+    input = load_fixture_bytes (fixture_dir, fixture_name);
+    g_assert_true (wyrebox_eml_ingestor_ingest_delivery_bytes (ingestor, input,
+        delivery_id, NULL, account_id, "sender@example.test", recipients,
+        out_result, &error));
+    g_assert_no_error (error);
+}
+
+static gboolean
+run_account_catchup (const gchar *catalog_path,
+    const gchar *object_root, const gchar *journal_root, GError **error)
+{
+    g_autoptr (WyreboxSchemaMetadataStore) metadata_store = NULL;
+    g_autoptr (WyreboxJournalReader) reader = NULL;
+    g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
+    g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+
+    metadata_store = wyrebox_schema_metadata_store_new_duckdb (catalog_path,
+            error);
+    if (metadata_store == NULL)
+        return FALSE;
+    reader = wyrebox_journal_reader_new (journal_root, error);
+    if (reader == NULL)
+        return FALSE;
+    object_store = wyrebox_local_object_store_new (object_root, error);
+    if (object_store == NULL)
+        return FALSE;
+    materializer = wyrebox_delivery_materializer_new_duckdb (catalog_path,
+            error);
+    if (materializer == NULL)
+        return FALSE;
+
+    return wyrebox_delivery_catchup_materialize_account_inboxes (
+        metadata_store, reader, object_store, materializer, error);
+}
+
+static guint64
+account_inbox_uid (const gchar *catalog_path, const gchar *account_id,
+    const WyreboxEmlIngestResult *result)
+{
+    TestDuckdbFixture duckdb = { 0 };
+    g_autofree gchar *sql = NULL;
+    guint64 uid = 0;
+
+    sql = g_strdup_printf ("SELECT m.uid FROM mailbox_memberships m "
+            "JOIN mailboxes b ON b.mailbox_id = m.mailbox_id "
+            "WHERE b.account_id = '%s' AND b.imap_name = 'INBOX' "
+            "AND m.journal_offset = %" G_GUINT64_FORMAT
+            " AND m.journal_sequence = %" G_GUINT64_FORMAT ";",
+            account_id, result->journal_offset, result->journal_sequence);
+
+    open_duckdb_fixture (catalog_path, &duckdb);
+    uid = query_uint64 (duckdb.connection, sql);
+    close_duckdb_fixture (&duckdb);
+
+    return uid;
+}
+
+static void
+test_account_catchup_routes_deliveries_by_account (void)
+{
+    g_autofree gchar *object_root =
+        g_dir_make_tmp ("wyrebox-delivery-catchup-objects-XXXXXX", NULL);
+    g_autofree gchar *journal_root =
+        g_dir_make_tmp ("wyrebox-delivery-catchup-journal-XXXXXX", NULL);
+    g_autofree gchar *catalog_path = create_bootstrap_catalog ();
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxLocalObjectStore) ingest_object_store = NULL;
+    g_autoptr (WyreboxJournalWriter) writer = NULL;
+    g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+    g_auto (WyreboxEmlIngestResult) first = { 0 };
+    g_auto (WyreboxEmlIngestResult) second = { 0 };
+    g_auto (WyreboxEmlIngestResult) third = { 0 };
+    TestDuckdbFixture duckdb = { 0 };
+
+    ingestor = create_ingestor (object_root, journal_root,
+            &ingest_object_store, &writer);
+    ingest_delivery_fixture (ingestor, "simple-crlf.eml", "delivery-1",
+        "account-a", &first);
+    ingest_delivery_fixture (ingestor, "duplicate-message-id.eml",
+        "delivery-2", "account-b", &second);
+    ingest_delivery_fixture (ingestor, "simple-crlf.eml", "delivery-3",
+        "account-a", &third);
+
+    g_assert_true (run_account_catchup (catalog_path, object_root,
+        journal_root, &error));
+    g_assert_no_error (error);
+    g_assert_true (run_account_catchup (catalog_path, object_root,
+        journal_root, &error));
+    g_assert_no_error (error);
+
+    g_assert_cmpuint (account_inbox_uid (catalog_path, "account-a", &first),
+        ==, 1);
+    g_assert_cmpuint (account_inbox_uid (catalog_path, "account-b", &second),
+        ==, 1);
+    g_assert_cmpuint (account_inbox_uid (catalog_path, "account-a", &third),
+        ==, 2);
+
+    open_duckdb_fixture (catalog_path, &duckdb);
+    assert_table_count (duckdb.connection, "mailboxes", 2);
+    assert_table_count (duckdb.connection, "mailbox_memberships", 3);
+    assert_materialization_checkpoint (duckdb.connection, third.journal_offset,
+        third.journal_sequence);
+    close_duckdb_fixture (&duckdb);
+
+    remove_tree (object_root);
+    remove_tree (journal_root);
+    remove_catalog (catalog_path);
+}
+
+static void
+test_account_catchup_rejects_delivery_without_account (void)
+{
+    g_autofree gchar *object_root =
+        g_dir_make_tmp ("wyrebox-delivery-catchup-objects-XXXXXX", NULL);
+    g_autofree gchar *journal_root =
+        g_dir_make_tmp ("wyrebox-delivery-catchup-journal-XXXXXX", NULL);
+    g_autofree gchar *catalog_path = create_bootstrap_catalog ();
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxLocalObjectStore) ingest_object_store = NULL;
+    g_autoptr (WyreboxJournalWriter) writer = NULL;
+    g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+    g_auto (WyreboxEmlIngestResult) first = { 0 };
+    g_auto (WyreboxEmlIngestResult) second = { 0 };
+    g_autofree gchar *location = NULL;
+
+    ingestor = create_ingestor (object_root, journal_root,
+            &ingest_object_store, &writer);
+    ingest_delivery_fixture (ingestor, "simple-crlf.eml", "delivery-1",
+        "account-a", &first);
+    ingest_fixture (ingestor, "duplicate-message-id.eml", &second);
+
+    g_assert_false (run_account_catchup (catalog_path, object_root,
+        journal_root, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    location = g_strdup_printf ("offset %" G_GUINT64_FORMAT,
+            second.journal_offset);
+    g_assert_nonnull (strstr (error->message, "account identity"));
+    g_assert_nonnull (strstr (error->message, location));
+    assert_unmaterialized_state (catalog_path);
+
+    remove_tree (object_root);
+    remove_tree (journal_root);
+    remove_catalog (catalog_path);
+}
+
+static void
+test_account_catchup_rebuild_keeps_uids (void)
+{
+    g_autofree gchar *object_root =
+        g_dir_make_tmp ("wyrebox-delivery-catchup-objects-XXXXXX", NULL);
+    g_autofree gchar *journal_root =
+        g_dir_make_tmp ("wyrebox-delivery-catchup-journal-XXXXXX", NULL);
+    g_autofree gchar *catalog_path = create_bootstrap_catalog ();
+    g_autofree gchar *rebuilt_path = create_bootstrap_catalog ();
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxLocalObjectStore) ingest_object_store = NULL;
+    g_autoptr (WyreboxJournalWriter) writer = NULL;
+    g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+    g_auto (WyreboxEmlIngestResult) first = { 0 };
+    g_auto (WyreboxEmlIngestResult) second = { 0 };
+    g_auto (WyreboxEmlIngestResult) third = { 0 };
+
+    ingestor = create_ingestor (object_root, journal_root,
+            &ingest_object_store, &writer);
+    ingest_delivery_fixture (ingestor, "simple-crlf.eml", "delivery-1",
+        "account-a", &first);
+    ingest_delivery_fixture (ingestor, "duplicate-message-id.eml",
+        "delivery-2", "account-a", &second);
+
+    g_assert_true (run_account_catchup (catalog_path, object_root,
+        journal_root, &error));
+    g_assert_no_error (error);
+
+    ingest_delivery_fixture (ingestor, "simple-crlf.eml", "delivery-3",
+        "account-a", &third);
+    g_assert_true (run_account_catchup (catalog_path, object_root,
+        journal_root, &error));
+    g_assert_no_error (error);
+
+    g_assert_true (run_account_catchup (rebuilt_path, object_root,
+        journal_root, &error));
+    g_assert_no_error (error);
+
+    g_assert_cmpuint (account_inbox_uid (catalog_path, "account-a", &third),
+        ==, 3);
+    g_assert_cmpuint (account_inbox_uid (rebuilt_path, "account-a", &first),
+        ==, account_inbox_uid (catalog_path, "account-a", &first));
+    g_assert_cmpuint (account_inbox_uid (rebuilt_path, "account-a", &second),
+        ==, account_inbox_uid (catalog_path, "account-a", &second));
+    g_assert_cmpuint (account_inbox_uid (rebuilt_path, "account-a", &third),
+        ==, account_inbox_uid (catalog_path, "account-a", &third));
+
+    remove_tree (object_root);
+    remove_tree (journal_root);
+    remove_catalog (catalog_path);
+    remove_catalog (rebuilt_path);
+}
+
 int
 main (int argc, char **argv)
 {
     g_test_init (&argc, &argv, NULL);
+
+    g_test_add_func ("/ingestion/delivery-catchup/accounts/routes-by-account",
+        test_account_catchup_routes_deliveries_by_account);
+    g_test_add_func ("/ingestion/delivery-catchup/accounts/"
+        "rejects-delivery-without-account",
+        test_account_catchup_rejects_delivery_without_account);
+    g_test_add_func ("/ingestion/delivery-catchup/accounts/rebuild-keeps-uids",
+        test_account_catchup_rebuild_keeps_uids);
 
     g_test_add_func ("/ingestion/delivery-catchup/no-checkpoint",
         test_no_checkpoint_materializes_two_deliveries);

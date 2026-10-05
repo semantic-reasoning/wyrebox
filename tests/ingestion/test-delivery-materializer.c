@@ -1069,6 +1069,83 @@ test_shares_instance_with_open_catalog_handle (void)
 }
 
 static void
+apply_projection_to_account_inbox (const gchar *path, const gchar *account_id,
+    const WyreboxDeliveryProjectionList *projection)
+{
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+
+    materializer = wyrebox_delivery_materializer_new_duckdb (path, &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_delivery_materializer_apply_to_inbox (materializer,
+        account_id, projection, &error));
+    g_assert_no_error (error);
+}
+
+static void
+test_apply_to_inbox_creates_account_inbox (void)
+{
+    g_autofree gchar *path = create_bootstrap_catalog ();
+    g_auto (WyreboxDeliveryProjectionList) first = { 0 };
+    g_auto (WyreboxDeliveryProjectionList) second = { 0 };
+    TestDuckdbFixture duckdb = { 0 };
+
+    append_projection_record (&first, "sha256:first", 101, 1001, 11, 1);
+    append_projection_record (&second, "sha256:second", 202, 1002, 22, 2);
+
+    apply_projection_to_account_inbox (path, "account-a", &first);
+    apply_projection_to_account_inbox (path, "account-b", &second);
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_query_string (duckdb.connection,
+        "SELECT imap_name FROM mailboxes WHERE mailbox_id = 'inbox:account-a' "
+        "AND account_id = 'account-a';", "INBOX");
+    assert_query_string (duckdb.connection,
+        "SELECT imap_name FROM mailboxes WHERE mailbox_id = 'inbox:account-b' "
+        "AND account_id = 'account-b';", "INBOX");
+    g_assert_cmpuint (query_uint64 (duckdb.connection,
+        "SELECT uid FROM mailbox_memberships WHERE "
+        "membership_id = 'mailbox:inbox:account-a:journal:11:1';"), ==, 1);
+    g_assert_cmpuint (query_uint64 (duckdb.connection,
+        "SELECT uid FROM mailbox_memberships WHERE "
+        "membership_id = 'mailbox:inbox:account-b:journal:22:2';"), ==, 1);
+    assert_materialization_checkpoint (duckdb.connection, 22, 2);
+    close_duckdb_fixture (&duckdb);
+
+    remove_catalog (path);
+}
+
+static void
+test_apply_to_inbox_reuses_existing_inbox_row (void)
+{
+    g_autofree gchar *path = create_bootstrap_catalog ();
+    g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+    TestDuckdbFixture duckdb = { 0 };
+
+    append_projection_record (&projection, "sha256:first", 101, 1001, 11, 1);
+
+    open_duckdb_fixture (path, &duckdb);
+    execute_sql (duckdb.connection,
+        "INSERT INTO accounts (account_id) VALUES ('account-1');");
+    execute_sql (duckdb.connection,
+        "INSERT INTO mailboxes ("
+        "mailbox_id, account_id, imap_name, is_selectable, is_visible"
+        ") VALUES ('mailbox-inbox', 'account-1', 'INBOX', TRUE, TRUE);");
+    close_duckdb_fixture (&duckdb);
+
+    apply_projection_to_account_inbox (path, "account-1", &projection);
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_table_count (duckdb.connection, "mailboxes", 1);
+    g_assert_cmpuint (query_uint64 (duckdb.connection,
+        "SELECT uid FROM mailbox_memberships WHERE "
+        "membership_id = 'mailbox:mailbox-inbox:journal:11:1';"), ==, 1);
+    close_duckdb_fixture (&duckdb);
+
+    remove_catalog (path);
+}
+
+static void
 test_reapply_projection_is_idempotent (void)
 {
     g_autofree gchar *path = create_bootstrap_catalog ();
@@ -1328,6 +1405,10 @@ main (int argc, char **argv)
         test_reapply_projection_is_idempotent);
     g_test_add_func ("/ingestion/delivery-materializer/shared-instance",
         test_shares_instance_with_open_catalog_handle);
+    g_test_add_func ("/ingestion/delivery-materializer/inbox-created",
+        test_apply_to_inbox_creates_account_inbox);
+    g_test_add_func ("/ingestion/delivery-materializer/inbox-reused",
+        test_apply_to_inbox_reuses_existing_inbox_row);
     g_test_add_func ("/ingestion/delivery-materializer/membership-attributes",
         test_duplicate_object_allows_membership_scoped_attributes);
     g_test_add_func ("/ingestion/delivery-materializer/divergent-mailbox",
