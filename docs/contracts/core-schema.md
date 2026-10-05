@@ -150,6 +150,14 @@ Replay must converge on equivalent `objects`, `messages`, `mailbox_memberships`,
 `materialization_checkpoint` must track durable replay position and allow restart
 to continue from the last fully materialized position.
 
+The delivery materialization checkpoint never leads an unapplied record, but it
+may lag behind records that are already materialized: when an account's INBOX
+cannot be materialized, the checkpoint stops before that account's earliest
+held record while other accounts keep materializing
+(`docs/adr/0003-delivery-materialization-isolation.md`). Re-applying an already
+materialized delivery is therefore required to be idempotent, and
+delivery-created `mailbox_memberships` rows must not be deleted or hidden.
+
 ## Query And API Safety Boundary
 
 DuckDB query usage is read/materialized-query oriented in this contract phase.

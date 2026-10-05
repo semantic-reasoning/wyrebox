@@ -102,6 +102,12 @@ already owns the path, startup must fail rather than stealing the socket.
 Restart restores the in-memory hot state and DuckDB materialized state from
 canonical state before clients observe normal service.
 
+Delivery materialization for an account held under
+`docs/adr/0003-delivery-materialization-isolation.md` may remain incomplete
+after startup; `wyreboxd` serves other accounts and retries the held account.
+Permanent startup materialization and catalog failures exit with `EX_DATAERR`
+(65) and transient ones with `EX_TEMPFAIL` (75).
+
 Clients reconnect to the socket after restart. A Postfix helper must not
 report delivery success unless it received a durable success response from
 `wyreboxd`. If restart interrupts a delivery request before that response, the

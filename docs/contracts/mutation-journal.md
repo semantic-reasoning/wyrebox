@@ -136,6 +136,11 @@ materialization after restart. DuckDB catch-up and rebuild consume the journal
 as input; DuckDB contents do not replace the journal as the source of canonical
 mutation truth.
 
+Delivery catch-up holds an account whose INBOX cannot be materialized and keeps
+materializing other accounts. Replay then resumes from the checkpoint before
+the earliest held record and re-applies later deliveries idempotently
+(`docs/adr/0003-delivery-materialization-isolation.md`).
+
 ## Object Store Consistency Boundary
 
 The raw object for a `MessageDelivered` event must exist durably in the object
