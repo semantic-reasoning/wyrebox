@@ -82,23 +82,38 @@ materializer_prepare (WyreboxDeliveryMaterializer *self, const gchar *sql,
 }
 
 static gboolean
-materializer_execute_prepared (duckdb_prepared_statement statement,
-    GError **error)
+materializer_execute_prepared_full (duckdb_prepared_statement statement,
+    gboolean constraint_is_invalid_data, GError **error)
 {
     g_auto (duckdb_result) result = { 0 };
 
     if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
         const char *detail = duckdb_result_error (&result);
+        gboolean invalid_data = constraint_is_invalid_data &&
+            duckdb_result_error_type (&result) == DUCKDB_ERROR_CONSTRAINT;
 
         g_set_error (error,
             G_IO_ERROR,
-            G_IO_ERROR_FAILED,
+            invalid_data ? G_IO_ERROR_INVALID_DATA : G_IO_ERROR_FAILED,
             "DuckDB delivery materializer statement failed: %s",
             detail != NULL ? detail : "unknown DuckDB error");
         return FALSE;
     }
 
     return TRUE;
+}
+
+/*
+ * For statements that write account-owned rows: a constraint violation is
+ * deterministic for the account and is reported as G_IO_ERROR_INVALID_DATA.
+ * Writes to rows that are not owned by an account, such as the checkpoint,
+ * must use materializer_execute_prepared_full() with FALSE.
+ */
+static gboolean
+materializer_execute_prepared (duckdb_prepared_statement statement,
+    GError **error)
+{
+    return materializer_execute_prepared_full (statement, TRUE, error);
 }
 
 static gboolean
@@ -720,7 +735,7 @@ materializer_save_checkpoint (WyreboxDeliveryMaterializer *self,
         !bind_uint64 (statement, 1, record->journal_sequence, error) ||
         !bind_uint64 (statement, 2, record->journal_sequence, error) ||
         !bind_uint64 (statement, 3, record->journal_offset, error) ||
-        !materializer_execute_prepared (statement, error))
+        !materializer_execute_prepared_full (statement, FALSE, error))
         return FALSE;
 
     duckdb_destroy_prepare (&statement);
@@ -734,7 +749,7 @@ materializer_save_checkpoint (WyreboxDeliveryMaterializer *self,
                error)
            && bind_uint64 (statement, 1, record->journal_offset, error)
            && bind_uint64 (statement, 2, record->journal_sequence, error)
-           && materializer_execute_prepared (statement, error);
+           && materializer_execute_prepared_full (statement, FALSE, error);
 }
 
 static void
@@ -893,7 +908,8 @@ materializer_resolve_inbox_id (WyreboxDeliveryMaterializer *self,
 static gboolean
 materializer_apply_in_transaction (WyreboxDeliveryMaterializer *self,
     const gchar *account_id, const gchar *mailbox_id, const gchar *imap_name,
-    const WyreboxDeliveryProjectionList *projection, GError **error)
+    const WyreboxDeliveryProjectionList *projection,
+    gboolean advance_checkpoint, GError **error)
 {
     guint64 uidnext = 0;
 
@@ -918,7 +934,7 @@ materializer_apply_in_transaction (WyreboxDeliveryMaterializer *self,
         error))
         return FALSE;
 
-    if (projection->records->len > 0) {
+    if (advance_checkpoint && projection->records->len > 0) {
         const WyreboxDeliveryProjectionRecord *last_record =
             g_ptr_array_index (projection->records,
                 projection->records->len - 1);
@@ -948,7 +964,7 @@ wyrebox_delivery_materializer_apply_to_mailbox (WyreboxDeliveryMaterializer
         return FALSE;
 
     if (!materializer_apply_in_transaction (self, account_id, mailbox_id,
-        imap_name, projection, error)) {
+        imap_name, projection, TRUE, error)) {
         materializer_rollback_quietly (self);
         return FALSE;
     }
@@ -960,6 +976,16 @@ gboolean
 wyrebox_delivery_materializer_apply_to_inbox (WyreboxDeliveryMaterializer
     *self, const gchar *account_id,
     const WyreboxDeliveryProjectionList *projection, GError **error)
+{
+    return wyrebox_delivery_materializer_apply_to_inbox_full (self, account_id,
+               projection, TRUE, error);
+}
+
+gboolean
+wyrebox_delivery_materializer_apply_to_inbox_full (WyreboxDeliveryMaterializer
+    *self, const gchar *account_id,
+    const WyreboxDeliveryProjectionList *projection,
+    gboolean advance_checkpoint, GError **error)
 {
     g_autofree gchar *mailbox_id = NULL;
 
@@ -974,7 +1000,7 @@ wyrebox_delivery_materializer_apply_to_inbox (WyreboxDeliveryMaterializer
 
     if (!materializer_resolve_inbox_id (self, account_id, &mailbox_id, error) ||
         !materializer_apply_in_transaction (self, account_id, mailbox_id,
-        "INBOX", projection, error)) {
+        "INBOX", projection, advance_checkpoint, error)) {
         materializer_rollback_quietly (self);
         return FALSE;
     }
