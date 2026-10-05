@@ -59,6 +59,14 @@ void wyrebox_journal_record_clear (WyreboxJournalRecord *record);
 WyreboxJournalReader *wyrebox_journal_reader_new (const char *journal_root_dir,
     GError **error);
 
+/*
+ * Like wyrebox_journal_reader_new(), but treats the segment as ending at
+ * MIN(segment size, @limit). Bytes past @limit, such as a record another
+ * writer is still appending, are never read or validated.
+ */
+WyreboxJournalReader *wyrebox_journal_reader_new_with_limit (
+    const char *journal_root_dir, guint64 limit, GError **error);
+
 gboolean wyrebox_journal_reader_read_next (WyreboxJournalReader *self,
     WyreboxJournalRecord *record, gboolean *out_eof, GError **error);
 

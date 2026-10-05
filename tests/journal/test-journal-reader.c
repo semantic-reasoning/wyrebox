@@ -1207,6 +1207,101 @@ test_seek_after_checkpoint_rejects_corrupt_event_length (void)
     remove_tree (root);
 }
 
+static void
+read_all_sequences (WyreboxJournalReader *reader, GArray *sequences)
+{
+    g_autoptr (GError) error = NULL;
+
+    while (TRUE) {
+        g_auto (WyreboxJournalRecord) record = { 0 };
+        gboolean eof = FALSE;
+
+        if (!wyrebox_journal_reader_read_next (reader, &record, &eof,
+            &error)) {
+            g_assert_no_error (error);
+            g_assert_true (eof);
+            return;
+        }
+
+        g_array_append_val (sequences, record.sequence);
+    }
+}
+
+static void
+test_limited_reader_stops_at_limit (void)
+{
+    g_autofree char *root =
+        g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+    g_autofree char *segment_path = NULL;
+    g_autofree guint8 *segment = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxJournalReader) reader = NULL;
+    g_autoptr (GArray) sequences = g_array_new (FALSE, FALSE, sizeof (guint64));
+    WyreboxJournalSafePrefix prefix = { 0 };
+    guint64 offsets[3] = { 0 };
+    guint64 record_sequences[3] = { 0 };
+    gsize segment_size = 0;
+
+    g_assert_nonnull (root);
+    append_three_records (root, offsets, record_sequences, &error);
+    g_assert_no_error (error);
+
+    segment_path = segment_path_for_root (root);
+    read_segment (segment_path, &segment, &segment_size);
+    overwrite_segment (segment_path, segment, (gsize)offsets[2] + 17);
+
+    reader = wyrebox_journal_reader_new_with_limit (root, offsets[2], &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (reader);
+    read_all_sequences (reader, sequences);
+    g_assert_cmpuint (sequences->len, ==, 2);
+    g_assert_cmpuint (g_array_index (sequences, guint64, 0), ==, 1);
+    g_assert_cmpuint (g_array_index (sequences, guint64, 1), ==, 2);
+    g_clear_object (&reader);
+
+    reader = wyrebox_journal_reader_new_with_limit (root, offsets[2], &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_journal_reader_scan_safe_prefix (reader, &prefix,
+        &error));
+    g_assert_no_error (error);
+    g_assert_true (prefix.reached_eof);
+    g_assert_false (prefix.unsafe_suffix_found);
+    g_assert_cmpuint (prefix.safe_end_offset, ==, offsets[2]);
+    g_assert_cmpuint (prefix.last_safe_sequence, ==, 2);
+
+    remove_tree (root);
+}
+
+static void
+test_limited_reader_caps_limit_at_segment_size (void)
+{
+    g_autofree char *root =
+        g_dir_make_tmp ("wyrebox-journal-reader-XXXXXX", NULL);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxJournalReader) reader = NULL;
+    g_autoptr (GArray) sequences = g_array_new (FALSE, FALSE, sizeof (guint64));
+    guint64 offsets[3] = { 0 };
+    guint64 record_sequences[3] = { 0 };
+
+    g_assert_nonnull (root);
+    append_three_records (root, offsets, record_sequences, &error);
+    g_assert_no_error (error);
+
+    reader = wyrebox_journal_reader_new_with_limit (root, G_MAXUINT64, &error);
+    g_assert_no_error (error);
+    read_all_sequences (reader, sequences);
+    g_assert_cmpuint (sequences->len, ==, 3);
+    g_clear_object (&reader);
+
+    reader = wyrebox_journal_reader_new_with_limit (root, 0, &error);
+    g_assert_no_error (error);
+    g_array_set_size (sequences, 0);
+    read_all_sequences (reader, sequences);
+    g_assert_cmpuint (sequences->len, ==, 0);
+
+    remove_tree (root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1272,6 +1367,10 @@ main (int argc, char **argv)
     g_test_add_func
         ("/journal-reader/seek-after-checkpoint/rejects-corrupt-event-length",
         test_seek_after_checkpoint_rejects_corrupt_event_length);
+    g_test_add_func ("/journal-reader/limited/stops-at-limit",
+        test_limited_reader_stops_at_limit);
+    g_test_add_func ("/journal-reader/limited/caps-limit-at-segment-size",
+        test_limited_reader_caps_limit_at_segment_size);
 
     return g_test_run ();
 }

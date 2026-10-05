@@ -24,6 +24,7 @@ struct _WyreboxJournalWriter
     char *segment_path;
     int fd;
     guint64 next_sequence;
+    guint64 durable_end;
     gboolean failed;
     GMutex append_mutex;
     WyreboxJournalWriterTestAppendHook test_append_hook;
@@ -474,6 +475,7 @@ wyrebox_journal_writer_new (const char *journal_root_dir, GError **error)
     self->segment_path = g_steal_pointer (&segment_path);
     self->fd = fd;
     self->next_sequence = next_sequence;
+    self->durable_end = (guint64)segment_stat.st_size;
 
     return g_steal_pointer (&self);
 }
@@ -708,8 +710,24 @@ wyrebox_journal_writer_append_unlocked (WyreboxJournalWriter *self,
     *out_offset = (guint64)offset;
     *out_sequence = sequence;
     self->next_sequence = sequence + 1;
+    self->durable_end = (guint64)offset + WYREBOX_JOURNAL_RECORD_HEADER_SIZE +
+        strlen (event_type_name) + payload_size;
 
     return TRUE;
+}
+
+guint64
+wyrebox_journal_writer_get_durable_end (WyreboxJournalWriter *self)
+{
+    guint64 durable_end = 0;
+
+    g_return_val_if_fail (WYREBOX_IS_JOURNAL_WRITER (self), 0);
+
+    g_mutex_lock (&self->append_mutex);
+    durable_end = self->durable_end;
+    g_mutex_unlock (&self->append_mutex);
+
+    return durable_end;
 }
 
 gboolean

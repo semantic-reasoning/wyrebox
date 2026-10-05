@@ -61,4 +61,12 @@ gboolean wyrebox_journal_writer_append (WyreboxJournalWriter *self,
     GBytes *payload,
     guint64 *out_offset, guint64 *out_sequence, GError **error);
 
+/*
+ * Returns the segment offset just past the last record this writer has
+ * written and fsynced, or the segment size when the writer was opened.
+ * Bytes of a failed or in-progress append are never included. Safe to call
+ * from any thread; it serializes with appends.
+ */
+guint64 wyrebox_journal_writer_get_durable_end (WyreboxJournalWriter *self);
+
 G_END_DECLS
