@@ -28,7 +28,7 @@ No top-level `include/` directory is introduced.
 ## Formatting And Style
 
 Components in this contract use C and GLib/GObject style. Implementations must
-follow the `uncrustify.cfg` style applied by `tools/uncrustify-format`, use
+follow the `uncrustify.cfg` style applied by `tools/format-c`, use
 four-space indentation, and keep code style consistent with existing WyreBox
 conventions.
 

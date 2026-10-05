@@ -20,15 +20,15 @@ jobs:
       - name: Check out sources
         uses: actions/checkout@v6
 
-      - name: Install formatter
+      - name: Install pinned Uncrustify
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends uncrustify
-          uncrustify --version
+          format_prefix="$RUNNER_TEMP/uncrustify"
+          ./tools/install-uncrustify.sh "$format_prefix"
+          echo "$format_prefix/bin" >> "$GITHUB_PATH"
 
       - name: Check C/H formatting
         run: |
-          ./tools/uncrustify-format --check
+          ./tools/check-format.sh --all
   build:
     name: Build (${{ matrix.compiler }})
     runs-on: ubuntu-24.04
