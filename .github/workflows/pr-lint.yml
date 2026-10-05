@@ -52,6 +52,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential \
             ca-certificates \
+            capnproto \
+            libcapnp-dev \
             libglib2.0-dev \
             meson \
             ninja-build \
@@ -89,6 +91,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential \
             ca-certificates \
+            capnproto \
+            libcapnp-dev \
             libglib2.0-dev \
             meson \
             ninja-build \
