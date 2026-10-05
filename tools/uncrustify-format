@@ -1,0 +1,43 @@
+#!/bin/sh
+# Format WyreBox C/H files with uncrustify using the repository uncrustify.cfg,
+# which follows semantic-reasoning/wirelog.
+#
+# Usage:
+#   tools/uncrustify-format [--check] [FILE...]
+#
+# Without FILE arguments, every tracked C/H file under wyrebox/ and tests/ is
+# processed, except tests/*/fixtures/ which mirror external sources verbatim.
+# Formatting runs twice because a few constructs only settle on the second pass.
+
+set -eu
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+cfg="$root/uncrustify.cfg"
+
+if ! command -v uncrustify > /dev/null 2>&1; then
+  echo "uncrustify not found. Install it (e.g., apt install uncrustify)." >&2
+  exit 1
+fi
+
+check=0
+if [ "${1:-}" = "--check" ]; then
+  check=1
+  shift
+fi
+
+if [ "$#" -eq 0 ]; then
+  cd "$root"
+  set -- $(git ls-files -- 'wyrebox/*.c' 'wyrebox/*.h' 'tests/*.c' \
+      'tests/*.h' ':!:tests/*/fixtures/*')
+fi
+
+if [ "$#" -eq 0 ]; then
+  exit 0
+fi
+
+if [ "$check" -eq 1 ]; then
+  exec uncrustify -q -c "$cfg" --check "$@"
+fi
+
+uncrustify -q -c "$cfg" --replace --no-backup "$@"
+uncrustify -q -c "$cfg" --replace --no-backup "$@"
