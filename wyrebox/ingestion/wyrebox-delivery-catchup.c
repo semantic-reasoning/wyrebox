@@ -82,25 +82,14 @@ fail_if_journal_has_unsafe_suffix (WyreboxJournalReader *journal_reader,
     return FALSE;
 }
 
-gboolean
-wyrebox_delivery_catchup_materialize_inbox (WyreboxSchemaMetadataStore
-    *metadata_store, WyreboxJournalReader *journal_reader,
+static gboolean
+replay_pending_deliveries (WyreboxSchemaMetadataStore *metadata_store,
+    WyreboxJournalReader *journal_reader,
     WyreboxLocalObjectStore *object_store,
-    WyreboxDeliveryMaterializer *materializer, const gchar *account_id,
-    GError **error)
+    WyreboxDeliveryProjectionList *out_list, GError **error)
 {
     g_auto (WyreboxSchemaMigrationMetadataState) metadata = { 0 };
     g_autoptr (WyreboxDeliveryProjection) projection = NULL;
-    g_auto (WyreboxDeliveryProjectionList) list = { 0 };
-
-    g_return_val_if_fail (WYREBOX_IS_SCHEMA_METADATA_STORE (metadata_store),
-        FALSE);
-    g_return_val_if_fail (WYREBOX_IS_JOURNAL_READER (journal_reader), FALSE);
-    g_return_val_if_fail (WYREBOX_IS_LOCAL_OBJECT_STORE (object_store), FALSE);
-    g_return_val_if_fail (WYREBOX_IS_DELIVERY_MATERIALIZER (materializer),
-        FALSE);
-    g_return_val_if_fail (account_id != NULL, FALSE);
-    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
     if (!wyrebox_schema_metadata_store_load (metadata_store, &metadata, error))
         return FALSE;
@@ -118,9 +107,105 @@ wyrebox_delivery_catchup_materialize_inbox (WyreboxSchemaMetadataStore
     if (projection == NULL)
         return FALSE;
 
-    if (!wyrebox_delivery_projection_replay_all (projection, &list, error))
+    return wyrebox_delivery_projection_replay_all (projection, out_list, error);
+}
+
+gboolean
+wyrebox_delivery_catchup_materialize_inbox (WyreboxSchemaMetadataStore
+    *metadata_store, WyreboxJournalReader *journal_reader,
+    WyreboxLocalObjectStore *object_store,
+    WyreboxDeliveryMaterializer *materializer, const gchar *account_id,
+    GError **error)
+{
+    g_auto (WyreboxDeliveryProjectionList) list = { 0 };
+
+    g_return_val_if_fail (WYREBOX_IS_SCHEMA_METADATA_STORE (metadata_store),
+        FALSE);
+    g_return_val_if_fail (WYREBOX_IS_JOURNAL_READER (journal_reader), FALSE);
+    g_return_val_if_fail (WYREBOX_IS_LOCAL_OBJECT_STORE (object_store), FALSE);
+    g_return_val_if_fail (WYREBOX_IS_DELIVERY_MATERIALIZER (materializer),
+        FALSE);
+    g_return_val_if_fail (account_id != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (!replay_pending_deliveries (metadata_store, journal_reader,
+        object_store, &list, error))
         return FALSE;
 
     return wyrebox_delivery_materializer_apply_to_mailbox (materializer,
                account_id, "mailbox-inbox", "INBOX", &list, error);
+}
+
+static gboolean
+fail_if_any_record_lacks_account (const WyreboxDeliveryProjectionList *list,
+    GError **error)
+{
+    for (guint i = 0; i < list->records->len; i++) {
+        const WyreboxDeliveryProjectionRecord *record =
+            g_ptr_array_index (list->records, i);
+
+        if (record->account_identity == NULL ||
+            record->account_identity[0] == '\0') {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "journaled delivery at offset %" G_GUINT64_FORMAT
+                ", sequence %" G_GUINT64_FORMAT " has no account identity",
+                record->journal_offset, record->journal_sequence);
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+gboolean
+wyrebox_delivery_catchup_materialize_account_inboxes (
+    WyreboxSchemaMetadataStore *metadata_store,
+    WyreboxJournalReader *journal_reader,
+    WyreboxLocalObjectStore *object_store,
+    WyreboxDeliveryMaterializer *materializer, GError **error)
+{
+    g_auto (WyreboxDeliveryProjectionList) list = { 0 };
+    guint run_start = 0;
+
+    g_return_val_if_fail (WYREBOX_IS_SCHEMA_METADATA_STORE (metadata_store),
+        FALSE);
+    g_return_val_if_fail (WYREBOX_IS_JOURNAL_READER (journal_reader), FALSE);
+    g_return_val_if_fail (WYREBOX_IS_LOCAL_OBJECT_STORE (object_store), FALSE);
+    g_return_val_if_fail (WYREBOX_IS_DELIVERY_MATERIALIZER (materializer),
+        FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (!replay_pending_deliveries (metadata_store, journal_reader,
+        object_store, &list, error) ||
+        !fail_if_any_record_lacks_account (&list, error))
+        return FALSE;
+
+    while (run_start < list.records->len) {
+        const WyreboxDeliveryProjectionRecord *first =
+            g_ptr_array_index (list.records, run_start);
+        g_auto (WyreboxDeliveryProjectionList) run = { 0 };
+        guint run_end = run_start;
+
+        run.records = g_ptr_array_new ();
+        while (run_end < list.records->len) {
+            WyreboxDeliveryProjectionRecord *record =
+                g_ptr_array_index (list.records, run_end);
+
+            if (g_strcmp0 (record->account_identity,
+                first->account_identity) != 0)
+                break;
+            g_ptr_array_add (run.records, record);
+            run_end++;
+        }
+
+        if (!wyrebox_delivery_materializer_apply_to_inbox (materializer,
+            first->account_identity, &run, error))
+            return FALSE;
+
+        run_start = run_end;
+    }
+
+    return TRUE;
 }

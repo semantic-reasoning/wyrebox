@@ -845,14 +845,97 @@ wyrebox_delivery_materializer_new_duckdb (const gchar *path, GError **error)
     return g_steal_pointer (&self);
 }
 
+static gboolean
+materializer_resolve_inbox_id (WyreboxDeliveryMaterializer *self,
+    const gchar *account_id, gchar **out_mailbox_id, GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    g_auto (duckdb_result) result = { 0 };
+    char *value = NULL;
+
+    if (!materializer_prepare (self,
+        "SELECT mailbox_id FROM mailboxes WHERE account_id = ? "
+        "AND imap_name = 'INBOX';", &statement, error) ||
+        !bind_varchar (statement, 1, account_id, error))
+        return FALSE;
+
+    if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+        const char *detail = duckdb_result_error (&result);
+
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_FAILED,
+            "DuckDB delivery materializer INBOX lookup failed: %s",
+            detail != NULL ? detail : "unknown DuckDB error");
+        return FALSE;
+    }
+
+    if (duckdb_row_count (&result) == 0) {
+        *out_mailbox_id = g_strdup_printf ("inbox:%s", account_id);
+        return TRUE;
+    }
+
+    if (duckdb_row_count (&result) == 1)
+        value = duckdb_value_varchar (&result, 0, 0);
+    if (value == NULL) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "INBOX mailbox for %s is ambiguous or malformed", account_id);
+        return FALSE;
+    }
+
+    *out_mailbox_id = g_strdup (value);
+    duckdb_free (value);
+    return TRUE;
+}
+
+static gboolean
+materializer_apply_in_transaction (WyreboxDeliveryMaterializer *self,
+    const gchar *account_id, const gchar *mailbox_id, const gchar *imap_name,
+    const WyreboxDeliveryProjectionList *projection, GError **error)
+{
+    guint64 uidnext = 0;
+
+    if (!materializer_insert_account (self, account_id, error) ||
+        !materializer_ensure_mailbox (self, account_id, mailbox_id, imap_name,
+        error) ||
+        !materializer_insert_uid_state (self, account_id, mailbox_id, error) ||
+        !materializer_select_uidnext (self, account_id, mailbox_id, &uidnext,
+        error))
+        return FALSE;
+
+    for (guint i = 0; i < projection->records->len; i++) {
+        const WyreboxDeliveryProjectionRecord *record =
+            g_ptr_array_index (projection->records, i);
+
+        if (!materializer_apply_record (self, account_id, mailbox_id, record,
+            &uidnext, error))
+            return FALSE;
+    }
+
+    if (!materializer_update_uidnext (self, account_id, mailbox_id, uidnext,
+        error))
+        return FALSE;
+
+    if (projection->records->len > 0) {
+        const WyreboxDeliveryProjectionRecord *last_record =
+            g_ptr_array_index (projection->records,
+                projection->records->len - 1);
+
+        if (!materializer_save_checkpoint (self, last_record, error))
+            return FALSE;
+    }
+
+    return materializer_query (self, "COMMIT;", error);
+}
+
 gboolean
 wyrebox_delivery_materializer_apply_to_mailbox (WyreboxDeliveryMaterializer
     *self, const gchar *account_id, const gchar *mailbox_id,
     const gchar *imap_name, const WyreboxDeliveryProjectionList *projection,
     GError **error)
 {
-    guint64 uidnext = 0;
-
     g_return_val_if_fail (WYREBOX_IS_DELIVERY_MATERIALIZER (self), FALSE);
     g_return_val_if_fail (account_id != NULL, FALSE);
     g_return_val_if_fail (mailbox_id != NULL, FALSE);
@@ -864,42 +947,37 @@ wyrebox_delivery_materializer_apply_to_mailbox (WyreboxDeliveryMaterializer
     if (!materializer_query (self, "BEGIN TRANSACTION;", error))
         return FALSE;
 
-    if (!materializer_insert_account (self, account_id, error) ||
-        !materializer_ensure_mailbox (self, account_id, mailbox_id, imap_name,
-        error) ||
-        !materializer_insert_uid_state (self, account_id, mailbox_id, error) ||
-        !materializer_select_uidnext (self, account_id, mailbox_id, &uidnext,
-        error))
-        goto fail;
-
-    for (guint i = 0; i < projection->records->len; i++) {
-        const WyreboxDeliveryProjectionRecord *record =
-            g_ptr_array_index (projection->records, i);
-
-        if (!materializer_apply_record (self, account_id, mailbox_id, record,
-            &uidnext, error))
-            goto fail;
+    if (!materializer_apply_in_transaction (self, account_id, mailbox_id,
+        imap_name, projection, error)) {
+        materializer_rollback_quietly (self);
+        return FALSE;
     }
-
-    if (!materializer_update_uidnext (self, account_id, mailbox_id, uidnext,
-        error))
-        goto fail;
-
-    if (projection->records->len > 0) {
-        const WyreboxDeliveryProjectionRecord *last_record =
-            g_ptr_array_index (projection->records,
-                projection->records->len - 1);
-
-        if (!materializer_save_checkpoint (self, last_record, error))
-            goto fail;
-    }
-
-    if (!materializer_query (self, "COMMIT;", error))
-        goto fail;
 
     return TRUE;
+}
 
-fail:
-    materializer_rollback_quietly (self);
-    return FALSE;
+gboolean
+wyrebox_delivery_materializer_apply_to_inbox (WyreboxDeliveryMaterializer
+    *self, const gchar *account_id,
+    const WyreboxDeliveryProjectionList *projection, GError **error)
+{
+    g_autofree gchar *mailbox_id = NULL;
+
+    g_return_val_if_fail (WYREBOX_IS_DELIVERY_MATERIALIZER (self), FALSE);
+    g_return_val_if_fail (account_id != NULL, FALSE);
+    g_return_val_if_fail (projection != NULL, FALSE);
+    g_return_val_if_fail (projection->records != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (!materializer_query (self, "BEGIN TRANSACTION;", error))
+        return FALSE;
+
+    if (!materializer_resolve_inbox_id (self, account_id, &mailbox_id, error) ||
+        !materializer_apply_in_transaction (self, account_id, mailbox_id,
+        "INBOX", projection, error)) {
+        materializer_rollback_quietly (self);
+        return FALSE;
+    }
+
+    return TRUE;
 }

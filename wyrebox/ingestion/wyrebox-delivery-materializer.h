@@ -45,5 +45,18 @@ gboolean wyrebox_delivery_materializer_apply_to_mailbox (
     const WyreboxDeliveryProjectionList *projection,
     GError **error);
 
+/*
+ * Apply @projection into the INBOX of @account_id, with the same transaction,
+ * idempotency and UID rules as wyrebox_delivery_materializer_apply_to_mailbox().
+ *
+ * The account's existing mailbox named "INBOX" is reused when present;
+ * otherwise mailbox "inbox:<account_id>" is created.
+ */
+gboolean wyrebox_delivery_materializer_apply_to_inbox (
+    WyreboxDeliveryMaterializer *self,
+    const gchar *account_id,
+    const WyreboxDeliveryProjectionList *projection,
+    GError **error);
+
 G_END_DECLS
 /* *INDENT-ON* */
