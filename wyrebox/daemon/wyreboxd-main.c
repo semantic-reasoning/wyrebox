@@ -270,15 +270,21 @@ run_daemon (int argc, char **argv)
     server = wyrebox_daemon_connection_server_new (socket_path,
             request_adapter);
 
+    /*
+     * Clients treat the socket as readiness, so the handlers must be in place
+     * before it appears; a signal caught before g_main_loop_run() stays pending
+     * and quits the loop on its first iteration.
+     */
+    loop = g_main_loop_new (NULL, FALSE);
+    (void)g_unix_signal_add (SIGTERM, quit_main_loop_on_signal, loop);
+    (void)g_unix_signal_add (SIGINT, quit_main_loop_on_signal, loop);
+
     if (!wyrebox_daemon_connection_server_start (server, &error)) {
         g_printerr ("wyreboxd: %s\n", error->message);
         wyrebox_daemon_delivery_materialization_stop (materialization);
         return EX_OSERR;
     }
 
-    loop = g_main_loop_new (NULL, FALSE);
-    (void)g_unix_signal_add (SIGTERM, quit_main_loop_on_signal, loop);
-    (void)g_unix_signal_add (SIGINT, quit_main_loop_on_signal, loop);
     g_main_loop_run (loop);
     wyrebox_daemon_delivery_materialization_stop (materialization);
 
