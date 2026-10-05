@@ -107,7 +107,8 @@ copy_recipients (const gchar *const *recipients,
   if (!validate_recipients (recipients, error))
     return FALSE;
 
-  for (; recipients[count] != NULL; count++);
+  while (recipients[count] != NULL)
+    count++;
 
   copied = g_new0 (gchar *, count + 1);
   for (gsize i = 0; recipients[i] != NULL; i++)
