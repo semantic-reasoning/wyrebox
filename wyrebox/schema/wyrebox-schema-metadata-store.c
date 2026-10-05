@@ -3,6 +3,7 @@
  */
 
 #include "wyrebox-schema-metadata-store.h"
+#include "wyrebox-duckdb-shared.h"
 #include "wyrebox-rfc5322-date.h"
 
 #include <duckdb.h>
@@ -3144,25 +3145,19 @@ wyrebox_schema_metadata_store_new_memory (void)
 WyreboxSchemaMetadataStore *
 wyrebox_schema_metadata_store_new_duckdb (const gchar *path, GError **error)
 {
-    const char *effective_path = path;
     g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
     WyreboxSchemaMetadataStoreDuckdb *self = NULL;
 
     g_return_val_if_fail (path != NULL, NULL);
     g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
-    if (g_strcmp0 (path, ":memory:") == 0)
-        effective_path = NULL;
-
     store = g_object_new (wyrebox_schema_metadata_store_duckdb_get_type (),
             NULL);
     self = (WyreboxSchemaMetadataStoreDuckdb *)store;
     self->path = g_strdup (path);
 
-    if (duckdb_open (effective_path, &self->database) != DuckDBSuccess) {
-        g_set_error (error,
-            G_IO_ERROR,
-            G_IO_ERROR_FAILED, "DuckDB schema metadata store open failed");
+    if (!wyrebox_duckdb_open_shared (path, &self->database, error)) {
+        g_prefix_error (error, "DuckDB schema metadata store: ");
         return NULL;
     }
 

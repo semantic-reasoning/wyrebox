@@ -74,6 +74,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-stream-chunk-frame.c',
   'daemon/wyrebox-daemon-success-receipt.c',
   'dovecot/wyrebox-dovecot-daemon-client.c',
+  'duckdb/wyrebox-duckdb-shared.c',
   'postfix/wyrebox-postfix-lmtp-reply.c',
   'postfix/wyrebox-postfix-lmtp-session.c',
   'postfix/wyrebox-postfix-pipe-input.c',
@@ -134,6 +135,7 @@ wyrebox_inc = include_directories(
   'facts',
   'daemon',
   'dovecot',
+  'duckdb',
   'postfix',
   'wirelog',
 )
