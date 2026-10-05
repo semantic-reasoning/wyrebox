@@ -2,6 +2,7 @@
 
 #include "wyrebox-derived-view-imap-name.h"
 #include "wyrebox-derived-view-membership-changed-payload.h"
+#include "wyrebox-duckdb-shared.h"
 
 #include <duckdb.h>
 #include <gio/gio.h>
@@ -1158,7 +1159,6 @@ wyrebox_derived_view_materializer_init (WyreboxDerivedViewMaterializer *self)
 WyreboxDerivedViewMaterializer *
 wyrebox_derived_view_materializer_new_duckdb (const gchar *path, GError **error)
 {
-    const gchar *effective_path = path;
     g_autoptr (WyreboxDerivedViewMaterializer) self = NULL;
 
     g_return_val_if_fail (error == NULL || *error == NULL, NULL);
@@ -1170,16 +1170,11 @@ wyrebox_derived_view_materializer_new_duckdb (const gchar *path, GError **error)
         return NULL;
     }
 
-    if (g_strcmp0 (path, ":memory:") == 0)
-        effective_path = NULL;
-
     self = g_object_new (WYREBOX_TYPE_DERIVED_VIEW_MATERIALIZER, NULL);
     self->path = g_strdup (path);
 
-    if (duckdb_open (effective_path, &self->database) != DuckDBSuccess) {
-        g_set_error (error,
-            G_IO_ERROR,
-            G_IO_ERROR_FAILED, "DuckDB derived view materializer open failed");
+    if (!wyrebox_duckdb_open_shared (path, &self->database, error)) {
+        g_prefix_error (error, "DuckDB derived view materializer: ");
         return NULL;
     }
 

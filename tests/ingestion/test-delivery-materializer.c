@@ -1,5 +1,6 @@
 #include "wyrebox-delivery-materializer.h"
 #include "wyrebox-delivery-projection.h"
+#include "wyrebox-duckdb-shared.h"
 #include "wyrebox-schema-metadata-store.h"
 
 #include <duckdb.h>
@@ -1035,6 +1036,39 @@ test_divergent_message_header_date_conflicts (void)
 }
 
 static void
+test_shares_instance_with_open_catalog_handle (void)
+{
+    g_autofree gchar *path = create_bootstrap_catalog ();
+    g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+    TestDuckdbFixture duckdb = { 0 };
+
+    append_projection_record (&projection, "sha256:first", 101, 1001, 11, 1);
+    append_projection_record (&projection, "sha256:second", 202, 1002, 22, 2);
+
+    g_assert_true (wyrebox_duckdb_open_shared (path, &duckdb.database,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (duckdb_connect (duckdb.database, &duckdb.connection), ==,
+        DuckDBSuccess);
+    assert_table_count (duckdb.connection, "mailbox_memberships", 0);
+
+    materializer = wyrebox_delivery_materializer_new_duckdb (path, &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_delivery_materializer_apply_to_mailbox (materializer,
+        "account-1", "mailbox-inbox", "INBOX", &projection, &error));
+    g_assert_no_error (error);
+
+    assert_table_count (duckdb.connection, "mailbox_memberships", 2);
+    g_clear_object (&materializer);
+    assert_table_count (duckdb.connection, "mailbox_memberships", 2);
+    close_duckdb_fixture (&duckdb);
+
+    remove_catalog (path);
+}
+
+static void
 test_reapply_projection_is_idempotent (void)
 {
     g_autofree gchar *path = create_bootstrap_catalog ();
@@ -1292,6 +1326,8 @@ main (int argc, char **argv)
         test_divergent_message_header_date_conflicts);
     g_test_add_func ("/ingestion/delivery-materializer/idempotent-reapply",
         test_reapply_projection_is_idempotent);
+    g_test_add_func ("/ingestion/delivery-materializer/shared-instance",
+        test_shares_instance_with_open_catalog_handle);
     g_test_add_func ("/ingestion/delivery-materializer/membership-attributes",
         test_duplicate_object_allows_membership_scoped_attributes);
     g_test_add_func ("/ingestion/delivery-materializer/divergent-mailbox",

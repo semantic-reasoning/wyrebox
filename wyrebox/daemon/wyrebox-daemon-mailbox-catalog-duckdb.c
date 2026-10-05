@@ -1,4 +1,5 @@
 #include "wyrebox-daemon-mailbox-catalog-duckdb.h"
+#include "wyrebox-duckdb-shared.h"
 
 #include <duckdb.h>
 #include <gio/gio.h>
@@ -430,11 +431,9 @@ wyrebox_daemon_mailbox_catalog_duckdb_new (const char *catalog_path,
     catalog->catalog_path = g_strdup (catalog_path);
     g_mutex_init (&catalog->mutex);
 
-    if (duckdb_open (catalog_path, &catalog->database) != DuckDBSuccess) {
-        g_set_error (error,
-            G_IO_ERROR,
-            G_IO_ERROR_FAILED,
-            "DuckDB mailbox catalog open failed for '%s'", catalog_path);
+    if (!wyrebox_duckdb_open_shared (catalog_path, &catalog->database,
+        error)) {
+        g_prefix_error (error, "DuckDB mailbox catalog: ");
         return NULL;
     }
 
