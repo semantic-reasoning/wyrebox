@@ -3,77 +3,77 @@
 WyreboxDaemonClientIdentityClass
 wyrebox_daemon_client_identity_classify_name (const char *caller_identity)
 {
-  if (g_strcmp0 (caller_identity, "admin-cli") == 0)
-    return WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI;
+    if (g_strcmp0 (caller_identity, "admin-cli") == 0)
+        return WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI;
 
-  if (g_strcmp0 (caller_identity, "trusted-tool") == 0)
-    return WYREBOX_DAEMON_CLIENT_IDENTITY_TRUSTED_TOOL;
+    if (g_strcmp0 (caller_identity, "trusted-tool") == 0)
+        return WYREBOX_DAEMON_CLIENT_IDENTITY_TRUSTED_TOOL;
 
-  if (g_strcmp0 (caller_identity, "postfix-helper") == 0)
-    return WYREBOX_DAEMON_CLIENT_IDENTITY_POSTFIX_HELPER;
+    if (g_strcmp0 (caller_identity, "postfix-helper") == 0)
+        return WYREBOX_DAEMON_CLIENT_IDENTITY_POSTFIX_HELPER;
 
-  if (g_strcmp0 (caller_identity, "dovecot") == 0)
-    return WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN;
+    if (g_strcmp0 (caller_identity, "dovecot") == 0)
+        return WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN;
 
-  if (g_strcmp0 (caller_identity, "dovecot-plugin") == 0)
-    return WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN;
+    if (g_strcmp0 (caller_identity, "dovecot-plugin") == 0)
+        return WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN;
 
-  return WYREBOX_DAEMON_CLIENT_IDENTITY_UNKNOWN;
+    return WYREBOX_DAEMON_CLIENT_IDENTITY_UNKNOWN;
 }
 
 WyreboxDaemonClientIdentityClass
-    wyrebox_daemon_client_identity_classify_request
-    (const WyreboxDaemonRequestIdentity * identity)
+wyrebox_daemon_client_identity_classify_request
+    (const WyreboxDaemonRequestIdentity *identity)
 {
-  if (identity == NULL)
-    return WYREBOX_DAEMON_CLIENT_IDENTITY_UNKNOWN;
+    if (identity == NULL)
+        return WYREBOX_DAEMON_CLIENT_IDENTITY_UNKNOWN;
 
-  return wyrebox_daemon_client_identity_classify_name
-      (identity->caller_identity);
+    return wyrebox_daemon_client_identity_classify_name
+               (identity->caller_identity);
 }
 
 const char *wyrebox_daemon_client_identity_class_to_name
     (WyreboxDaemonClientIdentityClass identity_class)
 {
-  switch (identity_class) {
+    switch (identity_class) {
     case WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI:
-      return "admin-cli";
+        return "admin-cli";
     case WYREBOX_DAEMON_CLIENT_IDENTITY_TRUSTED_TOOL:
-      return "trusted-tool";
+        return "trusted-tool";
     case WYREBOX_DAEMON_CLIENT_IDENTITY_POSTFIX_HELPER:
-      return "postfix-helper";
+        return "postfix-helper";
     case WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN:
-      return "dovecot-plugin";
+        return "dovecot-plugin";
     case WYREBOX_DAEMON_CLIENT_IDENTITY_UNKNOWN:
     default:
-      return "unknown";
-  }
+        return "unknown";
+    }
 }
 
 gboolean
-    wyrebox_daemon_client_identity_can_query_controlled_views
+wyrebox_daemon_client_identity_can_query_controlled_views
     (WyreboxDaemonClientIdentityClass identity_class) {
-  return identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI
-      || identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_TRUSTED_TOOL;
+    return identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI
+           || identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_TRUSTED_TOOL;
 }
 
 gboolean
-    wyrebox_daemon_client_identity_can_mutate_facts
+wyrebox_daemon_client_identity_can_mutate_facts
     (WyreboxDaemonClientIdentityClass identity_class) {
-  return identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_TRUSTED_TOOL;
+    return identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_TRUSTED_TOOL;
 }
 
 gboolean
-    wyrebox_daemon_client_identity_can_export_datasets
+wyrebox_daemon_client_identity_can_export_datasets
     (WyreboxDaemonClientIdentityClass identity_class) {
-  return identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI
-      || identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_TRUSTED_TOOL;
+    return identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI
+           || identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_TRUSTED_TOOL;
 }
 
 gboolean
-    wyrebox_daemon_client_identity_can_read_mail_events
+wyrebox_daemon_client_identity_can_read_mail_events
     (WyreboxDaemonClientIdentityClass identity_class) {
-  return identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI
-      || identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_TRUSTED_TOOL
-      || identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN;
+    return identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI
+           || identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_TRUSTED_TOOL
+           || identity_class == WYREBOX_DAEMON_CLIENT_IDENTITY_DOVECOT_PLUGIN;
 }

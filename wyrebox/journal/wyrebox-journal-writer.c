@@ -18,176 +18,176 @@
 
 struct _WyreboxJournalWriter
 {
-  GObject parent_instance;
+    GObject parent_instance;
 
-  char *journal_root_dir;
-  char *segment_path;
-  int fd;
-  guint64 next_sequence;
-  gboolean failed;
-  GMutex append_mutex;
-  WyreboxJournalWriterTestAppendHook test_append_hook;
-  gpointer test_append_hook_user_data;
-  GDestroyNotify test_append_hook_destroy;
+    char *journal_root_dir;
+    char *segment_path;
+    int fd;
+    guint64 next_sequence;
+    gboolean failed;
+    GMutex append_mutex;
+    WyreboxJournalWriterTestAppendHook test_append_hook;
+    gpointer test_append_hook_user_data;
+    GDestroyNotify test_append_hook_destroy;
 };
 
 G_DEFINE_TYPE (WyreboxJournalWriter, wyrebox_journal_writer, G_TYPE_OBJECT);
 
 static const char *event_type_names[] = {
-  "MessageDelivered",
-  "FlagChanged",
-  "KeywordChanged",
-  "FactInserted",
-  "FactRetracted",
-  "DerivedViewMembershipChanged",
-  "DaemonAuditRecorded",
+    "MessageDelivered",
+    "FlagChanged",
+    "KeywordChanged",
+    "FactInserted",
+    "FactRetracted",
+    "DerivedViewMembershipChanged",
+    "DaemonAuditRecorded",
 };
 
 typedef struct
 {
-  guint64 size;
-  dev_t dev;
-  ino_t ino;
+    guint64 size;
+    dev_t dev;
+    ino_t ino;
 } JournalSegmentStat;
 
 static inline void
 write_u16_le (guint8 *dst, guint16 value)
 {
-  dst[0] = (guint8) ((value >> 0) & 0xFF);
-  dst[1] = (guint8) ((value >> 8) & 0xFF);
+    dst[0] = (guint8)((value >> 0) & 0xFF);
+    dst[1] = (guint8)((value >> 8) & 0xFF);
 }
 
 static inline void
 write_u32_le (guint8 *dst, guint32 value)
 {
-  dst[0] = (guint8) ((value >> 0) & 0xFF);
-  dst[1] = (guint8) ((value >> 8) & 0xFF);
-  dst[2] = (guint8) ((value >> 16) & 0xFF);
-  dst[3] = (guint8) ((value >> 24) & 0xFF);
+    dst[0] = (guint8)((value >> 0) & 0xFF);
+    dst[1] = (guint8)((value >> 8) & 0xFF);
+    dst[2] = (guint8)((value >> 16) & 0xFF);
+    dst[3] = (guint8)((value >> 24) & 0xFF);
 }
 
 static inline void
 write_u64_le (guint8 *dst, guint64 value)
 {
-  dst[0] = (guint8) ((value >> 0) & 0xFF);
-  dst[1] = (guint8) ((value >> 8) & 0xFF);
-  dst[2] = (guint8) ((value >> 16) & 0xFF);
-  dst[3] = (guint8) ((value >> 24) & 0xFF);
-  dst[4] = (guint8) ((value >> 32) & 0xFF);
-  dst[5] = (guint8) ((value >> 40) & 0xFF);
-  dst[6] = (guint8) ((value >> 48) & 0xFF);
-  dst[7] = (guint8) ((value >> 56) & 0xFF);
+    dst[0] = (guint8)((value >> 0) & 0xFF);
+    dst[1] = (guint8)((value >> 8) & 0xFF);
+    dst[2] = (guint8)((value >> 16) & 0xFF);
+    dst[3] = (guint8)((value >> 24) & 0xFF);
+    dst[4] = (guint8)((value >> 32) & 0xFF);
+    dst[5] = (guint8)((value >> 40) & 0xFF);
+    dst[6] = (guint8)((value >> 48) & 0xFF);
+    dst[7] = (guint8)((value >> 56) & 0xFF);
 }
 
 static gboolean
 validate_event_type (WyreboxJournalEventType event_type)
 {
-  return event_type >= WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED &&
-      event_type <= WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED;
+    return event_type >= WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED &&
+           event_type <= WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED;
 }
 
 const char *
 wyrebox_journal_event_type_to_string (WyreboxJournalEventType event_type)
 {
-  if (!validate_event_type (event_type))
-    return NULL;
+    if (!validate_event_type (event_type))
+        return NULL;
 
-  return event_type_names[event_type];
+    return event_type_names[event_type];
 }
 
 static gboolean
 write_all (int fd, const guint8 *data, gsize size, GError **error)
 {
-  while (size > 0) {
-    ssize_t wrote = write (fd, data, size);
+    while (size > 0) {
+        ssize_t wrote = write (fd, data, size);
 
-    if (wrote < 0) {
-      int saved_errno = errno;
+        if (wrote < 0) {
+            int saved_errno = errno;
 
-      if (saved_errno == EINTR)
-        continue;
+            if (saved_errno == EINTR)
+                continue;
 
-      g_set_error (error,
-          G_IO_ERROR,
-          g_io_error_from_errno (saved_errno),
-          "failed to write journal record: %s", g_strerror (saved_errno));
-      return FALSE;
+            g_set_error (error,
+                G_IO_ERROR,
+                g_io_error_from_errno (saved_errno),
+                "failed to write journal record: %s", g_strerror (saved_errno));
+            return FALSE;
+        }
+
+        data += wrote;
+        size -= (gsize)wrote;
     }
 
-    data += wrote;
-    size -= (gsize) wrote;
-  }
-
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
 fsync_directory_path (const char *path, GError **error)
 {
-  g_autofd int fd = -1;
+    g_autofd int fd = -1;
 
-  fd = open (path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (fd < 0) {
-    int saved_errno = errno;
+    fd = open (path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0) {
+        int saved_errno = errno;
 
-    g_set_error (error,
-        G_IO_ERROR,
-        g_io_error_from_errno (saved_errno),
-        "failed to open directory %s for fsync: %s",
-        path, g_strerror (saved_errno));
-    return FALSE;
-  }
+        g_set_error (error,
+            G_IO_ERROR,
+            g_io_error_from_errno (saved_errno),
+            "failed to open directory %s for fsync: %s",
+            path, g_strerror (saved_errno));
+        return FALSE;
+    }
 
-  if (fsync (fd) != 0) {
-    int saved_errno = errno;
+    if (fsync (fd) != 0) {
+        int saved_errno = errno;
 
-    g_set_error (error,
-        G_IO_ERROR,
-        g_io_error_from_errno (saved_errno),
-        "failed to fsync directory %s: %s", path, g_strerror (saved_errno));
-    return FALSE;
-  }
+        g_set_error (error,
+            G_IO_ERROR,
+            g_io_error_from_errno (saved_errno),
+            "failed to fsync directory %s: %s", path, g_strerror (saved_errno));
+        return FALSE;
+    }
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
 fsync_journal_root_setup (const char *journal_root_dir, GError **error)
 {
-  g_autofree char *journal_parent_dir = g_path_get_dirname (journal_root_dir);
+    g_autofree char *journal_parent_dir = g_path_get_dirname (journal_root_dir);
 
-  if (!fsync_directory_path (journal_parent_dir, error))
-    return FALSE;
+    if (!fsync_directory_path (journal_parent_dir, error))
+        return FALSE;
 
-  if (!fsync_directory_path (journal_root_dir, error))
-    return FALSE;
+    if (!fsync_directory_path (journal_root_dir, error))
+        return FALSE;
 
-  return TRUE;
+    return TRUE;
 }
 
 static char *
 journal_segment_path_for_root (const char *journal_root_dir)
 {
-  return g_build_filename (journal_root_dir,
-      WYREBOX_JOURNAL_SEGMENT_NAME, NULL);
+    return g_build_filename (journal_root_dir,
+               WYREBOX_JOURNAL_SEGMENT_NAME, NULL);
 }
 
 static gboolean
 lock_segment_for_writer (int fd, const char *segment_path, GError **error)
 {
-  if (flock (fd, LOCK_EX | LOCK_NB) == 0)
-    return TRUE;
+    if (flock (fd, LOCK_EX | LOCK_NB) == 0)
+        return TRUE;
 
-  int saved_errno = errno;
-  GIOErrorEnum code = saved_errno == EWOULDBLOCK || saved_errno == EAGAIN ?
-      G_IO_ERROR_BUSY : g_io_error_from_errno (saved_errno);
+    int saved_errno = errno;
+    GIOErrorEnum code = saved_errno == EWOULDBLOCK || saved_errno == EAGAIN ?
+        G_IO_ERROR_BUSY : g_io_error_from_errno (saved_errno);
 
-  g_set_error (error,
-      G_IO_ERROR,
-      code,
-      "failed to acquire exclusive journal writer lock for %s: %s",
-      segment_path, g_strerror (saved_errno));
-  return FALSE;
+    g_set_error (error,
+        G_IO_ERROR,
+        code,
+        "failed to acquire exclusive journal writer lock for %s: %s",
+        segment_path, g_strerror (saved_errno));
+    return FALSE;
 }
 
 static gboolean
@@ -195,80 +195,82 @@ journal_segment_stat_from_stat (const char *segment_path,
     const struct stat *segment_stat, JournalSegmentStat *out_stat,
     GError **error)
 {
-  if (segment_stat->st_size < 0) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA, "journal segment %s has invalid size",
-        segment_path);
-    return FALSE;
-  }
+    if (segment_stat->st_size < 0) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA, "journal segment %s has invalid size",
+            segment_path);
+        return FALSE;
+    }
 
-  out_stat->size = (guint64) segment_stat->st_size;
-  out_stat->dev = segment_stat->st_dev;
-  out_stat->ino = segment_stat->st_ino;
-  return TRUE;
+    out_stat->size = (guint64)segment_stat->st_size;
+    out_stat->dev = segment_stat->st_dev;
+    out_stat->ino = segment_stat->st_ino;
+    return TRUE;
 }
 
 static gboolean
 stat_segment (const char *segment_path, JournalSegmentStat *out_stat,
     GError **error)
 {
-  struct stat segment_stat = { 0 };
+    struct stat segment_stat = { 0 };
 
-  if (stat (segment_path, &segment_stat) != 0) {
-    int saved_errno = errno;
+    if (stat (segment_path, &segment_stat) != 0) {
+        int saved_errno = errno;
 
-    g_set_error (error,
-        G_IO_ERROR,
-        g_io_error_from_errno (saved_errno),
-        "failed to stat journal segment %s: %s",
-        segment_path, g_strerror (saved_errno));
-    return FALSE;
-  }
+        g_set_error (error,
+            G_IO_ERROR,
+            g_io_error_from_errno (saved_errno),
+            "failed to stat journal segment %s: %s",
+            segment_path, g_strerror (saved_errno));
+        return FALSE;
+    }
 
-  return journal_segment_stat_from_stat (segment_path, &segment_stat, out_stat,
-      error);
+    return journal_segment_stat_from_stat (segment_path, &segment_stat,
+               out_stat,
+               error);
 }
 
 static gboolean
 fstat_segment (int fd, const char *segment_path, JournalSegmentStat *out_stat,
     GError **error)
 {
-  struct stat segment_stat = { 0 };
+    struct stat segment_stat = { 0 };
 
-  if (fstat (fd, &segment_stat) != 0) {
-    int saved_errno = errno;
+    if (fstat (fd, &segment_stat) != 0) {
+        int saved_errno = errno;
 
-    g_set_error (error,
-        G_IO_ERROR,
-        g_io_error_from_errno (saved_errno),
-        "failed to stat journal segment %s: %s",
-        segment_path, g_strerror (saved_errno));
-    return FALSE;
-  }
+        g_set_error (error,
+            G_IO_ERROR,
+            g_io_error_from_errno (saved_errno),
+            "failed to stat journal segment %s: %s",
+            segment_path, g_strerror (saved_errno));
+        return FALSE;
+    }
 
-  return journal_segment_stat_from_stat (segment_path, &segment_stat, out_stat,
-      error);
+    return journal_segment_stat_from_stat (segment_path, &segment_stat,
+               out_stat,
+               error);
 }
 
 static gboolean
 journal_segment_stat_same_file (const JournalSegmentStat *left,
     const JournalSegmentStat *right)
 {
-  return left->dev == right->dev && left->ino == right->ino;
+    return left->dev == right->dev && left->ino == right->ino;
 }
 
 static gboolean
 scan_safe_prefix_for_root (const char *journal_root_dir,
     WyreboxJournalSafePrefix *out_prefix, GError **error)
 {
-  g_autoptr (WyreboxJournalReader) reader = NULL;
+    g_autoptr (WyreboxJournalReader) reader = NULL;
 
-  reader = wyrebox_journal_reader_new (journal_root_dir, error);
-  if (reader == NULL)
-    return FALSE;
+    reader = wyrebox_journal_reader_new (journal_root_dir, error);
+    if (reader == NULL)
+        return FALSE;
 
-  return wyrebox_journal_reader_scan_safe_prefix (reader, out_prefix, error);
+    return wyrebox_journal_reader_scan_safe_prefix (reader, out_prefix, error);
 }
 
 static gboolean
@@ -276,69 +278,70 @@ scan_safe_prefix_for_segment_fd (int fd,
     const char *segment_path, WyreboxJournalSafePrefix *out_prefix,
     GError **error)
 {
-  return wyrebox_journal_reader_scan_safe_prefix_for_segment_fd (fd,
-      segment_path, out_prefix, error);
+    return wyrebox_journal_reader_scan_safe_prefix_for_segment_fd (fd,
+               segment_path, out_prefix, error);
 }
 
 static gboolean
 safe_prefix_is_recoverable_torn_suffix (const WyreboxJournalSafePrefix *prefix)
 {
-  return prefix->unsafe_suffix_found &&
-      prefix->has_last_safe_sequence &&
-      prefix->safe_end_offset > 0 &&
-      prefix->unsafe_offset == prefix->safe_end_offset &&
-      (prefix->stop_reason ==
-      WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_HEADER ||
-      prefix->stop_reason == WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_RECORD);
+    return prefix->unsafe_suffix_found &&
+           prefix->has_last_safe_sequence &&
+           prefix->safe_end_offset > 0 &&
+           prefix->unsafe_offset == prefix->safe_end_offset &&
+           (prefix->stop_reason ==
+           WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_HEADER ||
+           prefix->stop_reason ==
+           WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_RECORD);
 }
 
 static gboolean
 safe_prefix_recovery_state_equal (const WyreboxJournalSafePrefix *left,
     const WyreboxJournalSafePrefix *right)
 {
-  return left->safe_end_offset == right->safe_end_offset &&
-      left->last_safe_sequence == right->last_safe_sequence &&
-      left->has_last_safe_sequence == right->has_last_safe_sequence &&
-      left->reached_eof == right->reached_eof &&
-      left->unsafe_suffix_found == right->unsafe_suffix_found &&
-      left->stop_reason == right->stop_reason &&
-      left->unsafe_offset == right->unsafe_offset &&
-      left->unsafe_available_size == right->unsafe_available_size &&
-      left->unsafe_required_size == right->unsafe_required_size;
+    return left->safe_end_offset == right->safe_end_offset &&
+           left->last_safe_sequence == right->last_safe_sequence &&
+           left->has_last_safe_sequence == right->has_last_safe_sequence &&
+           left->reached_eof == right->reached_eof &&
+           left->unsafe_suffix_found == right->unsafe_suffix_found &&
+           left->stop_reason == right->stop_reason &&
+           left->unsafe_offset == right->unsafe_offset &&
+           left->unsafe_available_size == right->unsafe_available_size &&
+           left->unsafe_required_size == right->unsafe_required_size;
 }
 
 static void
 wyrebox_journal_writer_finalize (GObject *object)
 {
-  WyreboxJournalWriter *self = WYREBOX_JOURNAL_WRITER (object);
+    WyreboxJournalWriter *self = WYREBOX_JOURNAL_WRITER (object);
 
-  if (self->fd >= 0)
-    (void) close (self->fd);
+    if (self->fd >= 0)
+        (void)close (self->fd);
 
-  if (self->test_append_hook_destroy != NULL &&
-      self->test_append_hook_user_data != NULL)
-    self->test_append_hook_destroy (self->test_append_hook_user_data);
-  g_clear_pointer (&self->journal_root_dir, g_free);
-  g_clear_pointer (&self->segment_path, g_free);
-  g_mutex_clear (&self->append_mutex);
+    if (self->test_append_hook_destroy != NULL &&
+        self->test_append_hook_user_data != NULL)
+        self->test_append_hook_destroy (self->test_append_hook_user_data);
+    g_clear_pointer (&self->journal_root_dir, g_free);
+    g_clear_pointer (&self->segment_path, g_free);
+    g_mutex_clear (&self->append_mutex);
 
-  G_OBJECT_CLASS (wyrebox_journal_writer_parent_class)->finalize (object);
+    G_OBJECT_CLASS (wyrebox_journal_writer_parent_class)->finalize (object);
 }
 
 static void
 wyrebox_journal_writer_class_init (WyreboxJournalWriterClass *klass)
 {
-  GObjectClass *object_class = G_OBJECT_CLASS (klass);
+    GObjectClass *object_class = G_OBJECT_CLASS (klass);
 
-  object_class->finalize = wyrebox_journal_writer_finalize;
+    object_class->finalize = wyrebox_journal_writer_finalize;
 }
 
 static void
 wyrebox_journal_writer_init (WyreboxJournalWriter *self)
 {
-  self->fd = -1;
-  self->next_sequence = 1;
-  g_mutex_init (&self->append_mutex);
+    self->fd = -1;
+    self->next_sequence = 1;
+    g_mutex_init (&self->append_mutex);
 }
 
 void
@@ -346,133 +349,133 @@ wyrebox_journal_writer_set_test_append_hook (WyreboxJournalWriter *self,
     WyreboxJournalWriterTestAppendHook hook, gpointer user_data,
     GDestroyNotify destroy_notify)
 {
-  g_return_if_fail (WYREBOX_IS_JOURNAL_WRITER (self));
+    g_return_if_fail (WYREBOX_IS_JOURNAL_WRITER (self));
 
-  if (self->test_append_hook_destroy != NULL &&
-      self->test_append_hook_user_data != NULL)
-    self->test_append_hook_destroy (self->test_append_hook_user_data);
+    if (self->test_append_hook_destroy != NULL &&
+        self->test_append_hook_user_data != NULL)
+        self->test_append_hook_destroy (self->test_append_hook_user_data);
 
-  self->test_append_hook = hook;
-  self->test_append_hook_user_data = user_data;
-  self->test_append_hook_destroy = destroy_notify;
+    self->test_append_hook = hook;
+    self->test_append_hook_user_data = user_data;
+    self->test_append_hook_destroy = destroy_notify;
 }
 
 static gboolean
 replay_existing_segment (const char *journal_root_dir,
     guint64 *out_next_sequence, GError **error)
 {
-  g_autoptr (WyreboxJournalReader) reader = NULL;
-  guint64 last_sequence = 0;
+    g_autoptr (WyreboxJournalReader) reader = NULL;
+    guint64 last_sequence = 0;
 
-  reader = wyrebox_journal_reader_new (journal_root_dir, error);
-  if (reader == NULL)
-    return FALSE;
+    reader = wyrebox_journal_reader_new (journal_root_dir, error);
+    if (reader == NULL)
+        return FALSE;
 
-  while (TRUE) {
-    g_auto (WyreboxJournalRecord) record = { 0 };
-    gboolean eof = FALSE;
+    while (TRUE) {
+        g_auto (WyreboxJournalRecord) record = { 0 };
+        gboolean eof = FALSE;
 
-    if (!wyrebox_journal_reader_read_next (reader, &record, &eof, error)) {
-      if (eof)
-        break;
+        if (!wyrebox_journal_reader_read_next (reader, &record, &eof, error)) {
+            if (eof)
+                break;
 
-      return FALSE;
+            return FALSE;
+        }
+
+        last_sequence = record.sequence;
     }
 
-    last_sequence = record.sequence;
-  }
+    if (last_sequence == G_MAXUINT64) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA, "journal sequence space is exhausted");
+        return FALSE;
+    }
 
-  if (last_sequence == G_MAXUINT64) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA, "journal sequence space is exhausted");
-    return FALSE;
-  }
-
-  *out_next_sequence = last_sequence + 1;
-  return TRUE;
+    *out_next_sequence = last_sequence + 1;
+    return TRUE;
 }
 
 WyreboxJournalWriter *
 wyrebox_journal_writer_new (const char *journal_root_dir, GError **error)
 {
-  g_autoptr (WyreboxJournalWriter) self = NULL;
-  g_autofree char *segment_path = NULL;
-  struct stat segment_stat = { 0 };
-  guint64 next_sequence = 1;
+    g_autoptr (WyreboxJournalWriter) self = NULL;
+    g_autofree char *segment_path = NULL;
+    struct stat segment_stat = { 0 };
+    guint64 next_sequence = 1;
 
-  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+    g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
-  if (journal_root_dir == NULL || *journal_root_dir == '\0') {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_ARGUMENT, "journal root directory is required");
-    return NULL;
-  }
+    if (journal_root_dir == NULL || *journal_root_dir == '\0') {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT, "journal root directory is required");
+        return NULL;
+    }
 
-  if (g_mkdir_with_parents (journal_root_dir, 0700) != 0) {
-    int saved_errno = errno;
+    if (g_mkdir_with_parents (journal_root_dir, 0700) != 0) {
+        int saved_errno = errno;
 
-    g_set_error (error,
-        G_IO_ERROR,
-        g_io_error_from_errno (saved_errno),
-        "failed to create journal root %s: %s",
-        journal_root_dir, g_strerror (saved_errno));
-    return NULL;
-  }
+        g_set_error (error,
+            G_IO_ERROR,
+            g_io_error_from_errno (saved_errno),
+            "failed to create journal root %s: %s",
+            journal_root_dir, g_strerror (saved_errno));
+        return NULL;
+    }
 
-  if (!fsync_journal_root_setup (journal_root_dir, error))
-    return NULL;
+    if (!fsync_journal_root_setup (journal_root_dir, error))
+        return NULL;
 
-  segment_path = journal_segment_path_for_root (journal_root_dir);
+    segment_path = journal_segment_path_for_root (journal_root_dir);
 
-  int fd = open (segment_path, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
-  if (fd < 0) {
-    int saved_errno = errno;
+    int fd = open (segment_path, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        int saved_errno = errno;
 
-    g_set_error (error,
-        G_IO_ERROR,
-        g_io_error_from_errno (saved_errno),
-        "failed to open journal segment %s: %s",
-        segment_path, g_strerror (saved_errno));
-    return NULL;
-  }
+        g_set_error (error,
+            G_IO_ERROR,
+            g_io_error_from_errno (saved_errno),
+            "failed to open journal segment %s: %s",
+            segment_path, g_strerror (saved_errno));
+        return NULL;
+    }
 
-  if (!lock_segment_for_writer (fd, segment_path, error)) {
-    (void) close (fd);
-    return NULL;
-  }
+    if (!lock_segment_for_writer (fd, segment_path, error)) {
+        (void)close (fd);
+        return NULL;
+    }
 
-  if (fstat (fd, &segment_stat) != 0) {
-    int saved_errno = errno;
+    if (fstat (fd, &segment_stat) != 0) {
+        int saved_errno = errno;
 
-    (void) close (fd);
-    g_set_error (error,
-        G_IO_ERROR,
-        g_io_error_from_errno (saved_errno),
-        "failed to stat journal segment %s: %s",
-        segment_path, g_strerror (saved_errno));
-    return NULL;
-  }
+        (void)close (fd);
+        g_set_error (error,
+            G_IO_ERROR,
+            g_io_error_from_errno (saved_errno),
+            "failed to stat journal segment %s: %s",
+            segment_path, g_strerror (saved_errno));
+        return NULL;
+    }
 
-  if (segment_stat.st_size != 0 &&
-      !replay_existing_segment (journal_root_dir, &next_sequence, error)) {
-    (void) close (fd);
-    return NULL;
-  }
+    if (segment_stat.st_size != 0 &&
+        !replay_existing_segment (journal_root_dir, &next_sequence, error)) {
+        (void)close (fd);
+        return NULL;
+    }
 
-  if (!fsync_directory_path (journal_root_dir, error)) {
-    (void) close (fd);
-    return NULL;
-  }
+    if (!fsync_directory_path (journal_root_dir, error)) {
+        (void)close (fd);
+        return NULL;
+    }
 
-  self = g_object_new (WYREBOX_TYPE_JOURNAL_WRITER, NULL);
-  self->journal_root_dir = g_strdup (journal_root_dir);
-  self->segment_path = g_steal_pointer (&segment_path);
-  self->fd = fd;
-  self->next_sequence = next_sequence;
+    self = g_object_new (WYREBOX_TYPE_JOURNAL_WRITER, NULL);
+    self->journal_root_dir = g_strdup (journal_root_dir);
+    self->segment_path = g_steal_pointer (&segment_path);
+    self->fd = fd;
+    self->next_sequence = next_sequence;
 
-  return g_steal_pointer (&self);
+    return g_steal_pointer (&self);
 }
 
 gboolean
@@ -480,117 +483,118 @@ wyrebox_journal_writer_recover_torn_suffix (const char *journal_root_dir,
     guint64 *out_safe_end_offset, guint64 *out_last_safe_sequence,
     GError **error)
 {
-  g_autofree char *segment_path = NULL;
-  g_autofd int fd = -1;
-  WyreboxJournalSafePrefix initial_prefix = { 0 };
-  WyreboxJournalSafePrefix locked_prefix = { 0 };
-  JournalSegmentStat initial_stat = { 0 };
-  JournalSegmentStat locked_fd_stat = { 0 };
-  JournalSegmentStat locked_path_stat = { 0 };
+    g_autofree char *segment_path = NULL;
+    g_autofd int fd = -1;
+    WyreboxJournalSafePrefix initial_prefix = { 0 };
+    WyreboxJournalSafePrefix locked_prefix = { 0 };
+    JournalSegmentStat initial_stat = { 0 };
+    JournalSegmentStat locked_fd_stat = { 0 };
+    JournalSegmentStat locked_path_stat = { 0 };
 
-  g_return_val_if_fail (out_safe_end_offset != NULL, FALSE);
-  g_return_val_if_fail (out_last_safe_sequence != NULL, FALSE);
-  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+    g_return_val_if_fail (out_safe_end_offset != NULL, FALSE);
+    g_return_val_if_fail (out_last_safe_sequence != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  *out_safe_end_offset = 0;
-  *out_last_safe_sequence = 0;
+    *out_safe_end_offset = 0;
+    *out_last_safe_sequence = 0;
 
-  if (journal_root_dir == NULL || *journal_root_dir == '\0') {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_ARGUMENT, "journal root directory is required");
-    return FALSE;
-  }
+    if (journal_root_dir == NULL || *journal_root_dir == '\0') {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT, "journal root directory is required");
+        return FALSE;
+    }
 
-  segment_path = journal_segment_path_for_root (journal_root_dir);
+    segment_path = journal_segment_path_for_root (journal_root_dir);
 
-  if (!scan_safe_prefix_for_root (journal_root_dir, &initial_prefix, error))
-    return FALSE;
+    if (!scan_safe_prefix_for_root (journal_root_dir, &initial_prefix, error))
+        return FALSE;
 
-  if (!safe_prefix_is_recoverable_torn_suffix (&initial_prefix)) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "journal segment %s does not have a recoverable torn suffix",
-        segment_path);
-    return FALSE;
-  }
+    if (!safe_prefix_is_recoverable_torn_suffix (&initial_prefix)) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "journal segment %s does not have a recoverable torn suffix",
+            segment_path);
+        return FALSE;
+    }
 
-  if (!stat_segment (segment_path, &initial_stat, error))
-    return FALSE;
+    if (!stat_segment (segment_path, &initial_stat, error))
+        return FALSE;
 
-  fd = open (segment_path, O_RDWR | O_CLOEXEC);
-  if (fd < 0) {
-    int saved_errno = errno;
+    fd = open (segment_path, O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+        int saved_errno = errno;
 
-    g_set_error (error,
-        G_IO_ERROR,
-        g_io_error_from_errno (saved_errno),
-        "failed to open journal segment %s for recovery: %s",
-        segment_path, g_strerror (saved_errno));
-    return FALSE;
-  }
+        g_set_error (error,
+            G_IO_ERROR,
+            g_io_error_from_errno (saved_errno),
+            "failed to open journal segment %s for recovery: %s",
+            segment_path, g_strerror (saved_errno));
+        return FALSE;
+    }
 
-  if (!lock_segment_for_writer (fd, segment_path, error))
-    return FALSE;
+    if (!lock_segment_for_writer (fd, segment_path, error))
+        return FALSE;
 
-  if (!fstat_segment (fd, segment_path, &locked_fd_stat, error))
-    return FALSE;
+    if (!fstat_segment (fd, segment_path, &locked_fd_stat, error))
+        return FALSE;
 
-  if (!stat_segment (segment_path, &locked_path_stat, error))
-    return FALSE;
+    if (!stat_segment (segment_path, &locked_path_stat, error))
+        return FALSE;
 
-  if (!scan_safe_prefix_for_segment_fd (fd, segment_path, &locked_prefix,
-          error))
-    return FALSE;
+    if (!scan_safe_prefix_for_segment_fd (fd, segment_path, &locked_prefix,
+        error))
+        return FALSE;
 
-  if (initial_stat.size != locked_path_stat.size ||
-      !journal_segment_stat_same_file (&initial_stat, &locked_path_stat) ||
-      !journal_segment_stat_same_file (&locked_fd_stat, &locked_path_stat) ||
-      !safe_prefix_recovery_state_equal (&initial_prefix, &locked_prefix) ||
-      !safe_prefix_is_recoverable_torn_suffix (&locked_prefix)) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_BUSY,
-        "journal segment %s changed before torn suffix recovery", segment_path);
-    return FALSE;
-  }
+    if (initial_stat.size != locked_path_stat.size ||
+        !journal_segment_stat_same_file (&initial_stat, &locked_path_stat) ||
+        !journal_segment_stat_same_file (&locked_fd_stat, &locked_path_stat) ||
+        !safe_prefix_recovery_state_equal (&initial_prefix, &locked_prefix) ||
+        !safe_prefix_is_recoverable_torn_suffix (&locked_prefix)) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_BUSY,
+            "journal segment %s changed before torn suffix recovery",
+            segment_path);
+        return FALSE;
+    }
 
-  if (locked_prefix.safe_end_offset > G_MAXINT64) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "journal safe end offset %" G_GUINT64_FORMAT " is too large",
-        locked_prefix.safe_end_offset);
-    return FALSE;
-  }
+    if (locked_prefix.safe_end_offset > G_MAXINT64) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "journal safe end offset %" G_GUINT64_FORMAT " is too large",
+            locked_prefix.safe_end_offset);
+        return FALSE;
+    }
 
-  if (ftruncate (fd, (off_t) locked_prefix.safe_end_offset) != 0) {
-    int saved_errno = errno;
+    if (ftruncate (fd, (off_t)locked_prefix.safe_end_offset) != 0) {
+        int saved_errno = errno;
 
-    g_set_error (error,
-        G_IO_ERROR,
-        g_io_error_from_errno (saved_errno),
-        "failed to truncate journal segment %s: %s",
-        segment_path, g_strerror (saved_errno));
-    return FALSE;
-  }
+        g_set_error (error,
+            G_IO_ERROR,
+            g_io_error_from_errno (saved_errno),
+            "failed to truncate journal segment %s: %s",
+            segment_path, g_strerror (saved_errno));
+        return FALSE;
+    }
 
-  if (fsync (fd) != 0) {
-    int saved_errno = errno;
+    if (fsync (fd) != 0) {
+        int saved_errno = errno;
 
-    g_set_error (error,
-        G_IO_ERROR,
-        g_io_error_from_errno (saved_errno),
-        "failed to fsync journal segment %s after recovery: %s",
-        segment_path, g_strerror (saved_errno));
-    return FALSE;
-  }
+        g_set_error (error,
+            G_IO_ERROR,
+            g_io_error_from_errno (saved_errno),
+            "failed to fsync journal segment %s after recovery: %s",
+            segment_path, g_strerror (saved_errno));
+        return FALSE;
+    }
 
-  *out_safe_end_offset = locked_prefix.safe_end_offset;
-  *out_last_safe_sequence = locked_prefix.last_safe_sequence;
+    *out_safe_end_offset = locked_prefix.safe_end_offset;
+    *out_last_safe_sequence = locked_prefix.last_safe_sequence;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
@@ -598,113 +602,114 @@ wyrebox_journal_writer_append_unlocked (WyreboxJournalWriter *self,
     WyreboxJournalEventType event_type,
     GBytes *payload, guint64 *out_offset, guint64 *out_sequence, GError **error)
 {
-  g_autofree guint8 *header = NULL;
-  g_autofree guint8 *checksum_buffer = NULL;
-  const guint8 *payload_data = NULL;
-  g_autoptr (GChecksum) checksum = NULL;
-  g_autofree char *event_type_name = NULL;
-  gsize payload_size = 0;
-  gsize checksum_len = 0;
-  guint16 header_size = WYREBOX_JOURNAL_RECORD_HEADER_SIZE;
-  guint64 sequence = 0;
-  off_t offset = 0;
+    g_autofree guint8 *header = NULL;
+    g_autofree guint8 *checksum_buffer = NULL;
+    const guint8 *payload_data = NULL;
+    g_autoptr (GChecksum) checksum = NULL;
+    g_autofree char *event_type_name = NULL;
+    gsize payload_size = 0;
+    gsize checksum_len = 0;
+    guint16 header_size = WYREBOX_JOURNAL_RECORD_HEADER_SIZE;
+    guint64 sequence = 0;
+    off_t offset = 0;
 
-  g_return_val_if_fail (WYREBOX_IS_JOURNAL_WRITER (self), FALSE);
-  g_return_val_if_fail (out_offset != NULL, FALSE);
-  g_return_val_if_fail (out_sequence != NULL, FALSE);
-  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+    g_return_val_if_fail (WYREBOX_IS_JOURNAL_WRITER (self), FALSE);
+    g_return_val_if_fail (out_offset != NULL, FALSE);
+    g_return_val_if_fail (out_sequence != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  if (self->failed) {
-    g_set_error (error,
-        G_IO_ERROR, G_IO_ERROR_FAILED, "journal writer is in failed state");
-    return FALSE;
-  }
-
-  if (!validate_event_type (event_type)) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_ARGUMENT,
-        "invalid journal event type: %d", (int) event_type);
-    return FALSE;
-  }
-
-  event_type_name =
-      g_strdup (wyrebox_journal_event_type_to_string (event_type));
-  if (payload != NULL)
-    payload_data = g_bytes_get_data (payload, &payload_size);
-
-  sequence = self->next_sequence;
-
-  *out_offset = 0;
-  *out_sequence = 0;
-
-  offset = lseek (self->fd, 0, SEEK_END);
-  if (offset < 0) {
-    int saved_errno = errno;
-
-    self->failed = TRUE;
-    g_set_error (error,
-        G_IO_ERROR,
-        g_io_error_from_errno (saved_errno),
-        "failed to seek journal end: %s", g_strerror (saved_errno));
-    return FALSE;
-  }
-
-  header = g_malloc0 (WYREBOX_JOURNAL_RECORD_HEADER_SIZE);
-  memcpy (header, "WYREJNL1", strlen ("WYREJNL1") + 1);
-  write_u16_le (header + 8, header_size);
-  write_u16_le (header + 10, WYREBOX_JOURNAL_RECORD_VERSION);
-  write_u32_le (header + 12, (guint32) strlen (event_type_name));
-  write_u64_le (header + 16, sequence);
-  write_u64_le (header + 24, (guint64) payload_size);
-
-  checksum = g_checksum_new (G_CHECKSUM_SHA256);
-  g_checksum_update (checksum, header, 32);
-  g_checksum_update (checksum,
-      (const guchar *) event_type_name, (gssize) strlen (event_type_name));
-  g_checksum_update (checksum, payload_data, (gssize) payload_size);
-
-  checksum_len = g_checksum_type_get_length (G_CHECKSUM_SHA256);
-  checksum_buffer = g_malloc (checksum_len);
-  g_checksum_get_digest (checksum, checksum_buffer, &checksum_len);
-
-  memcpy (header + 32, checksum_buffer, checksum_len);
-
-  if (!write_all (self->fd, header, WYREBOX_JOURNAL_RECORD_HEADER_SIZE, error)) {
-    self->failed = TRUE;
-    return FALSE;
-  }
-
-  if (!write_all (self->fd,
-          (const guint8 *) event_type_name, strlen (event_type_name), error)) {
-    self->failed = TRUE;
-    return FALSE;
-  }
-
-  if (payload_size > 0) {
-    if (!write_all (self->fd, payload_data, payload_size, error)) {
-      self->failed = TRUE;
-      return FALSE;
+    if (self->failed) {
+        g_set_error (error,
+            G_IO_ERROR, G_IO_ERROR_FAILED, "journal writer is in failed state");
+        return FALSE;
     }
-  }
 
-  if (fsync (self->fd) != 0) {
-    int saved_errno = errno;
+    if (!validate_event_type (event_type)) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT,
+            "invalid journal event type: %d", (int)event_type);
+        return FALSE;
+    }
 
-    self->failed = TRUE;
-    g_set_error (error,
-        G_IO_ERROR,
-        g_io_error_from_errno (saved_errno),
-        "failed to fsync journal segment %s: %s",
-        self->segment_path, g_strerror (saved_errno));
-    return FALSE;
-  }
+    event_type_name =
+        g_strdup (wyrebox_journal_event_type_to_string (event_type));
+    if (payload != NULL)
+        payload_data = g_bytes_get_data (payload, &payload_size);
 
-  *out_offset = (guint64) offset;
-  *out_sequence = sequence;
-  self->next_sequence = sequence + 1;
+    sequence = self->next_sequence;
 
-  return TRUE;
+    *out_offset = 0;
+    *out_sequence = 0;
+
+    offset = lseek (self->fd, 0, SEEK_END);
+    if (offset < 0) {
+        int saved_errno = errno;
+
+        self->failed = TRUE;
+        g_set_error (error,
+            G_IO_ERROR,
+            g_io_error_from_errno (saved_errno),
+            "failed to seek journal end: %s", g_strerror (saved_errno));
+        return FALSE;
+    }
+
+    header = g_malloc0 (WYREBOX_JOURNAL_RECORD_HEADER_SIZE);
+    memcpy (header, "WYREJNL1", strlen ("WYREJNL1") + 1);
+    write_u16_le (header + 8, header_size);
+    write_u16_le (header + 10, WYREBOX_JOURNAL_RECORD_VERSION);
+    write_u32_le (header + 12, (guint32)strlen (event_type_name));
+    write_u64_le (header + 16, sequence);
+    write_u64_le (header + 24, (guint64)payload_size);
+
+    checksum = g_checksum_new (G_CHECKSUM_SHA256);
+    g_checksum_update (checksum, header, 32);
+    g_checksum_update (checksum,
+        (const guchar *)event_type_name, (gssize)strlen (event_type_name));
+    g_checksum_update (checksum, payload_data, (gssize)payload_size);
+
+    checksum_len = g_checksum_type_get_length (G_CHECKSUM_SHA256);
+    checksum_buffer = g_malloc (checksum_len);
+    g_checksum_get_digest (checksum, checksum_buffer, &checksum_len);
+
+    memcpy (header + 32, checksum_buffer, checksum_len);
+
+    if (!write_all (self->fd, header, WYREBOX_JOURNAL_RECORD_HEADER_SIZE,
+        error)) {
+        self->failed = TRUE;
+        return FALSE;
+    }
+
+    if (!write_all (self->fd,
+        (const guint8 *)event_type_name, strlen (event_type_name), error)) {
+        self->failed = TRUE;
+        return FALSE;
+    }
+
+    if (payload_size > 0) {
+        if (!write_all (self->fd, payload_data, payload_size, error)) {
+            self->failed = TRUE;
+            return FALSE;
+        }
+    }
+
+    if (fsync (self->fd) != 0) {
+        int saved_errno = errno;
+
+        self->failed = TRUE;
+        g_set_error (error,
+            G_IO_ERROR,
+            g_io_error_from_errno (saved_errno),
+            "failed to fsync journal segment %s: %s",
+            self->segment_path, g_strerror (saved_errno));
+        return FALSE;
+    }
+
+    *out_offset = (guint64)offset;
+    *out_sequence = sequence;
+    self->next_sequence = sequence + 1;
+
+    return TRUE;
 }
 
 gboolean
@@ -714,34 +719,34 @@ wyrebox_journal_writer_append_guarded (WyreboxJournalWriter *self,
     gpointer user_data, guint64 *out_offset, guint64 *out_sequence,
     GError **error)
 {
-  g_autoptr (GBytes) payload = NULL;
-  gboolean success = FALSE;
+    g_autoptr (GBytes) payload = NULL;
+    gboolean success = FALSE;
 
-  g_return_val_if_fail (WYREBOX_IS_JOURNAL_WRITER (self), FALSE);
-  g_return_val_if_fail (callback != NULL, FALSE);
-  g_return_val_if_fail (out_offset != NULL, FALSE);
-  g_return_val_if_fail (out_sequence != NULL, FALSE);
-  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+    g_return_val_if_fail (WYREBOX_IS_JOURNAL_WRITER (self), FALSE);
+    g_return_val_if_fail (callback != NULL, FALSE);
+    g_return_val_if_fail (out_offset != NULL, FALSE);
+    g_return_val_if_fail (out_sequence != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  *out_offset = 0;
-  *out_sequence = 0;
+    *out_offset = 0;
+    *out_sequence = 0;
 
-  g_mutex_lock (&self->append_mutex);
-  success = callback (self->journal_root_dir, user_data, &payload, out_offset,
-      out_sequence, error);
-  if (success && payload != NULL) {
-    if (self->test_append_hook != NULL &&
-        !self->test_append_hook (self->journal_root_dir,
+    g_mutex_lock (&self->append_mutex);
+    success = callback (self->journal_root_dir, user_data, &payload, out_offset,
+            out_sequence, error);
+    if (success && payload != NULL) {
+        if (self->test_append_hook != NULL &&
+            !self->test_append_hook (self->journal_root_dir,
             self->test_append_hook_user_data, error)) {
-      g_mutex_unlock (&self->append_mutex);
-      return FALSE;
+            g_mutex_unlock (&self->append_mutex);
+            return FALSE;
+        }
+        success = wyrebox_journal_writer_append_unlocked (self, event_type,
+                payload, out_offset, out_sequence, error);
     }
-    success = wyrebox_journal_writer_append_unlocked (self, event_type,
-        payload, out_offset, out_sequence, error);
-  }
-  g_mutex_unlock (&self->append_mutex);
+    g_mutex_unlock (&self->append_mutex);
 
-  return success;
+    return success;
 }
 
 gboolean
@@ -749,17 +754,17 @@ wyrebox_journal_writer_append (WyreboxJournalWriter *self,
     WyreboxJournalEventType event_type,
     GBytes *payload, guint64 *out_offset, guint64 *out_sequence, GError **error)
 {
-  gboolean success = FALSE;
+    gboolean success = FALSE;
 
-  g_return_val_if_fail (WYREBOX_IS_JOURNAL_WRITER (self), FALSE);
-  g_return_val_if_fail (out_offset != NULL, FALSE);
-  g_return_val_if_fail (out_sequence != NULL, FALSE);
-  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+    g_return_val_if_fail (WYREBOX_IS_JOURNAL_WRITER (self), FALSE);
+    g_return_val_if_fail (out_offset != NULL, FALSE);
+    g_return_val_if_fail (out_sequence != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  g_mutex_lock (&self->append_mutex);
-  success = wyrebox_journal_writer_append_unlocked (self, event_type, payload,
-      out_offset, out_sequence, error);
-  g_mutex_unlock (&self->append_mutex);
+    g_mutex_lock (&self->append_mutex);
+    success = wyrebox_journal_writer_append_unlocked (self, event_type, payload,
+            out_offset, out_sequence, error);
+    g_mutex_unlock (&self->append_mutex);
 
-  return success;
+    return success;
 }

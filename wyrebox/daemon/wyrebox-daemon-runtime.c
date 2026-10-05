@@ -16,41 +16,41 @@ typedef char *duckdb_owned_string;
 static void
 duckdb_database_clear (duckdb_database *database)
 {
-  if (*database != NULL)
-    duckdb_close (database);
+    if (*database != NULL)
+        duckdb_close (database);
 }
 
 static void
 duckdb_connection_clear (duckdb_connection *connection)
 {
-  if (*connection != NULL)
-    duckdb_disconnect (connection);
+    if (*connection != NULL)
+        duckdb_disconnect (connection);
 }
 
 static void
 duckdb_result_clear (duckdb_result *result)
 {
-  duckdb_destroy_result (result);
+    duckdb_destroy_result (result);
 }
 
 static void
 duckdb_prepared_statement_clear (duckdb_prepared_statement *statement)
 {
-  duckdb_destroy_prepare (statement);
+    duckdb_destroy_prepare (statement);
 }
 
 static void
 duckdb_config_clear (duckdb_config *config)
 {
-  if (*config != NULL)
-    duckdb_destroy_config (config);
+    if (*config != NULL)
+        duckdb_destroy_config (config);
 }
 
 static void
 duckdb_owned_string_clear (char **value)
 {
-  if (*value != NULL)
-    duckdb_free (*value);
+    if (*value != NULL)
+        duckdb_free (*value);
 }
 
 /* *INDENT-OFF* */
@@ -66,182 +66,184 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_owned_string, duckdb_owned_string_clear
 const char *
 wyrebox_daemon_runtime_get_default_runtime_dir (void)
 {
-  return WYREBOX_DAEMON_DEFAULT_RUNTIME_DIR;
+    return WYREBOX_DAEMON_DEFAULT_RUNTIME_DIR;
 }
 
 const char *
 wyrebox_daemon_runtime_get_default_socket_path (void)
 {
-  return WYREBOX_DAEMON_DEFAULT_SOCKET_PATH;
+    return WYREBOX_DAEMON_DEFAULT_SOCKET_PATH;
 }
 
 const char *
 wyrebox_daemon_runtime_get_default_fact_dump_dir (void)
 {
-  return WYREBOX_DAEMON_DEFAULT_FACT_DUMP_DIR;
+    return WYREBOX_DAEMON_DEFAULT_FACT_DUMP_DIR;
 }
 
 GFile *
 wyrebox_daemon_runtime_get_default_fact_dump_file (void)
 {
-  return g_file_new_for_path (WYREBOX_DAEMON_DEFAULT_FACT_DUMP_DIR);
+    return g_file_new_for_path (WYREBOX_DAEMON_DEFAULT_FACT_DUMP_DIR);
 }
 
 static const gchar *
 runtime_safe_prefix_stop_reason_to_string (WyreboxJournalSafePrefixStopReason
     reason)
 {
-  switch (reason) {
+    switch (reason) {
     case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_EOF:
-      return "eof";
+        return "eof";
     case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_MISSING_SEGMENT:
-      return "missing-segment";
+        return "missing-segment";
     case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_EMPTY_SEGMENT:
-      return "empty-segment";
+        return "empty-segment";
     case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_HEADER:
-      return "partial-header";
+        return "partial-header";
     case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_PARTIAL_RECORD:
-      return "partial-record";
+        return "partial-record";
     case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_MAGIC:
-      return "invalid-magic";
+        return "invalid-magic";
     case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_HEADER_SIZE:
-      return "invalid-header-size";
+        return "invalid-header-size";
     case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_VERSION:
-      return "invalid-version";
+        return "invalid-version";
     case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_SEQUENCE:
-      return "invalid-sequence";
+        return "invalid-sequence";
     case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_INVALID_SIZE:
-      return "invalid-size";
+        return "invalid-size";
     case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_ZERO_EVENT_TYPE_LENGTH:
-      return "zero-event-type-length";
+        return "zero-event-type-length";
     case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_UNKNOWN_EVENT_TYPE:
-      return "unknown-event-type";
+        return "unknown-event-type";
     case WYREBOX_JOURNAL_SAFE_PREFIX_STOP_CHECKSUM_MISMATCH:
-      return "checksum-mismatch";
+        return "checksum-mismatch";
     default:
-      return "unknown";
-  }
+        return "unknown";
+    }
 }
 
 static void
-    runtime_delivery_storage_report_init
-    (WyreboxDaemonDeliveryStorageValidationReport * report)
+runtime_delivery_storage_report_init
+    (WyreboxDaemonDeliveryStorageValidationReport *report)
 {
-  memset (report, 0, sizeof (*report));
-  report->status = WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID;
-  report->failure_category =
-      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED;
+    memset (report, 0, sizeof (*report));
+    report->status = WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID;
+    report->failure_category =
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED;
 }
 
 void wyrebox_daemon_object_reachability_report_clear
-    (WyreboxDaemonObjectReachabilityReport * report)
+    (WyreboxDaemonObjectReachabilityReport *report)
 {
-  if (report == NULL)
-    return;
+    if (report == NULL)
+        return;
 
-  g_clear_pointer (&report->object_id, g_free);
-  report->size_bytes = 0;
-  report->message_reference_count = 0;
-  report->visible_mailbox_membership_count = 0;
-  report->visible_derived_view_membership_count = 0;
-  report->is_gc_reachable = FALSE;
-  report->is_gc_candidate = FALSE;
+    g_clear_pointer (&report->object_id, g_free);
+    report->size_bytes = 0;
+    report->message_reference_count = 0;
+    report->visible_mailbox_membership_count = 0;
+    report->visible_derived_view_membership_count = 0;
+    report->is_gc_reachable = FALSE;
+    report->is_gc_candidate = FALSE;
 }
 
 void wyrebox_daemon_garbage_collection_dry_run_report_clear
-    (WyreboxDaemonGarbageCollectionDryRunReport * report)
+    (WyreboxDaemonGarbageCollectionDryRunReport *report)
 {
-  if (report == NULL)
-    return;
+    if (report == NULL)
+        return;
 
-  memset (report, 0, sizeof (*report));
+    memset (report, 0, sizeof (*report));
 }
 
 static void
-    runtime_delivery_storage_report_apply_safe_prefix
-    (WyreboxDaemonDeliveryStorageValidationReport * report,
-    const WyreboxJournalSafePrefix * prefix)
+runtime_delivery_storage_report_apply_safe_prefix
+    (WyreboxDaemonDeliveryStorageValidationReport *report,
+    const WyreboxJournalSafePrefix *prefix)
 {
-  report->safe_end_offset = prefix->safe_end_offset;
-  report->has_last_safe_sequence = prefix->has_last_safe_sequence;
-  report->last_safe_sequence = prefix->last_safe_sequence;
-  report->has_unsafe_offset = prefix->unsafe_suffix_found;
-  report->unsafe_offset = prefix->unsafe_offset;
+    report->safe_end_offset = prefix->safe_end_offset;
+    report->has_last_safe_sequence = prefix->has_last_safe_sequence;
+    report->last_safe_sequence = prefix->last_safe_sequence;
+    report->has_unsafe_offset = prefix->unsafe_suffix_found;
+    report->unsafe_offset = prefix->unsafe_offset;
 }
 
 static WyreboxDaemonDeliveryStorageValidationFailureCategory
-    runtime_delivery_storage_failure_category_for_replay_error
-    (const GError * error)
+runtime_delivery_storage_failure_category_for_replay_error
+    (const GError *error)
 {
-  if (error == NULL || error->message == NULL)
+    if (error == NULL || error->message == NULL)
+        return
+            WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED;
+
+    if (g_error_matches (error,
+        WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+        WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_SIZE_MISMATCH))
+        return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_SIZE_MISMATCH;
+
+    if (g_error_matches (error,
+        WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+        WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_HASH_MISMATCH))
+        return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_HASH_MISMATCH;
+
+    if (g_error_matches (error,
+        WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+        WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_MISSING_OBJECT))
+        return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_MISSING_OBJECT;
+
     return
         WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED;
-
-  if (g_error_matches (error,
-          WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
-          WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_SIZE_MISMATCH))
-    return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_SIZE_MISMATCH;
-
-  if (g_error_matches (error,
-          WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
-          WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_HASH_MISMATCH))
-    return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_HASH_MISMATCH;
-
-  if (g_error_matches (error,
-          WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
-          WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_MISSING_OBJECT))
-    return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_MISSING_OBJECT;
-
-  return
-      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED;
 }
 
 static gboolean
-    runtime_scan_journal_safe_prefix_for_delivery_storage
-    (WyreboxJournalReader * journal_reader,
-    WyreboxDaemonDeliveryStorageValidationReport * report, GError ** error)
+runtime_scan_journal_safe_prefix_for_delivery_storage
+    (WyreboxJournalReader *journal_reader,
+    WyreboxDaemonDeliveryStorageValidationReport *report, GError **error)
 {
-  WyreboxJournalSafePrefix prefix = { 0 };
-  const gchar *stop_reason = NULL;
+    WyreboxJournalSafePrefix prefix = { 0 };
+    const gchar *stop_reason = NULL;
 
-  if (!wyrebox_journal_reader_scan_safe_prefix (journal_reader, &prefix, error))
+    if (!wyrebox_journal_reader_scan_safe_prefix (journal_reader, &prefix,
+        error))
+        return FALSE;
+
+    runtime_delivery_storage_report_apply_safe_prefix (report, &prefix);
+    if (!prefix.unsafe_suffix_found)
+        return TRUE;
+
+    report->status = WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID;
+    report->failure_category =
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_UNSAFE_JOURNAL_SUFFIX;
+
+    stop_reason =
+        runtime_safe_prefix_stop_reason_to_string (prefix.stop_reason);
+    if (prefix.has_last_safe_sequence) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "startup delivery storage validation failed: journal unsafe suffix "
+            "found, stop reason %s, unsafe offset %" G_GUINT64_FORMAT
+            ", safe end offset %" G_GUINT64_FORMAT ", last safe sequence %"
+            G_GUINT64_FORMAT ", available size %" G_GUINT64_FORMAT
+            ", required size %" G_GUINT64_FORMAT,
+            stop_reason, prefix.unsafe_offset, prefix.safe_end_offset,
+            prefix.last_safe_sequence, prefix.unsafe_available_size,
+            prefix.unsafe_required_size);
+    } else {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "startup delivery storage validation failed: journal unsafe suffix "
+            "found, stop reason %s, unsafe offset %" G_GUINT64_FORMAT
+            ", safe end offset %" G_GUINT64_FORMAT ", last safe sequence none, "
+            "available size %" G_GUINT64_FORMAT ", required size %"
+            G_GUINT64_FORMAT,
+            stop_reason, prefix.unsafe_offset, prefix.safe_end_offset,
+            prefix.unsafe_available_size, prefix.unsafe_required_size);
+    }
+
     return FALSE;
-
-  runtime_delivery_storage_report_apply_safe_prefix (report, &prefix);
-  if (!prefix.unsafe_suffix_found)
-    return TRUE;
-
-  report->status = WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID;
-  report->failure_category =
-      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_UNSAFE_JOURNAL_SUFFIX;
-
-  stop_reason = runtime_safe_prefix_stop_reason_to_string (prefix.stop_reason);
-  if (prefix.has_last_safe_sequence) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "startup delivery storage validation failed: journal unsafe suffix "
-        "found, stop reason %s, unsafe offset %" G_GUINT64_FORMAT
-        ", safe end offset %" G_GUINT64_FORMAT ", last safe sequence %"
-        G_GUINT64_FORMAT ", available size %" G_GUINT64_FORMAT
-        ", required size %" G_GUINT64_FORMAT,
-        stop_reason, prefix.unsafe_offset, prefix.safe_end_offset,
-        prefix.last_safe_sequence, prefix.unsafe_available_size,
-        prefix.unsafe_required_size);
-  } else {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "startup delivery storage validation failed: journal unsafe suffix "
-        "found, stop reason %s, unsafe offset %" G_GUINT64_FORMAT
-        ", safe end offset %" G_GUINT64_FORMAT ", last safe sequence none, "
-        "available size %" G_GUINT64_FORMAT ", required size %"
-        G_GUINT64_FORMAT,
-        stop_reason, prefix.unsafe_offset, prefix.safe_end_offset,
-        prefix.unsafe_available_size, prefix.unsafe_required_size);
-  }
-
-  return FALSE;
 }
 
 gboolean
@@ -249,78 +251,79 @@ wyrebox_daemon_runtime_validate_delivery_storage_report (const char
     *journal_root_dir, const char *object_root_dir,
     WyreboxDaemonDeliveryStorageValidationReport *out_report, GError **error)
 {
-  g_autoptr (WyreboxJournalReader) journal_reader = NULL;
-  g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
-  g_autoptr (WyreboxDeliveryReplayValidator) validator = NULL;
-  g_autoptr (GError) local_error = NULL;
+    g_autoptr (WyreboxJournalReader) journal_reader = NULL;
+    g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
+    g_autoptr (WyreboxDeliveryReplayValidator) validator = NULL;
+    g_autoptr (GError) local_error = NULL;
 
-  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
-  g_return_val_if_fail (out_report != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+    g_return_val_if_fail (out_report != NULL, FALSE);
 
-  runtime_delivery_storage_report_init (out_report);
+    runtime_delivery_storage_report_init (out_report);
 
-  if (journal_root_dir == NULL || *journal_root_dir == '\0') {
-    out_report->failure_category =
-        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_INVALID_ARGUMENT;
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_ARGUMENT, "journal root directory is required");
-    return FALSE;
-  }
-
-  if (object_root_dir == NULL || *object_root_dir == '\0') {
-    out_report->failure_category =
-        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_INVALID_ARGUMENT;
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_ARGUMENT, "object root directory is required");
-    return FALSE;
-  }
-
-  journal_reader = wyrebox_journal_reader_new (journal_root_dir, error);
-  if (journal_reader == NULL) {
-    out_report->failure_category =
-        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_JOURNAL_UNAVAILABLE;
-    return FALSE;
-  }
-
-  if (!runtime_scan_journal_safe_prefix_for_delivery_storage (journal_reader,
-          out_report, error)) {
-    if (out_report->failure_category ==
-        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED)
-    {
-      out_report->failure_category =
-          WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_JOURNAL_UNAVAILABLE;
+    if (journal_root_dir == NULL || *journal_root_dir == '\0') {
+        out_report->failure_category =
+            WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_INVALID_ARGUMENT;
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT, "journal root directory is required");
+        return FALSE;
     }
-    return FALSE;
-  }
 
-  object_store = wyrebox_local_object_store_open_existing (object_root_dir,
-      error);
-  if (object_store == NULL) {
+    if (object_root_dir == NULL || *object_root_dir == '\0') {
+        out_report->failure_category =
+            WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_INVALID_ARGUMENT;
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT, "object root directory is required");
+        return FALSE;
+    }
+
+    journal_reader = wyrebox_journal_reader_new (journal_root_dir, error);
+    if (journal_reader == NULL) {
+        out_report->failure_category =
+            WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_JOURNAL_UNAVAILABLE;
+        return FALSE;
+    }
+
+    if (!runtime_scan_journal_safe_prefix_for_delivery_storage (journal_reader,
+        out_report, error)) {
+        if (out_report->failure_category ==
+            WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED)
+        {
+            out_report->failure_category =
+                WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_JOURNAL_UNAVAILABLE;
+        }
+        return FALSE;
+    }
+
+    object_store = wyrebox_local_object_store_open_existing (object_root_dir,
+            error);
+    if (object_store == NULL) {
+        out_report->failure_category =
+            WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_OBJECT_STORE_UNAVAILABLE;
+        return FALSE;
+    }
+
+    validator = wyrebox_delivery_replay_validator_new (journal_reader,
+            object_store);
+    if (validator == NULL)
+        return FALSE;
+
+    if (!wyrebox_delivery_replay_validator_validate_all (validator,
+        &local_error)) {
+        out_report->failure_category =
+            runtime_delivery_storage_failure_category_for_replay_error
+                (local_error);
+        g_propagate_prefixed_error (error, g_steal_pointer (&local_error),
+            "startup delivery storage validation failed: ");
+        return FALSE;
+    }
+
+    out_report->status = WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_VALID;
     out_report->failure_category =
-        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_OBJECT_STORE_UNAVAILABLE;
-    return FALSE;
-  }
-
-  validator = wyrebox_delivery_replay_validator_new (journal_reader,
-      object_store);
-  if (validator == NULL)
-    return FALSE;
-
-  if (!wyrebox_delivery_replay_validator_validate_all (validator, &local_error)) {
-    out_report->failure_category =
-        runtime_delivery_storage_failure_category_for_replay_error
-        (local_error);
-    g_propagate_prefixed_error (error, g_steal_pointer (&local_error),
-        "startup delivery storage validation failed: ");
-    return FALSE;
-  }
-
-  out_report->status = WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_VALID;
-  out_report->failure_category =
-      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_NONE;
-  return TRUE;
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_NONE;
+    return TRUE;
 }
 
 gboolean
@@ -328,122 +331,125 @@ wyrebox_daemon_runtime_recover_and_validate_delivery_storage (const char
     *journal_root_dir, const char *object_root_dir,
     WyreboxDaemonDeliveryStorageValidationReport *out_report, GError **error)
 {
-  g_autoptr (GError) validation_error = NULL;
-  g_autoptr (GError) recovery_error = NULL;
-  g_autoptr (GError) recovered_validation_error = NULL;
-  WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
-  guint64 safe_end_offset = 0;
-  guint64 last_safe_sequence = 0;
+    g_autoptr (GError) validation_error = NULL;
+    g_autoptr (GError) recovery_error = NULL;
+    g_autoptr (GError) recovered_validation_error = NULL;
+    WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
+    guint64 safe_end_offset = 0;
+    guint64 last_safe_sequence = 0;
 
-  g_return_val_if_fail (out_report != NULL, FALSE);
-  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+    g_return_val_if_fail (out_report != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  runtime_delivery_storage_report_init (out_report);
+    runtime_delivery_storage_report_init (out_report);
 
-  if (wyrebox_daemon_runtime_validate_delivery_storage_report (journal_root_dir,
-          object_root_dir, &report, &validation_error)) {
+    if (wyrebox_daemon_runtime_validate_delivery_storage_report (
+            journal_root_dir,
+            object_root_dir, &report, &validation_error)) {
+        *out_report = report;
+        return TRUE;
+    }
+
+    if (report.failure_category !=
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_UNSAFE_JOURNAL_SUFFIX)
+    {
+        *out_report = report;
+        g_propagate_error (error, g_steal_pointer (&validation_error));
+        return FALSE;
+    }
+
+    {
+        g_autoptr (WyreboxLocalObjectStore) recovery_object_store = NULL;
+
+        recovery_object_store =
+            wyrebox_local_object_store_open_existing (object_root_dir,
+                &recovery_error);
+        if (recovery_object_store == NULL) {
+            *out_report = report;
+            g_propagate_error (error, g_steal_pointer (&recovery_error));
+            return FALSE;
+        }
+    }
+
+    if (!wyrebox_journal_writer_recover_torn_suffix (journal_root_dir,
+        &safe_end_offset, &last_safe_sequence, &recovery_error)) {
+        *out_report = report;
+        g_propagate_error (error, g_steal_pointer (&recovery_error));
+        return FALSE;
+    }
+
+    (void)safe_end_offset;
+    (void)last_safe_sequence;
+
+    if (!wyrebox_daemon_runtime_validate_delivery_storage_report
+            (journal_root_dir, object_root_dir, &report,
+        &recovered_validation_error)) {
+        *out_report = report;
+        g_propagate_error (error,
+            g_steal_pointer (&recovered_validation_error));
+        return FALSE;
+    }
+
     *out_report = report;
     return TRUE;
-  }
-
-  if (report.failure_category !=
-      WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_UNSAFE_JOURNAL_SUFFIX)
-  {
-    *out_report = report;
-    g_propagate_error (error, g_steal_pointer (&validation_error));
-    return FALSE;
-  }
-
-  {
-    g_autoptr (WyreboxLocalObjectStore) recovery_object_store = NULL;
-
-    recovery_object_store =
-        wyrebox_local_object_store_open_existing (object_root_dir,
-        &recovery_error);
-    if (recovery_object_store == NULL) {
-      *out_report = report;
-      g_propagate_error (error, g_steal_pointer (&recovery_error));
-      return FALSE;
-    }
-  }
-
-  if (!wyrebox_journal_writer_recover_torn_suffix (journal_root_dir,
-          &safe_end_offset, &last_safe_sequence, &recovery_error)) {
-    *out_report = report;
-    g_propagate_error (error, g_steal_pointer (&recovery_error));
-    return FALSE;
-  }
-
-  (void) safe_end_offset;
-  (void) last_safe_sequence;
-
-  if (!wyrebox_daemon_runtime_validate_delivery_storage_report
-      (journal_root_dir, object_root_dir, &report,
-          &recovered_validation_error)) {
-    *out_report = report;
-    g_propagate_error (error, g_steal_pointer (&recovered_validation_error));
-    return FALSE;
-  }
-
-  *out_report = report;
-  return TRUE;
 }
 
 gboolean
 wyrebox_daemon_runtime_validate_delivery_storage (const char *journal_root_dir,
     const char *object_root_dir, GError **error)
 {
-  g_autoptr (WyreboxJournalReader) journal_reader = NULL;
-  g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
-  g_autoptr (WyreboxDeliveryReplayValidator) validator = NULL;
-  g_autoptr (GError) local_error = NULL;
-  WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
+    g_autoptr (WyreboxJournalReader) journal_reader = NULL;
+    g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
+    g_autoptr (WyreboxDeliveryReplayValidator) validator = NULL;
+    g_autoptr (GError) local_error = NULL;
+    WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
 
-  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  if (journal_root_dir == NULL || *journal_root_dir == '\0') {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_ARGUMENT, "journal root directory is required");
-    return FALSE;
-  }
+    if (journal_root_dir == NULL || *journal_root_dir == '\0') {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT, "journal root directory is required");
+        return FALSE;
+    }
 
-  if (object_root_dir == NULL || *object_root_dir == '\0') {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_ARGUMENT, "object root directory is required");
-    return FALSE;
-  }
+    if (object_root_dir == NULL || *object_root_dir == '\0') {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT, "object root directory is required");
+        return FALSE;
+    }
 
-  journal_reader = wyrebox_journal_reader_new (journal_root_dir, error);
-  if (journal_reader == NULL)
-    return FALSE;
+    journal_reader = wyrebox_journal_reader_new (journal_root_dir, error);
+    if (journal_reader == NULL)
+        return FALSE;
 
-  object_store = wyrebox_local_object_store_open_existing (object_root_dir,
-      error);
-  if (object_store == NULL)
-    return FALSE;
+    object_store = wyrebox_local_object_store_open_existing (object_root_dir,
+            error);
+    if (object_store == NULL)
+        return FALSE;
 
-  if (!runtime_scan_journal_safe_prefix_for_delivery_storage (journal_reader,
-          &report, error))
-    return FALSE;
+    if (!runtime_scan_journal_safe_prefix_for_delivery_storage (journal_reader,
+        &report, error))
+        return FALSE;
 
-  validator = wyrebox_delivery_replay_validator_new (journal_reader,
-      object_store);
-  if (validator == NULL)
-    return FALSE;
+    validator = wyrebox_delivery_replay_validator_new (journal_reader,
+            object_store);
+    if (validator == NULL)
+        return FALSE;
 
-  if (!wyrebox_delivery_replay_validator_validate_all (validator, &local_error)) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "startup delivery storage validation failed: %s",
-        local_error != NULL && local_error->message != NULL ?
-        local_error->message : "unknown error");
-    return FALSE;
-  }
+    if (!wyrebox_delivery_replay_validator_validate_all (validator,
+        &local_error)) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "startup delivery storage validation failed: %s",
+            local_error != NULL && local_error->message != NULL ?
+            local_error->message : "unknown error");
+        return FALSE;
+    }
 
-  return TRUE;
+    return TRUE;
 }
 
 gboolean
@@ -451,37 +457,38 @@ wyrebox_daemon_runtime_prepare_catalog (const char *journal_root_dir,
     const char *catalog_path,
     gboolean checkpoint_precondition_satisfied, GError **error)
 {
-  g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
-  g_autoptr (WyreboxJournalReader) journal_reader = NULL;
-  g_autoptr (WyreboxSchemaMigration) migration = NULL;
+    g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+    g_autoptr (WyreboxJournalReader) journal_reader = NULL;
+    g_autoptr (WyreboxSchemaMigration) migration = NULL;
 
-  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  if (journal_root_dir == NULL || *journal_root_dir == '\0') {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_ARGUMENT, "journal root directory is required");
-    return FALSE;
-  }
+    if (journal_root_dir == NULL || *journal_root_dir == '\0') {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT, "journal root directory is required");
+        return FALSE;
+    }
 
-  if (catalog_path == NULL || *catalog_path == '\0') {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_ARGUMENT, "DuckDB catalog path is required");
-    return FALSE;
-  }
+    if (catalog_path == NULL || *catalog_path == '\0') {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT, "DuckDB catalog path is required");
+        return FALSE;
+    }
 
-  store = wyrebox_schema_metadata_store_new_duckdb (catalog_path, error);
-  if (store == NULL)
-    return FALSE;
+    store = wyrebox_schema_metadata_store_new_duckdb (catalog_path, error);
+    if (store == NULL)
+        return FALSE;
 
-  journal_reader = wyrebox_journal_reader_new (journal_root_dir, error);
-  if (journal_reader == NULL)
-    return FALSE;
+    journal_reader = wyrebox_journal_reader_new (journal_root_dir, error);
+    if (journal_reader == NULL)
+        return FALSE;
 
-  migration = wyrebox_schema_migration_new ();
-  return wyrebox_schema_migration_run_store_to_current_with_journal (migration,
-      store, journal_reader, checkpoint_precondition_satisfied, error);
+    migration = wyrebox_schema_migration_new ();
+    return wyrebox_schema_migration_run_store_to_current_with_journal (
+        migration,
+        store, journal_reader, checkpoint_precondition_satisfied, error);
 }
 
 static gboolean
@@ -489,192 +496,200 @@ runtime_open_catalog_read_only (const char *catalog_path,
     duckdb_database *out_database, duckdb_connection *out_connection,
     GError **error)
 {
-  g_auto (duckdb_config) config = NULL;
-  char *open_error = NULL;
+    g_auto (duckdb_config) config = NULL;
+    char *open_error = NULL;
 
-  if (duckdb_create_config (&config) != DuckDBSuccess ||
-      duckdb_set_config (config, "access_mode", "READ_ONLY") != DuckDBSuccess) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_FAILED, "failed to configure DuckDB catalog read-only open");
-    return FALSE;
-  }
+    if (duckdb_create_config (&config) != DuckDBSuccess ||
+        duckdb_set_config (config, "access_mode",
+        "READ_ONLY") != DuckDBSuccess) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_FAILED,
+            "failed to configure DuckDB catalog read-only open");
+        return FALSE;
+    }
 
-  if (duckdb_open_ext (catalog_path, out_database, config, &open_error) !=
-      DuckDBSuccess) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_FAILED,
-        "failed to open DuckDB catalog '%s': %s",
-        catalog_path, open_error != NULL ? open_error : "unknown DuckDB error");
-    if (open_error != NULL)
-      duckdb_free (open_error);
-    return FALSE;
-  }
+    if (duckdb_open_ext (catalog_path, out_database, config, &open_error) !=
+        DuckDBSuccess) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_FAILED,
+            "failed to open DuckDB catalog '%s': %s",
+            catalog_path,
+            open_error != NULL ? open_error : "unknown DuckDB error");
+        if (open_error != NULL)
+            duckdb_free (open_error);
+        return FALSE;
+    }
 
-  if (duckdb_connect (*out_database, out_connection) != DuckDBSuccess) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_FAILED, "failed to connect to DuckDB catalog '%s'",
-        catalog_path);
-    return FALSE;
-  }
+    if (duckdb_connect (*out_database, out_connection) != DuckDBSuccess) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_FAILED, "failed to connect to DuckDB catalog '%s'",
+            catalog_path);
+        return FALSE;
+    }
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
-    runtime_object_reachability_report_load_row
+runtime_object_reachability_report_load_row
     (duckdb_connection connection,
     const char *object_id,
-    WyreboxDaemonObjectReachabilityReport * out_report, GError ** error)
+    WyreboxDaemonObjectReachabilityReport *out_report, GError **error)
 {
-  g_auto (duckdb_result) result = { 0 };
-  g_auto (duckdb_prepared_statement) statement = NULL;
-  g_auto (duckdb_owned_string) returned_object_id = NULL;
+    g_auto (duckdb_result) result = { 0 };
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    g_auto (duckdb_owned_string) returned_object_id = NULL;
 
-  if (duckdb_prepare (connection,
-          "SELECT object_id, size_bytes, message_reference_count, "
-          "visible_mailbox_membership_count, "
-          "visible_derived_view_membership_count, is_gc_reachable, "
-          "is_gc_candidate FROM object_reachability WHERE object_id = ?;",
-          &statement) != DuckDBSuccess) {
-    const char *detail = statement != NULL ?
-        duckdb_prepare_error (statement) : NULL;
+    if (duckdb_prepare (connection,
+        "SELECT object_id, size_bytes, message_reference_count, "
+        "visible_mailbox_membership_count, "
+        "visible_derived_view_membership_count, is_gc_reachable, "
+        "is_gc_candidate FROM object_reachability WHERE object_id = ?;",
+        &statement) != DuckDBSuccess) {
+        const char *detail = statement != NULL ?
+            duckdb_prepare_error (statement) : NULL;
 
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_FAILED,
-        "failed to prepare object reachability query: %s",
-        detail != NULL && *detail != '\0' ? detail : "unknown DuckDB error");
-    return FALSE;
-  }
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_FAILED,
+            "failed to prepare object reachability query: %s",
+            detail != NULL &&
+            *detail != '\0' ? detail : "unknown DuckDB error");
+        return FALSE;
+    }
 
-  if (duckdb_bind_varchar (statement, 1, object_id) != DuckDBSuccess) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_FAILED, "failed to bind object reachability object_id");
-    return FALSE;
-  }
+    if (duckdb_bind_varchar (statement, 1, object_id) != DuckDBSuccess) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_FAILED, "failed to bind object reachability object_id");
+        return FALSE;
+    }
 
-  if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
-    const char *detail = duckdb_result_error (&result);
+    if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+        const char *detail = duckdb_result_error (&result);
 
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_FAILED,
-        "failed to query object reachability: %s",
-        detail != NULL && *detail != '\0' ? detail : "unknown DuckDB error");
-    return FALSE;
-  }
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_FAILED,
+            "failed to query object reachability: %s",
+            detail != NULL &&
+            *detail != '\0' ? detail : "unknown DuckDB error");
+        return FALSE;
+    }
 
-  if (duckdb_row_count (&result) == 0) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_NOT_FOUND,
-        "object reachability row %s was not found", object_id);
-    return FALSE;
-  }
+    if (duckdb_row_count (&result) == 0) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_NOT_FOUND,
+            "object reachability row %s was not found", object_id);
+        return FALSE;
+    }
 
-  if (duckdb_row_count (&result) != 1 || duckdb_column_count (&result) != 7) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "object reachability query returned an unexpected shape");
-    return FALSE;
-  }
+    if (duckdb_row_count (&result) != 1 || duckdb_column_count (&result) != 7) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "object reachability query returned an unexpected shape");
+        return FALSE;
+    }
 
-  wyrebox_daemon_object_reachability_report_clear (out_report);
-  returned_object_id = duckdb_value_varchar (&result, 0, 0);
-  if (returned_object_id == NULL) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "object reachability row returned a NULL object_id");
-    return FALSE;
-  }
+    wyrebox_daemon_object_reachability_report_clear (out_report);
+    returned_object_id = duckdb_value_varchar (&result, 0, 0);
+    if (returned_object_id == NULL) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "object reachability row returned a NULL object_id");
+        return FALSE;
+    }
 
-  out_report->object_id = g_strdup (returned_object_id);
-  if (out_report->object_id == NULL) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_FAILED, "failed to duplicate object reachability object_id");
-    return FALSE;
-  }
+    out_report->object_id = g_strdup (returned_object_id);
+    if (out_report->object_id == NULL) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_FAILED,
+            "failed to duplicate object reachability object_id");
+        return FALSE;
+    }
 
-  out_report->size_bytes = (guint64) duckdb_value_uint64 (&result, 1, 0);
-  out_report->message_reference_count =
-      (guint64) duckdb_value_uint64 (&result, 2, 0);
-  out_report->visible_mailbox_membership_count =
-      (guint64) duckdb_value_uint64 (&result, 3, 0);
-  out_report->visible_derived_view_membership_count =
-      (guint64) duckdb_value_uint64 (&result, 4, 0);
-  out_report->is_gc_reachable =
-      duckdb_value_boolean (&result, 5, 0) ? TRUE : FALSE;
-  out_report->is_gc_candidate =
-      duckdb_value_boolean (&result, 6, 0) ? TRUE : FALSE;
+    out_report->size_bytes = (guint64)duckdb_value_uint64 (&result, 1, 0);
+    out_report->message_reference_count =
+        (guint64)duckdb_value_uint64 (&result, 2, 0);
+    out_report->visible_mailbox_membership_count =
+        (guint64)duckdb_value_uint64 (&result, 3, 0);
+    out_report->visible_derived_view_membership_count =
+        (guint64)duckdb_value_uint64 (&result, 4, 0);
+    out_report->is_gc_reachable =
+        duckdb_value_boolean (&result, 5, 0) ? TRUE : FALSE;
+    out_report->is_gc_candidate =
+        duckdb_value_boolean (&result, 6, 0) ? TRUE : FALSE;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
-    runtime_garbage_collection_dry_run_report_load_row
+runtime_garbage_collection_dry_run_report_load_row
     (duckdb_connection connection,
-    WyreboxDaemonGarbageCollectionDryRunReport * out_report, GError ** error)
+    WyreboxDaemonGarbageCollectionDryRunReport *out_report, GError **error)
 {
-  g_auto (duckdb_result) result = { 0 };
-  g_auto (duckdb_prepared_statement) statement = NULL;
+    g_auto (duckdb_result) result = { 0 };
+    g_auto (duckdb_prepared_statement) statement = NULL;
 
-  if (duckdb_prepare (connection,
-          "SELECT CAST(COUNT(*) AS UBIGINT) AS total_object_count, "
-          "CAST(COALESCE(SUM(CASE WHEN is_gc_candidate THEN 1 ELSE 0 END), 0) "
-          "AS UBIGINT) AS gc_candidate_count, "
-          "CAST(COALESCE(SUM(CASE WHEN is_gc_candidate THEN size_bytes ELSE 0 "
-          "END), 0) AS UBIGINT) AS gc_reclaimable_bytes, "
-          "CAST(COALESCE(SUM(CASE WHEN is_gc_reachable THEN size_bytes ELSE 0 "
-          "END), 0) AS UBIGINT) AS gc_reachable_bytes "
-          "FROM object_reachability;", &statement) != DuckDBSuccess) {
-    const char *detail = statement != NULL ?
-        duckdb_prepare_error (statement) : NULL;
+    if (duckdb_prepare (connection,
+        "SELECT CAST(COUNT(*) AS UBIGINT) AS total_object_count, "
+        "CAST(COALESCE(SUM(CASE WHEN is_gc_candidate THEN 1 ELSE 0 END), 0) "
+        "AS UBIGINT) AS gc_candidate_count, "
+        "CAST(COALESCE(SUM(CASE WHEN is_gc_candidate THEN size_bytes ELSE 0 "
+        "END), 0) AS UBIGINT) AS gc_reclaimable_bytes, "
+        "CAST(COALESCE(SUM(CASE WHEN is_gc_reachable THEN size_bytes ELSE 0 "
+        "END), 0) AS UBIGINT) AS gc_reachable_bytes "
+        "FROM object_reachability;", &statement) != DuckDBSuccess) {
+        const char *detail = statement != NULL ?
+            duckdb_prepare_error (statement) : NULL;
 
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_FAILED,
-        "failed to prepare garbage collection dry-run query: %s",
-        detail != NULL && *detail != '\0' ? detail : "unknown DuckDB error");
-    return FALSE;
-  }
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_FAILED,
+            "failed to prepare garbage collection dry-run query: %s",
+            detail != NULL &&
+            *detail != '\0' ? detail : "unknown DuckDB error");
+        return FALSE;
+    }
 
-  if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
-    const char *detail = duckdb_result_error (&result);
+    if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+        const char *detail = duckdb_result_error (&result);
 
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_FAILED,
-        "failed to query garbage collection dry-run report: %s",
-        detail != NULL && *detail != '\0' ? detail : "unknown DuckDB error");
-    return FALSE;
-  }
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_FAILED,
+            "failed to query garbage collection dry-run report: %s",
+            detail != NULL &&
+            *detail != '\0' ? detail : "unknown DuckDB error");
+        return FALSE;
+    }
 
-  if (duckdb_row_count (&result) != 1 || duckdb_column_count (&result) != 4) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "garbage collection dry-run query returned an unexpected shape");
-    return FALSE;
-  }
+    if (duckdb_row_count (&result) != 1 || duckdb_column_count (&result) != 4) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "garbage collection dry-run query returned an unexpected shape");
+        return FALSE;
+    }
 
-  wyrebox_daemon_garbage_collection_dry_run_report_clear (out_report);
-  out_report->total_object_count =
-      (guint64) duckdb_value_uint64 (&result, 0, 0);
-  out_report->gc_candidate_count =
-      (guint64) duckdb_value_uint64 (&result, 1, 0);
-  out_report->gc_reclaimable_bytes =
-      (guint64) duckdb_value_uint64 (&result, 2, 0);
-  out_report->gc_reachable_bytes =
-      (guint64) duckdb_value_uint64 (&result, 3, 0);
+    wyrebox_daemon_garbage_collection_dry_run_report_clear (out_report);
+    out_report->total_object_count =
+        (guint64)duckdb_value_uint64 (&result, 0, 0);
+    out_report->gc_candidate_count =
+        (guint64)duckdb_value_uint64 (&result, 1, 0);
+    out_report->gc_reclaimable_bytes =
+        (guint64)duckdb_value_uint64 (&result, 2, 0);
+    out_report->gc_reachable_bytes =
+        (guint64)duckdb_value_uint64 (&result, 3, 0);
 
-  return TRUE;
+    return TRUE;
 }
 
 gboolean
@@ -682,33 +697,33 @@ wyrebox_daemon_runtime_load_object_reachability_report (const char
     *catalog_path, const char *object_id,
     WyreboxDaemonObjectReachabilityReport *out_report, GError **error)
 {
-  g_auto (duckdb_database) database = NULL;
-  g_auto (duckdb_connection) connection = NULL;
+    g_auto (duckdb_database) database = NULL;
+    g_auto (duckdb_connection) connection = NULL;
 
-  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
-  g_return_val_if_fail (out_report != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+    g_return_val_if_fail (out_report != NULL, FALSE);
 
-  if (catalog_path == NULL || *catalog_path == '\0') {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_ARGUMENT, "DuckDB catalog path is required");
-    return FALSE;
-  }
+    if (catalog_path == NULL || *catalog_path == '\0') {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT, "DuckDB catalog path is required");
+        return FALSE;
+    }
 
-  if (object_id == NULL || *object_id == '\0') {
-    g_set_error (error,
-        G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "object id is required");
-    return FALSE;
-  }
+    if (object_id == NULL || *object_id == '\0') {
+        g_set_error (error,
+            G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "object id is required");
+        return FALSE;
+    }
 
-  wyrebox_daemon_object_reachability_report_clear (out_report);
+    wyrebox_daemon_object_reachability_report_clear (out_report);
 
-  if (!runtime_open_catalog_read_only (catalog_path, &database, &connection,
-          error))
-    return FALSE;
+    if (!runtime_open_catalog_read_only (catalog_path, &database, &connection,
+        error))
+        return FALSE;
 
-  return runtime_object_reachability_report_load_row (connection, object_id,
-      out_report, error);
+    return runtime_object_reachability_report_load_row (connection, object_id,
+               out_report, error);
 }
 
 gboolean
@@ -716,131 +731,133 @@ wyrebox_daemon_runtime_load_garbage_collection_dry_run_report (const char
     *catalog_path,
     WyreboxDaemonGarbageCollectionDryRunReport *out_report, GError **error)
 {
-  g_auto (duckdb_database) database = NULL;
-  g_auto (duckdb_connection) connection = NULL;
+    g_auto (duckdb_database) database = NULL;
+    g_auto (duckdb_connection) connection = NULL;
 
-  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
-  g_return_val_if_fail (out_report != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+    g_return_val_if_fail (out_report != NULL, FALSE);
 
-  if (catalog_path == NULL || *catalog_path == '\0') {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_ARGUMENT, "DuckDB catalog path is required");
-    return FALSE;
-  }
+    if (catalog_path == NULL || *catalog_path == '\0') {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT, "DuckDB catalog path is required");
+        return FALSE;
+    }
 
-  wyrebox_daemon_garbage_collection_dry_run_report_clear (out_report);
+    wyrebox_daemon_garbage_collection_dry_run_report_clear (out_report);
 
-  if (!runtime_open_catalog_read_only (catalog_path, &database, &connection,
-          error))
-    return FALSE;
+    if (!runtime_open_catalog_read_only (catalog_path, &database, &connection,
+        error))
+        return FALSE;
 
-  return runtime_garbage_collection_dry_run_report_load_row (connection,
-      out_report, error);
+    return runtime_garbage_collection_dry_run_report_load_row (connection,
+               out_report, error);
 }
 
 static GPtrArray *
 runtime_load_account_ids (const char *catalog_path, GError **error)
 {
-  g_auto (duckdb_database) database = NULL;
-  g_auto (duckdb_connection) connection = NULL;
-  g_auto (duckdb_result) result = { 0 };
-  g_autoptr (GPtrArray) account_ids = NULL;
+    g_auto (duckdb_database) database = NULL;
+    g_auto (duckdb_connection) connection = NULL;
+    g_auto (duckdb_result) result = { 0 };
+    g_autoptr (GPtrArray) account_ids = NULL;
 
-  if (!runtime_open_catalog_read_only (catalog_path, &database, &connection,
-          error))
-    return NULL;
+    if (!runtime_open_catalog_read_only (catalog_path, &database, &connection,
+        error))
+        return NULL;
 
-  if (duckdb_query (connection,
-          "SELECT account_id FROM accounts ORDER BY account_id ASC;",
-          &result) != DuckDBSuccess) {
-    const char *detail = duckdb_result_error (&result);
+    if (duckdb_query (connection,
+        "SELECT account_id FROM accounts ORDER BY account_id ASC;",
+        &result) != DuckDBSuccess) {
+        const char *detail = duckdb_result_error (&result);
 
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_FAILED,
-        "failed to enumerate accounts from DuckDB catalog '%s': %s",
-        catalog_path,
-        detail != NULL && *detail != '\0' ? detail : "unknown DuckDB error");
-    return NULL;
-  }
-
-  account_ids = g_ptr_array_new_with_free_func (g_free);
-
-  for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
-    g_auto (duckdb_owned_string) value = NULL;
-
-    if (duckdb_value_is_null (&result, 0, row)) {
-      g_set_error (error,
-          G_IO_ERROR,
-          G_IO_ERROR_INVALID_DATA,
-          "DuckDB catalog '%s' contains an account with NULL account_id",
-          catalog_path);
-      return NULL;
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_FAILED,
+            "failed to enumerate accounts from DuckDB catalog '%s': %s",
+            catalog_path,
+            detail != NULL &&
+            *detail != '\0' ? detail : "unknown DuckDB error");
+        return NULL;
     }
 
-    value = duckdb_value_varchar (&result, 0, row);
-    if (value == NULL || *value == '\0') {
-      g_set_error (error,
-          G_IO_ERROR,
-          G_IO_ERROR_INVALID_DATA,
-          "DuckDB catalog '%s' contains an account with empty account_id",
-          catalog_path);
-      return NULL;
+    account_ids = g_ptr_array_new_with_free_func (g_free);
+
+    for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+        g_auto (duckdb_owned_string) value = NULL;
+
+        if (duckdb_value_is_null (&result, 0, row)) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "DuckDB catalog '%s' contains an account with NULL account_id",
+                catalog_path);
+            return NULL;
+        }
+
+        value = duckdb_value_varchar (&result, 0, row);
+        if (value == NULL || *value == '\0') {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "DuckDB catalog '%s' contains an account with empty account_id",
+                catalog_path);
+            return NULL;
+        }
+
+        g_ptr_array_add (account_ids, g_strdup (value));
     }
 
-    g_ptr_array_add (account_ids, g_strdup (value));
-  }
-
-  return g_steal_pointer (&account_ids);
+    return g_steal_pointer (&account_ids);
 }
 
 gboolean
-    wyrebox_daemon_runtime_catch_up_configured_wirelog_derived_views
-    (WyreboxDaemonFactMutationService * fact_mutation_service,
-    const char *catalog_path, GError ** error)
+wyrebox_daemon_runtime_catch_up_configured_wirelog_derived_views
+    (WyreboxDaemonFactMutationService *fact_mutation_service,
+    const char *catalog_path, GError **error)
 {
-  g_autoptr (GPtrArray) account_ids = NULL;
+    g_autoptr (GPtrArray) account_ids = NULL;
 
-  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  if (fact_mutation_service == NULL) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_ARGUMENT, "fact mutation service is required");
-    return FALSE;
-  }
-
-  if (!WYREBOX_IS_DAEMON_FACT_MUTATION_SERVICE (fact_mutation_service)) {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_ARGUMENT, "fact mutation service is invalid");
-    return FALSE;
-  }
-
-  if (catalog_path == NULL || *catalog_path == '\0') {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_ARGUMENT, "DuckDB catalog path is required");
-    return FALSE;
-  }
-
-  account_ids = runtime_load_account_ids (catalog_path, error);
-  if (account_ids == NULL)
-    return FALSE;
-
-  for (guint i = 0; i < account_ids->len; i++) {
-    const char *account_id = g_ptr_array_index (account_ids, i);
-    g_autoptr (GError) catch_up_error = NULL;
-
-    if (!wyrebox_daemon_fact_mutation_service_catch_up_wirelog_derived_view
-        (fact_mutation_service, account_id, &catch_up_error)) {
-      g_propagate_prefixed_error (error, g_steal_pointer (&catch_up_error),
-          "failed to catch up Wirelog derived view for account '%s': ",
-          account_id);
-      return FALSE;
+    if (fact_mutation_service == NULL) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT, "fact mutation service is required");
+        return FALSE;
     }
-  }
 
-  return TRUE;
+    if (!WYREBOX_IS_DAEMON_FACT_MUTATION_SERVICE (fact_mutation_service)) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT, "fact mutation service is invalid");
+        return FALSE;
+    }
+
+    if (catalog_path == NULL || *catalog_path == '\0') {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT, "DuckDB catalog path is required");
+        return FALSE;
+    }
+
+    account_ids = runtime_load_account_ids (catalog_path, error);
+    if (account_ids == NULL)
+        return FALSE;
+
+    for (guint i = 0; i < account_ids->len; i++) {
+        const char *account_id = g_ptr_array_index (account_ids, i);
+        g_autoptr (GError) catch_up_error = NULL;
+
+        if (!wyrebox_daemon_fact_mutation_service_catch_up_wirelog_derived_view
+                (fact_mutation_service, account_id, &catch_up_error)) {
+            g_propagate_prefixed_error (error,
+                g_steal_pointer (&catch_up_error),
+                "failed to catch up Wirelog derived view for account '%s': ",
+                account_id);
+            return FALSE;
+        }
+    }
+
+    return TRUE;
 }

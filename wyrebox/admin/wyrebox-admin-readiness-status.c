@@ -3,17 +3,17 @@
 const char *
 wyrebox_admin_readiness_status_state_to_name (WyreboxAdminReadinessStatus state)
 {
-  switch (state) {
+    switch (state) {
     case WYREBOX_ADMIN_READINESS_STATUS_READY:
-      return "ready";
+        return "ready";
     case WYREBOX_ADMIN_READINESS_STATUS_REPLAYING:
-      return "replaying";
+        return "replaying";
     case WYREBOX_ADMIN_READINESS_STATUS_MATERIALIZING:
-      return "materializing";
+        return "materializing";
     case WYREBOX_ADMIN_READINESS_STATUS_READ_ONLY:
-      return "read-only";
+        return "read-only";
     case WYREBOX_ADMIN_READINESS_STATUS_UNAVAILABLE:
     default:
-      return "unavailable";
-  }
+        return "unavailable";
+    }
 }
