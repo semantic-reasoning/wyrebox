@@ -6,57 +6,57 @@ G_BEGIN_DECLS
 #define WYREBOX_TYPE_JOURNAL_WRITER (wyrebox_journal_writer_get_type())
 G_DECLARE_FINAL_TYPE (WyreboxJournalWriter,
     wyrebox_journal_writer, WYREBOX, JOURNAL_WRITER, GObject)
-     typedef enum
-     {
-       WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
-       WYREBOX_JOURNAL_EVENT_FLAG_CHANGED,
-       WYREBOX_JOURNAL_EVENT_KEYWORD_CHANGED,
-       WYREBOX_JOURNAL_EVENT_FACT_INSERTED,
-       WYREBOX_JOURNAL_EVENT_FACT_RETRACTED,
-       WYREBOX_JOURNAL_EVENT_DERIVED_VIEW_MEMBERSHIP_CHANGED,
-       WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED,
-     } WyreboxJournalEventType;
+typedef enum
+{
+    WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+    WYREBOX_JOURNAL_EVENT_FLAG_CHANGED,
+    WYREBOX_JOURNAL_EVENT_KEYWORD_CHANGED,
+    WYREBOX_JOURNAL_EVENT_FACT_INSERTED,
+    WYREBOX_JOURNAL_EVENT_FACT_RETRACTED,
+    WYREBOX_JOURNAL_EVENT_DERIVED_VIEW_MEMBERSHIP_CHANGED,
+    WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED,
+} WyreboxJournalEventType;
 
-     const char *wyrebox_journal_event_type_to_string (WyreboxJournalEventType
+const char *wyrebox_journal_event_type_to_string (WyreboxJournalEventType
     event_type);
 
-     WyreboxJournalWriter *wyrebox_journal_writer_new (const char
+WyreboxJournalWriter *wyrebox_journal_writer_new (const char
     *journal_root_dir, GError **error);
 
-     /*
-      * Explicitly mutates the active journal segment by truncating one
-      * trailing torn suffix. This succeeds only for a partial record header or
-      * partial record after at least one committed record. Clean, missing,
-      * empty, checksum-corrupt, and structurally invalid segments fail and are
-      * preserved.
-      */
-     gboolean wyrebox_journal_writer_recover_torn_suffix (const char
+/*
+ * Explicitly mutates the active journal segment by truncating one
+ * trailing torn suffix. This succeeds only for a partial record header or
+ * partial record after at least one committed record. Clean, missing,
+ * empty, checksum-corrupt, and structurally invalid segments fail and are
+ * preserved.
+ */
+gboolean wyrebox_journal_writer_recover_torn_suffix (const char
     *journal_root_dir,
     guint64 *out_safe_end_offset,
     guint64 *out_last_safe_sequence, GError **error);
 
-     typedef gboolean (*WyreboxJournalWriterGuardedAppendFunc) (const char
+typedef gboolean (*WyreboxJournalWriterGuardedAppendFunc) (const char
     *journal_root_dir,
     gpointer user_data,
     GBytes **out_payload,
     guint64 *out_offset, guint64 *out_sequence, GError **error);
 
-     typedef gboolean (*WyreboxJournalWriterTestAppendHook) (const char
+typedef gboolean (*WyreboxJournalWriterTestAppendHook) (const char
     *journal_root_dir, gpointer user_data, GError **error);
 
-     void wyrebox_journal_writer_set_test_append_hook (WyreboxJournalWriter
+void wyrebox_journal_writer_set_test_append_hook (WyreboxJournalWriter
     *self,
     WyreboxJournalWriterTestAppendHook hook,
     gpointer user_data, GDestroyNotify destroy_notify);
 
-     gboolean wyrebox_journal_writer_append_guarded (WyreboxJournalWriter
+gboolean wyrebox_journal_writer_append_guarded (WyreboxJournalWriter
     *self,
     WyreboxJournalEventType event_type,
     WyreboxJournalWriterGuardedAppendFunc callback,
     gpointer user_data,
     guint64 *out_offset, guint64 *out_sequence, GError **error);
 
-     gboolean wyrebox_journal_writer_append (WyreboxJournalWriter *self,
+gboolean wyrebox_journal_writer_append (WyreboxJournalWriter *self,
     WyreboxJournalEventType event_type,
     GBytes *payload,
     guint64 *out_offset, guint64 *out_sequence, GError **error);

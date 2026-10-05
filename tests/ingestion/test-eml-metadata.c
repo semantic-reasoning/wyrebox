@@ -8,311 +8,317 @@
 static GBytes *
 load_fixture_bytes (const char *fixture_dir, const char *name)
 {
-  g_autoptr (GError) error = NULL;
-  g_autofree char *path = g_build_filename (fixture_dir, name, NULL);
-  g_autofree char *contents = NULL;
-  gsize length = 0;
+    g_autoptr (GError) error = NULL;
+    g_autofree char *path = g_build_filename (fixture_dir, name, NULL);
+    g_autofree char *contents = NULL;
+    gsize length = 0;
 
-  g_assert_true (g_file_get_contents (path, &contents, &length, &error));
-  g_assert_no_error (error);
+    g_assert_true (g_file_get_contents (path, &contents, &length, &error));
+    g_assert_no_error (error);
 
-  return g_bytes_new_take (g_steal_pointer (&contents), length);
+    return g_bytes_new_take (g_steal_pointer (&contents), length);
 }
 
 static void
 test_parses_simple_crlf_fixture (void)
 {
-  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
-  g_autoptr (GError) error = NULL;
-  g_autoptr (GBytes) bytes = NULL;
-  g_auto (WyreboxEmlMetadata) metadata = { 0 };
-  gsize size = 0;
+    const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
+    gsize size = 0;
 
-  g_assert_nonnull (fixture_dir);
+    g_assert_nonnull (fixture_dir);
 
-  bytes = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
-  size = g_bytes_get_size (bytes);
+    bytes = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
+    size = g_bytes_get_size (bytes);
 
-  g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
-  g_assert_no_error (error);
-  g_assert_cmpstr (metadata.message_id, ==, "<simple-crlf@example.test>");
-  g_assert_cmpstr (metadata.subject, ==, "CRLF fixture");
-  g_assert_cmpstr (metadata.from, ==, "Alice <alice@example.test>");
-  g_assert_cmpstr (metadata.to, ==, "Bob <bob@example.test>");
-  g_assert_null (metadata.cc);
-  g_assert_null (metadata.bcc);
-  g_assert_cmpstr (metadata.date, ==, "Tue, 02 Jun 2026 12:34:56 +0000");
-  g_assert_cmpuint (metadata.size_bytes, ==, size);
-  g_assert_cmpuint (metadata.duplicate_message_id_count, ==, 0);
+    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (metadata.message_id, ==, "<simple-crlf@example.test>");
+    g_assert_cmpstr (metadata.subject, ==, "CRLF fixture");
+    g_assert_cmpstr (metadata.from, ==, "Alice <alice@example.test>");
+    g_assert_cmpstr (metadata.to, ==, "Bob <bob@example.test>");
+    g_assert_null (metadata.cc);
+    g_assert_null (metadata.bcc);
+    g_assert_cmpstr (metadata.date, ==, "Tue, 02 Jun 2026 12:34:56 +0000");
+    g_assert_cmpuint (metadata.size_bytes, ==, size);
+    g_assert_cmpuint (metadata.duplicate_message_id_count, ==, 0);
 }
 
 static void
 test_missing_message_id_is_successful (void)
 {
-  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
-  g_autoptr (GError) error = NULL;
-  g_autoptr (GBytes) bytes = NULL;
-  g_auto (WyreboxEmlMetadata) metadata = { 0 };
+    const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
 
-  g_assert_nonnull (fixture_dir);
+    g_assert_nonnull (fixture_dir);
 
-  bytes = load_fixture_bytes (fixture_dir, "missing-message-id.eml");
+    bytes = load_fixture_bytes (fixture_dir, "missing-message-id.eml");
 
-  g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
-  g_assert_no_error (error);
-  g_assert_null (metadata.message_id);
-  g_assert_cmpstr (metadata.subject, ==, "Missing Message-ID fixture");
-  g_assert_cmpuint (metadata.duplicate_message_id_count, ==, 0);
+    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+    g_assert_no_error (error);
+    g_assert_null (metadata.message_id);
+    g_assert_cmpstr (metadata.subject, ==, "Missing Message-ID fixture");
+    g_assert_cmpuint (metadata.duplicate_message_id_count, ==, 0);
 }
 
 static void
 test_duplicate_message_id_keeps_first_and_counts_extra (void)
 {
-  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
-  g_autoptr (GError) error = NULL;
-  g_autoptr (GBytes) bytes = NULL;
-  g_auto (WyreboxEmlMetadata) metadata = { 0 };
+    const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
 
-  g_assert_nonnull (fixture_dir);
+    g_assert_nonnull (fixture_dir);
 
-  bytes = load_fixture_bytes (fixture_dir, "duplicate-message-id.eml");
+    bytes = load_fixture_bytes (fixture_dir, "duplicate-message-id.eml");
 
-  g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
-  g_assert_no_error (error);
-  g_assert_cmpstr (metadata.message_id, ==,
-      "<duplicate-message-id@example.test>");
-  g_assert_cmpuint (metadata.duplicate_message_id_count, ==, 1);
-  g_assert_true (metadata.message_id_span_valid);
-  g_assert_cmpuint (metadata.message_id_span_start, >, 0);
-  g_assert_cmpuint (metadata.message_id_span_end,
-      >, metadata.message_id_span_start);
+    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (metadata.message_id, ==,
+        "<duplicate-message-id@example.test>");
+    g_assert_cmpuint (metadata.duplicate_message_id_count, ==, 1);
+    g_assert_true (metadata.message_id_span_valid);
+    g_assert_cmpuint (metadata.message_id_span_start, >, 0);
+    g_assert_cmpuint (metadata.message_id_span_end,
+        >, metadata.message_id_span_start);
 }
 
 static void
 test_non_ascii_headers_preserve_rfc2047_values (void)
 {
-  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
-  g_autoptr (GError) error = NULL;
-  g_autoptr (GBytes) bytes = NULL;
-  g_auto (WyreboxEmlMetadata) metadata = { 0 };
+    const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
 
-  g_assert_nonnull (fixture_dir);
+    g_assert_nonnull (fixture_dir);
 
-  bytes = load_fixture_bytes (fixture_dir, "non-ascii-headers.eml");
+    bytes = load_fixture_bytes (fixture_dir, "non-ascii-headers.eml");
 
-  g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
-  g_assert_no_error (error);
-  g_assert_cmpstr (metadata.message_id, ==, "<non-ascii-headers@example.test>");
-  g_assert_cmpstr (metadata.subject, ==,
-      "=?UTF-8?B?UsOpc3Vtw6kg4oCTIOyVhOuFle2VmOyEuOyalA==?=");
-  g_assert_cmpstr (metadata.from, ==,
-      "=?UTF-8?B?SmnFmcOtIMWgYWZhw61r?= <jiri@example.test>");
-  g_assert_cmpstr (metadata.to, ==,
-      "=?UTF-8?Q?Zo=C3=AB_Reader?= <zoe@example.test>");
+    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (metadata.message_id, ==,
+        "<non-ascii-headers@example.test>");
+    g_assert_cmpstr (metadata.subject, ==,
+        "=?UTF-8?B?UsOpc3Vtw6kg4oCTIOyVhOuFle2VmOyEuOyalA==?=");
+    g_assert_cmpstr (metadata.from, ==,
+        "=?UTF-8?B?SmnFmcOtIMWgYWZhw61r?= <jiri@example.test>");
+    g_assert_cmpstr (metadata.to, ==,
+        "=?UTF-8?Q?Zo=C3=AB_Reader?= <zoe@example.test>");
 }
 
 static void
 test_unfolds_header_continuations (void)
 {
-  static const char raw[] =
-      "From: Folded <folded@example.test>\r\n"
-      "To: Target <target@example.test>\r\n"
-      "Cc: First <first@example.test>,\r\n"
-      "\tSecond <second@example.test>\r\n"
-      "Bcc: Hidden <hidden@example.test>\r\n"
-      "Subject: First line\r\n"
-      " second line\r\n"
-      "Date: Thu, 11 Jun 2026 00:00:00 +0000\r\n"
-      "Message-ID: <folded@example.test>\r\n" "\r\n" "Body.\r\n";
-  g_autoptr (GError) error = NULL;
-  g_autoptr (GBytes) bytes = NULL;
-  g_auto (WyreboxEmlMetadata) metadata = { 0 };
+    static const char raw[] =
+        "From: Folded <folded@example.test>\r\n"
+        "To: Target <target@example.test>\r\n"
+        "Cc: First <first@example.test>,\r\n"
+        "\tSecond <second@example.test>\r\n"
+        "Bcc: Hidden <hidden@example.test>\r\n"
+        "Subject: First line\r\n"
+        " second line\r\n"
+        "Date: Thu, 11 Jun 2026 00:00:00 +0000\r\n"
+        "Message-ID: <folded@example.test>\r\n" "\r\n" "Body.\r\n";
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
 
-  bytes = g_bytes_new_static (raw, strlen (raw));
+    bytes = g_bytes_new_static (raw, strlen (raw));
 
-  g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
-  g_assert_no_error (error);
-  g_assert_cmpstr (metadata.subject, ==, "First line second line");
-  g_assert_cmpstr (metadata.cc, ==,
-      "First <first@example.test>, Second <second@example.test>");
-  g_assert_cmpstr (metadata.bcc, ==, "Hidden <hidden@example.test>");
+    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (metadata.subject, ==, "First line second line");
+    g_assert_cmpstr (metadata.cc, ==,
+        "First <first@example.test>, Second <second@example.test>");
+    g_assert_cmpstr (metadata.bcc, ==, "Hidden <hidden@example.test>");
 }
 
 static void
 test_records_subject_span_for_folded_header (void)
 {
-  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
-  g_autoptr (GError) error = NULL;
-  g_autoptr (GBytes) bytes = NULL;
-  g_auto (WyreboxEmlMetadata) metadata = { 0 };
-  gsize size = 0;
-  const char *data = NULL;
-  const char *subject = NULL;
-  const char *date_separator = NULL;
-  guint64 expected_start = 0;
-  guint64 expected_end = 0;
+    const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
+    gsize size = 0;
+    const char *data = NULL;
+    const char *subject = NULL;
+    const char *date_separator = NULL;
+    guint64 expected_start = 0;
+    guint64 expected_end = 0;
 
-  g_assert_nonnull (fixture_dir);
+    g_assert_nonnull (fixture_dir);
 
-  bytes = load_fixture_bytes (fixture_dir, "folded-subject.eml");
-  data = g_bytes_get_data (bytes, &size);
+    bytes = load_fixture_bytes (fixture_dir, "folded-subject.eml");
+    data = g_bytes_get_data (bytes, &size);
 
-  subject = g_strstr_len (data, size, "Subject: First line\r\n");
-  g_assert_nonnull (subject);
-  date_separator = g_strstr_len (subject, size - (subject - data),
-      "\r\nDate: Thu, 11 Jun 2026 00:00:00 +0000\r\n");
-  g_assert_nonnull (date_separator);
+    subject = g_strstr_len (data, size, "Subject: First line\r\n");
+    g_assert_nonnull (subject);
+    date_separator = g_strstr_len (subject, size - (subject - data),
+            "\r\nDate: Thu, 11 Jun 2026 00:00:00 +0000\r\n");
+    g_assert_nonnull (date_separator);
 
-  expected_start = (guint64) (subject - data);
-  expected_end = (guint64) (date_separator - data);
+    expected_start = (guint64)(subject - data);
+    expected_end = (guint64)(date_separator - data);
 
-  g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
-  g_assert_no_error (error);
-  g_assert_cmpstr (metadata.subject, ==, "First line second line");
-  g_assert_true (metadata.subject_span_valid);
-  g_assert_cmpuint (metadata.subject_span_start, ==, expected_start);
-  g_assert_cmpuint (metadata.subject_span_end, ==, expected_end);
+    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (metadata.subject, ==, "First line second line");
+    g_assert_true (metadata.subject_span_valid);
+    g_assert_cmpuint (metadata.subject_span_start, ==, expected_start);
+    g_assert_cmpuint (metadata.subject_span_end, ==, expected_end);
 }
 
 static void
 test_records_message_id_span_for_folded_header (void)
 {
-  const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
-  g_autoptr (GError) error = NULL;
-  g_autoptr (GBytes) bytes = NULL;
-  g_auto (WyreboxEmlMetadata) metadata = { 0 };
-  gsize size = 0;
-  const char *data = NULL;
-  const char *message_id = NULL;
-  const char *subject = NULL;
-  guint64 expected_start = 0;
-  guint64 expected_end = 0;
+    const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
+    gsize size = 0;
+    const char *data = NULL;
+    const char *message_id = NULL;
+    const char *subject = NULL;
+    guint64 expected_start = 0;
+    guint64 expected_end = 0;
 
-  g_assert_nonnull (fixture_dir);
+    g_assert_nonnull (fixture_dir);
 
-  bytes = load_fixture_bytes (fixture_dir, "folded-message-id.eml");
-  data = g_bytes_get_data (bytes, &size);
+    bytes = load_fixture_bytes (fixture_dir, "folded-message-id.eml");
+    data = g_bytes_get_data (bytes, &size);
 
-  message_id = g_strstr_len (data, size, "Message-ID: <folded-message-id@\r\n");
-  g_assert_nonnull (message_id);
-  subject = g_strstr_len (message_id, size - (message_id - data),
-      "\r\nSubject: Folded Message-ID fixture\r\n");
-  g_assert_nonnull (subject);
+    message_id = g_strstr_len (data, size,
+            "Message-ID: <folded-message-id@\r\n");
+    g_assert_nonnull (message_id);
+    subject = g_strstr_len (message_id, size - (message_id - data),
+            "\r\nSubject: Folded Message-ID fixture\r\n");
+    g_assert_nonnull (subject);
 
-  expected_start = (guint64) (message_id - data);
-  expected_end = (guint64) (subject - data);
+    expected_start = (guint64)(message_id - data);
+    expected_end = (guint64)(subject - data);
 
-  g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
-  g_assert_no_error (error);
-  g_assert_cmpstr (metadata.message_id, ==,
-      "<folded-message-id@ example.test>");
-  g_assert_true (metadata.message_id_span_valid);
-  g_assert_cmpuint (metadata.message_id_span_start, ==, expected_start);
-  g_assert_cmpuint (metadata.message_id_span_end, ==, expected_end);
+    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (metadata.message_id, ==,
+        "<folded-message-id@ example.test>");
+    g_assert_true (metadata.message_id_span_valid);
+    g_assert_cmpuint (metadata.message_id_span_start, ==, expected_start);
+    g_assert_cmpuint (metadata.message_id_span_end, ==, expected_end);
 }
 
 static void
 test_preserves_thread_reference_headers (void)
 {
-  static const char raw[] =
-      "From: Reply <reply@example.test>\r\n"
-      "To: Parent <parent@example.test>\r\n"
-      "Subject: Re: parent\r\n"
-      "Date: Thu, 11 Jun 2026 01:00:00 +0000\r\n"
-      "Message-ID: <reply@example.test>\r\n"
-      "In-Reply-To: <parent@example.test>\r\n"
-      "References: <root@example.test>\r\n"
-      " <parent@example.test>\r\n" "\r\n" "Body.\r\n";
-  g_autoptr (GError) error = NULL;
-  g_autoptr (GBytes) bytes = NULL;
-  g_auto (WyreboxEmlMetadata) metadata = { 0 };
+    static const char raw[] =
+        "From: Reply <reply@example.test>\r\n"
+        "To: Parent <parent@example.test>\r\n"
+        "Subject: Re: parent\r\n"
+        "Date: Thu, 11 Jun 2026 01:00:00 +0000\r\n"
+        "Message-ID: <reply@example.test>\r\n"
+        "In-Reply-To: <parent@example.test>\r\n"
+        "References: <root@example.test>\r\n"
+        " <parent@example.test>\r\n" "\r\n" "Body.\r\n";
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
 
-  bytes = g_bytes_new_static (raw, strlen (raw));
+    bytes = g_bytes_new_static (raw, strlen (raw));
 
-  g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
-  g_assert_no_error (error);
-  g_assert_cmpstr (metadata.in_reply_to, ==, "<parent@example.test>");
-  g_assert_cmpstr (metadata.references, ==,
-      "<root@example.test> <parent@example.test>");
+    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (metadata.in_reply_to, ==, "<parent@example.test>");
+    g_assert_cmpstr (metadata.references, ==,
+        "<root@example.test> <parent@example.test>");
 }
 
 static void
 test_preserves_final_selected_header_byte (void)
 {
-  static const char message_id_last_raw[] =
-      "From: Sender <sender@example.test>\r\n"
-      "Message-ID: <last@example.test>\r\n" "\r\n" "Body";
-  static const char subject_last_raw[] =
-      "Message-ID: <subject-prefix@example.test>\r\n"
-      "Subject: Last header\r\n" "\r\n" "Body";
+    static const char message_id_last_raw[] =
+        "From: Sender <sender@example.test>\r\n"
+        "Message-ID: <last@example.test>\r\n" "\r\n" "Body";
+    static const char subject_last_raw[] =
+        "Message-ID: <subject-prefix@example.test>\r\n"
+        "Subject: Last header\r\n" "\r\n" "Body";
 
-  {
-    g_autoptr (GError) error = NULL;
-    g_autoptr (GBytes) bytes = NULL;
-    g_auto (WyreboxEmlMetadata) metadata = { 0 };
+    {
+        g_autoptr (GError) error = NULL;
+        g_autoptr (GBytes) bytes = NULL;
+        g_auto (WyreboxEmlMetadata) metadata = { 0 };
 
-    bytes = g_bytes_new_static (message_id_last_raw,
-        strlen (message_id_last_raw));
+        bytes = g_bytes_new_static (message_id_last_raw,
+                strlen (message_id_last_raw));
 
-    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
-    g_assert_no_error (error);
-    g_assert_cmpstr (metadata.message_id, ==, "<last@example.test>");
-  }
+        g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata,
+            &error));
+        g_assert_no_error (error);
+        g_assert_cmpstr (metadata.message_id, ==, "<last@example.test>");
+    }
 
-  {
-    g_autoptr (GError) error = NULL;
-    g_autoptr (GBytes) bytes = NULL;
-    g_auto (WyreboxEmlMetadata) metadata = { 0 };
+    {
+        g_autoptr (GError) error = NULL;
+        g_autoptr (GBytes) bytes = NULL;
+        g_auto (WyreboxEmlMetadata) metadata = { 0 };
 
-    bytes = g_bytes_new_static (subject_last_raw, strlen (subject_last_raw));
+        bytes = g_bytes_new_static (subject_last_raw,
+                strlen (subject_last_raw));
 
-    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
-    g_assert_no_error (error);
-    g_assert_cmpstr (metadata.subject, ==, "Last header");
-  }
+        g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata,
+            &error));
+        g_assert_no_error (error);
+        g_assert_cmpstr (metadata.subject, ==, "Last header");
+    }
 }
 
 static void
 test_missing_header_body_separator_is_invalid (void)
 {
-  static const char raw[] =
-      "Subject: No separator\r\nMessage-ID: <bad@test>\r\n";
-  g_autoptr (GError) error = NULL;
-  g_autoptr (GBytes) bytes = NULL;
-  g_auto (WyreboxEmlMetadata) metadata = { 0 };
+    static const char raw[] =
+        "Subject: No separator\r\nMessage-ID: <bad@test>\r\n";
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
 
-  bytes = g_bytes_new_static (raw, strlen (raw));
+    bytes = g_bytes_new_static (raw, strlen (raw));
 
-  g_assert_false (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
-  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
-  g_assert_null (metadata.message_id);
+    g_assert_false (wyrebox_eml_metadata_parse_bytes (bytes, &metadata,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_assert_null (metadata.message_id);
 }
 
 int
 main (int argc, char **argv)
 {
-  g_test_init (&argc, &argv, NULL);
+    g_test_init (&argc, &argv, NULL);
 
-  g_test_add_func ("/ingestion/eml-metadata/simple-crlf",
-      test_parses_simple_crlf_fixture);
-  g_test_add_func ("/ingestion/eml-metadata/missing-message-id",
-      test_missing_message_id_is_successful);
-  g_test_add_func ("/ingestion/eml-metadata/duplicate-message-id",
-      test_duplicate_message_id_keeps_first_and_counts_extra);
-  g_test_add_func ("/ingestion/eml-metadata/non-ascii-headers",
-      test_non_ascii_headers_preserve_rfc2047_values);
-  g_test_add_func ("/ingestion/eml-metadata/header-continuations",
-      test_unfolds_header_continuations);
-  g_test_add_func ("/ingestion/eml-metadata/subject-span-folded-header",
-      test_records_subject_span_for_folded_header);
-  g_test_add_func ("/ingestion/eml-metadata/message-id-span-folded-header",
-      test_records_message_id_span_for_folded_header);
-  g_test_add_func ("/ingestion/eml-metadata/thread-reference-headers",
-      test_preserves_thread_reference_headers);
-  g_test_add_func ("/ingestion/eml-metadata/final-selected-header-byte",
-      test_preserves_final_selected_header_byte);
-  g_test_add_func ("/ingestion/eml-metadata/missing-separator",
-      test_missing_header_body_separator_is_invalid);
+    g_test_add_func ("/ingestion/eml-metadata/simple-crlf",
+        test_parses_simple_crlf_fixture);
+    g_test_add_func ("/ingestion/eml-metadata/missing-message-id",
+        test_missing_message_id_is_successful);
+    g_test_add_func ("/ingestion/eml-metadata/duplicate-message-id",
+        test_duplicate_message_id_keeps_first_and_counts_extra);
+    g_test_add_func ("/ingestion/eml-metadata/non-ascii-headers",
+        test_non_ascii_headers_preserve_rfc2047_values);
+    g_test_add_func ("/ingestion/eml-metadata/header-continuations",
+        test_unfolds_header_continuations);
+    g_test_add_func ("/ingestion/eml-metadata/subject-span-folded-header",
+        test_records_subject_span_for_folded_header);
+    g_test_add_func ("/ingestion/eml-metadata/message-id-span-folded-header",
+        test_records_message_id_span_for_folded_header);
+    g_test_add_func ("/ingestion/eml-metadata/thread-reference-headers",
+        test_preserves_thread_reference_headers);
+    g_test_add_func ("/ingestion/eml-metadata/final-selected-header-byte",
+        test_preserves_final_selected_header_byte);
+    g_test_add_func ("/ingestion/eml-metadata/missing-separator",
+        test_missing_header_body_separator_is_invalid);
 
-  return g_test_run ();
+    return g_test_run ();
 }

@@ -6,72 +6,72 @@
 
 typedef struct
 {
-  /*
-   * Object key for the immutable raw RFC 5322 bytes.
-   *
-   * Ownership: caller owns and must free with g_free() or
-   * wyrebox_message_delivered_payload_clear().
-   */
-  char *object_key;
+    /*
+     * Object key for the immutable raw RFC 5322 bytes.
+     *
+     * Ownership: caller owns and must free with g_free() or
+     * wyrebox_message_delivered_payload_clear().
+     */
+    char *object_key;
 
-  /*
-   * Size of the delivered raw RFC 5322 bytes, in bytes.
-   */
-  guint64 size_bytes;
+    /*
+     * Size of the delivered raw RFC 5322 bytes, in bytes.
+     */
+    guint64 size_bytes;
 
-  /*
-   * Caller-supplied internal delivery date as Unix microseconds. Zero means
-   * absent/unknown at this boundary; this codec stores but does not parse it.
-   */
-  guint64 internal_date_unix_us;
+    /*
+     * Caller-supplied internal delivery date as Unix microseconds. Zero means
+     * absent/unknown at this boundary; this codec stores but does not parse it.
+     */
+    guint64 internal_date_unix_us;
 
-  /*
-   * Owned nullable parsed EML metadata fields. Values are raw unfolded header
-   * values supplied by the caller, not parsed or normalized by this codec.
-   */
-  char *message_id;
-  char *subject;
-  char *from;
-  char *to;
-  char *cc;
-  char *bcc;
-  char *date;
+    /*
+     * Owned nullable parsed EML metadata fields. Values are raw unfolded header
+     * values supplied by the caller, not parsed or normalized by this codec.
+     */
+    char *message_id;
+    char *subject;
+    char *from;
+    char *to;
+    char *cc;
+    char *bcc;
+    char *date;
 
-  /*
-   * Optional raw byte span for the first canonical Message-ID header within
-   * the RFC 5322 header block.
-   */
-  gboolean message_id_span_valid;
-  guint64 message_id_span_start;
-  guint64 message_id_span_end;
+    /*
+     * Optional raw byte span for the first canonical Message-ID header within
+     * the RFC 5322 header block.
+     */
+    gboolean message_id_span_valid;
+    guint64 message_id_span_start;
+    guint64 message_id_span_end;
 
-  /*
-   * Optional raw byte span for the first canonical Subject header within the
-   * RFC 5322 header block.
-   */
-  gboolean subject_span_valid;
-  guint64 subject_span_start;
-  guint64 subject_span_end;
+    /*
+     * Optional raw byte span for the first canonical Subject header within the
+     * RFC 5322 header block.
+     */
+    gboolean subject_span_valid;
+    guint64 subject_span_start;
+    guint64 subject_span_end;
 
-  /*
-   * Number of additional Message-ID headers after the first canonical value.
-   */
-  guint duplicate_message_id_count;
+    /*
+     * Number of additional Message-ID headers after the first canonical value.
+     */
+    guint duplicate_message_id_count;
 
-  /*
-   * Owned nullable daemon delivery identity fields. These are present only for
-   * v3 payloads produced by daemon-backed delivery ingestion.
-   */
-  char *delivery_id;
-  char *queue_id;
-  char *account_identity;
-  char *envelope_sender;
+    /*
+     * Owned nullable daemon delivery identity fields. These are present only for
+     * v3 payloads produced by daemon-backed delivery ingestion.
+     */
+    char *delivery_id;
+    char *queue_id;
+    char *account_identity;
+    char *envelope_sender;
 
-  /*
-   * Ordered null-terminated recipient list. Vector and strings are owned by
-   * the payload and are present only for v3 payloads with delivery identity.
-   */
-  gchar **recipients;
+    /*
+     * Ordered null-terminated recipient list. Vector and strings are owned by
+     * the payload and are present only for v3 payloads with delivery identity.
+     */
+    gchar **recipients;
 } WyreboxMessageDeliveredPayload;
 
 /* *INDENT-OFF* */

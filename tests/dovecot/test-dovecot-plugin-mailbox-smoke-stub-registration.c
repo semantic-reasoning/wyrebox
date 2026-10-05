@@ -15,145 +15,145 @@ static unsigned int istream_stub_live_count;
 
 struct mailbox_list_sink
 {
-  struct mailbox_list list;
-  struct mailbox_list_sink_entry *entries;
-  unsigned int n_entries;
-  unsigned int capacity;
-  bool fail_next_publish;
-  unsigned int original_iter_init_calls;
-  unsigned int original_iter_next_calls;
-  unsigned int original_iter_deinit_calls;
-  unsigned int original_deinit_calls;
+    struct mailbox_list list;
+    struct mailbox_list_sink_entry *entries;
+    unsigned int n_entries;
+    unsigned int capacity;
+    bool fail_next_publish;
+    unsigned int original_iter_init_calls;
+    unsigned int original_iter_next_calls;
+    unsigned int original_iter_deinit_calls;
+    unsigned int original_deinit_calls;
 };
 
 static struct mailbox_list_sink *
 mailbox_list_sink_from_list (const struct mailbox_list *list)
 {
-  return (struct mailbox_list_sink *) ((char *) list
-      - offsetof (struct mailbox_list_sink, list));
+    return (struct mailbox_list_sink *)((char *)list
+           - offsetof (struct mailbox_list_sink, list));
 }
 
 static void
 mailbox_list_sink_entry_clear (struct mailbox_list_sink_entry *entry)
 {
-  free ((char *) entry->name);
-  free ((char *) entry->special_use);
-  memset (entry, 0, sizeof (*entry));
+    free ((char *)entry->name);
+    free ((char *)entry->special_use);
+    memset (entry, 0, sizeof (*entry));
 }
 
 void
 mail_storage_class_register (struct mail_storage *storage_class)
 {
-  wyrebox_dovecot_loader_shim_mail_storage_class = storage_class;
-  ++wyrebox_dovecot_loader_shim_mail_storage_class_register_calls;
+    wyrebox_dovecot_loader_shim_mail_storage_class = storage_class;
+    ++wyrebox_dovecot_loader_shim_mail_storage_class_register_calls;
 }
 
 void
 mail_storage_class_unregister (struct mail_storage *storage_class)
 {
-  (void) storage_class;
-  ++wyrebox_dovecot_loader_shim_mail_storage_class_unregister_calls;
+    (void)storage_class;
+    ++wyrebox_dovecot_loader_shim_mail_storage_class_unregister_calls;
 }
 
 static struct mailbox_list_iterate_context *
 mailbox_list_sink_original_iter_init (struct mailbox_list *list,
     const char *const *patterns, enum mailbox_list_iter_flags flags)
 {
-  struct mailbox_list_iterate_context *ctx;
-  struct mailbox_list_sink *sink;
+    struct mailbox_list_iterate_context *ctx;
+    struct mailbox_list_sink *sink;
 
-  (void) patterns;
+    (void)patterns;
 
-  sink = mailbox_list_sink_from_list (list);
-  sink->original_iter_init_calls++;
+    sink = mailbox_list_sink_from_list (list);
+    sink->original_iter_init_calls++;
 
-  ctx = calloc (1, sizeof (*ctx));
-  if (ctx == NULL)
-    return NULL;
+    ctx = calloc (1, sizeof (*ctx));
+    if (ctx == NULL)
+        return NULL;
 
-  ctx->list = list;
-  ctx->flags = flags;
-  return ctx;
+    ctx->list = list;
+    ctx->flags = flags;
+    return ctx;
 }
 
 static const struct mailbox_info *
 mailbox_list_sink_original_iter_next (struct mailbox_list_iterate_context *ctx)
 {
-  struct mailbox_list_sink *sink;
+    struct mailbox_list_sink *sink;
 
-  sink = mailbox_list_sink_from_list (ctx->list);
-  sink->original_iter_next_calls++;
-  return NULL;
+    sink = mailbox_list_sink_from_list (ctx->list);
+    sink->original_iter_next_calls++;
+    return NULL;
 }
 
 static int
 mailbox_list_sink_original_iter_deinit (struct
     mailbox_list_iterate_context *ctx)
 {
-  struct mailbox_list_sink *sink;
+    struct mailbox_list_sink *sink;
 
-  sink = mailbox_list_sink_from_list (ctx->list);
-  sink->original_iter_deinit_calls++;
-  free (ctx);
-  return 0;
+    sink = mailbox_list_sink_from_list (ctx->list);
+    sink->original_iter_deinit_calls++;
+    free (ctx);
+    return 0;
 }
 
 static void
 mailbox_list_sink_original_deinit (struct mailbox_list *list)
 {
-  struct mailbox_list_sink *sink;
+    struct mailbox_list_sink *sink;
 
-  sink = mailbox_list_sink_from_list (list);
-  sink->original_deinit_calls++;
+    sink = mailbox_list_sink_from_list (list);
+    sink->original_deinit_calls++;
 }
 
 const char *
 mailbox_list_get_storage_name (struct mailbox_list *list, const char *vname)
 {
-  (void) list;
-  (void) vname;
-  return NULL;
+    (void)list;
+    (void)vname;
+    return NULL;
 }
 
 struct mailbox_list *
 mailbox_list_sink_alloc (void)
 {
-  struct mailbox_list_sink *sink;
+    struct mailbox_list_sink *sink;
 
-  sink = calloc (1, sizeof (*sink));
-  if (sink == NULL)
-    return NULL;
+    sink = calloc (1, sizeof (*sink));
+    if (sink == NULL)
+        return NULL;
 
-  sink->list.v.deinit = mailbox_list_sink_original_deinit;
-  sink->list.v.iter_init = mailbox_list_sink_original_iter_init;
-  sink->list.v.iter_next = mailbox_list_sink_original_iter_next;
-  sink->list.v.iter_deinit = mailbox_list_sink_original_iter_deinit;
-  return &sink->list;
+    sink->list.v.deinit = mailbox_list_sink_original_deinit;
+    sink->list.v.iter_init = mailbox_list_sink_original_iter_init;
+    sink->list.v.iter_next = mailbox_list_sink_original_iter_next;
+    sink->list.v.iter_deinit = mailbox_list_sink_original_iter_deinit;
+    return &sink->list;
 }
 
 void
 mailbox_list_sink_free (struct mailbox_list *list)
 {
-  struct mailbox_list_sink *sink;
-  unsigned int i;
+    struct mailbox_list_sink *sink;
+    unsigned int i;
 
-  if (list == NULL)
-    return;
+    if (list == NULL)
+        return;
 
-  sink = mailbox_list_sink_from_list (list);
-  for (i = 0; i < sink->n_entries; i++)
-    mailbox_list_sink_entry_clear (&sink->entries[i]);
+    sink = mailbox_list_sink_from_list (list);
+    for (i = 0; i < sink->n_entries; i++)
+        mailbox_list_sink_entry_clear (&sink->entries[i]);
 
-  free (sink->entries);
-  free (sink);
+    free (sink->entries);
+    free (sink);
 }
 
 void
 mailbox_list_sink_fail_next_publish (struct mailbox_list *list)
 {
-  if (list != NULL) {
-    mailbox_list_sink_from_list (list)->fail_next_publish = true;
-  }
+    if (list != NULL) {
+        mailbox_list_sink_from_list (list)->fail_next_publish = true;
+    }
 }
 
 bool
@@ -161,85 +161,86 @@ mailbox_list_sink_publish_entry (struct mailbox_list *list,
     const char *name, char hierarchy_delimiter, bool selectable,
     enum mailbox_list_child_state child_state, const char *special_use)
 {
-  struct mailbox_list_sink *sink;
-  struct mailbox_list_sink_entry *entry;
+    struct mailbox_list_sink *sink;
+    struct mailbox_list_sink_entry *entry;
 
-  if (list == NULL || name == NULL)
-    return false;
+    if (list == NULL || name == NULL)
+        return false;
 
-  sink = mailbox_list_sink_from_list (list);
-  if (sink->fail_next_publish) {
-    sink->fail_next_publish = false;
-    return false;
-  }
-
-  if (sink->n_entries == sink->capacity) {
-    unsigned int new_capacity = sink->capacity == 0 ? 4 : sink->capacity * 2;
-    struct mailbox_list_sink_entry *new_entries;
-
-    new_entries = realloc (sink->entries,
-        sizeof (struct mailbox_list_sink_entry) * new_capacity);
-    if (new_entries == NULL)
-      return false;
-
-    sink->entries = new_entries;
-    sink->capacity = new_capacity;
-  }
-
-  entry = &sink->entries[sink->n_entries];
-  memset (entry, 0, sizeof (*entry));
-  entry->name = p_strdup (NULL, name);
-  if (entry->name == NULL)
-    return false;
-
-  if (special_use != NULL) {
-    entry->special_use = p_strdup (NULL, special_use);
-    if (entry->special_use == NULL) {
-      mailbox_list_sink_entry_clear (entry);
-      return false;
+    sink = mailbox_list_sink_from_list (list);
+    if (sink->fail_next_publish) {
+        sink->fail_next_publish = false;
+        return false;
     }
-  }
 
-  entry->hierarchy_delimiter = hierarchy_delimiter;
-  entry->selectable = selectable;
-  entry->child_state = child_state;
-  sink->n_entries++;
-  return true;
+    if (sink->n_entries == sink->capacity) {
+        unsigned int new_capacity = sink->capacity ==
+            0 ? 4 : sink->capacity * 2;
+        struct mailbox_list_sink_entry *new_entries;
+
+        new_entries = realloc (sink->entries,
+                sizeof (struct mailbox_list_sink_entry) * new_capacity);
+        if (new_entries == NULL)
+            return false;
+
+        sink->entries = new_entries;
+        sink->capacity = new_capacity;
+    }
+
+    entry = &sink->entries[sink->n_entries];
+    memset (entry, 0, sizeof (*entry));
+    entry->name = p_strdup (NULL, name);
+    if (entry->name == NULL)
+        return false;
+
+    if (special_use != NULL) {
+        entry->special_use = p_strdup (NULL, special_use);
+        if (entry->special_use == NULL) {
+            mailbox_list_sink_entry_clear (entry);
+            return false;
+        }
+    }
+
+    entry->hierarchy_delimiter = hierarchy_delimiter;
+    entry->selectable = selectable;
+    entry->child_state = child_state;
+    sink->n_entries++;
+    return true;
 }
 
 unsigned int
 mailbox_list_sink_get_count (const struct mailbox_list *list)
 {
-  return list != NULL ? mailbox_list_sink_from_list (list)->n_entries : 0;
+    return list != NULL ? mailbox_list_sink_from_list (list)->n_entries : 0;
 }
 
 const struct mailbox_list_sink_entry *
 mailbox_list_sink_get_entry (const struct mailbox_list *list,
     unsigned int index)
 {
-  struct mailbox_list_sink *sink;
+    struct mailbox_list_sink *sink;
 
-  if (list == NULL)
-    return NULL;
+    if (list == NULL)
+        return NULL;
 
-  sink = mailbox_list_sink_from_list (list);
-  if (index >= sink->n_entries)
-    return NULL;
+    sink = mailbox_list_sink_from_list (list);
+    if (index >= sink->n_entries)
+        return NULL;
 
-  return &sink->entries[index];
+    return &sink->entries[index];
 }
 
 unsigned int
 mailbox_list_sink_get_original_iter_init_calls (const struct mailbox_list *list)
 {
-  return list != NULL
+    return list != NULL
       ? mailbox_list_sink_from_list (list)->original_iter_init_calls : 0;
 }
 
 unsigned int
 mailbox_list_sink_get_original_iter_next_calls (const struct mailbox_list *list)
 {
-  return list != NULL
+    return list != NULL
       ? mailbox_list_sink_from_list (list)->original_iter_next_calls : 0;
 }
 
@@ -247,14 +248,14 @@ unsigned int
 mailbox_list_sink_get_original_iter_deinit_calls (const struct
     mailbox_list *list)
 {
-  return list != NULL
+    return list != NULL
       ? mailbox_list_sink_from_list (list)->original_iter_deinit_calls : 0;
 }
 
 unsigned int
 mailbox_list_sink_get_original_deinit_calls (const struct mailbox_list *list)
 {
-  return list != NULL
+    return list != NULL
       ? mailbox_list_sink_from_list (list)->original_deinit_calls : 0;
 }
 
@@ -262,9 +263,9 @@ void
 mail_storage_set_error (struct mail_storage *storage,
     enum mail_error error, const char *string)
 {
-  (void) storage;
-  (void) error;
-  (void) string;
+    (void)storage;
+    (void)error;
+    (void)string;
 }
 
 int
@@ -272,188 +273,188 @@ mail_get_stream (struct mail *mail, bool get_body,
     struct message_size *hdr_size,
     struct message_size *body_size, struct istream **stream)
 {
-  struct mail_private *private = (struct mail_private *) mail;
+    struct mail_private *private = (struct mail_private *)mail;
 
-  if (private == NULL || private->v.get_stream == NULL)
-    return -1;
+    if (private == NULL || private->v.get_stream == NULL)
+        return -1;
 
-  return private->v.get_stream (mail, get_body, hdr_size, body_size, stream);
+    return private->v.get_stream (mail, get_body, hdr_size, body_size, stream);
 }
 
 bool
 mail_set_uid (struct mail *mail, unsigned int uid)
 {
-  struct mail_private *private = (struct mail_private *) mail;
+    struct mail_private *private = (struct mail_private *)mail;
 
-  if (private == NULL || private->v.set_uid == NULL)
-    return false;
+    if (private == NULL || private->v.set_uid == NULL)
+        return false;
 
-  return private->v.set_uid (mail, uid);
+    return private->v.set_uid (mail, uid);
 }
 
 void
 mail_set_seq (struct mail *mail, unsigned int seq)
 {
-  struct mail_private *private = (struct mail_private *) mail;
+    struct mail_private *private = (struct mail_private *)mail;
 
-  if (private == NULL || private->v.set_seq == NULL)
-    return;
+    if (private == NULL || private->v.set_seq == NULL)
+        return;
 
-  private->v.set_seq (mail, seq, false);
+    private->v.set_seq (mail, seq, false);
 }
 
 void
 mail_free (struct mail **mail)
 {
-  struct mail_private *private;
+    struct mail_private *private;
 
-  if (mail == NULL || *mail == NULL)
-    return;
+    if (mail == NULL || *mail == NULL)
+        return;
 
-  private = (struct mail_private *) *mail;
-  if (private->v.free != NULL)
-    private->v.free (*mail);
-  *mail = NULL;
+    private = (struct mail_private *)*mail;
+    if (private->v.free != NULL)
+        private->v.free (*mail);
+    *mail = NULL;
 }
 
 pool_t
 pool_alloconly_create (const char *name, size_t size)
 {
-  (void) name;
-  (void) size;
-  return malloc (1);
+    (void)name;
+    (void)size;
+    return malloc (1);
 }
 
 void
 pool_unref (pool_t *pool)
 {
-  free (*pool);
-  *pool = NULL;
+    free (*pool);
+    *pool = NULL;
 }
 
 void *
 p_malloc (pool_t pool, size_t size)
 {
-  (void) pool;
-  return calloc (1, size);
+    (void)pool;
+    return calloc (1, size);
 }
 
 void *
 p_strdup (pool_t pool, const char *str)
 {
-  size_t size;
-  char *copy;
+    size_t size;
+    char *copy;
 
-  (void) pool;
-  if (str == NULL)
-    return NULL;
+    (void)pool;
+    if (str == NULL)
+        return NULL;
 
-  size = strlen (str) + 1;
-  copy = malloc (size);
-  if (copy == NULL)
-    return NULL;
-  memcpy (copy, str, size);
-  return copy;
+    size = strlen (str) + 1;
+    copy = malloc (size);
+    if (copy == NULL)
+        return NULL;
+    memcpy (copy, str, size);
+    return copy;
 }
 
 struct event *
 event_create (struct event *parent)
 {
-  (void) parent;
-  return malloc (1);
+    (void)parent;
+    return malloc (1);
 }
 
 void
 event_unref (struct event **event)
 {
-  free (*event);
-  *event = NULL;
+    free (*event);
+    *event = NULL;
 }
 
 void
 p_array_init (array_t *array, pool_t pool, unsigned int count)
 {
-  (void) pool;
-  (void) count;
-  array->dummy = NULL;
+    (void)pool;
+    (void)count;
+    array->dummy = NULL;
 }
 
 struct istream *
 i_stream_create_from_data (const void *data, size_t size)
 {
-  struct istream *stream;
+    struct istream *stream;
 
-  if (data == NULL || size == 0)
-    return NULL;
+    if (data == NULL || size == 0)
+        return NULL;
 
-  stream = calloc (1, sizeof (*stream));
-  if (stream == NULL)
-    return NULL;
+    stream = calloc (1, sizeof (*stream));
+    if (stream == NULL)
+        return NULL;
 
-  stream->data = (void *) data;
-  stream->size = size;
-  stream->owns_data = false;
-  istream_stub_create_count++;
-  istream_stub_live_count++;
-  return stream;
+    stream->data = (void *)data;
+    stream->size = size;
+    stream->owns_data = false;
+    istream_stub_create_count++;
+    istream_stub_live_count++;
+    return stream;
 }
 
 struct istream *
 i_stream_create_copy_from_data (const void *data, size_t size)
 {
-  struct istream *stream;
+    struct istream *stream;
 
-  stream = i_stream_create_from_data (data, size);
-  if (stream == NULL)
-    return NULL;
+    stream = i_stream_create_from_data (data, size);
+    if (stream == NULL)
+        return NULL;
 
-  stream->data = malloc (size);
-  if (stream->data == NULL) {
-    free (stream);
-    return NULL;
-  }
+    stream->data = malloc (size);
+    if (stream->data == NULL) {
+        free (stream);
+        return NULL;
+    }
 
-  memcpy (stream->data, data, size);
-  stream->owns_data = true;
-  return stream;
+    memcpy (stream->data, data, size);
+    stream->owns_data = true;
+    return stream;
 }
 
 void
 i_stream_unref (struct istream **stream)
 {
-  if (stream == NULL || *stream == NULL)
-    return;
+    if (stream == NULL || *stream == NULL)
+        return;
 
-  if ((*stream)->owns_data)
-    free ((*stream)->data);
-  free (*stream);
-  *stream = NULL;
-  istream_stub_unref_count++;
-  istream_stub_live_count--;
+    if ((*stream)->owns_data)
+        free ((*stream)->data);
+    free (*stream);
+    *stream = NULL;
+    istream_stub_unref_count++;
+    istream_stub_live_count--;
 }
 
 void
 istream_stub_reset_counts (void)
 {
-  istream_stub_create_count = 0;
-  istream_stub_unref_count = 0;
-  istream_stub_live_count = 0;
+    istream_stub_create_count = 0;
+    istream_stub_unref_count = 0;
+    istream_stub_live_count = 0;
 }
 
 unsigned int
 istream_stub_get_create_count (void)
 {
-  return istream_stub_create_count;
+    return istream_stub_create_count;
 }
 
 unsigned int
 istream_stub_get_unref_count (void)
 {
-  return istream_stub_unref_count;
+    return istream_stub_unref_count;
 }
 
 unsigned int
 istream_stub_get_live_count (void)
 {
-  return istream_stub_live_count;
+    return istream_stub_live_count;
 }

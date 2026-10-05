@@ -8,12 +8,12 @@
 int
 main (void)
 {
-  duckdb_database db = NULL;
+    duckdb_database db = NULL;
 
-  if (duckdb_open (NULL, &db) != DuckDBSuccess)
-    return 1;
+    if (duckdb_open (NULL, &db) != DuckDBSuccess)
+        return 1;
 
-  duckdb_close (&db);
+    duckdb_close (&db);
 
-  return 0;
+    return 0;
 }

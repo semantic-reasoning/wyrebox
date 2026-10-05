@@ -4,15 +4,15 @@
 
 typedef struct
 {
-  char *account_id;
-  char *view_id;
-  char *message_id;
-  char *membership_id;
-  char *rule_version_hash;
-  guint64 uid;
-  guint64 uidvalidity;
-  gboolean is_visible;
-  guint64 materialized_at_unix_us;
+    char *account_id;
+    char *view_id;
+    char *message_id;
+    char *membership_id;
+    char *rule_version_hash;
+    guint64 uid;
+    guint64 uidvalidity;
+    gboolean is_visible;
+    guint64 materialized_at_unix_us;
 } WyreboxDerivedViewMembershipChangedPayload;
 
 /* *INDENT-OFF* */
