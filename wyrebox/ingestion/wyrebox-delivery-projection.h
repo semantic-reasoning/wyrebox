@@ -35,6 +35,17 @@ typedef struct
   char *object_key;
 
   /*
+   * Account the delivery was routed to, or NULL for payloads written before
+   * account identity was journaled.
+   *
+   * Ownership: owned by this record and cleared by
+   * wyrebox_delivery_projection_record_clear(). When accessed through
+   * WyreboxDeliveryProjectionList, this pointer is borrowed and valid until the
+   * list is cleared or the record is removed from the list.
+   */
+  char *account_identity;
+
+  /*
    * Stored metadata from the MessageDelivered payload.
    */
   guint64 size_bytes;
