@@ -27,7 +27,9 @@ G_DECLARE_FINAL_TYPE (WyreboxDaemonDeliveryMaterialization,
  * serialized by an internal lock.
  *
  * Retries are scheduled on the thread-default main context of the thread that
- * calls this constructor; drop the last reference on that same thread.
+ * calls this constructor. A pending retry holds a reference to the service;
+ * call wyrebox_daemon_delivery_materialization_stop() on that thread to cancel
+ * it before dropping the last caller reference.
  *
  * @catalog_path: DuckDB catalog, already prepared to the current schema.
  * @journal_root_dir: root of the journal @journal_writer appends to.
@@ -68,9 +70,22 @@ gboolean wyrebox_daemon_delivery_materialization_catch_up (
  * temporary here; deliveries stay durable in the journal regardless.
  *
  * Safe to call from any thread, with the same append-lock restriction as
- * wyrebox_daemon_delivery_materialization_catch_up().
+ * wyrebox_daemon_delivery_materialization_catch_up(). Callers on other threads
+ * and the scheduled retry contend for the same internal lock, so a call can
+ * block for the duration of an in-progress catch-up.
+ *
+ * After wyrebox_daemon_delivery_materialization_stop(), failures are logged
+ * but no retry is scheduled.
  */
 void wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
+    WyreboxDaemonDeliveryMaterialization *self);
+
+/*
+ * Cancels any pending retry, releasing the reference it holds, and prevents
+ * new retries from being scheduled. Call on the thread that created the
+ * service, typically once its main loop has quit.
+ */
+void wyrebox_daemon_delivery_materialization_stop (
     WyreboxDaemonDeliveryMaterialization *self);
 
 gboolean wyrebox_daemon_delivery_materialization_is_retry_pending (

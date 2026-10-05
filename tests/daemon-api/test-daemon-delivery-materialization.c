@@ -397,6 +397,49 @@ test_pending_record_without_account_fails (Fixture *fixture,
             materialization));
 }
 
+static void
+test_stop_cancels_retry_and_releases_reference (Fixture *fixture,
+    gconstpointer user_data)
+{
+    WyreboxDaemonDeliveryMaterialization *materialization = NULL;
+    g_auto (WyreboxEmlIngestResult) delivered = { 0 };
+
+    exec_catalog_sql (fixture->catalog_path,
+        "INSERT INTO accounts (account_id) VALUES ('account-b');");
+    exec_catalog_sql (fixture->catalog_path,
+        "INSERT INTO mailboxes ("
+        "mailbox_id, account_id, imap_name, is_selectable, is_visible"
+        ") VALUES ('inbox-b', 'account-b', 'INBOX', FALSE, TRUE);");
+    ingest (fixture, "simple-crlf.eml", "delivery-1", "account-b", &delivered);
+
+    materialization = new_materialization (fixture, fixture->catalog_path);
+    g_object_add_weak_pointer (G_OBJECT (materialization),
+        (gpointer *)&materialization);
+
+    g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
+        "*delivery materialization failed*inbox-b*");
+    wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
+        materialization);
+    g_test_assert_expected_messages ();
+    g_assert_true (wyrebox_daemon_delivery_materialization_is_retry_pending (
+            materialization));
+
+    wyrebox_daemon_delivery_materialization_stop (materialization);
+    g_assert_false (wyrebox_daemon_delivery_materialization_is_retry_pending (
+            materialization));
+
+    g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
+        "*delivery materialization failed*inbox-b*");
+    wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
+        materialization);
+    g_test_assert_expected_messages ();
+    g_assert_false (wyrebox_daemon_delivery_materialization_is_retry_pending (
+            materialization));
+
+    g_object_unref (materialization);
+    g_assert_null (materialization);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -423,6 +466,11 @@ main (int argc, char **argv)
         "pending-record-without-account-fails",
         Fixture, NULL, (void (*)(Fixture *, gconstpointer)) fixture_set_up,
         test_pending_record_without_account_fails,
+        (void (*)(Fixture *, gconstpointer)) fixture_tear_down);
+    g_test_add ("/daemon/delivery-materialization/"
+        "stop-cancels-retry-and-releases-reference",
+        Fixture, NULL, (void (*)(Fixture *, gconstpointer)) fixture_set_up,
+        test_stop_cancels_retry_and_releases_reference,
         (void (*)(Fixture *, gconstpointer)) fixture_tear_down);
 
     return g_test_run ();

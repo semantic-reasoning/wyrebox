@@ -10,7 +10,22 @@ struct _WyreboxDaemonDeliveryIngestionService
     WyreboxDaemonDeliveryIngestionServiceFunc func;
     gpointer user_data;
     GDestroyNotify user_data_destroy;
+    WyreboxDaemonDeliveryIngestionServicePostIngestFunc post_ingest_func;
+    gpointer post_ingest_user_data;
+    GDestroyNotify post_ingest_user_data_destroy;
 };
+
+static void
+clear_post_ingest_hook (WyreboxDaemonDeliveryIngestionService *self)
+{
+    if (self->post_ingest_user_data_destroy != NULL &&
+        self->post_ingest_user_data != NULL)
+        self->post_ingest_user_data_destroy (self->post_ingest_user_data);
+
+    self->post_ingest_func = NULL;
+    self->post_ingest_user_data = NULL;
+    self->post_ingest_user_data_destroy = NULL;
+}
 
 G_DEFINE_TYPE (WyreboxDaemonDeliveryIngestionService,
     wyrebox_daemon_delivery_ingestion_service, G_TYPE_OBJECT);
@@ -36,6 +51,15 @@ authorize_delivery_ingestion_identity (const WyreboxDaemonRequestIdentity
         return FALSE;
     }
 
+    if (identity->account_identity == NULL ||
+        *identity->account_identity == '\0') {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT,
+            "delivery ingestion requires an account identity");
+        return FALSE;
+    }
+
     return TRUE;
 }
 
@@ -47,6 +71,7 @@ wyrebox_daemon_delivery_ingestion_service_finalize (GObject *object)
 
     if (self->user_data_destroy != NULL && self->user_data != NULL)
         self->user_data_destroy (self->user_data);
+    clear_post_ingest_hook (self);
 
     G_OBJECT_CLASS
         (wyrebox_daemon_delivery_ingestion_service_parent_class)->finalize
@@ -117,6 +142,20 @@ wyrebox_daemon_delivery_ingestion_service_new_with_ingestor (WyreboxEmlIngestor
             g_object_unref);
 }
 
+void
+wyrebox_daemon_delivery_ingestion_service_set_post_ingest_hook
+    (WyreboxDaemonDeliveryIngestionService *self,
+    WyreboxDaemonDeliveryIngestionServicePostIngestFunc func,
+    gpointer user_data, GDestroyNotify user_data_destroy)
+{
+    g_return_if_fail (WYREBOX_IS_DAEMON_DELIVERY_INGESTION_SERVICE (self));
+
+    clear_post_ingest_hook (self);
+    self->post_ingest_func = func;
+    self->post_ingest_user_data = user_data;
+    self->post_ingest_user_data_destroy = user_data_destroy;
+}
+
 gboolean
 wyrebox_daemon_delivery_ingestion_service_handle_identity
     (WyreboxDaemonDeliveryIngestionService *self,
@@ -156,6 +195,9 @@ wyrebox_daemon_delivery_ingestion_service_handle_identity
         g_propagate_error (error, g_steal_pointer (&local_error));
         return FALSE;
     }
+
+    if (self->post_ingest_func != NULL)
+        self->post_ingest_func (&ingest_result, self->post_ingest_user_data);
 
     return wyrebox_daemon_response_frame_init_success (out_frame,
                &receipt, identity->correlation_id, error);

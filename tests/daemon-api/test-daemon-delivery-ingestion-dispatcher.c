@@ -439,6 +439,143 @@ test_dispatcher_ingestor_backed_service_reports_parse_failure (void)
     remove_tree (journal_root);
 }
 
+typedef struct
+{
+    guint calls;
+    guint64 journal_offset;
+    guint64 journal_sequence;
+} PostIngestRecord;
+
+static void
+record_post_ingest (const WyreboxEmlIngestResult *result, gpointer user_data)
+{
+    PostIngestRecord *record = user_data;
+
+    record->calls++;
+    record->journal_offset = result->journal_offset;
+    record->journal_sequence = result->journal_sequence;
+}
+
+static void
+dispatch_with_post_ingest_hook (WyreboxDaemonDeliveryIngestionServiceFunc func,
+    const char *caller_identity, PostIngestRecord *record,
+    WyreboxDaemonResponseFrame *frame)
+{
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDaemonDeliveryIngestionService) service = NULL;
+    g_auto (WyreboxDaemonDeliveryIngestionRequest) request = { 0 };
+    const char *recipients[] = { "alice@example.com", NULL };
+    g_autoptr (GBytes) message = g_bytes_new_static ("message-bytes", 12);
+
+    g_assert_true (wyrebox_daemon_delivery_ingestion_request_init (&request,
+        "delivery-123", "queue-1", NULL, recipients, message, &error));
+    g_assert_no_error (error);
+
+    service = wyrebox_daemon_delivery_ingestion_service_new (func, NULL, NULL);
+    wyrebox_daemon_delivery_ingestion_service_set_post_ingest_hook (service,
+        record_post_ingest, record, NULL);
+
+    g_assert_true (wyrebox_daemon_delivery_ingestion_dispatch (service,
+        "request-delivery", caller_identity, "account-1", "postfix",
+        "postfix-ingest-1", &request, frame, &error));
+    g_assert_no_error (error);
+}
+
+static void
+test_post_ingest_hook_runs_after_successful_ingest (void)
+{
+    PostIngestRecord record = { 0 };
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+    dispatch_with_post_ingest_hook (ingest_delivery_success, "postfix",
+        &record, &frame);
+
+    g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+    g_assert_cmpuint (record.calls, ==, 1);
+    g_assert_cmpuint (record.journal_offset, ==, 4096);
+    g_assert_cmpuint (record.journal_sequence, ==, 7);
+}
+
+static void
+test_post_ingest_hook_skipped_without_ingest (void)
+{
+    PostIngestRecord record = { 0 };
+    g_auto (WyreboxDaemonResponseFrame) failed = { 0 };
+    g_auto (WyreboxDaemonResponseFrame) denied = { 0 };
+
+    dispatch_with_post_ingest_hook (fail_delivery_without_error, "postfix",
+        &record, &failed);
+    dispatch_with_post_ingest_hook (ingest_delivery_success, "skill",
+        &record, &denied);
+
+    g_assert_cmpint (failed.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+    g_assert_cmpint (denied.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+    g_assert_cmpuint (record.calls, ==, 0);
+}
+
+static void
+test_dispatcher_rejects_delivery_without_account (void)
+{
+    const char *accounts[] = { NULL, "" };
+
+    for (gsize i = 0; i < G_N_ELEMENTS (accounts); i++) {
+        gboolean was_called = FALSE;
+        g_autoptr (GError) error = NULL;
+        g_autoptr (WyreboxDaemonDeliveryIngestionService) service = NULL;
+        g_auto (WyreboxDaemonDeliveryIngestionRequest) request = { 0 };
+        g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+        const char *recipients[] = { "alice@example.com", NULL };
+        g_autoptr (GBytes) message = g_bytes_new_static ("message-bytes", 12);
+
+        g_assert_true (wyrebox_daemon_delivery_ingestion_request_init (
+                &request, "delivery-123", "queue-1", NULL, recipients, message,
+                &error));
+        g_assert_no_error (error);
+
+        service = wyrebox_daemon_delivery_ingestion_service_new
+                (ingest_delivery_success, &was_called, NULL);
+
+        g_assert_true (wyrebox_daemon_delivery_ingestion_dispatch (service,
+            "request-delivery", "postfix", accounts[i], "postfix",
+            "postfix-ingest-1", &request, &frame, &error));
+        g_assert_no_error (error);
+        g_assert_false (was_called);
+        g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+        g_assert_cmpint (frame.error.error_class, ==,
+            WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+    }
+}
+
+static void
+test_service_rejects_empty_account_identity (void)
+{
+    gboolean was_called = FALSE;
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDaemonDeliveryIngestionService) service = NULL;
+    g_auto (WyreboxDaemonDeliveryIngestionRequest) request = { 0 };
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+    const char *recipients[] = { "alice@example.com", NULL };
+    g_autoptr (GBytes) message = g_bytes_new_static ("message-bytes", 12);
+    WyreboxDaemonRequestIdentity identity = {
+        .request_id = (char *)"request-delivery",
+        .caller_identity = (char *)"postfix",
+        .account_identity = (char *)"",
+        .tool_identity = (char *)"postfix",
+        .correlation_id = (char *)"postfix-ingest-1",
+    };
+
+    g_assert_true (wyrebox_daemon_delivery_ingestion_request_init (&request,
+        "delivery-123", "queue-1", NULL, recipients, message, &error));
+    g_assert_no_error (error);
+    service = wyrebox_daemon_delivery_ingestion_service_new
+            (ingest_delivery_success, &was_called, NULL);
+
+    g_assert_false (wyrebox_daemon_delivery_ingestion_service_handle_identity (
+            service, &identity, &request, &frame, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_assert_false (was_called);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -461,6 +598,18 @@ main (int argc, char **argv)
     g_test_add_func ("/daemon-api/delivery-ingestion-dispatcher/"
         "ingestor-backed-service-reports-parse-failure",
         test_dispatcher_ingestor_backed_service_reports_parse_failure);
+    g_test_add_func ("/daemon-api/delivery-ingestion-dispatcher/"
+        "post-ingest-hook-runs-after-successful-ingest",
+        test_post_ingest_hook_runs_after_successful_ingest);
+    g_test_add_func ("/daemon-api/delivery-ingestion-dispatcher/"
+        "post-ingest-hook-skipped-without-ingest",
+        test_post_ingest_hook_skipped_without_ingest);
+    g_test_add_func ("/daemon-api/delivery-ingestion-dispatcher/"
+        "rejects-delivery-without-account",
+        test_dispatcher_rejects_delivery_without_account);
+    g_test_add_func ("/daemon-api/delivery-ingestion-dispatcher/"
+        "service-rejects-empty-account-identity",
+        test_service_rejects_empty_account_identity);
 
     return g_test_run ();
 }
