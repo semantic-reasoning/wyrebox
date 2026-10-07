@@ -1866,6 +1866,48 @@ test_runtime_recover_and_validate_tolerates_hash_mismatch (void)
 }
 
 static void
+test_runtime_recover_and_validate_tolerates_size_mismatch (void)
+{
+    g_autofree char *journal_root =
+        g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+    g_autofree char *object_root =
+        g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+    g_auto (WyreboxEmlIngestResult) result = { 0 };
+    WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxJournalWriter) writer = NULL;
+    g_autoptr (GBytes) payload = NULL;
+    guint64 offset = 0;
+    guint64 sequence = 0;
+
+    ingest_runtime_preflight_message (journal_root, object_root, &result);
+    payload = wyrebox_message_delivered_payload_encode (result.object_key,
+            result.size_bytes + 1, &error);
+    g_assert_no_error (error);
+    writer = wyrebox_journal_writer_new (journal_root, &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_journal_writer_append (writer,
+        WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED, payload, &offset, &sequence,
+        &error));
+    g_assert_no_error (error);
+    g_clear_object (&writer);
+
+    g_assert_true (wyrebox_daemon_runtime_recover_and_validate_delivery_storage
+            (journal_root, object_root, &report, &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (report.status, ==,
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_VALID);
+    g_assert_cmpuint (report.object_failure_count, ==, 1);
+    g_assert_cmpuint (report.first_object_failure_offset, ==, offset);
+    g_assert_cmpuint (report.first_object_failure_sequence, ==, sequence);
+    g_assert_cmpint (report.first_object_failure_category, ==,
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_SIZE_MISMATCH);
+
+    remove_tree (journal_root);
+    remove_tree (object_root);
+}
+
+static void
 test_runtime_recover_and_validate_tolerates_missing_object_with_torn_suffix
     (void)
 {
@@ -2054,6 +2096,9 @@ main (int argc, char **argv)
     g_test_add_func ("/daemon-api/runtime/recover-and-validate/"
         "tolerates-hash-mismatch",
         test_runtime_recover_and_validate_tolerates_hash_mismatch);
+    g_test_add_func ("/daemon-api/runtime/recover-and-validate/"
+        "tolerates-size-mismatch",
+        test_runtime_recover_and_validate_tolerates_size_mismatch);
     g_test_add_func ("/daemon-api/runtime/recover-and-validate/"
         "tolerates-missing-object-with-torn-suffix",
         test_runtime_recover_and_validate_tolerates_missing_object_with_torn_suffix);

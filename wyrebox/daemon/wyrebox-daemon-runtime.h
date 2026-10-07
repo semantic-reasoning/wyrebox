@@ -72,16 +72,6 @@ typedef enum {
   WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_OBJECT_UNREADABLE,
 } WyreboxDaemonDeliveryStorageValidationFailureCategory;
 
-/*
- * @object_failure_count: journaled deliveries whose raw object is missing or
- *   does not match the journaled size or SHA-256 key. Only
- *   wyrebox_daemon_runtime_recover_and_validate_delivery_storage() tolerates
- *   them; it is always 0 otherwise.
- * @first_object_failure_offset, @first_object_failure_sequence,
- * @first_object_failure_category: the first such delivery; read them only
- *   when @object_failure_count is not 0.
- */
-
 typedef struct {
   WyreboxDaemonDeliveryStorageValidationStatus status;
   WyreboxDaemonDeliveryStorageValidationFailureCategory failure_category;
@@ -90,6 +80,13 @@ typedef struct {
   guint64 last_safe_sequence;
   gboolean has_unsafe_offset;
   guint64 unsafe_offset;
+  /*
+   * Journaled deliveries whose raw object is missing or does not match the
+   * journaled size or SHA-256 key. Only
+   * wyrebox_daemon_runtime_recover_and_validate_delivery_storage() tolerates
+   * them; it is always 0 otherwise. The first_object_failure_* fields describe
+   * the first such delivery; read them only when the count is not 0.
+   */
   guint64 object_failure_count;
   guint64 first_object_failure_offset;
   guint64 first_object_failure_sequence;
