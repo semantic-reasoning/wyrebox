@@ -586,6 +586,103 @@ test_wyreboxd_exits_tempfail_when_object_root_is_missing (void)
     g_assert_false (g_file_test (sha256_dir, G_FILE_TEST_EXISTS));
 }
 
+static char *
+first_raw_object_path (const DaemonRoot *daemon_root)
+{
+    g_autofree char *sha256_dir = g_build_filename (daemon_root->object_dir,
+            "objects", "sha256", NULL);
+    g_autoptr (GDir) shards = g_dir_open (sha256_dir, 0, NULL);
+    const char *shard = NULL;
+
+    g_assert_nonnull (shards);
+    while ((shard = g_dir_read_name (shards)) != NULL) {
+        g_autofree char *shard_dir = g_build_filename (sha256_dir, shard, NULL);
+        g_autoptr (GDir) objects = g_dir_open (shard_dir, 0, NULL);
+        const char *name = NULL;
+
+        while (objects != NULL &&
+            (name = g_dir_read_name (objects)) != NULL) {
+            if (g_str_has_suffix (name, ".eml"))
+                return g_build_filename (shard_dir, name, NULL);
+        }
+    }
+
+    g_assert_not_reached ();
+    return NULL;
+}
+
+static void
+test_wyreboxd_starts_with_missing_raw_object (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) subprocess = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autofree char *object_path = NULL;
+    g_autofree char *stderr_text = NULL;
+
+    daemon_root_init (&daemon_root);
+    journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
+    object_path = first_raw_object_path (&daemon_root);
+    g_assert_cmpint (g_remove (object_path), ==, 0);
+
+    subprocess = spawn_daemon (&daemon_root, G_SUBPROCESS_FLAGS_STDERR_PIPE);
+    g_assert_true (wait_for_socket (subprocess, daemon_root.socket_path));
+    g_subprocess_send_signal (subprocess, SIGTERM);
+    g_assert_true (g_subprocess_communicate_utf8 (subprocess, NULL, NULL, NULL,
+        &stderr_text, &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==, 0);
+    g_assert_nonnull (strstr (stderr_text,
+        "journaled deliveries with missing or corrupt raw objects: 1, first "
+        "at journal sequence 1"));
+    g_assert_nonnull (strstr (stderr_text,
+        "delivery materialization held account account-1"));
+    g_assert_false (g_file_test (object_path, G_FILE_TEST_EXISTS));
+}
+
+static void
+test_wyreboxd_exits_tempfail_on_unreadable_raw_object (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autofree char *object_path = NULL;
+
+    daemon_root_init (&daemon_root);
+    journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
+    object_path = first_raw_object_path (&daemon_root);
+    g_assert_cmpint (g_remove (object_path), ==, 0);
+    g_assert_cmpint (g_mkdir (object_path, 0700), ==, 0);
+
+    assert_daemon_startup_fails (&daemon_root, EX_TEMPFAIL,
+        "failed to read raw object");
+}
+
+static void
+test_wyreboxd_exits_dataerr_on_corrupt_journal_record (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GError) error = NULL;
+    g_autofree char *segment_path = NULL;
+    g_autofree char *contents = NULL;
+    gsize length = 0;
+
+    daemon_root_init (&daemon_root);
+    journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
+    journal_delivery_offline (&daemon_root, "delivery-2", "account-1");
+    segment_path = g_build_filename (daemon_root.journal_dir,
+            JOURNAL_SEGMENT_NAME, NULL);
+    g_assert_true (g_file_get_contents (segment_path, &contents, &length,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (length, >, 0);
+    contents[length - 1] ^= 0x01;
+    g_assert_true (g_file_set_contents (segment_path, contents, (gssize)length,
+        &error));
+    g_assert_no_error (error);
+
+    assert_daemon_startup_fails (&daemon_root, EX_DATAERR,
+        "delivery storage is invalid");
+}
+
 /*
  * Prepares the catalog offline with an unselectable account-1 INBOX that
  * WyreBox refuses to materialize into.
@@ -817,6 +914,14 @@ main (int argc, char **argv)
     g_test_add_func
         ("/daemon-api/wyreboxd/exits-tempfail-when-object-root-is-missing",
         test_wyreboxd_exits_tempfail_when_object_root_is_missing);
+    g_test_add_func ("/daemon-api/wyreboxd/starts-with-missing-raw-object",
+        test_wyreboxd_starts_with_missing_raw_object);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/exits-tempfail-on-unreadable-raw-object",
+        test_wyreboxd_exits_tempfail_on_unreadable_raw_object);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/exits-dataerr-on-corrupt-journal-record",
+        test_wyreboxd_exits_dataerr_on_corrupt_journal_record);
     g_test_add_func ("/daemon-api/wyreboxd/starts-with-held-account",
         test_wyreboxd_starts_with_held_account);
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \

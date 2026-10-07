@@ -193,6 +193,12 @@ runtime_delivery_storage_failure_category_for_replay_error
         WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_MISSING_OBJECT))
         return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_MISSING_OBJECT;
 
+    if (g_error_matches (error,
+        WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+        WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_OBJECT_UNREADABLE))
+        return
+            WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_OBJECT_UNREADABLE;
+
     return
         WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED;
 }
@@ -247,18 +253,32 @@ runtime_scan_journal_safe_prefix_for_delivery_storage
     return FALSE;
 }
 
-gboolean
-wyrebox_daemon_runtime_validate_delivery_storage_report (const char
-    *journal_root_dir, const char *object_root_dir,
+static WyreboxDaemonDeliveryStorageValidationFailureCategory
+runtime_delivery_storage_failure_category_for_object_failure
+    (WyreboxDeliveryReplayValidatorError code)
+{
+    switch (code) {
+    case WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_SIZE_MISMATCH:
+        return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_SIZE_MISMATCH;
+    case WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_HASH_MISMATCH:
+        return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_HASH_MISMATCH;
+    case WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_MISSING_OBJECT:
+    default:
+        return WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_MISSING_OBJECT;
+    }
+}
+
+static gboolean
+runtime_validate_delivery_storage_report (const char *journal_root_dir,
+    const char *object_root_dir, gboolean tolerate_object_failures,
     WyreboxDaemonDeliveryStorageValidationReport *out_report, GError **error)
 {
     g_autoptr (WyreboxJournalReader) journal_reader = NULL;
     g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
     g_autoptr (WyreboxDeliveryReplayValidator) validator = NULL;
     g_autoptr (GError) local_error = NULL;
-
-    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
-    g_return_val_if_fail (out_report != NULL, FALSE);
+    WyreboxDeliveryReplayValidatorReport validator_report = { 0 };
+    gboolean valid = FALSE;
 
     runtime_delivery_storage_report_init (out_report);
 
@@ -311,20 +331,62 @@ wyrebox_daemon_runtime_validate_delivery_storage_report (const char
     if (validator == NULL)
         return FALSE;
 
-    if (!wyrebox_delivery_replay_validator_validate_all (validator,
-        &local_error)) {
+    if (tolerate_object_failures) {
+        valid = wyrebox_delivery_replay_validator_validate_all_report (
+            validator, &validator_report, &local_error);
+    } else {
+        valid = wyrebox_delivery_replay_validator_validate_all (validator,
+                &local_error);
+    }
+
+    if (!valid) {
         out_report->failure_category =
             runtime_delivery_storage_failure_category_for_replay_error
                 (local_error);
+        if (tolerate_object_failures &&
+            g_error_matches (local_error,
+            WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+            WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_INVALID_RECORD)) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "startup delivery storage validation failed: %s",
+                local_error->message);
+            return FALSE;
+        }
         g_propagate_prefixed_error (error, g_steal_pointer (&local_error),
             "startup delivery storage validation failed: ");
         return FALSE;
+    }
+
+    if (validator_report.object_failure_count > 0) {
+        out_report->object_failure_count =
+            validator_report.object_failure_count;
+        out_report->first_object_failure_offset =
+            validator_report.first_object_failure_offset;
+        out_report->first_object_failure_sequence =
+            validator_report.first_object_failure_sequence;
+        out_report->first_object_failure_category =
+            runtime_delivery_storage_failure_category_for_object_failure
+                (validator_report.first_object_failure_code);
     }
 
     out_report->status = WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_VALID;
     out_report->failure_category =
         WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_NONE;
     return TRUE;
+}
+
+gboolean
+wyrebox_daemon_runtime_validate_delivery_storage_report (const char
+    *journal_root_dir, const char *object_root_dir,
+    WyreboxDaemonDeliveryStorageValidationReport *out_report, GError **error)
+{
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+    g_return_val_if_fail (out_report != NULL, FALSE);
+
+    return runtime_validate_delivery_storage_report (journal_root_dir,
+               object_root_dir, FALSE, out_report, error);
 }
 
 gboolean
@@ -344,9 +406,8 @@ wyrebox_daemon_runtime_recover_and_validate_delivery_storage (const char
 
     runtime_delivery_storage_report_init (out_report);
 
-    if (wyrebox_daemon_runtime_validate_delivery_storage_report (
-            journal_root_dir,
-            object_root_dir, &report, &validation_error)) {
+    if (runtime_validate_delivery_storage_report (journal_root_dir,
+        object_root_dir, TRUE, &report, &validation_error)) {
         *out_report = report;
         return TRUE;
     }
@@ -382,9 +443,8 @@ wyrebox_daemon_runtime_recover_and_validate_delivery_storage (const char
     (void)safe_end_offset;
     (void)last_safe_sequence;
 
-    if (!wyrebox_daemon_runtime_validate_delivery_storage_report
-            (journal_root_dir, object_root_dir, &report,
-        &recovered_validation_error)) {
+    if (!runtime_validate_delivery_storage_report (journal_root_dir,
+        object_root_dir, TRUE, &report, &recovered_validation_error)) {
         *out_report = report;
         g_propagate_error (error,
             g_steal_pointer (&recovered_validation_error));

@@ -202,7 +202,15 @@ run_daemon (int argc, char **argv)
             (journal_root_dir, object_root_dir, &storage_report, &error)) {
         g_printerr ("wyreboxd: delivery storage is invalid: %s\n",
             error->message);
-        return EX_DATAERR;
+        return wyrebox_daemon_exit_code_for_startup_error (error);
+    }
+
+    if (storage_report.object_failure_count > 0) {
+        g_warning ("journaled deliveries with missing or corrupt raw "
+            "objects: %" G_GUINT64_FORMAT ", first at journal sequence %"
+            G_GUINT64_FORMAT "; delivery catch-up holds the affected accounts",
+            storage_report.object_failure_count,
+            storage_report.first_object_failure_sequence);
     }
 
     journal_writer = wyrebox_journal_writer_new (journal_root_dir, &error);
