@@ -162,6 +162,15 @@ promptly.
   is `G_IO_ERROR_INVALID_DATA` (65), an unsupported DuckDB storage version is
   `G_IO_ERROR_NOT_SUPPORTED` (65), and any other message stays
   `G_IO_ERROR_FAILED` (75).
+- Delivery storage recovery and validation, which runs before catalog
+  preparation, does not stop startup for a journaled delivery whose raw
+  object is missing or does not match the journaled size or SHA-256 key.
+  `wyreboxd` logs a warning with the number of such deliveries and the first
+  journal sequence, starts, and delivery catch-up holds the accounts that
+  reference them. A raw object that exists but cannot be read, for example
+  because of a permission or I/O error, exits with `EX_TEMPFAIL` (75) at
+  startup, while at runtime it holds the account; a restart retries the whole
+  check. Corrupt journal data still exits with `EX_DATAERR` (65).
 - The shipped `wyreboxd.service` sets `RestartPreventExitStatus=65`, so
   systemd keeps restarting after transient failures but not after permanent
   ones.
@@ -185,25 +194,14 @@ A persisted per-account hold or per-account checkpoint table was rejected:
 
 ## Consequences And Known Gaps
 
-- Delivery storage validation at startup still rejects a missing or corrupt
-  raw object before catch-up runs, so one bad object still stops `wyreboxd`
-  from starting.
 - An object store that is mounted but fails reads for every object, for
   example on a failing disk, fails every object check, so catch-up holds every
   account with pending deliveries instead of stopping.
-- The delivery replay validator reports an object read error other than a
-  missing file, for example a permission or I/O error, as
-  `OBJECT_UNREADABLE`, separate from missing or corrupt objects, but startup
-  still exits with `EX_DATAERR` for it.
 - DuckDB open failures are classified by the text of DuckDB's error message
   in the pinned DuckDB release. An unrecognised message, for example a failed
   WAL replay, exits with `EX_TEMPFAIL` and systemd keeps restarting until its
   start rate limit stops it. The catalog services opened after catalog
   preparation still exit with `EX_OSERR`.
-- Delivery storage recovery and validation, which runs before catalog
-  preparation, keeps exiting with `EX_DATAERR` for every error, including
-  transient journal or object I/O errors, so systemd does not restart after
-  them.
 - The object, catalog, and storage recovery gaps above are tracked in #331.
 - `wyrebox-admin materialization-checkpoint` reports the latest
   materialization manifest, not the delivery `materialization_checkpoint`

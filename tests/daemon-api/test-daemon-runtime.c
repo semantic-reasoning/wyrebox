@@ -1,4 +1,5 @@
 #include "wyrebox-daemon-runtime.h"
+#include "wyrebox-daemon-exit-code.h"
 #include "wyrebox-daemon-fact-mutation-request.h"
 #include "wyrebox-daemon-fact-mutation-service.h"
 #include "wyrebox-daemon-mailbox-catalog-duckdb.h"
@@ -14,6 +15,7 @@
 #include <gio/gio.h>
 #include <glib.h>
 #include <glib/gstdio.h>
+#include <sysexits.h>
 #include <unistd.h>
 
 static void
@@ -1785,6 +1787,157 @@ test_runtime_open_object_store_refuses_missing_root_with_journal (void)
     remove_tree (object_root);
 }
 
+static void
+assert_tolerated_object_failure (
+    const WyreboxDaemonDeliveryStorageValidationReport *report,
+    const WyreboxEmlIngestResult *result,
+    WyreboxDaemonDeliveryStorageValidationFailureCategory category)
+{
+    g_assert_cmpint (report->status, ==,
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_VALID);
+    g_assert_cmpint (report->failure_category, ==,
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_NONE);
+    g_assert_cmpuint (report->object_failure_count, ==, 1);
+    g_assert_cmpuint (report->first_object_failure_offset, ==,
+        result->journal_offset);
+    g_assert_cmpuint (report->first_object_failure_sequence, ==,
+        result->journal_sequence);
+    g_assert_cmpint (report->first_object_failure_category, ==, category);
+}
+
+static void
+test_runtime_recover_and_validate_tolerates_missing_object (void)
+{
+    g_autofree char *journal_root =
+        g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+    g_autofree char *object_root =
+        g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+    g_auto (WyreboxEmlIngestResult) result = { 0 };
+    WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
+    g_autoptr (GError) error = NULL;
+    g_autofree char *object_path = NULL;
+
+    ingest_runtime_preflight_message (journal_root, object_root, &result);
+    object_path = object_path_for_key (object_root, result.object_key);
+    g_assert_cmpint (g_remove (object_path), ==, 0);
+
+    g_assert_true (wyrebox_daemon_runtime_recover_and_validate_delivery_storage
+            (journal_root, object_root, &report, &error));
+    g_assert_no_error (error);
+    assert_tolerated_object_failure (&report, &result,
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_MISSING_OBJECT);
+
+    remove_tree (journal_root);
+    remove_tree (object_root);
+}
+
+static void
+test_runtime_recover_and_validate_tolerates_hash_mismatch (void)
+{
+    g_autofree char *journal_root =
+        g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+    g_autofree char *object_root =
+        g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+    g_auto (WyreboxEmlIngestResult) result = { 0 };
+    WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
+    g_autoptr (GError) error = NULL;
+    g_autofree char *object_path = NULL;
+    g_autofree char *contents = NULL;
+    gsize length = 0;
+
+    ingest_runtime_preflight_message (journal_root, object_root, &result);
+    object_path = object_path_for_key (object_root, result.object_key);
+    g_assert_true (g_file_get_contents (object_path, &contents, &length,
+        &error));
+    g_assert_no_error (error);
+    contents[0] ^= 0x01;
+    g_assert_true (g_file_set_contents (object_path, contents, (gssize)length,
+        &error));
+    g_assert_no_error (error);
+
+    g_assert_true (wyrebox_daemon_runtime_recover_and_validate_delivery_storage
+            (journal_root, object_root, &report, &error));
+    g_assert_no_error (error);
+    assert_tolerated_object_failure (&report, &result,
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_HASH_MISMATCH);
+
+    remove_tree (journal_root);
+    remove_tree (object_root);
+}
+
+static void
+test_runtime_recover_and_validate_tolerates_missing_object_with_torn_suffix
+    (void)
+{
+    g_autofree char *journal_root =
+        g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+    g_autofree char *object_root =
+        g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+    g_autofree char *segment_path = NULL;
+    g_autofree char *object_path = NULL;
+    g_autofree gchar *contents = NULL;
+    gsize length = 0;
+    g_auto (WyreboxEmlIngestResult) result = { 0 };
+    WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
+    g_autoptr (GError) error = NULL;
+    guint64 offset = 0;
+    guint64 sequence = 0;
+
+    ingest_runtime_preflight_message (journal_root, object_root, &result);
+    append_runtime_journal_record (journal_root, &offset, &sequence);
+    object_path = object_path_for_key (object_root, result.object_key);
+    g_assert_cmpint (g_remove (object_path), ==, 0);
+    segment_path = journal_segment_path (journal_root);
+    g_assert_true (g_file_get_contents (segment_path, &contents, &length,
+        &error));
+    g_assert_no_error (error);
+    g_assert_true (g_file_set_contents (segment_path, contents, length - 1,
+        &error));
+    g_assert_no_error (error);
+
+    g_assert_true (wyrebox_daemon_runtime_recover_and_validate_delivery_storage
+            (journal_root, object_root, &report, &error));
+    g_assert_no_error (error);
+    assert_tolerated_object_failure (&report, &result,
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_MISSING_OBJECT);
+    g_assert_cmpuint (report.last_safe_sequence, ==, result.journal_sequence);
+
+    remove_tree (journal_root);
+    remove_tree (object_root);
+}
+
+static void
+test_runtime_recover_and_validate_rejects_unreadable_object (void)
+{
+    g_autofree char *journal_root =
+        g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
+    g_autofree char *object_root =
+        g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
+    g_auto (WyreboxEmlIngestResult) result = { 0 };
+    WyreboxDaemonDeliveryStorageValidationReport report = { 0 };
+    g_autoptr (GError) error = NULL;
+    g_autofree char *object_path = NULL;
+
+    ingest_runtime_preflight_message (journal_root, object_root, &result);
+    object_path = object_path_for_key (object_root, result.object_key);
+    g_assert_cmpint (g_remove (object_path), ==, 0);
+    g_assert_cmpint (g_mkdir (object_path, 0700), ==, 0);
+
+    g_assert_false (wyrebox_daemon_runtime_recover_and_validate_delivery_storage
+            (journal_root, object_root, &report, &error));
+    g_assert_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+        WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_OBJECT_UNREADABLE);
+    g_assert_cmpint (report.status, ==,
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_INVALID);
+    g_assert_cmpint (report.failure_category, ==,
+        WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_OBJECT_UNREADABLE);
+    g_assert_cmpint (wyrebox_daemon_exit_code_for_startup_error (error), ==,
+        EX_TEMPFAIL);
+
+    remove_tree (journal_root);
+    remove_tree (object_root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1895,6 +2048,18 @@ main (int argc, char **argv)
     g_test_add_func ("/daemon-api/runtime/open-object-store/"
         "refuses-missing-root-with-journal",
         test_runtime_open_object_store_refuses_missing_root_with_journal);
+    g_test_add_func ("/daemon-api/runtime/recover-and-validate/"
+        "tolerates-missing-object",
+        test_runtime_recover_and_validate_tolerates_missing_object);
+    g_test_add_func ("/daemon-api/runtime/recover-and-validate/"
+        "tolerates-hash-mismatch",
+        test_runtime_recover_and_validate_tolerates_hash_mismatch);
+    g_test_add_func ("/daemon-api/runtime/recover-and-validate/"
+        "tolerates-missing-object-with-torn-suffix",
+        test_runtime_recover_and_validate_tolerates_missing_object_with_torn_suffix);
+    g_test_add_func ("/daemon-api/runtime/recover-and-validate/"
+        "rejects-unreadable-object",
+        test_runtime_recover_and_validate_rejects_unreadable_object);
     g_test_add_func ("/daemon-api/runtime/catch-up-configured-wirelog-views",
         test_runtime_catch_up_configured_wirelog_views_for_catalog_accounts);
     g_test_add_func

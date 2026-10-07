@@ -97,6 +97,35 @@ def main() -> None:
     assert_section_matches(runtime, runbook,
         r"`EX_TEMPFAIL` \(75\) means.*object store that is not mounted")
 
+    assert_section_matches(adr, decision,
+        r"does not stop startup for a journaled delivery whose raw object is "
+        r"missing or does not match")
+    assert_section_matches(adr, decision,
+        r"cannot be read, for example because of a permission or I/O error, "
+        r"exits with `EX_TEMPFAIL` \(75\) at startup")
+    assert_section_lacks(adr, gaps,
+        r"Delivery storage validation at startup still rejects")
+    assert_section_lacks(adr, gaps, r"still exits with `EX_DATAERR` for it")
+    assert_section_lacks(adr, gaps,
+        r"keeps exiting with `EX_DATAERR` for every error")
+    assert_section_matches(runtime, runbook,
+        r"`journaled deliveries with missing or corrupt raw objects: <n>, "
+        r"first at journal sequence <sequence>")
+    assert_section_matches(runtime, runbook,
+        r"`EX_TEMPFAIL` \(75\) means.*`failed to read raw object`")
+    assert_section_lacks(runtime, runbook,
+        r"transient object read errors exiting with 65")
+
+    runtime_source = (REPO_ROOT / "wyrebox" / "daemon" /
+                      "wyreboxd-main.c").read_text(encoding="utf-8")
+    for literal in [
+        '"journaled deliveries with missing or corrupt raw "',
+        '", first at journal sequence %"',
+    ]:
+        assert literal in runtime_source, (
+            f"startup object warning drifted: {literal}"
+        )
+
     shared_source = (REPO_ROOT / "wyrebox" / "duckdb" /
                      "wyrebox-duckdb-shared.c").read_text(encoding="utf-8")
     for literal in [

@@ -69,7 +69,18 @@ typedef enum {
   WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_SIZE_MISMATCH,
   WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_HASH_MISMATCH,
   WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_REPLAY_VALIDATION_FAILED,
+  WYREBOX_DAEMON_DELIVERY_STORAGE_VALIDATION_FAILURE_OBJECT_UNREADABLE,
 } WyreboxDaemonDeliveryStorageValidationFailureCategory;
+
+/*
+ * @object_failure_count: journaled deliveries whose raw object is missing or
+ *   does not match the journaled size or SHA-256 key. Only
+ *   wyrebox_daemon_runtime_recover_and_validate_delivery_storage() tolerates
+ *   them; it is always 0 otherwise.
+ * @first_object_failure_offset, @first_object_failure_sequence,
+ * @first_object_failure_category: the first such delivery; read them only
+ *   when @object_failure_count is not 0.
+ */
 
 typedef struct {
   WyreboxDaemonDeliveryStorageValidationStatus status;
@@ -79,12 +90,19 @@ typedef struct {
   guint64 last_safe_sequence;
   gboolean has_unsafe_offset;
   guint64 unsafe_offset;
+  guint64 object_failure_count;
+  guint64 first_object_failure_offset;
+  guint64 first_object_failure_sequence;
+  WyreboxDaemonDeliveryStorageValidationFailureCategory
+      first_object_failure_category;
 } WyreboxDaemonDeliveryStorageValidationReport;
 
 /*
  * Produces a structured, read-only report for the delivery journal and
  * immutable raw object store. The report is filled on both valid and invalid
- * storage outcomes. Returns TRUE only when storage is valid.
+ * storage outcomes. Returns TRUE only when storage is valid. Any missing or
+ * corrupt raw object fails validation; a raw object that exists but cannot be
+ * read is reported with the OBJECT_UNREADABLE category.
  */
 gboolean wyrebox_daemon_runtime_validate_delivery_storage_report (
     const char *journal_root_dir,
@@ -131,6 +149,14 @@ gboolean wyrebox_daemon_runtime_validate_delivery_storage (
  * Attempts torn journal suffix recovery, then re-validates delivery storage.
  * Recovery only applies to a recoverable torn journal suffix; checksum,
  * object-store, and other corruption failures are reported without mutation.
+ *
+ * Unlike wyrebox_daemon_runtime_validate_delivery_storage_report(), a raw
+ * object that is missing or does not match the journaled size or SHA-256 key
+ * does not fail validation: it is counted in @out_report, and delivery
+ * catch-up holds the accounts that reference it. Any other failure fails:
+ * corrupt journal data, including a payload with an invalid object key, with
+ * G_IO_ERROR_INVALID_DATA, and an object read error other than a missing file
+ * with WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_OBJECT_UNREADABLE.
  */
 gboolean wyrebox_daemon_runtime_recover_and_validate_delivery_storage (
     const char *journal_root_dir,

@@ -147,6 +147,11 @@ Symptoms and log lines:
 - During shutdown the suffix is `service stopped, no retry scheduled`.
 - When a later pass succeeds, `wyreboxd` logs
   `delivery materialization recovered`.
+- When journaled deliveries reference raw objects that are missing or do not
+  match the journaled size or SHA-256 key, startup logs `journaled deliveries
+  with missing or corrupt raw objects: <n>, first at journal sequence
+  <sequence>; delivery catch-up holds the affected accounts` and continues;
+  the hold warnings name the accounts and objects.
 - A startup failure is printed to stderr as
   `wyreboxd: delivery materialization failed: <error>` or
   `wyreboxd: catalog preparation failed: <error>`, without a retry suffix, and
@@ -212,16 +217,17 @@ Startup exit codes:
   `checkpoint precondition not satisfied` or an invalid catalog file, restore
   the catalog from backup or rebuild it as described under Recovery.
 - `EX_TEMPFAIL` (75) means a failure that may clear by itself, such as another
-  process holding the catalog open, an I/O error, or an object store that is
-  not mounted (`check that the object store is mounted`). systemd restarts
+  process holding the catalog open, an I/O error, a raw object that exists
+  but cannot be read (`failed to read raw object`), or an object store that
+  is not mounted (`check that the object store is mounted`). systemd restarts
   `wyreboxd` within its start rate limit. If restarts keep failing, look for
   processes holding the catalog, check that the object store is mounted at
   `object_root_dir`, and check disk space and permissions.
 - `EX_OSERR` (71) means `wyreboxd` could not open its object store, journal,
   catalog services, or socket, and `EX_CONFIG` (78) means the configuration is
   invalid. systemd restarts after both, within its start rate limit.
-- The ADR lists the known misclassifications, for example transient object
-  read errors exiting with 65.
+- The ADR lists the known misclassifications, for example DuckDB open
+  failures with an unrecognised message exiting with 75.
 
 ## Permission Mismatch Behavior
 
