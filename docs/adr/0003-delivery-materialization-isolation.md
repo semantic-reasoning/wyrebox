@@ -39,6 +39,14 @@ A catch-up pass holds an account instead of stopping:
   rest of the pass. The run's transaction is rolled back, and every later run
   of that account in the pass is skipped, so a held account never receives
   records out of journal order.
+- Before a run is applied, the raw object of each of its records is read and
+  checked against the journaled size and SHA-256 key. A missing, truncated,
+  or tampered object holds the account at the run's first record with
+  `G_IO_ERROR_INVALID_DATA`. Any other object read error, such as a
+  permission or I/O error, also holds the account, keeping the object store's
+  error, so a transient object problem in one account never stops the others
+  and clears on a later pass. Raw objects are deduplicated by content, so one
+  bad object holds every account that references it.
 - DuckDB constraint violations raised while writing a run's account-owned rows
   are reported as `G_IO_ERROR_INVALID_DATA`, because they are deterministic for
   that account. Checkpoint writes are not classified this way.
@@ -46,8 +54,8 @@ A catch-up pass holds an account instead of stopping:
   failure) aborts the whole pass. These failures are global and would affect
   every later account too.
 - Failures before any run is applied still abort the pass: metadata load,
-  unsafe journal suffix, checkpoint seek, projection replay (including a
-  missing or corrupt raw object), and a record without an account identity.
+  unsafe journal suffix, checkpoint seek, journal record replay, and a record
+  without an account identity.
 
 Holds are not persisted. Every pass re-derives them from the journal and the
 catalog, so a fixed INBOX recovers automatically on the next pass, and a
@@ -167,10 +175,15 @@ A persisted per-account hold or per-account checkpoint table was rejected:
 
 ## Consequences And Known Gaps
 
-- A missing or corrupt raw object for one delivery still stops every pass,
-  because object validation runs before records are grouped by account.
-- Object-store read errors are reported as invalid data, so a transient
-  object read failure at startup exits with `EX_DATAERR`.
+- Delivery storage validation at startup still rejects a missing or corrupt
+  raw object before catch-up runs, so one bad object still stops `wyreboxd`
+  from starting.
+- An object store that is unmounted or unreadable as a whole fails every
+  object check, so catch-up holds every account with pending deliveries
+  instead of stopping.
+- Startup storage validation reports object-store read errors as invalid
+  data, so a transient object read failure at startup exits with
+  `EX_DATAERR`.
 - DuckDB open failures are classified by the text of DuckDB's error message
   in the pinned DuckDB release. An unrecognised message, for example a failed
   WAL replay, exits with `EX_TEMPFAIL` and systemd keeps restarting until its

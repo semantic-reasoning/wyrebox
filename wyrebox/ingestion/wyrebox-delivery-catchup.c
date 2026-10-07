@@ -129,7 +129,21 @@ replay_deliveries_after (WyreboxSchemaMetadataStore *metadata_store,
     if (projection == NULL)
         return FALSE;
 
-    return wyrebox_delivery_projection_replay_all (projection, out_list, error);
+    return wyrebox_delivery_projection_replay_records (projection, out_list,
+               error);
+}
+
+static gboolean
+check_record_objects (WyreboxLocalObjectStore *object_store,
+    const GPtrArray *records, GError **error)
+{
+    for (guint i = 0; i < records->len; i++) {
+        if (!wyrebox_delivery_projection_check_record_object (object_store,
+            g_ptr_array_index (records, i), error))
+            return FALSE;
+    }
+
+    return TRUE;
 }
 
 gboolean
@@ -152,7 +166,8 @@ wyrebox_delivery_catchup_materialize_inbox (WyreboxSchemaMetadataStore
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
     if (!replay_deliveries_after (metadata_store, journal_reader,
-        object_store, NULL, &list, &from_checkpoint, error))
+        object_store, NULL, &list, &from_checkpoint, error) ||
+        !check_record_objects (object_store, list.records, error))
         return FALSE;
 
     return wyrebox_delivery_materializer_apply_to_mailbox (materializer,
@@ -316,6 +331,11 @@ wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
 
         if (is_account_held (holds, first->account_identity))
             continue;
+
+        if (!check_record_objects (object_store, run.records, &run_error)) {
+            add_hold (holds, first, g_steal_pointer (&run_error));
+            continue;
+        }
 
         if (wyrebox_delivery_materializer_apply_to_inbox_full (materializer,
             first->account_identity, &run,

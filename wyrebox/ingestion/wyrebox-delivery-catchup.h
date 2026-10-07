@@ -19,8 +19,8 @@ G_BEGIN_DECLS
  *   materialization checkpoint.
  * @journal_reader: (transfer none): reader positioned at the beginning of the
  *   journal; this function advances it through replay.
- * @object_store: (transfer none): object store used by projection replay to
- *   verify immutable raw message objects.
+ * @object_store: (transfer none): object store used to verify immutable raw
+ *   message objects; any raw object failure fails the replay.
  * @materializer: (transfer none): delivery materializer receiving the INBOX
  *   projection.
  * @account_id: account owning the fixed INBOX mailbox.
@@ -39,7 +39,8 @@ gboolean wyrebox_delivery_catchup_materialize_inbox (
  * @account_id: (owned): the held account.
  * @journal_offset, @journal_sequence: the first record of the account that was
  *   not materialized in the pass; later records of the account were skipped.
- * @error: (owned): the G_IO_ERROR_INVALID_DATA error that held the account.
+ * @error: (owned): the error that held the account: G_IO_ERROR_INVALID_DATA,
+ *   or the object store's error when a raw object could not be read.
  */
 typedef struct
 {
@@ -99,15 +100,20 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDeliveryCatchupReport,
  * wyrebox_delivery_materializer_apply_to_inbox_full().
  *
  * Consecutive records for the same account are applied in one materializer
- * transaction, in journal order. A run that fails with
- * G_IO_ERROR_INVALID_DATA holds its account: the run is rolled back, later
- * runs of that account are skipped, and the hold is added to @out_report.
- * Other accounts keep materializing. The checkpoint only advances over runs
- * committed before the first hold, so it never leads an unapplied record.
+ * transaction, in journal order. Before a run is applied, the raw object of
+ * each of its records is checked with
+ * wyrebox_delivery_projection_check_record_object(). A run whose raw object
+ * check fails for any reason, or whose apply fails with
+ * G_IO_ERROR_INVALID_DATA, holds its account: nothing of the run is applied,
+ * later runs of that account are skipped, and the hold is added to
+ * @out_report. Other accounts keep materializing. Records sharing a
+ * deduplicated raw object hold every account that references it. The
+ * checkpoint only advances over runs committed before the first hold, so it
+ * never leads an unapplied record.
  *
  * Returns TRUE when the pass completed, with or without holds. Returns FALSE
- * with @error set when the pass was aborted: on a metadata, journal, or
- * projection failure, when a pending record has no account identity
+ * with @error set when the pass was aborted: on a metadata or journal
+ * failure, when a pending record has no account identity
  * (G_IO_ERROR_INVALID_DATA, before anything is materialized), or when
  * applying a run fails with an error other than G_IO_ERROR_INVALID_DATA.
  *
