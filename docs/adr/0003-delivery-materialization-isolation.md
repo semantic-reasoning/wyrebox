@@ -2,8 +2,10 @@
 
 ## Status
 
-Accepted for issue #317. `.internal-docs/` is not part of the repository, so
-this ADR together with the referenced contract sections is the decision record.
+Accepted for issue #317. Amended by issue #331 (object, catalog, and storage
+recovery error classification). `.internal-docs/` is not part of the
+repository, so this ADR together with the referenced contract sections is the
+decision record.
 
 ## Context
 
@@ -125,9 +127,16 @@ promptly.
 - A startup catch-up abort or a catalog preparation failure is fatal:
   - `G_IO_ERROR_INVALID_DATA` and `G_IO_ERROR_NOT_SUPPORTED` exit with
     `EX_DATAERR` (65). These are permanent: corrupt or account-less journal
-    data, an unsafe journal suffix, or a catalog schema newer than supported.
+    data, an unsafe journal suffix, a catalog schema newer than supported, or
+    a catalog migration that needs an offline checkpoint.
   - Every other error exits with `EX_TEMPFAIL` (75), for example a locked
     DuckDB file or an I/O error.
+- `wyreboxd` never runs checkpoint-requiring catalog migration steps itself,
+  so a catalog migration step whose checkpoint precondition is not met fails
+  with `G_IO_ERROR_NOT_SUPPORTED` and exits with 65. Callers that assert the
+  precondition without materialization checkpoint metadata get
+  `G_IO_ERROR_INVALID_DATA`. No shipped command runs these steps; rebuilding
+  the catalog from the journal is the supported recovery.
 - The shipped `wyreboxd.service` sets `RestartPreventExitStatus=65`, so
   systemd keeps restarting after transient failures but not after permanent
   ones.
@@ -155,8 +164,6 @@ A persisted per-account hold or per-account checkpoint table was rejected:
   because object validation runs before records are grouped by account.
 - Object-store read errors are reported as invalid data, so a transient
   object read failure at startup exits with `EX_DATAERR`.
-- Catalog migration precondition failures use `G_IO_ERROR_FAILED` and exit
-  with `EX_TEMPFAIL` although retrying does not fix them.
 - DuckDB open failures are not split into lock conflicts and corrupt or
   incompatible catalog files, so a corrupt catalog also exits with
   `EX_TEMPFAIL` and systemd keeps restarting until its start rate limit stops

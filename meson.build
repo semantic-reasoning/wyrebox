@@ -711,6 +711,12 @@ test(
 )
 
 test(
+  'docs issue 0331 object error classification',
+  python,
+  args: files('tests/docs/test_issue_0331_object_error_classification.py'),
+)
+
+test(
   'docs issue 0326 ci capnp configurations',
   python,
   args: files('tests/docs/test_issue_0326_ci_capnp_configurations.py'),

@@ -1082,7 +1082,7 @@ test_schema_migration_run_store_to_current_legacy_without_checkpoint_fails
     g_clear_error (&error);
     g_assert_false (wyrebox_schema_migration_run_store_to_current (migration,
         store, FALSE, &error));
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
 
     g_clear_error (&error);
     g_assert_true (wyrebox_schema_metadata_store_load (store, &loaded, &error));
@@ -1955,7 +1955,7 @@ test_schema_migration_duckdb_run_store_v5_without_checkpoint_preserves_state
     g_assert_nonnull (store);
     g_assert_false (wyrebox_schema_migration_run_store_to_current (migration,
         store, TRUE, &error));
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
     g_clear_error (&error);
     g_clear_object (&store);
 
@@ -2546,7 +2546,7 @@ test_schema_migration_duckdb_run_store_legacy_without_checkpoint_preserves_state
 
     g_assert_false (wyrebox_schema_migration_run_store_to_current (migration,
         store, FALSE, &error));
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
     g_clear_object (&store);
     g_clear_error (&error);
 
@@ -2634,7 +2634,7 @@ test_checkpoint_precondition_missing_blocks_legacy_migration (void)
 
     g_assert_false (wyrebox_schema_migration_evaluate_to_current (migration,
         &metadata, &error));
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
     g_assert_cmpuint (metadata.schema_version, ==, 0);
     g_assert_cmpuint (fixture_data.operation_call_count, ==, 0);
     g_assert_cmpuint (fixture_data.validation_call_count, ==, 0);
@@ -2662,7 +2662,7 @@ test_materialization_checkpoint_missing_blocks_checkpointed_migration (void)
 
     g_assert_false (wyrebox_schema_migration_evaluate_to_current (migration,
         &metadata, &error));
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
     g_assert_true (metadata.schema_version_present);
     g_assert_cmpuint (metadata.schema_version, ==, 0);
     g_assert_true (metadata.checkpoint_precondition_satisfied);
@@ -2909,7 +2909,7 @@ test_destructive_forward_path_without_checkpoint_precondition_fails (void)
 
     g_assert_false (wyrebox_schema_migration_evaluate_to_current (migration,
         &metadata, &error));
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
     g_assert_true (metadata.schema_version_present);
     g_assert_cmpuint (metadata.schema_version, ==, 4);
     g_assert_false (metadata.checkpoint_precondition_satisfied);
@@ -2939,7 +2939,7 @@ test_destructive_forward_path_without_materialization_checkpoint_fails (void)
 
     g_assert_false (wyrebox_schema_migration_evaluate_to_current (migration,
         &metadata, &error));
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
     g_assert_true (metadata.schema_version_present);
     g_assert_cmpuint (metadata.schema_version, ==, 4);
     g_assert_true (metadata.checkpoint_precondition_satisfied);
@@ -2978,7 +2978,7 @@ test_schema_migration_run_store_to_current_destructive_without_materialization_c
     g_clear_error (&error);
     g_assert_false (wyrebox_schema_migration_run_store_to_current (migration,
         (WyreboxSchemaMetadataStore *)spy, TRUE, &error));
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
     g_assert_false (spy->save_called);
     g_assert_cmpuint (spy->save_call_count, ==, 0);
     g_assert_cmpuint (spy->migration_operation_call_count, ==, 0);
@@ -3024,7 +3024,7 @@ test_schema_migration_run_store_to_current_legacy_without_materialization_checkp
     g_clear_error (&error);
     g_assert_false (wyrebox_schema_migration_run_store_to_current (migration,
         (WyreboxSchemaMetadataStore *)spy, TRUE, &error));
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
     g_assert_false (spy->save_called);
     g_assert_cmpuint (spy->save_call_count, ==, 0);
 

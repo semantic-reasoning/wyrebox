@@ -1354,7 +1354,7 @@ test_runtime_prepare_catalog_rejects_legacy_without_checkpoint (void)
 
     g_assert_false (wyrebox_daemon_runtime_prepare_catalog (journal_root,
         catalog_path, FALSE, &error));
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
     g_assert_nonnull (strstr (error->message, "checkpoint precondition"));
 
     load_catalog_schema_state (catalog_path, &loaded);
