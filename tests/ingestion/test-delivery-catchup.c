@@ -1813,6 +1813,40 @@ test_account_catchup_without_report_fails_on_missing_object (
 }
 
 static void
+test_account_catchup_missing_object_root_aborts_pass (InterleavedFixture
+    *fixture, gconstpointer user_data)
+{
+    g_auto (WyreboxDeliveryCatchupReport) report = { 0 };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxSchemaMetadataStore) metadata_store = NULL;
+    g_autoptr (WyreboxJournalReader) reader = NULL;
+    g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+    g_autofree gchar *objects_dir = g_build_filename (fixture->object_root,
+            "objects", "sha256", NULL);
+
+    metadata_store = wyrebox_schema_metadata_store_new_duckdb (
+        fixture->catalog_path, &error);
+    g_assert_no_error (error);
+    reader = wyrebox_journal_reader_new (fixture->journal_root, &error);
+    g_assert_no_error (error);
+    materializer = wyrebox_delivery_materializer_new_duckdb (
+        fixture->catalog_path, &error);
+    g_assert_no_error (error);
+    remove_tree (objects_dir);
+
+    g_assert_false (
+        wyrebox_delivery_catchup_materialize_account_inboxes_isolated (
+            metadata_store, reader, fixture->object_store, materializer,
+            &report, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+    g_clear_object (&materializer);
+    g_clear_object (&metadata_store);
+    g_assert_null (report.holds);
+    g_assert_false (g_file_test (objects_dir, G_FILE_TEST_EXISTS));
+    assert_unmaterialized_state (fixture->catalog_path);
+}
+
+static void
 test_account_catchup_shared_missing_object_holds_both_accounts (void)
 {
     g_autofree gchar *object_root =
@@ -2058,6 +2092,8 @@ main (int argc, char **argv)
         test_account_catchup_resume_holds_new_missing_object);
     ADD_OBJECT_TEST ("legacy-fails-on-missing-object",
         test_account_catchup_without_report_fails_on_missing_object);
+    ADD_OBJECT_TEST ("missing-root-aborts-pass",
+        test_account_catchup_missing_object_root_aborts_pass);
     g_test_add_func ("/ingestion/delivery-catchup/accounts/objects/"
         "shared-missing-holds-both-accounts",
         test_account_catchup_shared_missing_object_holds_both_accounts);

@@ -212,9 +212,11 @@ Startup exit codes:
   `checkpoint precondition not satisfied` or an invalid catalog file, restore
   the catalog from backup or rebuild it as described under Recovery.
 - `EX_TEMPFAIL` (75) means a failure that may clear by itself, such as another
-  process holding the catalog open or an I/O error. systemd restarts
+  process holding the catalog open, an I/O error, or an object store that is
+  not mounted (`check that the object store is mounted`). systemd restarts
   `wyreboxd` within its start rate limit. If restarts keep failing, look for
-  processes holding the catalog and check disk space and permissions.
+  processes holding the catalog, check that the object store is mounted at
+  `object_root_dir`, and check disk space and permissions.
 - `EX_OSERR` (71) means `wyreboxd` could not open its object store, journal,
   catalog services, or socket, and `EX_CONFIG` (78) means the configuration is
   invalid. systemd restarts after both, within its start rate limit.

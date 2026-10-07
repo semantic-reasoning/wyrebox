@@ -568,6 +568,24 @@ test_wyreboxd_exits_dataerr_when_catalog_migration_needs_checkpoint (void)
         "checkpoint precondition not satisfied");
 }
 
+static void
+test_wyreboxd_exits_tempfail_when_object_root_is_missing (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autofree char *sha256_dir = NULL;
+    g_autofree char *objects_dir = NULL;
+
+    daemon_root_init (&daemon_root);
+    journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
+    objects_dir = g_build_filename (daemon_root.object_dir, "objects", NULL);
+    sha256_dir = g_build_filename (objects_dir, "sha256", NULL);
+    remove_tree (objects_dir);
+
+    assert_daemon_startup_fails (&daemon_root, EX_TEMPFAIL,
+        "check that the object store is mounted");
+    g_assert_false (g_file_test (sha256_dir, G_FILE_TEST_EXISTS));
+}
+
 /*
  * Prepares the catalog offline with an unselectable account-1 INBOX that
  * WyreBox refuses to materialize into.
@@ -796,6 +814,9 @@ main (int argc, char **argv)
     (
         "/daemon-api/wyreboxd/exits-dataerr-when-catalog-migration-needs-checkpoint",
         test_wyreboxd_exits_dataerr_when_catalog_migration_needs_checkpoint);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/exits-tempfail-when-object-root-is-missing",
+        test_wyreboxd_exits_tempfail_when_object_root_is_missing);
     g_test_add_func ("/daemon-api/wyreboxd/starts-with-held-account",
         test_wyreboxd_starts_with_held_account);
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \

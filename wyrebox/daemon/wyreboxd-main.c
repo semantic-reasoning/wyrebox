@@ -190,10 +190,12 @@ run_daemon (int argc, char **argv)
     journal_root_dir = wyrebox_daemon_config_get_journal_root_dir (config);
     object_root_dir = wyrebox_daemon_config_get_object_root_dir (config);
 
-    object_store = wyrebox_local_object_store_new (object_root_dir, &error);
+    object_store = wyrebox_daemon_runtime_open_object_store (object_root_dir,
+            journal_root_dir, &error);
     if (object_store == NULL) {
         g_printerr ("wyreboxd: %s\n", error->message);
-        return EX_OSERR;
+        return g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND) ?
+               EX_TEMPFAIL : EX_OSERR;
     }
 
     if (!wyrebox_daemon_runtime_recover_and_validate_delivery_storage

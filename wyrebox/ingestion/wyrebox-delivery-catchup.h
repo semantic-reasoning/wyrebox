@@ -113,7 +113,9 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDeliveryCatchupReport,
  *
  * Returns TRUE when the pass completed, with or without holds. Returns FALSE
  * with @error set when the pass was aborted: on a metadata or journal
- * failure, when a pending record has no account identity
+ * failure, when records are pending but the object store root fails
+ * wyrebox_local_object_store_check_root(), for example because the object
+ * store is not mounted, when a pending record has no account identity
  * (G_IO_ERROR_INVALID_DATA, before anything is materialized), or when
  * applying a run fails with an error other than G_IO_ERROR_INVALID_DATA.
  *
