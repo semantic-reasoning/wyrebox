@@ -151,7 +151,9 @@ Symptoms and log lines:
   match the journaled size or SHA-256 key, startup logs `journaled deliveries
   with missing or corrupt raw objects: <n>, first at journal sequence
   <sequence>; delivery catch-up holds the affected accounts` and continues;
-  the hold warnings name the accounts and objects.
+  the hold warnings name the accounts and objects. Deliveries that were
+  materialized before the checkpoint are not held and are reported only by
+  this warning; restore their objects the same way.
 - A startup failure is printed to stderr as
   `wyreboxd: delivery materialization failed: <error>` or
   `wyreboxd: catalog preparation failed: <error>`, without a retry suffix, and
@@ -222,7 +224,8 @@ Startup exit codes:
   is not mounted (`check that the object store is mounted`). systemd restarts
   `wyreboxd` within its start rate limit. If restarts keep failing, look for
   processes holding the catalog, check that the object store is mounted at
-  `object_root_dir`, and check disk space and permissions.
+  `object_root_dir`, and check disk space and permissions. For `failed to
+  read raw object`, fix the permissions or the disk for the named object.
 - `EX_OSERR` (71) means `wyreboxd` could not open its object store, journal,
   catalog services, or socket, and `EX_CONFIG` (78) means the configuration is
   invalid. systemd restarts after both, within its start rate limit.

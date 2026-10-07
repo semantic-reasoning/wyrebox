@@ -116,6 +116,23 @@ def main() -> None:
     assert_section_lacks(runtime, runbook,
         r"transient object read errors exiting with 65")
 
+    assert_section_lacks(adr, gaps, r"tracked in #331")
+    assert_section_matches(adr, gaps,
+        r"already materialized and later lost its raw object is reported only "
+        r"by the startup warning")
+    assert_section_matches(adr, gaps,
+        r"permanently lost keeps every account that references it held until "
+        r"the object is restored.*\(#338\)")
+    assert_section_matches(adr, gaps,
+        r"cannot be read stops startup with `EX_TEMPFAIL`.*\(#339\)")
+    assert_section_matches(adr, gaps,
+        r"same unmounted volume.*\(#337\)")
+    assert_section_matches(runtime, runbook,
+        r"materialized before the checkpoint are not held and are reported "
+        r"only by this warning")
+    assert_section_matches(runtime, runbook,
+        r"For `failed to read raw object`, fix the permissions or the disk")
+
     runtime_source = (REPO_ROOT / "wyrebox" / "daemon" /
                       "wyreboxd-main.c").read_text(encoding="utf-8")
     for literal in [

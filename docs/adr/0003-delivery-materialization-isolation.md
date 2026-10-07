@@ -197,12 +197,25 @@ A persisted per-account hold or per-account checkpoint table was rejected:
 - An object store that is mounted but fails reads for every object, for
   example on a failing disk, fails every object check, so catch-up holds every
   account with pending deliveries instead of stopping.
+- Only deliveries after the materialization checkpoint are held. A delivery
+  that was already materialized and later lost its raw object is reported only
+  by the startup warning, and fetching that message fails.
+- A raw object that is permanently lost keeps every account that references
+  it held until the object is restored. There is no supported way to skip the
+  delivery, and later deliveries for those accounts are not materialized
+  (#338).
+- An object that exists but cannot be read stops startup with `EX_TEMPFAIL`,
+  so systemd restarts `wyreboxd` until its start rate limit stops it, while
+  the same object at runtime only holds its accounts (#339).
+- Startup treats a missing object store root as a new installation when the
+  journal has no complete record. A journal and object store on the same
+  unmounted volume, or a torn first journal record with an unmounted object
+  store, therefore create a new, empty root in the mount point (#337).
 - DuckDB open failures are classified by the text of DuckDB's error message
   in the pinned DuckDB release. An unrecognised message, for example a failed
   WAL replay, exits with `EX_TEMPFAIL` and systemd keeps restarting until its
   start rate limit stops it. The catalog services opened after catalog
   preparation still exit with `EX_OSERR`.
-- The object, catalog, and storage recovery gaps above are tracked in #331.
 - `wyrebox-admin materialization-checkpoint` reports the latest
   materialization manifest, not the delivery `materialization_checkpoint`
   row, and cannot open the catalog while `wyreboxd` runs (#332).
