@@ -88,6 +88,15 @@ def main() -> None:
         r"raw object that is missing, unreadable, or does not match the "
         r"journaled size or SHA-256 key")
 
+    assert_section_matches(adr, decision,
+        r"missing root with journal records exits with `EX_TEMPFAIL` \(75\) "
+        r"and creates nothing")
+    assert_section_matches(adr, decision,
+        r"A missing root therefore stops every account and retries")
+    assert_section_lacks(adr, gaps, r"unmounted or unreadable as a whole")
+    assert_section_matches(runtime, runbook,
+        r"`EX_TEMPFAIL` \(75\) means.*object store that is not mounted")
+
     shared_source = (REPO_ROOT / "wyrebox" / "duckdb" /
                      "wyrebox-duckdb-shared.c").read_text(encoding="utf-8")
     for literal in [

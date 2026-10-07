@@ -306,6 +306,39 @@ wyrebox_local_object_store_open_existing (const char *root_dir, GError **error)
 }
 
 gboolean
+wyrebox_local_object_store_check_root (WyreboxLocalObjectStore *self,
+    GError **error)
+{
+    g_autofree char *objects_dir = NULL;
+
+    g_return_val_if_fail (WYREBOX_IS_LOCAL_OBJECT_STORE (self), FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    objects_dir = g_build_filename (self->root_dir, "objects", "sha256", NULL);
+    if (!g_file_test (objects_dir, G_FILE_TEST_IS_DIR)) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_NOT_FOUND,
+            "object store root %s is missing or not a directory",
+            objects_dir);
+        return FALSE;
+    }
+
+    if (access (objects_dir, R_OK | X_OK) != 0) {
+        int saved_errno = errno;
+
+        g_set_error (error,
+            G_IO_ERROR,
+            g_io_error_from_errno (saved_errno),
+            "object store root %s is not accessible: %s",
+            objects_dir, g_strerror (saved_errno));
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+gboolean
 wyrebox_local_object_store_put_bytes (WyreboxLocalObjectStore *self,
     GBytes *bytes, char **out_object_key, GError **error)
 {
@@ -336,11 +369,24 @@ wyrebox_local_object_store_put_bytes (WyreboxLocalObjectStore *self,
     parent_dir = g_path_get_dirname (path);
     hash_root_dir = g_path_get_dirname (parent_dir);
 
-    if (g_mkdir_with_parents (parent_dir, 0700) != 0) {
+    {
+        g_autoptr (GError) root_error = NULL;
+
+        if (!wyrebox_local_object_store_check_root (self, &root_error)) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_BUSY,
+                "object store is unavailable: %s", root_error->message);
+            return FALSE;
+        }
+    }
+
+    if (g_mkdir (parent_dir, 0700) != 0 && errno != EEXIST) {
         int saved_errno = errno;
 
         g_set_error (error,
             G_IO_ERROR,
+            saved_errno == ENOENT ? G_IO_ERROR_BUSY :
             g_io_error_from_errno (saved_errno),
             "failed to create object directory %s: %s",
             parent_dir, g_strerror (saved_errno));

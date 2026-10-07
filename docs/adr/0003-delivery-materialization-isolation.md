@@ -54,8 +54,18 @@ A catch-up pass holds an account instead of stopping:
   failure) aborts the whole pass. These failures are global and would affect
   every later account too.
 - Failures before any run is applied still abort the pass: metadata load,
-  unsafe journal suffix, checkpoint seek, journal record replay, and a record
-  without an account identity.
+  unsafe journal suffix, checkpoint seek, journal record replay, a record
+  without an account identity, and an object store root
+  (`objects/sha256`) that is missing or not accessible, as when the object
+  store is not mounted. A missing root therefore stops every account and
+  retries, instead of holding every account.
+- At startup `wyreboxd` creates the object store root only while the journal
+  has no records. A missing root with journal records exits with
+  `EX_TEMPFAIL` (75) and creates nothing, so starting before the object
+  store is mounted neither writes into the mount point nor reports every
+  delivery as missing. Likewise, a delivery while the root is missing fails
+  with `G_IO_ERROR_BUSY`, a temporary failure that Postfix retries, and
+  creates nothing.
 
 Holds are not persisted. Every pass re-derives them from the journal and the
 catalog, so a fixed INBOX recovers automatically on the next pass, and a
@@ -178,9 +188,9 @@ A persisted per-account hold or per-account checkpoint table was rejected:
 - Delivery storage validation at startup still rejects a missing or corrupt
   raw object before catch-up runs, so one bad object still stops `wyreboxd`
   from starting.
-- An object store that is unmounted or unreadable as a whole fails every
-  object check, so catch-up holds every account with pending deliveries
-  instead of stopping.
+- An object store that is mounted but fails reads for every object, for
+  example on a failing disk, fails every object check, so catch-up holds every
+  account with pending deliveries instead of stopping.
 - The delivery replay validator reports an object read error other than a
   missing file, for example a permission or I/O error, as
   `OBJECT_UNREADABLE`, separate from missing or corrupt objects, but startup

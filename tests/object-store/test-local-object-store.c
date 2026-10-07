@@ -1,6 +1,7 @@
 #include "wyrebox-local-object-store.h"
 
 #include <string.h>
+#include <unistd.h>
 
 #include <glib.h>
 #include <glib/gstdio.h>
@@ -457,10 +458,112 @@ test_duplicate_put_rejects_corrupted_existing_object (void)
     remove_tree (root);
 }
 
+static void
+test_check_root_accepts_initialized_store (void)
+{
+    g_autofree char *root = g_dir_make_tmp ("wyrebox-object-store-XXXXXX",
+            NULL);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxLocalObjectStore) store = NULL;
+
+    store = wyrebox_local_object_store_new (root, &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_local_object_store_check_root (store, &error));
+    g_assert_no_error (error);
+
+    remove_tree (root);
+}
+
+static void
+test_check_root_rejects_missing_root_without_creating_it (void)
+{
+    g_autofree char *root = g_dir_make_tmp ("wyrebox-object-store-XXXXXX",
+            NULL);
+    g_autofree char *objects_dir = g_build_filename (root, "objects", "sha256",
+            NULL);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxLocalObjectStore) store = NULL;
+
+    store = wyrebox_local_object_store_new (root, &error);
+    g_assert_no_error (error);
+    remove_tree (objects_dir);
+
+    g_assert_false (wyrebox_local_object_store_check_root (store, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+    g_assert_nonnull (strstr (error->message, objects_dir));
+    g_assert_false (g_file_test (objects_dir, G_FILE_TEST_EXISTS));
+
+    remove_tree (root);
+}
+
+static void
+test_check_root_rejects_inaccessible_root (void)
+{
+    g_autofree char *root = g_dir_make_tmp ("wyrebox-object-store-XXXXXX",
+            NULL);
+    g_autofree char *objects_dir = g_build_filename (root, "objects", "sha256",
+            NULL);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxLocalObjectStore) store = NULL;
+
+    if (geteuid () == 0) {
+        g_test_skip ("root bypasses directory permissions");
+        remove_tree (root);
+        return;
+    }
+
+    store = wyrebox_local_object_store_new (root, &error);
+    g_assert_no_error (error);
+    g_assert_cmpint (g_chmod (objects_dir, 0), ==, 0);
+
+    g_assert_false (wyrebox_local_object_store_check_root (store, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
+
+    g_assert_cmpint (g_chmod (objects_dir, 0700), ==, 0);
+    remove_tree (root);
+}
+
+static void
+test_put_with_missing_root_fails_busy_without_creating_it (void)
+{
+    const guint8 message[] = "Subject: unmounted\r\n\r\nbody\r\n";
+    g_autofree char *root = g_dir_make_tmp ("wyrebox-object-store-XXXXXX",
+            NULL);
+    g_autofree char *objects_dir = g_build_filename (root, "objects", NULL);
+    g_autofree char *sha256_dir = g_build_filename (objects_dir, "sha256",
+            NULL);
+    g_autoptr (GBytes) input = g_bytes_new_static (message,
+            sizeof (message) - 1);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxLocalObjectStore) store = NULL;
+    g_autofree char *key = NULL;
+
+    store = wyrebox_local_object_store_new (root, &error);
+    g_assert_no_error (error);
+    remove_tree (objects_dir);
+
+    g_assert_false (wyrebox_local_object_store_put_bytes (store, input, &key,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_BUSY);
+    g_assert_null (key);
+    g_assert_false (g_file_test (sha256_dir, G_FILE_TEST_EXISTS));
+
+    remove_tree (root);
+}
+
 int
 main (int argc, char **argv)
 {
     g_test_init (&argc, &argv, NULL);
+
+    g_test_add_func ("/object-store/check-root-accepts-initialized-store",
+        test_check_root_accepts_initialized_store);
+    g_test_add_func ("/object-store/check-root-rejects-missing-root",
+        test_check_root_rejects_missing_root_without_creating_it);
+    g_test_add_func ("/object-store/check-root-rejects-inaccessible-root",
+        test_check_root_rejects_inaccessible_root);
+    g_test_add_func ("/object-store/put-with-missing-root-fails-busy",
+        test_put_with_missing_root_fails_busy_without_creating_it);
 
     g_test_add_func ("/object-store/round-trip-preserves-bytes",
         test_round_trip_preserves_bytes);

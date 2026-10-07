@@ -290,6 +290,10 @@ wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
         !fail_if_any_record_lacks_account (&list, error))
         return FALSE;
 
+    if (list.records->len > 0 &&
+        !wyrebox_local_object_store_check_root (object_store, error))
+        return FALSE;
+
     holds = g_ptr_array_new_with_free_func (
         (GDestroyNotify)wyrebox_delivery_catchup_hold_free);
     for (guint i = 0; prior_holds != NULL && i < prior_holds->len; i++) {
