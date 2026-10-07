@@ -513,7 +513,23 @@ test_wyreboxd_exits_tempfail_when_catalog_is_locked (void)
         DuckDBSuccess);
 
     assert_daemon_startup_fails (&daemon_root, EX_TEMPFAIL,
-        "catalog preparation failed");
+        "Could not set lock");
+}
+
+static void
+test_wyreboxd_exits_dataerr_when_catalog_is_corrupt (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autofree char *garbage = g_strnfill (8192, 'x');
+    g_autoptr (GError) error = NULL;
+
+    daemon_root_init (&daemon_root);
+    g_assert_true (g_file_set_contents (daemon_root.catalog_path, garbage,
+        8192, &error));
+    g_assert_no_error (error);
+
+    assert_daemon_startup_fails (&daemon_root, EX_DATAERR,
+        "not a valid DuckDB database file");
 }
 
 static void
@@ -770,6 +786,9 @@ main (int argc, char **argv)
     g_test_add_func
         ("/daemon-api/wyreboxd/exits-tempfail-when-catalog-is-locked",
         test_wyreboxd_exits_tempfail_when_catalog_is_locked);
+    g_test_add_func (
+        "/daemon-api/wyreboxd/exits-dataerr-when-catalog-is-corrupt",
+        test_wyreboxd_exits_dataerr_when_catalog_is_corrupt);
     g_test_add_func
         ("/daemon-api/wyreboxd/exits-dataerr-on-newer-catalog-schema",
         test_wyreboxd_exits_dataerr_on_newer_catalog_schema);

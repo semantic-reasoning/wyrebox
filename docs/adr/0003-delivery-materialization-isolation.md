@@ -127,8 +127,9 @@ promptly.
 - A startup catch-up abort or a catalog preparation failure is fatal:
   - `G_IO_ERROR_INVALID_DATA` and `G_IO_ERROR_NOT_SUPPORTED` exit with
     `EX_DATAERR` (65). These are permanent: corrupt or account-less journal
-    data, an unsafe journal suffix, a catalog schema newer than supported, or
-    a catalog migration that needs an offline checkpoint.
+    data, an unsafe journal suffix, a catalog schema newer than supported, a
+    catalog migration that needs an offline checkpoint, or a catalog file
+    that is not a valid or compatible DuckDB database.
   - Every other error exits with `EX_TEMPFAIL` (75), for example a locked
     DuckDB file or an I/O error.
 - `wyreboxd` never runs checkpoint-requiring catalog migration steps itself,
@@ -137,6 +138,12 @@ promptly.
   precondition without materialization checkpoint metadata get
   `G_IO_ERROR_INVALID_DATA`. No shipped command runs these steps; rebuilding
   the catalog from the journal is the supported recovery.
+- DuckDB reports open failures only as message text, so `wyreboxd`
+  classifies the message: a lock held by another process is
+  `G_IO_ERROR_BUSY` (75), a file that is not a valid or intact DuckDB database
+  is `G_IO_ERROR_INVALID_DATA` (65), an unsupported DuckDB storage version is
+  `G_IO_ERROR_NOT_SUPPORTED` (65), and any other message stays
+  `G_IO_ERROR_FAILED` (75).
 - The shipped `wyreboxd.service` sets `RestartPreventExitStatus=65`, so
   systemd keeps restarting after transient failures but not after permanent
   ones.
@@ -164,10 +171,11 @@ A persisted per-account hold or per-account checkpoint table was rejected:
   because object validation runs before records are grouped by account.
 - Object-store read errors are reported as invalid data, so a transient
   object read failure at startup exits with `EX_DATAERR`.
-- DuckDB open failures are not split into lock conflicts and corrupt or
-  incompatible catalog files, so a corrupt catalog also exits with
-  `EX_TEMPFAIL` and systemd keeps restarting until its start rate limit stops
-  it.
+- DuckDB open failures are classified by the text of DuckDB's error message
+  in the pinned DuckDB release. An unrecognised message, for example a failed
+  WAL replay, exits with `EX_TEMPFAIL` and systemd keeps restarting until its
+  start rate limit stops it. The catalog services opened after catalog
+  preparation still exit with `EX_OSERR`.
 - Delivery storage recovery and validation, which runs before catalog
   preparation, keeps exiting with `EX_DATAERR` for every error, including
   transient journal or object I/O errors, so systemd does not restart after

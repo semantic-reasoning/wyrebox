@@ -131,6 +131,48 @@ test_open_failure_reports_error (void)
     remove_tree (root);
 }
 
+static void
+test_open_error_code_classifies_messages (void)
+{
+    g_assert_cmpint (wyrebox_duckdb_open_error_code ("IO Error: Could not set "
+        "lock on file \"/x/catalog.duckdb\": Conflicting lock is held in "
+        "/usr/bin/wyreboxd (PID 7)"), ==, G_IO_ERROR_BUSY);
+    g_assert_cmpint (wyrebox_duckdb_open_error_code ("IO Error: The file "
+        "\"/x/catalog.duckdb\" exists, but it is not a valid DuckDB "
+        "database file!"), ==, G_IO_ERROR_INVALID_DATA);
+    g_assert_cmpint (wyrebox_duckdb_open_error_code ("Corrupt database file: "
+        "computed checksum 1 does not match stored checksum 2 in block "
+        "at location 4096"), ==, G_IO_ERROR_INVALID_DATA);
+    g_assert_cmpint (wyrebox_duckdb_open_error_code ("IO Error: Trying to "
+        "read a database file with version number 99, but we can only "
+        "read versions between 1 and 67."), ==, G_IO_ERROR_NOT_SUPPORTED);
+    g_assert_cmpint (wyrebox_duckdb_open_error_code ("IO Error: Cannot open "
+        "file \"/x/catalog.duckdb\": No such file or directory"), ==,
+        G_IO_ERROR_FAILED);
+    g_assert_cmpint (wyrebox_duckdb_open_error_code (NULL), ==,
+        G_IO_ERROR_FAILED);
+}
+
+static void
+test_garbage_file_reports_invalid_data (void)
+{
+    g_autofree char *root = g_dir_make_tmp ("wyrebox-duckdb-shared-XXXXXX",
+            NULL);
+    g_autofree char *path = g_build_filename (root, "catalog.duckdb", NULL);
+    g_autofree char *garbage = g_strnfill (8192, 'x');
+    g_autoptr (GError) error = NULL;
+    duckdb_database database = NULL;
+
+    g_assert_true (g_file_set_contents (path, garbage, 8192, &error));
+    g_assert_no_error (error);
+
+    g_assert_false (wyrebox_duckdb_open_shared (path, &database, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_assert_null (database);
+
+    remove_tree (root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -142,6 +184,10 @@ main (int argc, char **argv)
         test_memory_databases_are_private);
     g_test_add_func ("/duckdb/shared/open-failure-reports-error",
         test_open_failure_reports_error);
+    g_test_add_func ("/duckdb/shared/open-error-code-classifies-messages",
+        test_open_error_code_classifies_messages);
+    g_test_add_func ("/duckdb/shared/garbage-file-reports-invalid-data",
+        test_garbage_file_reports_invalid_data);
 
     return g_test_run ();
 }
