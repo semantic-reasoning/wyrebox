@@ -853,6 +853,119 @@ test_replay_exposes_delivery_account_identity (void)
     remove_tree (journal_root);
 }
 
+/*
+ * Journals one delivery of simple-crlf.eml and replaces its raw object file
+ * with a directory, which the object store cannot read but which is not
+ * missing.
+ */
+static void
+journal_delivery_with_unreadable_object (const char *object_root,
+    const char *journal_root, WyreboxLocalObjectStore **out_store)
+{
+    const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) input = NULL;
+    g_autoptr (WyreboxJournalWriter) writer = NULL;
+    g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+    g_auto (WyreboxEmlIngestResult) result = { 0 };
+    g_autofree char *path = NULL;
+
+    g_assert_nonnull (fixture_dir);
+    input = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
+    *out_store = wyrebox_local_object_store_new (object_root, &error);
+    g_assert_no_error (error);
+    writer = wyrebox_journal_writer_new (journal_root, &error);
+    g_assert_no_error (error);
+    ingestor = wyrebox_eml_ingestor_new_with_journal (*out_store, writer);
+    g_assert_true (wyrebox_eml_ingestor_ingest_bytes (ingestor, input, &result,
+        &error));
+    g_assert_no_error (error);
+
+    path = object_path_for_key (object_root, result.object_key);
+    g_assert_cmpint (g_remove (path), ==, 0);
+    g_assert_cmpint (g_mkdir (path, 0700), ==, 0);
+}
+
+static void
+test_unreadable_object_is_not_invalid_data (void)
+{
+    g_autofree char *object_root =
+        g_dir_make_tmp ("wyrebox-delivery-projection-objects-XXXXXX", NULL);
+    g_autofree char *journal_root =
+        g_dir_make_tmp ("wyrebox-delivery-projection-journal-XXXXXX", NULL);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxLocalObjectStore) store = NULL;
+    g_autoptr (WyreboxJournalReader) reader = NULL;
+    g_autoptr (WyreboxDeliveryProjection) projection = NULL;
+    g_auto (WyreboxDeliveryProjectionList) list = { 0 };
+
+    journal_delivery_with_unreadable_object (object_root, journal_root,
+        &store);
+    reader = wyrebox_journal_reader_new (journal_root, &error);
+    g_assert_no_error (error);
+    projection = wyrebox_delivery_projection_new (reader, store);
+
+    g_assert_false (wyrebox_delivery_projection_replay_all (projection, &list,
+        &error));
+    g_assert_error (error, G_FILE_ERROR, G_FILE_ERROR_ISDIR);
+    g_assert_nonnull (g_strstr_len (error->message, -1, "sequence 1"));
+    g_assert_null (list.records);
+
+    remove_tree (object_root);
+    remove_tree (journal_root);
+}
+
+static void
+test_replay_records_skips_object_checks (void)
+{
+    g_autofree char *object_root =
+        g_dir_make_tmp ("wyrebox-delivery-projection-objects-XXXXXX", NULL);
+    g_autofree char *journal_root =
+        g_dir_make_tmp ("wyrebox-delivery-projection-journal-XXXXXX", NULL);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) payload = NULL;
+    g_autoptr (WyreboxLocalObjectStore) store = NULL;
+    g_autoptr (WyreboxJournalWriter) writer = NULL;
+    g_autoptr (WyreboxJournalReader) reader = NULL;
+    g_autoptr (WyreboxDeliveryProjection) projection = NULL;
+    g_auto (WyreboxDeliveryProjectionList) list = { 0 };
+    const WyreboxDeliveryProjectionRecord *record = NULL;
+    guint64 offset = 0;
+    guint64 sequence = 0;
+
+    store = wyrebox_local_object_store_new (object_root, &error);
+    g_assert_no_error (error);
+    writer = wyrebox_journal_writer_new (journal_root, &error);
+    g_assert_no_error (error);
+    payload = wyrebox_message_delivered_payload_encode (missing_object_key, 123,
+            &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_journal_writer_append (writer,
+        WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED,
+        payload, &offset, &sequence, &error));
+    g_assert_no_error (error);
+
+    reader = wyrebox_journal_reader_new (journal_root, &error);
+    g_assert_no_error (error);
+    projection = wyrebox_delivery_projection_new (reader, store);
+
+    g_assert_true (wyrebox_delivery_projection_replay_records (projection,
+        &list, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (list.records->len, ==, 1);
+    record = g_ptr_array_index (list.records, 0);
+    g_assert_cmpstr (record->object_key, ==, missing_object_key);
+
+    g_assert_false (wyrebox_delivery_projection_check_record_object (store,
+        record, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_assert_nonnull (g_strstr_len (error->message, -1, missing_object_key));
+    g_assert_nonnull (g_strstr_len (error->message, -1, "sequence 1"));
+
+    remove_tree (object_root);
+    remove_tree (journal_root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -886,6 +999,12 @@ main (int argc, char **argv)
     g_test_add_func ("/ingestion/delivery-projection/"
         "exposes-delivery-account-identity",
         test_replay_exposes_delivery_account_identity);
+    g_test_add_func ("/ingestion/delivery-projection/"
+        "unreadable-object-is-not-invalid-data",
+        test_unreadable_object_is_not_invalid_data);
+    g_test_add_func ("/ingestion/delivery-projection/"
+        "replay-records-skips-object-checks",
+        test_replay_records_skips_object_checks);
 
     return g_test_run ();
 }

@@ -25,6 +25,12 @@ delivery_replay_validator_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+delivery_object_check_test = executable(
+  'test-delivery-object-check',
+  'test-delivery-object-check.c',
+  dependencies: [wyrebox_dep],
+)
+
 delivery_projection_test = executable(
   'test-delivery-projection',
   'test-delivery-projection.c',
@@ -80,6 +86,8 @@ test(
     'WYREBOX_EML_FIXTURE_DIR': eml_fixture_dir,
   },
 )
+
+test('delivery object check', delivery_object_check_test)
 
 test(
   'delivery projection',
