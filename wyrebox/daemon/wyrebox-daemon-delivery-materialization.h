@@ -97,8 +97,9 @@ typedef gint64 (*WyreboxDaemonDeliveryMaterializationClockFunc) (
  * replaces the current holds with the pass's holds.
  *
  * An account whose INBOX run fails with G_IO_ERROR_INVALID_DATA, for example
- * because its existing INBOX is not selectable or its UIDVALIDITY differs, is
- * held: other accounts keep materializing, the hold is logged and a retry is
+ * because its existing INBOX is not selectable or its UIDVALIDITY differs, or
+ * whose run references a raw object that is missing, corrupt, or unreadable,
+ * is held: other accounts keep materializing, the hold is logged and a retry is
  * scheduled as described for
  * wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry(), and
  * the call still returns TRUE.

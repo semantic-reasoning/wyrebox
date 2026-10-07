@@ -174,8 +174,12 @@ FROM materialization_checkpoint WHERE checkpoint_key = 'materialization';
 
 Common hold causes are an existing INBOX row that is not selectable or not
 visible, and INBOX `mailbox_uid_state` that is missing, stale, or has an
-unexpected UIDVALIDITY. The checkpoint stays just before the earliest held
-delivery.
+unexpected UIDVALIDITY, and a raw object that is missing, unreadable, or does
+not match the journaled size or SHA-256 key. The hold warning names the
+journal sequence and the object key; restore the object file under the
+object root from backup, unchanged, and the next retry materializes the
+account. Raw objects are shared by content, so one bad object can hold several
+accounts. The checkpoint stays just before the earliest held delivery.
 
 Recovery:
 

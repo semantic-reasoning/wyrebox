@@ -76,6 +76,18 @@ def main() -> None:
     assert_section_matches(runtime, runbook,
         r"catalog file that is not a valid or compatible DuckDB database")
 
+    assert_section_matches(adr, decision,
+        r"missing, truncated, or tampered object holds the account")
+    assert_section_matches(adr, decision,
+        r"one bad object holds every account that references it")
+    assert_section_lacks(adr, decision,
+        r"projection replay \(including a missing or corrupt raw object\)")
+    assert_section_lacks(adr, gaps,
+        r"raw object for one delivery still stops every pass")
+    assert_section_matches(runtime, runbook,
+        r"raw object that is missing, unreadable, or does not match the "
+        r"journaled size or SHA-256 key")
+
     shared_source = (REPO_ROOT / "wyrebox" / "duckdb" /
                      "wyrebox-duckdb-shared.c").read_text(encoding="utf-8")
     for literal in [
