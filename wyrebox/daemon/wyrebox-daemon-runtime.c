@@ -2,6 +2,7 @@
 
 #include "wyrebox-daemon-fact-mutation-service.h"
 #include "wyrebox-delivery-replay-validator.h"
+#include "wyrebox-duckdb-shared.h"
 #include "wyrebox-journal-reader.h"
 #include "wyrebox-local-object-store.h"
 #include "wyrebox-schema-metadata-store.h"
@@ -513,7 +514,7 @@ runtime_open_catalog_read_only (const char *catalog_path,
         DuckDBSuccess) {
         g_set_error (error,
             G_IO_ERROR,
-            G_IO_ERROR_FAILED,
+            wyrebox_duckdb_open_error_code (open_error),
             "failed to open DuckDB catalog '%s': %s",
             catalog_path,
             open_error != NULL ? open_error : "unknown DuckDB error");

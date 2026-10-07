@@ -59,7 +59,34 @@ def main() -> None:
         r"`EX_DATAERR` \(65\) means a permanent problem:.*"
         r"catalog migration that needs an offline checkpoint")
     assert_section_matches(runtime, runbook,
-        r"`checkpoint precondition not satisfied`, rebuild the catalog")
+        r"`checkpoint precondition not satisfied` or an invalid catalog file, "
+        r"restore the catalog from backup or rebuild it")
+
+    assert_section_matches(adr, decision,
+        r"lock held by another process is `G_IO_ERROR_BUSY`")
+    assert_section_matches(adr, decision,
+        r"not a valid or intact DuckDB database is `G_IO_ERROR_INVALID_DATA`")
+    assert_section_matches(adr, decision,
+        r"unsupported DuckDB storage version is `G_IO_ERROR_NOT_SUPPORTED`")
+    assert_section_lacks(adr, gaps,
+        r"DuckDB open failures are not split")
+    assert_section_matches(adr, gaps,
+        r"DuckDB open failures are classified by the text of DuckDB's error "
+        r"message")
+    assert_section_matches(runtime, runbook,
+        r"catalog file that is not a valid or compatible DuckDB database")
+
+    shared_source = (REPO_ROOT / "wyrebox" / "duckdb" /
+                     "wyrebox-duckdb-shared.c").read_text(encoding="utf-8")
+    for literal in [
+        '"Could not set lock on file"',
+        '"is not a valid DuckDB database file"',
+        '"Corrupt database file"',
+        '"Trying to read a database file with version number"',
+    ]:
+        assert literal in shared_source, (
+            f"DuckDB open classification drifted: {literal}"
+        )
 
 
 if __name__ == "__main__":

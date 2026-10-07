@@ -200,12 +200,13 @@ Startup exit codes:
 
 - `EX_DATAERR` (65) means a permanent problem: corrupt or account-less journal
   data, an unsafe journal suffix, a catalog schema newer than this build
-  supports, or a catalog migration that needs an offline checkpoint. systemd
+  supports, a catalog migration that needs an offline checkpoint, or a
+  catalog file that is not a valid or compatible DuckDB database. systemd
   does not restart `wyreboxd`. Read the `wyreboxd` journal for `catalog
   preparation failed`, `delivery materialization failed`, or `delivery
   storage is invalid`, and fix the cause before starting again. For
-  `checkpoint precondition not satisfied`, rebuild the catalog as described
-  under Recovery.
+  `checkpoint precondition not satisfied` or an invalid catalog file, restore
+  the catalog from backup or rebuild it as described under Recovery.
 - `EX_TEMPFAIL` (75) means a failure that may clear by itself, such as another
   process holding the catalog open or an I/O error. systemd restarts
   `wyreboxd` within its start rate limit. If restarts keep failing, look for
@@ -213,8 +214,8 @@ Startup exit codes:
 - `EX_OSERR` (71) means `wyreboxd` could not open its object store, journal,
   catalog services, or socket, and `EX_CONFIG` (78) means the configuration is
   invalid. systemd restarts after both, within its start rate limit.
-- The ADR lists the known misclassifications, for example corrupt catalog
-  files exiting with 75 and transient object read errors exiting with 65.
+- The ADR lists the known misclassifications, for example transient object
+  read errors exiting with 65.
 
 ## Permission Mismatch Behavior
 

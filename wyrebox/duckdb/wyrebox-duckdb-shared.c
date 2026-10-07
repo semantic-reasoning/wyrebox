@@ -2,6 +2,8 @@
 
 #include <gio/gio.h>
 
+#include <string.h>
+
 static duckdb_instance_cache
 shared_instance_cache (void)
 {
@@ -20,6 +22,26 @@ static gboolean
 is_memory_path (const char *path)
 {
     return path == NULL || *path == '\0' || g_str_has_prefix (path, ":memory:");
+}
+
+GIOErrorEnum
+wyrebox_duckdb_open_error_code (const char *message)
+{
+    if (message == NULL)
+        return G_IO_ERROR_FAILED;
+
+    if (strstr (message, "Could not set lock on file") != NULL)
+        return G_IO_ERROR_BUSY;
+
+    if (strstr (message, "is not a valid DuckDB database file") != NULL ||
+        strstr (message, "Corrupt database file") != NULL)
+        return G_IO_ERROR_INVALID_DATA;
+
+    if (strstr (message,
+        "Trying to read a database file with version number") != NULL)
+        return G_IO_ERROR_NOT_SUPPORTED;
+
+    return G_IO_ERROR_FAILED;
 }
 
 gboolean
@@ -46,7 +68,8 @@ wyrebox_duckdb_open_shared (const char *path, duckdb_database *out_database,
     if (duckdb_get_or_create_from_cache (shared_instance_cache (), path,
         out_database, NULL, &open_error) != DuckDBSuccess) {
         *out_database = NULL;
-        g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+        g_set_error (error, G_IO_ERROR,
+            wyrebox_duckdb_open_error_code (open_error),
             "DuckDB open failed for '%s': %s", path,
             open_error != NULL ? open_error : "unknown error");
         if (open_error != NULL)
