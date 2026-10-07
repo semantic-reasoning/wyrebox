@@ -375,6 +375,231 @@ test_non_message_delivered_records_are_skipped (void)
     remove_tree (journal_root);
 }
 
+typedef struct
+{
+    char *object_root;
+    char *journal_root;
+    WyreboxLocalObjectStore *store;
+    WyreboxJournalWriter *writer;
+    WyreboxEmlIngestor *ingestor;
+} ValidatorFixture;
+
+static void
+validator_fixture_set_up (ValidatorFixture *fixture, gconstpointer user_data)
+{
+    g_autoptr (GError) error = NULL;
+
+    fixture->object_root =
+        g_dir_make_tmp ("wyrebox-replay-validator-objects-XXXXXX", NULL);
+    fixture->journal_root =
+        g_dir_make_tmp ("wyrebox-replay-validator-journal-XXXXXX", NULL);
+    fixture->store = wyrebox_local_object_store_new (fixture->object_root,
+            &error);
+    g_assert_no_error (error);
+    fixture->writer = wyrebox_journal_writer_new (fixture->journal_root,
+            &error);
+    g_assert_no_error (error);
+    fixture->ingestor = wyrebox_eml_ingestor_new_with_journal (fixture->store,
+            fixture->writer);
+}
+
+static void
+validator_fixture_tear_down (ValidatorFixture *fixture,
+    gconstpointer user_data)
+{
+    g_clear_object (&fixture->ingestor);
+    g_clear_object (&fixture->writer);
+    g_clear_object (&fixture->store);
+    remove_tree (fixture->object_root);
+    remove_tree (fixture->journal_root);
+    g_clear_pointer (&fixture->object_root, g_free);
+    g_clear_pointer (&fixture->journal_root, g_free);
+}
+
+static void
+ingest_into (ValidatorFixture *fixture, const char *fixture_name,
+    WyreboxEmlIngestResult *out_result)
+{
+    const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+    g_autoptr (GBytes) input = NULL;
+    g_autoptr (GError) error = NULL;
+
+    g_assert_nonnull (fixture_dir);
+    input = load_fixture_bytes (fixture_dir, fixture_name);
+    g_assert_true (wyrebox_eml_ingestor_ingest_bytes (fixture->ingestor, input,
+        out_result, &error));
+    g_assert_no_error (error);
+}
+
+static void
+append_payload (ValidatorFixture *fixture, GBytes *payload,
+    guint64 *out_offset, guint64 *out_sequence)
+{
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (wyrebox_journal_writer_append (fixture->writer,
+        WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED, payload, out_offset,
+        out_sequence, &error));
+    g_assert_no_error (error);
+}
+
+static void
+append_delivery (ValidatorFixture *fixture, const char *object_key,
+    guint64 size_bytes, guint64 *out_offset, guint64 *out_sequence)
+{
+    g_autoptr (GBytes) payload = NULL;
+    g_autoptr (GError) error = NULL;
+
+    payload = wyrebox_message_delivered_payload_encode (object_key, size_bytes,
+            &error);
+    g_assert_no_error (error);
+    append_payload (fixture, payload, out_offset, out_sequence);
+}
+
+static void
+make_object_unreadable (ValidatorFixture *fixture, const char *object_key)
+{
+    g_autofree char *path = object_path_for_key (fixture->object_root,
+            object_key);
+
+    g_assert_cmpint (g_remove (path), ==, 0);
+    g_assert_cmpint (g_mkdir (path, 0700), ==, 0);
+}
+
+static WyreboxDeliveryReplayValidator *
+new_validator (ValidatorFixture *fixture)
+{
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxJournalReader) reader = NULL;
+
+    reader = wyrebox_journal_reader_new (fixture->journal_root, &error);
+    g_assert_no_error (error);
+
+    return wyrebox_delivery_replay_validator_new (reader, fixture->store);
+}
+
+static void
+test_unreadable_object_reports_object_unreadable (ValidatorFixture *fixture,
+    gconstpointer user_data)
+{
+    g_auto (WyreboxEmlIngestResult) result = { 0 };
+    g_autoptr (WyreboxDeliveryReplayValidator) validator = NULL;
+    g_autoptr (GError) error = NULL;
+
+    ingest_into (fixture, "simple-crlf.eml", &result);
+    make_object_unreadable (fixture, result.object_key);
+
+    validator = new_validator (fixture);
+    g_assert_false (wyrebox_delivery_replay_validator_validate_all (validator,
+        &error));
+    g_assert_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+        WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_OBJECT_UNREADABLE);
+    g_assert_nonnull (strstr (error->message, "sequence 1"));
+    g_assert_nonnull (strstr (error->message, result.object_key));
+}
+
+static void
+test_report_counts_object_failures_and_continues (ValidatorFixture *fixture,
+    gconstpointer user_data)
+{
+    g_auto (WyreboxEmlIngestResult) intact = { 0 };
+    g_autoptr (WyreboxDeliveryReplayValidator) validator = NULL;
+    g_autoptr (GError) error = NULL;
+    WyreboxDeliveryReplayValidatorReport report = { 0 };
+    guint64 missing_offset = 0;
+    guint64 missing_sequence = 0;
+    guint64 offset = 0;
+    guint64 sequence = 0;
+
+    ingest_into (fixture, "simple-crlf.eml", &intact);
+    append_delivery (fixture, missing_object_key, 123, &missing_offset,
+        &missing_sequence);
+    append_delivery (fixture, intact.object_key, intact.size_bytes - 1,
+        &offset, &sequence);
+    g_assert_cmpuint (sequence, ==, 3);
+
+    validator = new_validator (fixture);
+    g_assert_true (wyrebox_delivery_replay_validator_validate_all_report (
+            validator, &report, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (report.object_failure_count, ==, 2);
+    g_assert_cmpuint (report.first_object_failure_sequence, ==,
+        missing_sequence);
+    g_assert_cmpuint (report.first_object_failure_offset, ==, missing_offset);
+    g_assert_cmpint (report.first_object_failure_code, ==,
+        WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_MISSING_OBJECT);
+}
+
+static void
+test_report_is_clean_without_object_failures (ValidatorFixture *fixture,
+    gconstpointer user_data)
+{
+    g_auto (WyreboxEmlIngestResult) intact = { 0 };
+    g_autoptr (WyreboxDeliveryReplayValidator) validator = NULL;
+    g_autoptr (GError) error = NULL;
+    WyreboxDeliveryReplayValidatorReport report = {
+        .object_failure_count = 7,
+    };
+
+    ingest_into (fixture, "simple-crlf.eml", &intact);
+
+    validator = new_validator (fixture);
+    g_assert_true (wyrebox_delivery_replay_validator_validate_all_report (
+            validator, &report, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (report.object_failure_count, ==, 0);
+}
+
+static void
+test_report_fails_on_malformed_payload_after_missing_object (
+    ValidatorFixture *fixture, gconstpointer user_data)
+{
+    g_autoptr (WyreboxDeliveryReplayValidator) validator = NULL;
+    g_autoptr (GBytes) malformed =
+        g_bytes_new_static ("not-a-payload", strlen ("not-a-payload"));
+    g_autoptr (GError) error = NULL;
+    WyreboxDeliveryReplayValidatorReport report = { 0 };
+    guint64 offset = 0;
+    guint64 sequence = 0;
+
+    append_delivery (fixture, missing_object_key, 123, &offset, &sequence);
+    append_payload (fixture, malformed, &offset, &sequence);
+
+    validator = new_validator (fixture);
+    g_assert_false (wyrebox_delivery_replay_validator_validate_all_report (
+            validator, &report, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_assert_nonnull (strstr (error->message, "sequence 2"));
+}
+
+static void
+test_report_fails_on_unreadable_object_after_missing_object (
+    ValidatorFixture *fixture, gconstpointer user_data)
+{
+    g_auto (WyreboxEmlIngestResult) unreadable = { 0 };
+    g_autoptr (WyreboxDeliveryReplayValidator) validator = NULL;
+    g_autoptr (GError) error = NULL;
+    WyreboxDeliveryReplayValidatorReport report = { 0 };
+    guint64 offset = 0;
+    guint64 sequence = 0;
+
+    append_delivery (fixture, missing_object_key, 123, &offset, &sequence);
+    ingest_into (fixture, "simple-crlf.eml", &unreadable);
+    make_object_unreadable (fixture, unreadable.object_key);
+
+    validator = new_validator (fixture);
+    g_assert_false (wyrebox_delivery_replay_validator_validate_all_report (
+            validator, &report, &error));
+    g_assert_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+        WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_OBJECT_UNREADABLE);
+    g_assert_nonnull (strstr (error->message, "sequence 2"));
+}
+
+#define ADD_VALIDATOR_TEST(path, func) \
+        g_test_add ("/ingestion/delivery-replay-validator/" path, \
+            ValidatorFixture, NULL, validator_fixture_set_up, func, \
+            validator_fixture_tear_down)
+
 int
 main (int argc, char **argv)
 {
@@ -397,6 +622,16 @@ main (int argc, char **argv)
     g_test_add_func ("/ingestion/delivery-replay-validator/"
         "non-message-delivered-records-are-skipped",
         test_non_message_delivered_records_are_skipped);
+    ADD_VALIDATOR_TEST ("unreadable-object-reports-object-unreadable",
+        test_unreadable_object_reports_object_unreadable);
+    ADD_VALIDATOR_TEST ("report-counts-object-failures-and-continues",
+        test_report_counts_object_failures_and_continues);
+    ADD_VALIDATOR_TEST ("report-is-clean-without-object-failures",
+        test_report_is_clean_without_object_failures);
+    ADD_VALIDATOR_TEST ("report-fails-on-malformed-payload-after-missing",
+        test_report_fails_on_malformed_payload_after_missing_object);
+    ADD_VALIDATOR_TEST ("report-fails-on-unreadable-object-after-missing",
+        test_report_fails_on_unreadable_object_after_missing_object);
 
     return g_test_run ();
 }

@@ -181,9 +181,10 @@ A persisted per-account hold or per-account checkpoint table was rejected:
 - An object store that is unmounted or unreadable as a whole fails every
   object check, so catch-up holds every account with pending deliveries
   instead of stopping.
-- Startup storage validation reports object-store read errors as invalid
-  data, so a transient object read failure at startup exits with
-  `EX_DATAERR`.
+- The delivery replay validator reports an object read error other than a
+  missing file, for example a permission or I/O error, as
+  `OBJECT_UNREADABLE`, separate from missing or corrupt objects, but startup
+  still exits with `EX_DATAERR` for it.
 - DuckDB open failures are classified by the text of DuckDB's error message
   in the pinned DuckDB release. An unrecognised message, for example a failed
   WAL replay, exits with `EX_TEMPFAIL` and systemd keeps restarting until its
