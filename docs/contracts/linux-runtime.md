@@ -199,10 +199,13 @@ Recovery:
 Startup exit codes:
 
 - `EX_DATAERR` (65) means a permanent problem: corrupt or account-less journal
-  data, an unsafe journal suffix, or a catalog schema newer than this build
-  supports. systemd does not restart `wyreboxd`. Read the `wyreboxd` journal
-  for `catalog preparation failed`, `delivery materialization failed`, or
-  `delivery storage is invalid`, and fix the cause before starting again.
+  data, an unsafe journal suffix, a catalog schema newer than this build
+  supports, or a catalog migration that needs an offline checkpoint. systemd
+  does not restart `wyreboxd`. Read the `wyreboxd` journal for `catalog
+  preparation failed`, `delivery materialization failed`, or `delivery
+  storage is invalid`, and fix the cause before starting again. For
+  `checkpoint precondition not satisfied`, rebuild the catalog as described
+  under Recovery.
 - `EX_TEMPFAIL` (75) means a failure that may clear by itself, such as another
   process holding the catalog open or an I/O error. systemd restarts
   `wyreboxd` within its start rate limit. If restarts keep failing, look for

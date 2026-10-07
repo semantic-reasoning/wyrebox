@@ -354,7 +354,7 @@ wyrebox_schema_migration_apply_step (WyreboxSchemaMigration *self,
         !state->checkpoint_precondition_satisfied) {
         g_set_error (error,
             G_IO_ERROR,
-            G_IO_ERROR_FAILED,
+            G_IO_ERROR_NOT_SUPPORTED,
             "checkpoint precondition not satisfied for migration step %s",
             step->name);
         return FALSE;
@@ -363,7 +363,7 @@ wyrebox_schema_migration_apply_step (WyreboxSchemaMigration *self,
     if (step->requires_checkpoint && !materialization_checkpoint_available) {
         g_set_error (error,
             G_IO_ERROR,
-            G_IO_ERROR_FAILED,
+            G_IO_ERROR_INVALID_DATA,
             "materialization checkpoint metadata missing for migration step %s",
             step->name);
         return FALSE;

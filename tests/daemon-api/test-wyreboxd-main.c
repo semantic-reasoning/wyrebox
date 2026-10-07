@@ -534,6 +534,24 @@ test_wyreboxd_exits_dataerr_on_newer_catalog_schema (void)
         "catalog preparation failed");
 }
 
+static void
+test_wyreboxd_exits_dataerr_when_catalog_migration_needs_checkpoint (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    daemon_root_init (&daemon_root);
+    g_assert_true (wyrebox_daemon_runtime_prepare_catalog
+            (daemon_root.journal_dir, daemon_root.catalog_path, FALSE,
+        &error));
+    g_assert_no_error (error);
+    exec_catalog_sql (daemon_root.catalog_path,
+        "UPDATE schema_metadata SET schema_version = 0;");
+
+    assert_daemon_startup_fails (&daemon_root, EX_DATAERR,
+        "checkpoint precondition not satisfied");
+}
+
 /*
  * Prepares the catalog offline with an unselectable account-1 INBOX that
  * WyreBox refuses to materialize into.
@@ -755,6 +773,10 @@ main (int argc, char **argv)
     g_test_add_func
         ("/daemon-api/wyreboxd/exits-dataerr-on-newer-catalog-schema",
         test_wyreboxd_exits_dataerr_on_newer_catalog_schema);
+    g_test_add_func
+    (
+        "/daemon-api/wyreboxd/exits-dataerr-when-catalog-migration-needs-checkpoint",
+        test_wyreboxd_exits_dataerr_when_catalog_migration_needs_checkpoint);
     g_test_add_func ("/daemon-api/wyreboxd/starts-with-held-account",
         test_wyreboxd_starts_with_held_account);
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \
