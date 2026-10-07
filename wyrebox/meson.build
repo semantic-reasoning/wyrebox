@@ -84,6 +84,7 @@ wyrebox_sources = files(
   'ingestion/wyrebox-delivery-materializer.c',
   'ingestion/wyrebox-delivery-fetcher.c',
   'ingestion/wyrebox-delivery-catchup.c',
+  'ingestion/wyrebox-delivery-object-check.c',
   'ingestion/wyrebox-delivery-projection.c',
   'ingestion/wyrebox-delivery-replay-validator.c',
   'ingestion/wyrebox-rfc5322-date.c',

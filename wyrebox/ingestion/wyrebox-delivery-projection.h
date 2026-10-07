@@ -109,7 +109,8 @@ WyreboxDeliveryProjection *wyrebox_delivery_projection_new (
 
 /*
  * Replays MessageDelivered records from the reader's current position through
- * EOF into an owned result list.
+ * EOF into an owned result list and checks every referenced raw object with
+ * wyrebox_delivery_projection_check_record_object().
  *
  * @out_projection must be zero-initialized or already managed by
  * wyrebox_delivery_projection_list_clear(); any previous contents are cleared
@@ -119,6 +120,32 @@ WyreboxDeliveryProjection *wyrebox_delivery_projection_new (
 gboolean wyrebox_delivery_projection_replay_all (
     WyreboxDeliveryProjection *self,
     WyreboxDeliveryProjectionList *out_projection,
+    GError **error);
+
+/*
+ * Like wyrebox_delivery_projection_replay_all() but reads and decodes the
+ * records without reading their raw objects, so callers can check objects
+ * per record with wyrebox_delivery_projection_check_record_object().
+ */
+gboolean wyrebox_delivery_projection_replay_records (
+    WyreboxDeliveryProjection *self,
+    WyreboxDeliveryProjectionList *out_projection,
+    GError **error);
+
+/*
+ * Checks the raw object @record references.
+ *
+ * A missing object, a size or SHA-256 mismatch, or an invalid key does not
+ * change on retry and fails with G_IO_ERROR_INVALID_DATA. Any other read
+ * failure keeps the object store's domain and code, so callers can treat it
+ * as transient.
+ *
+ * @object_store: (transfer none): store holding the raw object.
+ * @record: (transfer none): projected delivery whose object is checked.
+ */
+gboolean wyrebox_delivery_projection_check_record_object (
+    WyreboxLocalObjectStore *object_store,
+    const WyreboxDeliveryProjectionRecord *record,
     GError **error);
 
 G_END_DECLS
