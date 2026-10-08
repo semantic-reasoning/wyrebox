@@ -69,6 +69,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-uds-client.c',
   'daemon/wyrebox-daemon-request-adapter.c',
   'daemon/wyrebox-daemon-runtime.c',
+  'daemon/wyrebox-daemon-storage.c',
   'daemon/wyrebox-daemon-socket-listener.c',
   'daemon/wyrebox-daemon-error.c',
   'daemon/wyrebox-daemon-error-frame.c',
