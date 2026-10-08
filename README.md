@@ -26,3 +26,8 @@ standard IMAP protocol — including virtual mailboxes derived from message fact
 ## License
 
 Mozilla Public License 2.0 (MPL-2.0).
+
+`wyreboxd` links the shared library of
+[libchronoid](https://github.com/semantic-reasoning/libchronoid), which is
+licensed under LGPL-3.0-or-later AND MIT. See
+`docs/contracts/libchronoid-dependency.md`.

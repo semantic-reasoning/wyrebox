@@ -21,3 +21,11 @@ build_config_test = executable(
 )
 
 test('build config feature macros', build_config_test)
+
+libchronoid_link_test = executable(
+  'test-libchronoid-link',
+  'test-libchronoid-link.c',
+  dependencies: [glib_dep, chronoid_dep],
+)
+
+test('libchronoid link', libchronoid_link_test)
