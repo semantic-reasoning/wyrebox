@@ -457,11 +457,9 @@ wyrebox_daemon_runtime_recover_and_validate_delivery_storage (const char
 
 WyreboxLocalObjectStore *
 wyrebox_daemon_runtime_open_object_store (const char *object_root_dir,
-    const char *journal_root_dir, GError **error)
+    GError **error)
 {
     g_autofree char *objects_dir = NULL;
-    g_autoptr (WyreboxJournalReader) journal_reader = NULL;
-    WyreboxJournalSafePrefix prefix = { 0 };
 
     g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
@@ -470,22 +468,12 @@ wyrebox_daemon_runtime_open_object_store (const char *object_root_dir,
 
     objects_dir = g_build_filename (object_root_dir, "objects", "sha256",
             NULL);
-    if (g_file_test (objects_dir, G_FILE_TEST_IS_DIR))
-        return wyrebox_local_object_store_new (object_root_dir, error);
-
-    journal_reader = wyrebox_journal_reader_new (journal_root_dir, error);
-    if (journal_reader == NULL ||
-        !wyrebox_journal_reader_scan_safe_prefix (journal_reader, &prefix,
-        error))
-        return NULL;
-
-    if (prefix.has_last_safe_sequence) {
+    if (!g_file_test (objects_dir, G_FILE_TEST_IS_DIR)) {
         g_set_error (error,
             G_IO_ERROR,
             G_IO_ERROR_NOT_FOUND,
-            "object store root %s does not exist but the journal already "
-            "has records; check that the object store is mounted",
-            objects_dir);
+            "object store root %s does not exist; check that the object "
+            "store is mounted", objects_dir);
         return NULL;
     }
 

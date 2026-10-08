@@ -306,6 +306,8 @@ test_check_fails_when_one_marker_is_missing (StorageFixture *fixture,
     write_journal_marker (fixture, journal);
     assert_check_fails (fixture, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
         "does not exist but");
+    assert_check_fails (fixture, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        "run wyreboxd --initialize-storage again if it was interrupted");
 
     g_assert_cmpint (g_remove (journal_path), ==, 0);
     write_object_marker (fixture, object);
@@ -626,14 +628,14 @@ static void
 test_initialize_completes_lone_marker_when_both_populated (StorageFixture
     *fixture, gconstpointer user_data)
 {
-    g_autofree char *object = marker_text ("object-store", STORAGE_ID_B);
+    g_autofree char *journal = marker_text ("journal", STORAGE_ID_B);
     g_autofree char *storage_id = NULL;
 
     (void)user_data;
 
     write_journal_data (fixture, -1);
     write_object_data (fixture);
-    write_object_marker (fixture, object);
+    write_journal_marker (fixture, journal);
     storage_id = initialize_ok (fixture, FALSE);
     g_assert_cmpstr (storage_id, ==, STORAGE_ID_B);
     assert_checks_with_id (fixture, STORAGE_ID_B);
@@ -654,6 +656,40 @@ test_initialize_refuses_lone_marker_with_one_sided_data (StorageFixture
         "check that the object store is mounted");
     g_assert_false (objects_dir_exists (fixture));
     g_assert_false (g_file_test (object_path, G_FILE_TEST_EXISTS));
+}
+
+static void
+test_initialize_refuses_lone_object_store_marker (StorageFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *object = marker_text ("object-store", STORAGE_ID_A);
+    g_autofree char *journal_path = journal_marker_path (fixture);
+
+    (void)user_data;
+
+    make_roots (fixture);
+    write_object_marker (fixture, object);
+    assert_initialize_fails (fixture, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        "check that the journal is mounted");
+    g_assert_false (g_file_test (journal_path, G_FILE_TEST_EXISTS));
+}
+
+static void
+test_initialize_refuses_stray_temporary_object (StorageFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *objects_dir = g_build_filename (fixture->object_root,
+            "objects", "sha256", NULL);
+    g_autofree char *stray = g_build_filename (objects_dir,
+            ".tmp-object-stray", NULL);
+
+    (void)user_data;
+
+    g_assert_cmpint (g_mkdir_with_parents (objects_dir, 0700), ==, 0);
+    write_file (stray, "partial", -1);
+    assert_initialize_fails (fixture, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        "check that the journal is mounted");
+    g_assert_false (any_marker_exists (fixture));
 }
 
 static void
@@ -752,6 +788,10 @@ main (int argc, char **argv)
         test_initialize_completes_lone_marker_when_both_populated);
     ADD_STORAGE_TEST ("initialize/refuses-lone-marker-with-one-sided-data",
         test_initialize_refuses_lone_marker_with_one_sided_data);
+    ADD_STORAGE_TEST ("initialize/refuses-lone-object-store-marker",
+        test_initialize_refuses_lone_object_store_marker);
+    ADD_STORAGE_TEST ("initialize/refuses-stray-temporary-object",
+        test_initialize_refuses_stray_temporary_object);
     ADD_STORAGE_TEST ("initialize/refuses-mismatched-markers",
         test_initialize_refuses_mismatched_markers);
     ADD_STORAGE_TEST ("initialize/refuses-invalid-marker",

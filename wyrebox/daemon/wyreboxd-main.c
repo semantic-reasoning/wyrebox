@@ -11,6 +11,7 @@
 #include "wyrebox-daemon-mailbox-catalog-duckdb.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-runtime.h"
+#include "wyrebox-daemon-storage.h"
 #include "wyrebox-eml-ingestor.h"
 #include "wyrebox-journal-writer.h"
 #include "wyrebox-local-object-store.h"
@@ -23,6 +24,7 @@
 typedef struct
 {
     char *config_path;
+    gboolean initialize_storage;
 } WyreboxdOptions;
 
 static void
@@ -57,6 +59,9 @@ parse_options (int argc, char **argv, WyreboxdOptions *options, GError **error)
     GOptionEntry entries[] = {
         {"config", 'c', 0, G_OPTION_ARG_STRING, &options->config_path,
          "WyreBox daemon config file", "PATH"},
+        {"initialize-storage", 0, 0, G_OPTION_ARG_NONE,
+         &options->initialize_storage,
+         "Initialize or adopt the journal and object store, then exit", NULL},
         {NULL}
     };
 
@@ -147,6 +152,34 @@ materialize_after_ingest (const WyreboxEmlIngestResult *result,
 }
 
 static int
+initialize_storage (const char *journal_root_dir, const char *object_root_dir)
+{
+    g_autoptr (GError) error = NULL;
+    g_autofree char *storage_id = NULL;
+    gboolean already_initialized = FALSE;
+
+    if (!wyrebox_daemon_storage_initialize (journal_root_dir, object_root_dir,
+        &already_initialized, &storage_id, &error)) {
+        g_printerr ("wyreboxd: %s\n", error->message);
+        if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND) ||
+            g_error_matches (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA) ||
+            g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED))
+            return wyrebox_daemon_exit_code_for_startup_error (error);
+        return EX_OSERR;
+    }
+
+    if (already_initialized) {
+        g_print ("wyreboxd: storage already initialized: storage ID %s\n",
+            storage_id);
+    } else {
+        g_print ("wyreboxd: storage initialized: storage ID %s, journal %s, "
+            "object store %s\n", storage_id, journal_root_dir,
+            object_root_dir);
+    }
+    return EX_OK;
+}
+
+static int
 run_daemon (int argc, char **argv)
 {
     g_auto (WyreboxdOptions) options = { 0 };
@@ -164,6 +197,7 @@ run_daemon (int argc, char **argv)
     g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
     g_autoptr (GMainLoop) loop = NULL;
     g_autofree char *socket_path = NULL;
+    g_autofree char *storage_id = NULL;
     WyreboxDaemonDeliveryStorageValidationReport storage_report = { 0 };
     const char *catalog_path = NULL;
     const char *journal_root_dir = NULL;
@@ -190,8 +224,18 @@ run_daemon (int argc, char **argv)
     journal_root_dir = wyrebox_daemon_config_get_journal_root_dir (config);
     object_root_dir = wyrebox_daemon_config_get_object_root_dir (config);
 
+    if (options.initialize_storage)
+        return initialize_storage (journal_root_dir, object_root_dir);
+
+    if (!wyrebox_daemon_storage_check_initialized (journal_root_dir,
+        object_root_dir, &storage_id, &error)) {
+        g_printerr ("wyreboxd: %s\n", error->message);
+        return wyrebox_daemon_exit_code_for_startup_error (error);
+    }
+    g_message ("storage ID %s", storage_id);
+
     object_store = wyrebox_daemon_runtime_open_object_store (object_root_dir,
-            journal_root_dir, &error);
+            &error);
     if (object_store == NULL) {
         g_printerr ("wyreboxd: %s\n", error->message);
         return g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND) ?

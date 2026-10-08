@@ -41,10 +41,12 @@ gboolean wyrebox_daemon_storage_check_initialized (
  * Initializes storage once, or adopts existing unmarked storage. Writes the
  * missing markers only when both roots hold data or neither does: the journal
  * holds data when its segment file is not empty, and the object store when
- * objects/sha256 has an entry. A lone existing marker supplies the storage ID;
- * otherwise a new UUIDv7 is generated. Refuses without writing anything when
- * only one root holds data or when an existing marker is invalid or does not
- * match. Creates the journal root and objects/sha256 before writing markers.
+ * objects/sha256 has an entry. A lone journal marker, left by an interrupted
+ * run, supplies the storage ID; otherwise a new UUIDv7 is generated. Refuses
+ * without writing anything when only one root holds data, when only the
+ * object store marker exists, or when an existing marker is invalid or does
+ * not match. Creates the journal root and objects/sha256 before writing
+ * markers, and writes the journal marker first.
  *
  * @out_already_initialized: (out) (optional): TRUE when both markers already
  *   existed and matched, so nothing was written.

@@ -1710,24 +1710,21 @@ test_runtime_catch_up_configured_wirelog_views_rejects_invalid_args (void)
 }
 
 static void
-test_runtime_open_object_store_creates_fresh_root (void)
+test_runtime_open_object_store_refuses_uninitialized_root (void)
 {
-    g_autofree char *journal_root =
-        g_dir_make_tmp ("wyrebox-daemon-runtime-journal-XXXXXX", NULL);
     g_autofree char *object_root =
         g_dir_make_tmp ("wyrebox-daemon-runtime-objects-XXXXXX", NULL);
     g_autofree char *objects_dir = g_build_filename (object_root, "objects",
-            "sha256", NULL);
+            NULL);
     g_autoptr (WyreboxLocalObjectStore) store = NULL;
     g_autoptr (GError) error = NULL;
 
-    store = wyrebox_daemon_runtime_open_object_store (object_root,
-            journal_root, &error);
-    g_assert_no_error (error);
-    g_assert_nonnull (store);
-    g_assert_true (g_file_test (objects_dir, G_FILE_TEST_IS_DIR));
+    store = wyrebox_daemon_runtime_open_object_store (object_root, &error);
+    g_assert_null (store);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+    g_assert_nonnull (strstr (error->message, "mounted"));
+    g_assert_false (g_file_test (objects_dir, G_FILE_TEST_EXISTS));
 
-    remove_tree (journal_root);
     remove_tree (object_root);
 }
 
@@ -1745,8 +1742,7 @@ test_runtime_open_object_store_opens_existing_root (void)
 
     ingest_runtime_preflight_message (journal_root, object_root, &result);
 
-    store = wyrebox_daemon_runtime_open_object_store (object_root,
-            journal_root, &error);
+    store = wyrebox_daemon_runtime_open_object_store (object_root, &error);
     g_assert_no_error (error);
     g_assert_nonnull (store);
     bytes = wyrebox_local_object_store_get_bytes (store, result.object_key,
@@ -1776,8 +1772,7 @@ test_runtime_open_object_store_refuses_missing_root_with_journal (void)
     ingest_runtime_preflight_message (journal_root, object_root, &result);
     remove_tree (objects_dir);
 
-    store = wyrebox_daemon_runtime_open_object_store (object_root,
-            journal_root, &error);
+    store = wyrebox_daemon_runtime_open_object_store (object_root, &error);
     g_assert_null (store);
     g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
     g_assert_nonnull (strstr (error->message, "mounted"));
@@ -2082,8 +2077,9 @@ main (int argc, char **argv)
     g_test_add_func
         ("/daemon-api/runtime/validate-delivery-storage/invalid-args",
         test_runtime_validate_delivery_storage_rejects_invalid_args);
-    g_test_add_func ("/daemon-api/runtime/open-object-store/creates-fresh-root",
-        test_runtime_open_object_store_creates_fresh_root);
+    g_test_add_func ("/daemon-api/runtime/open-object-store/"
+        "refuses-uninitialized-root",
+        test_runtime_open_object_store_refuses_uninitialized_root);
     g_test_add_func (
         "/daemon-api/runtime/open-object-store/opens-existing-root",
         test_runtime_open_object_store_opens_existing_root);
