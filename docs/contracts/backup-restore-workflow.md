@@ -57,6 +57,14 @@ clear error.
 If the DuckDB catalog is missing or a materialization checkpoint is missing,
 recovery must prefer rebuild over data loss.
 
+The storage markers travel with their data: `wyrebox-journal.marker` belongs
+to the `canonical-journal` backup unit and `wyrebox-object-store.marker` to the
+`raw-objects` unit. Restore them together with a matching journal and object
+store; markers from different installations make `wyreboxd` exit with
+`EX_DATAERR` (65). A restore without markers starts with `EX_TEMPFAIL` (75)
+and `storage is not initialized` until `wyreboxd --initialize-storage` adopts
+the restored journal and objects under a new storage ID.
+
 Delivery materialization holds are not persisted; `wyreboxd` rediscovers them
 after a restore.
 

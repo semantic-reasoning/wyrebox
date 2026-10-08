@@ -211,8 +211,11 @@ Startup exit codes:
 
 - `EX_DATAERR` (65) means a permanent problem: corrupt or account-less journal
   data, an unsafe journal suffix, a catalog schema newer than this build
-  supports, a catalog migration that needs an offline checkpoint, or a
-  catalog file that is not a valid or compatible DuckDB database. systemd
+  supports, a catalog migration that needs an offline checkpoint, a
+  catalog file that is not a valid or compatible DuckDB database, an invalid
+  storage marker, or `storage markers do not match`, which means a volume
+  from another installation or a mismatched restore is mounted. Mount the
+  right volumes or restore a matching pair. systemd
   does not restart `wyreboxd`. Read the `wyreboxd` journal for `catalog
   preparation failed`, `delivery materialization failed`, or `delivery
   storage is invalid`, and fix the cause before starting again. For
@@ -221,7 +224,13 @@ Startup exit codes:
 - `EX_TEMPFAIL` (75) means a failure that may clear by itself, such as another
   process holding the catalog open, an I/O error, a raw object that exists
   but cannot be read (`failed to read raw object`), or an object store that
-  is not mounted (`check that the object store is mounted`). systemd restarts
+  is not mounted (`check that the object store is mounted`). Storage that is
+  not initialized or not mounted is also 75: `storage is not initialized`
+  means both markers are missing, so mount the storage volume or, on a new
+  installation or an upgrade, run `--initialize-storage` as described under
+  Systemd Operational Model; `storage marker <path> does not exist but <path>
+  does` means one volume is not mounted, or an interrupted
+  `--initialize-storage` needs to run again. systemd restarts
   `wyreboxd` within its start rate limit. If restarts keep failing, look for
   processes holding the catalog, check that the object store is mounted at
   `object_root_dir`, and check disk space and permissions. For `failed to
@@ -257,6 +266,68 @@ The service model uses `RuntimeDirectory=wyrebox` for `/run/wyrebox/`,
 
 Logging is journald first. If file logs are needed later, packaging may use
 `LogsDirectory=wyrebox` or an equivalent `/var/log/wyrebox/` layout.
+
+The shipped unit declares
+`RequiresMountsFor=/var/lib/wyrebox/journal /var/lib/wyrebox/object-store`, so
+systemd mounts the default storage roots before it starts `wyreboxd`. When the
+configuration moves `journal_root_dir` or `object_root_dir`, add a drop-in
+with `systemctl edit wyreboxd` that repeats `RequiresMountsFor=` with the
+configured paths. `RequiresMountsFor=` only orders and requires mount units
+that systemd knows about; the storage markers remain the guard against
+starting on a volume that is not mounted (see
+`docs/adr/0003-delivery-materialization-isolation.md`).
+
+Storage initialization is an explicit, one-time operator step. Create the
+mount points, mount the journal and object store volumes, give the mounted
+roots to the service user, then initialize:
+
+```sh
+install -d -o wyrebox -g wyrebox -m 0750 /var/lib/wyrebox
+install -d /var/lib/wyrebox/journal /var/lib/wyrebox/object-store
+mount /var/lib/wyrebox/journal
+mount /var/lib/wyrebox/object-store
+install -d -o wyrebox -g wyrebox -m 0700 /var/lib/wyrebox/journal /var/lib/wyrebox/object-store
+runuser -u wyrebox -- wyreboxd --initialize-storage --config /etc/wyrebox/wyrebox.conf
+```
+
+Skip the `mount` lines when the roots are plain directories. The root of a
+newly created filesystem is owned by root, so without the ownership step
+`--initialize-storage` exits with 71. Run it as the service user: run as
+root, it leaves root-owned roots and markers that `wyreboxd` cannot read, so
+startup exits with 75 until an operator runs `chown -R wyrebox:wyrebox` on
+both roots. Never run it from `ExecStartPre=` or any other automatic hook,
+because initializing on every start would turn an unmounted volume into a
+new, empty installation. It prints the storage ID and exits; running it again
+on initialized storage prints `storage already initialized` and changes
+nothing.
+
+Upgrading existing storage from a release without storage markers: stop
+`wyreboxd`, check that both volumes are mounted, run the same
+`--initialize-storage` command, then start `wyreboxd`. Until then startup
+exits with 75 and logs `storage is not initialized`. The command adopts the
+existing journal and objects when both hold data, and refuses when only one
+does.
+
+`--initialize-storage` exits with 0 when storage is initialized or already
+was, 75 when a root looks unmounted (only one side holds data, or only the
+object store marker exists), 65 when an existing marker is invalid or the
+markers do not match, 78 when the configuration is invalid, and 71 for any
+other failure, such as a permission or write error. When it refuses with 75:
+
+- `check that the object store is mounted` or `check that the journal is
+  mounted`: mount the named volume and run it again.
+- Only a lone object store marker: mount the correct journal volume. If the
+  journal really is new, move the object store marker aside only after
+  confirming that the object store belongs to this installation.
+- An empty journal and an object store that holds only empty shard
+  directories, `.tmp-object-` files, or complete objects under
+  `objects/sha256`, left by deliveries that failed before their journal
+  append: move them aside and run it again.
+
+After repeated 75 exits, for example while a volume is not mounted or
+storage is not initialized after an upgrade, systemd stops restarting
+`wyreboxd` at its start rate limit. Fix the cause, then run
+`systemctl reset-failed wyreboxd` and `systemctl start wyreboxd`.
 
 Socket activation is deferred. The initial service owns socket creation and
 lifecycle directly after startup and replay are complete.

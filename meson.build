@@ -638,6 +638,12 @@ test(
 )
 
 test(
+  'docs issue 0337 storage initialization',
+  python,
+  args: files('tests/docs/test_issue_0337_storage_initialization.py'),
+)
+
+test(
   'docs issue 0004 daemon api schema',
   python,
   args: capnp_schema_args,

@@ -2,6 +2,7 @@
 Description=WyreBox daemon
 Documentation=man:wyreboxd(8)
 After=network.target
+RequiresMountsFor=/var/lib/wyrebox/journal /var/lib/wyrebox/object-store
 
 [Service]
 Type=simple
