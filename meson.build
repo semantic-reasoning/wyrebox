@@ -2,7 +2,7 @@ project('wyrebox',
   'c',
   version: '0.1.0',
   license: 'MPL-2.0',
-  meson_version: '>=1.0.0',
+  meson_version: '>=1.1.0',
 )
 
 fs = import('fs')
@@ -237,6 +237,34 @@ if not wirelog_from_subproject
 endif
 
 summary('wirelog runtime', wirelog_runtime_summary, section: 'Dependencies')
+
+# libchronoid provides UUIDv7 storage identifiers. It is LGPL-3.0-or-later,
+# so WyreBox links its shared library only.
+if get_option('wrap_mode') == 'forcefallback' or \
+    'libchronoid' in get_option('force_fallback_for')
+  chronoid_dep = dependency('', required: false)
+else
+  chronoid_dep = dependency('libchronoid',
+    version: ['>=1.2.0', '<2'],
+    required: false,
+    allow_fallback: false)
+endif
+chronoid_summary = 'shared library via pkg-config'
+if not chronoid_dep.found()
+  chronoid_project = subproject(
+    'libchronoid',
+    default_options: [
+      'tests=false',
+      'cli=false',
+    ],
+  )
+  chronoid_dep = declare_dependency(
+    link_with: chronoid_project.get_variable('chronoid_lib').get_shared_lib(),
+    include_directories: chronoid_project.get_variable('inc'),
+  )
+  chronoid_summary = 'shared library via subproject fallback'
+endif
+summary('libchronoid', chronoid_summary, section: 'Dependencies')
 
 dovecot_backend_option = get_option('dovecot_backend')
 dovecot_loader_smoke_option = get_option('dovecot_loader_smoke')
@@ -601,6 +629,12 @@ test(
   'docs duckdb dependency contract',
   python,
   args: files('tests/docs/test_duckdb_dependency_contract.py'),
+)
+
+test(
+  'docs issue 0337 libchronoid dependency',
+  python,
+  args: files('tests/docs/test_issue_0337_libchronoid_dependency.py'),
 )
 
 test(

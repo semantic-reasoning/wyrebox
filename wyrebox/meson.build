@@ -150,6 +150,7 @@ wyrebox_link_deps = [
   gobject_dep,
   gio_dep,
   gio_unix_dep,
+  chronoid_dep.partial_dependency(compile_args: true, includes: true),
 ] + duckdb_deps
 
 if capnp_serialization_found
@@ -230,7 +231,7 @@ if capnp_serialization_found
   wyreboxd = executable(
     'wyreboxd',
     'daemon/wyreboxd-main.c',
-    dependencies: [wyrebox_dep],
+    dependencies: [wyrebox_dep, chronoid_dep],
     install: true,
   )
   wyrebox_backup_tool = executable(
