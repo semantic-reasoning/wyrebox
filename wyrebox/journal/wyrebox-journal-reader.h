@@ -7,6 +7,9 @@
 /* *INDENT-OFF* */
 G_BEGIN_DECLS
 
+/* The single journal segment file under the journal root directory. */
+#define WYREBOX_JOURNAL_SEGMENT_NAME "00000000000000000000.wbj"
+
 #define WYREBOX_TYPE_JOURNAL_READER (wyrebox_journal_reader_get_type())
 
 G_DECLARE_FINAL_TYPE (WyreboxJournalReader,

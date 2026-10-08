@@ -12,7 +12,6 @@
 #include <glib-unix.h>
 #include <gio/gio.h>
 
-#define WYREBOX_JOURNAL_SEGMENT_NAME "00000000000000000000.wbj"
 #define WYREBOX_JOURNAL_RECORD_HEADER_SIZE 64
 #define WYREBOX_JOURNAL_RECORD_VERSION 1
 
