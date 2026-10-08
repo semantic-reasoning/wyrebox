@@ -89,8 +89,7 @@ def main() -> None:
         r"journaled size or SHA-256 key")
 
     assert_section_matches(adr, decision,
-        r"missing root with journal records exits with `EX_TEMPFAIL` \(75\) "
-        r"and creates nothing")
+        r"missing root exits with `EX_TEMPFAIL` \(75\) and creates nothing")
     assert_section_matches(adr, decision,
         r"A missing root therefore stops every account and retries")
     assert_section_lacks(adr, gaps, r"unmounted or unreadable as a whole")
@@ -125,8 +124,7 @@ def main() -> None:
         r"the object is restored.*\(#338\)")
     assert_section_matches(adr, gaps,
         r"cannot be read stops startup with `EX_TEMPFAIL`.*\(#339\)")
-    assert_section_matches(adr, gaps,
-        r"same unmounted volume.*\(#337\)")
+    assert_section_lacks(adr, gaps, r"same unmounted volume")
     assert_section_matches(runtime, runbook,
         r"materialized before the checkpoint are not held and are reported "
         r"only by this warning")

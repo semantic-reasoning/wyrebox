@@ -3,9 +3,9 @@
 ## Status
 
 Accepted for issue #317. Amended by issue #331 (object, catalog, and storage
-recovery error classification). `.internal-docs/` is not part of the
-repository, so this ADR together with the referenced contract sections is the
-decision record.
+recovery error classification). Amended by issue #337 (paired storage
+markers). `.internal-docs/` is not part of the repository, so this ADR
+together with the referenced contract sections is the decision record.
 
 ## Context
 
@@ -59,17 +59,52 @@ A catch-up pass holds an account instead of stopping:
   (`objects/sha256`) that is missing or not accessible, as when the object
   store is not mounted. A missing root therefore stops every account and
   retries, instead of holding every account.
-- At startup `wyreboxd` creates the object store root only while the journal
-  has no records. A missing root with journal records exits with
-  `EX_TEMPFAIL` (75) and creates nothing, so starting before the object
-  store is mounted neither writes into the mount point nor reports every
-  delivery as missing. Likewise, a delivery while the root is missing fails
-  with `G_IO_ERROR_BUSY`, a temporary failure that Postfix retries, and
-  creates nothing.
+- At startup `wyreboxd` never creates the object store root. A missing root
+  exits with `EX_TEMPFAIL` (75) and creates nothing, whether or not the
+  journal has records, so starting before the object store is mounted neither
+  writes into the mount point nor reports every delivery as missing.
+  Likewise, a delivery while the root is missing fails with
+  `G_IO_ERROR_BUSY`, a temporary failure that Postfix retries, and creates
+  nothing.
 
 Holds are not persisted. Every pass re-derives them from the journal and the
 catalog, so a fixed INBOX recovers automatically on the next pass, and a
 restart rediscovers a hold that still exists.
+
+### Paired storage markers
+
+- The journal root holds `wyrebox-journal.marker` and the object store root
+  holds `wyrebox-object-store.marker`. Both record the same storage ID, so a
+  root that is not mounted, or a volume from another installation, is
+  detected before anything is written.
+- At startup `wyreboxd` checks the markers right after loading its
+  configuration and creates nothing until both storage markers exist and
+  match. It does not open the object store, recover a torn journal suffix,
+  create the journal, or prepare the catalog before that check.
+  - Both markers missing (`storage is not initialized`) or one marker missing
+    (`storage marker <path> does not exist but <path> does`) exits with
+    `EX_TEMPFAIL` (75), as does a marker that cannot be read.
+  - A marker that is malformed, larger than 4 KiB, has an unsupported format
+    or role, or holds an invalid storage ID, and two markers with different
+    storage IDs (`storage markers do not match`), exit with `EX_DATAERR`
+    (65). Mounting a volume from another installation is an operator error
+    that restarting cannot fix.
+- Only `wyreboxd --initialize-storage` writes storage markers. It runs once on
+  a new installation and once when upgrading existing storage, then exits:
+  - It writes the missing markers only when both roots hold data or neither
+    does. The journal holds data when its segment file is not empty, and the
+    object store when `objects/sha256` has any entry. Otherwise it refuses
+    with 75 and writes nothing, because one empty side means that volume is
+    probably not mounted.
+  - It creates the journal root and `objects/sha256`, then writes the journal
+    marker first and the object store marker second. Running it again
+    completes a lone journal marker left by an interrupted run, and it
+    refuses a lone object store marker, which an interrupted run never
+    leaves.
+  - Invalid or mismatched markers are refused with 65 and left unchanged.
+- The storage ID is a UUIDv7 generated with libchronoid
+  (`docs/contracts/libchronoid-dependency.md`). Only `wyreboxd` links
+  libchronoid.
 
 ### Checkpoint invariant
 
@@ -178,8 +213,9 @@ promptly.
 ### No new identifier
 
 Holds are keyed by account identity and reported with journal offset and
-sequence, which already identify a delivery. No new identifier is introduced,
-so no UUIDv7 dependency is added.
+sequence, which already identify a delivery. No new identifier is introduced
+for holds, so no UUIDv7 dependency is added for them. The storage ID above is
+the only UUIDv7 that `wyreboxd` generates.
 
 ## Alternatives Considered
 
@@ -207,10 +243,17 @@ A persisted per-account hold or per-account checkpoint table was rejected:
 - An object that exists but cannot be read stops startup with `EX_TEMPFAIL`,
   so systemd restarts `wyreboxd` until its start rate limit stops it, while
   the same object at runtime only holds its accounts (#339).
-- Startup treats a missing object store root as a new installation when the
-  journal has no complete record. A journal and object store on the same
-  unmounted volume, or a torn first journal record with an unmounted object
-  store, therefore create a new, empty root in the mount point (#337).
+- Running `--initialize-storage` while a volume is not mounted, when both
+  roots look empty, initializes the mount point. Markers detect the volume
+  that is missing later, but the shipped unit's `RequiresMountsFor=` and the
+  operator's check of the mounts are the only guard during initialization.
+- Two concurrent `--initialize-storage` runs can leave markers with different
+  storage IDs. Startup then exits with 65 until an operator removes the
+  markers and initializes again.
+- Any entry under `objects/sha256` counts as object data, including an empty
+  shard directory or a temporary file left by a failed delivery, so
+  `--initialize-storage` refuses storage whose journal is empty but whose
+  object store holds only such leftovers.
 - DuckDB open failures are classified by the text of DuckDB's error message
   in the pinned DuckDB release. An unrecognised message, for example a failed
   WAL replay, exits with `EX_TEMPFAIL` and systemd keeps restarting until its
