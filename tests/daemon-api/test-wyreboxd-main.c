@@ -11,6 +11,7 @@
 #include "wyrebox-daemon-capnp-codec.h"
 #endif
 #include "wyrebox-daemon-runtime.h"
+#include "wyrebox-daemon-storage.h"
 #include "wyrebox-dovecot-daemon-client.h"
 #include "wyrebox-eml-ingestor.h"
 #include "wyrebox-journal-writer.h"
@@ -23,6 +24,7 @@
 #include <sysexits.h>
 
 #define JOURNAL_SEGMENT_NAME "00000000000000000000.wbj"
+#define OTHER_STORAGE_ID "01920000-0000-7000-8000-0000000000ff"
 
 static void
 duckdb_connection_clear (duckdb_connection *connection)
@@ -92,7 +94,7 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (DaemonRoot, daemon_root_clear)
 /* *INDENT-ON* */
 
 static void
-daemon_root_init (DaemonRoot *daemon_root)
+daemon_root_init_uninitialized (DaemonRoot *daemon_root)
 {
     g_autofree char *run_dir = NULL;
     g_autofree char *config_contents = NULL;
@@ -139,6 +141,121 @@ wyreboxd_executable (void)
     g_assert_nonnull (path);
     g_assert_cmpstr (path, !=, "");
     return path;
+}
+
+/*
+ * Runs wyreboxd to completion, optionally with --initialize-storage, and
+ * returns its exit status.
+ */
+static int
+run_wyreboxd (const DaemonRoot *daemon_root, gboolean initialize_storage,
+    char **out_stdout, char **out_stderr)
+{
+    g_autoptr (GSubprocess) subprocess = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autofree char *stdout_text = NULL;
+    g_autofree char *stderr_text = NULL;
+    const char *argv[] = {
+        wyreboxd_executable (),
+        "--config",
+        daemon_root->config_path,
+        initialize_storage ? "--initialize-storage" : NULL,
+        NULL
+    };
+
+    subprocess = g_subprocess_newv (argv,
+            (GSubprocessFlags)(G_SUBPROCESS_FLAGS_STDOUT_PIPE |
+            G_SUBPROCESS_FLAGS_STDERR_PIPE), &error);
+    g_assert_no_error (error);
+    g_assert_true (g_subprocess_communicate_utf8 (subprocess, NULL, NULL,
+        &stdout_text, &stderr_text, &error));
+    g_assert_no_error (error);
+
+    if (out_stdout != NULL)
+        *out_stdout = g_steal_pointer (&stdout_text);
+    if (out_stderr != NULL)
+        *out_stderr = g_steal_pointer (&stderr_text);
+    return g_subprocess_get_exit_status (subprocess);
+}
+
+static void
+initialize_storage (const DaemonRoot *daemon_root)
+{
+    g_autofree char *stdout_text = NULL;
+
+    g_assert_cmpint (run_wyreboxd (daemon_root, TRUE, &stdout_text, NULL), ==,
+        EX_OK);
+    g_assert_nonnull (strstr (stdout_text, "storage initialized"));
+}
+
+static void
+daemon_root_init (DaemonRoot *daemon_root)
+{
+    daemon_root_init_uninitialized (daemon_root);
+    initialize_storage (daemon_root);
+}
+
+static char *
+storage_marker_path (const DaemonRoot *daemon_root, gboolean journal)
+{
+    return journal ? g_build_filename (daemon_root->journal_dir,
+               WYREBOX_DAEMON_STORAGE_JOURNAL_MARKER, NULL) :
+           g_build_filename (daemon_root->object_dir,
+               WYREBOX_DAEMON_STORAGE_OBJECT_STORE_MARKER, NULL);
+}
+
+static void
+write_storage_marker (const DaemonRoot *daemon_root, gboolean journal,
+    const char *contents, gssize length)
+{
+    g_autofree char *path = storage_marker_path (daemon_root, journal);
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (g_file_set_contents (path, contents, length, &error));
+    g_assert_no_error (error);
+}
+
+static gboolean
+storage_marker_exists (const DaemonRoot *daemon_root, gboolean journal)
+{
+    g_autofree char *path = storage_marker_path (daemon_root, journal);
+
+    return g_file_test (path, G_FILE_TEST_EXISTS);
+}
+
+static gboolean
+objects_dir_exists (const DaemonRoot *daemon_root)
+{
+    g_autofree char *path = g_build_filename (daemon_root->object_dir,
+            "objects", "sha256", NULL);
+
+    return g_file_test (path, G_FILE_TEST_IS_DIR);
+}
+
+static char *
+read_segment (const DaemonRoot *daemon_root, gsize *out_length)
+{
+    g_autofree char *path = g_build_filename (daemon_root->journal_dir,
+            JOURNAL_SEGMENT_NAME, NULL);
+    g_autoptr (GError) error = NULL;
+    char *contents = NULL;
+
+    g_assert_true (g_file_get_contents (path, &contents, out_length, &error));
+    g_assert_no_error (error);
+    return contents;
+}
+
+static void
+write_segment (const DaemonRoot *daemon_root, const char *contents,
+    gsize length)
+{
+    g_autofree char *path = g_build_filename (daemon_root->journal_dir,
+            JOURNAL_SEGMENT_NAME, NULL);
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (g_file_set_contents (path, contents, (gssize)length,
+        &error));
+    g_assert_no_error (error);
 }
 
 static GSubprocess *
@@ -586,6 +703,207 @@ test_wyreboxd_exits_tempfail_when_object_root_is_missing (void)
     g_assert_false (g_file_test (sha256_dir, G_FILE_TEST_EXISTS));
 }
 
+static void
+test_wyreboxd_exits_tempfail_on_uninitialized_storage (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autofree char *segment = NULL;
+
+    daemon_root_init_uninitialized (&daemon_root);
+    segment = g_build_filename (daemon_root.journal_dir, JOURNAL_SEGMENT_NAME,
+            NULL);
+
+    assert_daemon_startup_fails (&daemon_root, EX_TEMPFAIL,
+        "storage is not initialized");
+    g_assert_false (objects_dir_exists (&daemon_root));
+    g_assert_false (g_file_test (segment, G_FILE_TEST_EXISTS));
+    g_assert_false (g_file_test (daemon_root.catalog_path, G_FILE_TEST_EXISTS));
+    g_assert_false (storage_marker_exists (&daemon_root, TRUE));
+    g_assert_false (storage_marker_exists (&daemon_root, FALSE));
+}
+
+static void
+test_wyreboxd_exits_tempfail_when_storage_roots_are_missing (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+
+    daemon_root_init_uninitialized (&daemon_root);
+    remove_tree (daemon_root.journal_dir);
+    remove_tree (daemon_root.object_dir);
+
+    assert_daemon_startup_fails (&daemon_root, EX_TEMPFAIL,
+        "storage is not initialized");
+    g_assert_false (g_file_test (daemon_root.journal_dir, G_FILE_TEST_EXISTS));
+    g_assert_false (g_file_test (daemon_root.object_dir, G_FILE_TEST_EXISTS));
+}
+
+/*
+ * A torn first record must not be truncated while the object store volume is
+ * not mounted, because recovery would discard the only trace of the delivery.
+ */
+static void
+test_wyreboxd_exits_tempfail_on_torn_first_record_with_unmounted_object_store
+    (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autofree char *before = NULL;
+    g_autofree char *after = NULL;
+    gsize before_length = 0;
+    gsize after_length = 0;
+
+    daemon_root_init (&daemon_root);
+    journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
+    before = read_segment (&daemon_root, &before_length);
+    g_assert_cmpuint (before_length, >, 1);
+    write_segment (&daemon_root, before, before_length - 1);
+    g_clear_pointer (&before, g_free);
+    before = read_segment (&daemon_root, &before_length);
+    remove_tree (daemon_root.object_dir);
+    g_assert_cmpint (g_mkdir (daemon_root.object_dir, 0750), ==, 0);
+
+    assert_daemon_startup_fails (&daemon_root, EX_TEMPFAIL,
+        "check that the volume holding");
+    after = read_segment (&daemon_root, &after_length);
+    g_assert_cmpmem (after, after_length, before, before_length);
+    g_assert_false (objects_dir_exists (&daemon_root));
+}
+
+static void
+test_wyreboxd_exits_dataerr_on_mismatched_storage_ids (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+
+    daemon_root_init (&daemon_root);
+    write_storage_marker (&daemon_root, FALSE, "[WyreBox Storage]\n"
+        "format=1\nrole=object-store\nstorage_id=" OTHER_STORAGE_ID "\n", -1);
+
+    assert_daemon_startup_fails (&daemon_root, EX_DATAERR,
+        "storage markers do not match");
+}
+
+static void
+test_wyreboxd_exits_dataerr_on_oversized_storage_marker (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autofree char *padding = g_strnfill (8192, '#');
+
+    daemon_root_init (&daemon_root);
+    write_storage_marker (&daemon_root, TRUE, padding, -1);
+
+    assert_daemon_startup_fails (&daemon_root, EX_DATAERR, "storage marker");
+}
+
+static void
+test_wyreboxd_exits_tempfail_on_unreadable_storage_marker (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autofree char *path = NULL;
+
+    daemon_root_init (&daemon_root);
+    path = storage_marker_path (&daemon_root, TRUE);
+    g_assert_cmpint (g_remove (path), ==, 0);
+    g_assert_cmpint (g_mkdir (path, 0700), ==, 0);
+
+    assert_daemon_startup_fails (&daemon_root, EX_TEMPFAIL,
+        "failed to read storage marker");
+}
+
+static void
+test_wyreboxd_initialize_storage_then_starts (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) subprocess = NULL;
+    g_autofree char *stdout_text = NULL;
+
+    daemon_root_init_uninitialized (&daemon_root);
+    remove_tree (daemon_root.journal_dir);
+    remove_tree (daemon_root.object_dir);
+    g_assert_cmpint (run_wyreboxd (&daemon_root, TRUE, &stdout_text, NULL), ==,
+        EX_OK);
+    g_assert_nonnull (strstr (stdout_text,
+        "wyreboxd: storage initialized: storage ID "));
+    g_assert_true (storage_marker_exists (&daemon_root, TRUE));
+    g_assert_true (storage_marker_exists (&daemon_root, FALSE));
+    g_assert_true (objects_dir_exists (&daemon_root));
+    g_assert_false (g_file_test (daemon_root.catalog_path, G_FILE_TEST_EXISTS));
+    g_assert_false (g_file_test (daemon_root.socket_path, G_FILE_TEST_EXISTS));
+
+    g_clear_pointer (&stdout_text, g_free);
+    g_assert_cmpint (run_wyreboxd (&daemon_root, TRUE, &stdout_text, NULL), ==,
+        EX_OK);
+    g_assert_nonnull (strstr (stdout_text,
+        "wyreboxd: storage already initialized: storage ID "));
+
+    subprocess = start_daemon (&daemon_root);
+    stop_daemon (subprocess);
+}
+
+static void
+test_wyreboxd_initialize_storage_adopts_existing_storage (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) subprocess = NULL;
+
+    daemon_root_init_uninitialized (&daemon_root);
+    journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
+    initialize_storage (&daemon_root);
+
+    subprocess = start_daemon (&daemon_root);
+    stop_daemon (subprocess);
+}
+
+static void
+test_wyreboxd_initialize_storage_refuses_half_mounted_storage (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autofree char *stderr_text = NULL;
+
+    daemon_root_init_uninitialized (&daemon_root);
+    journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
+    remove_tree (daemon_root.object_dir);
+    g_assert_cmpint (g_mkdir (daemon_root.object_dir, 0750), ==, 0);
+
+    g_assert_cmpint (run_wyreboxd (&daemon_root, TRUE, NULL, &stderr_text), ==,
+        EX_TEMPFAIL);
+    g_assert_nonnull (strstr (stderr_text,
+        "check that the object store is mounted"));
+    g_assert_false (storage_marker_exists (&daemon_root, TRUE));
+    g_assert_false (storage_marker_exists (&daemon_root, FALSE));
+    g_assert_false (objects_dir_exists (&daemon_root));
+}
+
+static void
+test_wyreboxd_initialize_storage_refuses_mismatched_markers (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autofree char *stderr_text = NULL;
+
+    daemon_root_init (&daemon_root);
+    write_storage_marker (&daemon_root, FALSE, "[WyreBox Storage]\n"
+        "format=1\nrole=object-store\nstorage_id=" OTHER_STORAGE_ID "\n", -1);
+
+    g_assert_cmpint (run_wyreboxd (&daemon_root, TRUE, NULL, &stderr_text), ==,
+        EX_DATAERR);
+    g_assert_nonnull (strstr (stderr_text, "storage markers do not match"));
+}
+
+static void
+test_wyreboxd_initialize_storage_rejects_invalid_config (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    daemon_root_init_uninitialized (&daemon_root);
+    g_assert_true (g_file_set_contents (daemon_root.config_path,
+        "[daemon]\nunknown_key=1\n", -1, &error));
+    g_assert_no_error (error);
+
+    g_assert_cmpint (run_wyreboxd (&daemon_root, TRUE, NULL, NULL), ==,
+        EX_CONFIG);
+    g_assert_false (storage_marker_exists (&daemon_root, TRUE));
+    g_assert_false (storage_marker_exists (&daemon_root, FALSE));
+}
+
 static char *
 first_raw_object_path (const DaemonRoot *daemon_root)
 {
@@ -914,6 +1232,38 @@ main (int argc, char **argv)
     g_test_add_func
         ("/daemon-api/wyreboxd/exits-tempfail-when-object-root-is-missing",
         test_wyreboxd_exits_tempfail_when_object_root_is_missing);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/exits-tempfail-on-uninitialized-storage",
+        test_wyreboxd_exits_tempfail_on_uninitialized_storage);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/exits-tempfail-when-storage-roots-are-missing",
+        test_wyreboxd_exits_tempfail_when_storage_roots_are_missing);
+    g_test_add_func ("/daemon-api/wyreboxd/"
+        "exits-tempfail-on-torn-first-record-with-unmounted-object-store",
+        test_wyreboxd_exits_tempfail_on_torn_first_record_with_unmounted_object_store);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/exits-dataerr-on-mismatched-storage-ids",
+        test_wyreboxd_exits_dataerr_on_mismatched_storage_ids);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/exits-dataerr-on-oversized-storage-marker",
+        test_wyreboxd_exits_dataerr_on_oversized_storage_marker);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/exits-tempfail-on-unreadable-storage-marker",
+        test_wyreboxd_exits_tempfail_on_unreadable_storage_marker);
+    g_test_add_func ("/daemon-api/wyreboxd/initialize-storage-then-starts",
+        test_wyreboxd_initialize_storage_then_starts);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/initialize-storage-adopts-existing-storage",
+        test_wyreboxd_initialize_storage_adopts_existing_storage);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/initialize-storage-refuses-half-mounted-storage",
+        test_wyreboxd_initialize_storage_refuses_half_mounted_storage);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/initialize-storage-refuses-mismatched-markers",
+        test_wyreboxd_initialize_storage_refuses_mismatched_markers);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/initialize-storage-rejects-invalid-config",
+        test_wyreboxd_initialize_storage_rejects_invalid_config);
     g_test_add_func ("/daemon-api/wyreboxd/starts-with-missing-raw-object",
         test_wyreboxd_starts_with_missing_raw_object);
     g_test_add_func

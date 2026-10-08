@@ -119,18 +119,16 @@ gboolean wyrebox_daemon_runtime_load_garbage_collection_dry_run_report (
     GError **error);
 
 /*
- * Opens the raw object store for the daemon, creating
- * @object_root_dir/objects/sha256 only for a store that has never received a
- * delivery. When that directory is missing but the journal at
- * @journal_root_dir already has records, the store is most likely not
- * mounted, so this fails with G_IO_ERROR_NOT_FOUND without creating anything.
+ * Opens the existing raw object store for the daemon. Only
+ * wyrebox_daemon_storage_initialize() creates @object_root_dir/objects/sha256;
+ * when that directory is missing the store is most likely not mounted, so this
+ * fails with G_IO_ERROR_NOT_FOUND without creating anything.
  *
  * Returns: (transfer full) (nullable): the object store, or NULL with @error
  *   set.
  */
 WyreboxLocalObjectStore *wyrebox_daemon_runtime_open_object_store (
     const char *object_root_dir,
-    const char *journal_root_dir,
     GError **error);
 
 /*

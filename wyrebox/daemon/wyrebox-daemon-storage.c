@@ -274,8 +274,9 @@ wyrebox_daemon_storage_check_initialized (const char *journal_root_dir,
 
         g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
             "storage marker %s does not exist but %s does; check that the "
-            "volume holding %s is mounted", missing->path, present->path,
-            missing_root);
+            "volume holding %s is mounted, or run wyreboxd "
+            "--initialize-storage again if it was interrupted", missing->path,
+            present->path, missing_root);
         return FALSE;
     }
 
@@ -453,6 +454,15 @@ wyrebox_daemon_storage_initialize (const char *journal_root_dir,
         return TRUE;
     }
 
+    /* Initialization writes the journal marker first, so an interrupted run
+     * never leaves the object store marker alone. */
+    if (journal.storage_id == NULL && object.storage_id != NULL) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+            "cannot initialize storage: %s exists but %s does not; check "
+            "that the journal is mounted", object.path, journal.path);
+        return FALSE;
+    }
+
     if (!journal_holds_data (journal_root_dir, &journal_data, error) ||
         !object_store_holds_data (object_root_dir, &object_data, error))
         return FALSE;
@@ -475,8 +485,6 @@ wyrebox_daemon_storage_initialize (const char *journal_root_dir,
 
     if (journal.storage_id != NULL)
         storage_id = g_strdup (journal.storage_id);
-    else if (object.storage_id != NULL)
-        storage_id = g_strdup (object.storage_id);
     else
         storage_id = generate_storage_id (error);
     if (storage_id == NULL)

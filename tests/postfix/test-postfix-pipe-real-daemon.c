@@ -112,6 +112,26 @@ bootstrap_catalog (const char *catalog_path)
 }
 
 static void
+initialize_storage (const char *config_path)
+{
+    g_autoptr (GSubprocess) subprocess = NULL;
+    g_autoptr (GError) error = NULL;
+    const char *argv[] = {
+        wyreboxd_executable (),
+        "--initialize-storage",
+        "--config",
+        config_path,
+        NULL
+    };
+
+    subprocess = g_subprocess_newv (argv, G_SUBPROCESS_FLAGS_STDOUT_SILENCE,
+            &error);
+    g_assert_no_error (error);
+    g_assert_true (g_subprocess_wait_check (subprocess, NULL, &error));
+    g_assert_no_error (error);
+}
+
+static void
 run_pipe_helper (const char *config_socket, GBytes *message,
     ProcessResult *result)
 {
@@ -251,6 +271,7 @@ test_pipe_helper_delivers_through_wyreboxd_and_persists_journal (void)
     bootstrap_catalog (catalog_path);
     write_config (config_path, socket_path, journal_dir, object_dir,
         catalog_path);
+    initialize_storage (config_path);
     message_bytes = g_bytes_new_static (message, sizeof (message) - 1);
 
     const char *daemon_argv[] = {
