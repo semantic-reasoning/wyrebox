@@ -1042,7 +1042,7 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Message Search Operation Contract",
-        r"does not define concrete `.capnp` schemas, field layouts, generated code, Dovecot backend implementation, or the concrete criteria schema",
+        r"request layout is `MessageSearchRequest` in\s+`wyrebox/wyrebox-daemon-api.capnp`",
     )
     for identity_field in [
         "request_id",
@@ -1087,11 +1087,22 @@ def main() -> None:
         "## Message Search Operation Contract",
         r"not arbitrary SQL or raw DuckDB query strings",
     )
-    assert_section_matches(
-        sections,
-        "## Message Search Operation Contract",
-        r"concrete criteria schema.*deferred",
-    )
+    for criterion in [
+        r"`subjectContains` and `fromContains` are substring matches",
+        r"fold ASCII letters only",
+        r"`senderDomain` matches the normalized sender domain exactly",
+        r"`sentSince` \(inclusive\) and `sentBefore` \(exclusive\)",
+        r"empty criteria list matches every visible message",
+        r"at most 16 criteria",
+        r"at most 256 bytes",
+        r"invalid arguments.*`permanent failure`",
+        r"ascending order, each as ASCII\s+decimal followed by a newline",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Message Search Operation Contract",
+            criterion,
+        )
     assert_section_matches(
         sections,
         "## Message Search Operation Contract",
@@ -1796,10 +1807,10 @@ def main() -> None:
         "template catalog implementation",
     ]:
         assert_in_section(sections, "## Deferred Operation Payloads", operation)
-    assert_section_matches(
+    assert_section_forbidden(
         sections,
         "## Deferred Operation Payloads",
-        r"Concrete SEARCH `.capnp` schemas, field layouts, and criteria payloads are deferred",
+        r"Concrete SEARCH",
     )
     assert_section_matches(
         sections,
