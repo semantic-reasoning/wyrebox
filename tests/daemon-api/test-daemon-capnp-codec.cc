@@ -1478,6 +1478,88 @@ assert_flag_keyword_update_request_encoder_round_trip (void)
 }
 
 static void
+assert_mail_event_stream_request_encoder_round_trip (void)
+{
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) encoded = NULL;
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonMailEventStreamRequest) request = { 0 };
+    WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+    gpointer decoded_state = NULL;
+    GDestroyNotify decoded_state_clear = NULL;
+
+    g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+        "request-encode-mail-event", "wyrebox-admin", "account-1",
+        "wyrebox-admin", "corr-mail-event", &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_mail_event_stream_request_init (&request,
+        "account-1", NULL, NULL, NULL, 4096, 12, 0, 0, &error));
+    g_assert_no_error (error);
+
+    encoded = wyrebox_daemon_capnp_codec_encode_mail_event_stream_request
+            (&identity, &request, NULL, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (encoded);
+
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+        encoded,
+        &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (decoded.request_id, ==, "request-encode-mail-event");
+    g_assert_cmpint (decoded.operation, ==,
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAIL_EVENT_STREAM);
+    g_assert_nonnull (decoded.mail_event_stream);
+    g_assert_cmpstr (decoded.mail_event_stream->account_identity, ==,
+        "account-1");
+    g_assert_cmpuint (decoded.mail_event_stream->after_journal_offset, ==,
+        4096);
+    g_assert_cmpuint (decoded.mail_event_stream->after_journal_sequence, ==,
+        12);
+    g_assert_null (decoded.flag_keyword_update);
+
+    decoded_state_clear (decoded_state);
+    g_clear_pointer (&encoded, g_bytes_unref);
+
+    encoded = wyrebox_daemon_capnp_codec_encode_mail_event_stream_request
+            (&identity, NULL, NULL, &error);
+    g_assert_null (encoded);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
+assert_request_bytes_rejects_mail_event_stream_bad_cursor (void)
+{
+    capnp::MallocMessageBuilder builder;
+    auto request_frame = builder.initRoot < RequestFrame > ();
+    auto request_identity = request_frame.initIdentity ();
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) request = NULL;
+    WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+    gpointer decoded_state = NULL;
+    GDestroyNotify decoded_state_clear = NULL;
+
+    request_identity.setRequestId ("request-mail-event-bad-cursor");
+    request_identity.setCallerIdentity ("wyrebox-admin");
+    request_identity.setAccountIdentity ("account-1");
+    auto mail_event_stream = request_frame.initMailEventStream ();
+    mail_event_stream.setAccountIdentity ("account-1");
+    mail_event_stream.setAfterJournalOffset (64);
+    mail_event_stream.setAfterJournalSequence (0);
+    {
+        auto words = capnp::messageToFlatArray (builder);
+        auto bytes = words.asBytes ();
+
+        request = g_bytes_new (bytes.begin (), bytes.size ());
+    }
+
+    g_assert_false (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+        request,
+        &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_assert_null (decoded_state);
+}
+
+static void
 assert_request_bytes_rejects_message_search_missing_account (void)
 {
     g_autoptr (GBytes) request =
@@ -4640,6 +4722,12 @@ main (int argc, char **argv)
     g_test_add_func (
         "/daemon-api/capnp/codec/flag-keyword-update-encoder-round-trip",
         assert_flag_keyword_update_request_encoder_round_trip);
+    g_test_add_func (
+        "/daemon-api/capnp/codec/mail-event-stream-encoder-round-trip",
+        assert_mail_event_stream_request_encoder_round_trip);
+    g_test_add_func (
+        "/daemon-api/capnp/codec/reject-mail-event-stream-bad-cursor",
+        assert_request_bytes_rejects_mail_event_stream_bad_cursor);
     g_test_add_func
         ("/daemon-api/capnp/codec/decode-wirelog-predicate-query-bindings",
         assert_request_bytes_decode_wirelog_predicate_query_with_bindings);
