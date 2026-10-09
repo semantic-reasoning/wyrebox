@@ -127,6 +127,17 @@ and never materialized.
 Mailbox mutations can only change materialized flag/keyword rows and membership
 rows as required by schema contracts.
 
+## Facts As Materialized State
+
+`message_facts` rows are derived from `FactInserted` and `FactRetracted`
+journal records, replayed in journal order with deliveries and flag changes
+under the same materialization checkpoint and per-account holds. A fact
+belongs to the account named by its scope. Its identity is its source,
+predicate, and arguments, and the first argument names the WyreBox message.
+A retraction keeps the row and records the retracting journal sequence in
+`retracted_at_unix_us`; a later insert of the same fact reactivates it.
+Replaying the journal into an empty catalog reproduces the same rows.
+
 ## Schema Versioning And Migration Policy
 
 `schema_metadata` stores an explicit `schema_version` value.

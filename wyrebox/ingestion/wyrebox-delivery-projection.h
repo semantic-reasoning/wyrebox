@@ -1,5 +1,6 @@
 #pragma once
 
+#include "wyrebox-daemon-fact-mutation-request.h"
 #include "wyrebox-flag-changed-payload.h"
 #include "wyrebox-journal-reader.h"
 #include "wyrebox-local-object-store.h"
@@ -20,7 +21,8 @@ G_DECLARE_FINAL_TYPE (WyreboxDeliveryProjection,
 typedef struct
 {
   /*
-   * Journal location of the MessageDelivered or FlagChanged record.
+   * Journal location of the MessageDelivered, FlagChanged, FactInserted, or
+   * FactRetracted record.
    */
   guint64 journal_offset;
   guint64 journal_sequence;
@@ -75,6 +77,16 @@ typedef struct
    * wyrebox_delivery_projection_record_clear().
    */
   WyreboxFlagChangedPayload *flag_change;
+
+  /*
+   * Decoded payload when the entry is a FactInserted or FactRetracted record,
+   * or NULL otherwise. A fact mutation has no object key or delivery
+   * metadata; @account_identity is its scope.
+   *
+   * Ownership: owned by this record and cleared by
+   * wyrebox_delivery_projection_record_clear().
+   */
+  WyreboxDaemonFactMutationRequest *fact_mutation;
 } WyreboxDeliveryProjectionRecord;
 
 /*
@@ -144,15 +156,24 @@ gboolean wyrebox_delivery_projection_replay_records (
     GError **error);
 
 /*
- * Like wyrebox_delivery_projection_replay_records() but also projects
- * FlagChanged records, in journal order with the deliveries, as entries whose
- * @flag_change is set. A FlagChanged payload that fails to decode fails the
- * replay with G_IO_ERROR_INVALID_DATA.
+ * Like wyrebox_delivery_projection_replay_records() but also projects, in
+ * journal order with the deliveries, FlagChanged records as entries whose
+ * @flag_change is set and FactInserted/FactRetracted records as entries whose
+ * @fact_mutation is set. A payload that fails to decode, or a fact payload
+ * whose mutation does not match its event type, fails the replay with
+ * G_IO_ERROR_INVALID_DATA.
  */
-gboolean wyrebox_delivery_projection_replay_records_with_flag_changes (
+gboolean wyrebox_delivery_projection_replay_records_with_mutations (
     WyreboxDeliveryProjection *self,
     WyreboxDeliveryProjectionList *out_projection,
     GError **error);
+
+/*
+ * Returns TRUE when @record projects a MessageDelivered record, which has a
+ * raw object, rather than a flag change or fact mutation.
+ */
+gboolean wyrebox_delivery_projection_record_is_delivery (
+    const WyreboxDeliveryProjectionRecord *record);
 
 /*
  * Checks the raw object @record references.

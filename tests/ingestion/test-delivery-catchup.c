@@ -1,3 +1,4 @@
+#include "wyrebox-daemon-fact-mutation-request.h"
 #include "wyrebox-delivery-catchup.h"
 #include "wyrebox-delivery-materializer.h"
 #include "wyrebox-eml-ingestor.h"
@@ -2138,6 +2139,139 @@ test_account_catchup_flag_changes_follow_holds (InterleavedFixture *fixture,
     remove_catalog (rebuilt_path);
 }
 
+static JournalPosition
+append_fact_mutation (WyreboxJournalWriter *writer,
+    WyreboxDaemonFactMutationKind kind, const gchar *account_id,
+    const WyreboxEmlIngestResult *message, const gchar *view_id)
+{
+    g_autofree gchar *message_id = g_strdup_printf ("journal:%"
+            G_GUINT64_FORMAT ":%" G_GUINT64_FORMAT, message->journal_offset,
+            message->journal_sequence);
+    const gchar *const arguments[] = { message_id, view_id, NULL };
+    g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
+    g_autoptr (GError) error = NULL;
+    JournalPosition position = { 0 };
+
+    g_assert_true (wyrebox_daemon_fact_mutation_request_init (&request, kind,
+        "project_keyword", account_id, arguments, &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_fact_mutation_request_append_journal
+            (&request, writer, &position.journal_offset,
+        &position.journal_sequence, &error));
+    g_assert_no_error (error);
+    return position;
+}
+
+/*
+ * Summarizes message_facts as account/message/object/args/retracted rows.
+ */
+static gchar *
+fact_rows (const gchar *catalog_path)
+{
+    TestDuckdbFixture duckdb = { 0 };
+    gchar *rows = NULL;
+
+    open_duckdb_fixture (catalog_path, &duckdb);
+    rows = query_string (duckdb.connection,
+            "SELECT COALESCE(string_agg(account_id || ' ' || message_id || "
+            "' ' || object_id || ' ' || args_json || ' ' || "
+            "retracted_at_unix_us || '@' || journal_sequence, '; ' "
+            "ORDER BY account_id, args_json), '') FROM message_facts;");
+    close_duckdb_fixture (&duckdb);
+
+    return rows;
+}
+
+static gchar *
+expected_fact_row (const gchar *account_id,
+    const WyreboxEmlIngestResult *message, const gchar *view_id,
+    guint64 retracted_at, JournalPosition last_change)
+{
+    return g_strdup_printf ("%s journal:%" G_GUINT64_FORMAT ":%"
+               G_GUINT64_FORMAT " %s [\"journal:%" G_GUINT64_FORMAT ":%"
+               G_GUINT64_FORMAT "\",\"%s\"] %" G_GUINT64_FORMAT "@%"
+               G_GUINT64_FORMAT, account_id, message->journal_offset,
+               message->journal_sequence, message->object_key,
+               message->journal_offset, message->journal_sequence, view_id,
+               retracted_at, last_change.journal_sequence);
+}
+
+static void
+test_account_catchup_fact_mutations_follow_holds (InterleavedFixture *fixture,
+    gconstpointer user_data)
+{
+    g_auto (WyreboxDeliveryCatchupReport) held = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) recovered = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) rebuilt = { 0 };
+    g_autofree gchar *rebuilt_path = create_bootstrap_catalog ();
+    g_autofree gchar *a_projects = NULL;
+    g_autofree gchar *a_ops = NULL;
+    g_autofree gchar *b_projects = NULL;
+    g_autofree gchar *expected = NULL;
+    g_autofree gchar *held_rows = NULL;
+    g_autofree gchar *recovered_rows = NULL;
+    g_autofree gchar *rebuilt_rows = NULL;
+    g_autoptr (GError) error = NULL;
+    JournalPosition a_insert = { 0 };
+    JournalPosition b_insert = { 0 };
+    JournalPosition a_ops_insert = { 0 };
+    JournalPosition a_retract = { 0 };
+
+    a_insert = append_fact_mutation (fixture->writer,
+            WYREBOX_DAEMON_FACT_MUTATION_INSERT, "account-a", &fixture->a1,
+            "view-projects");
+    b_insert = append_fact_mutation (fixture->writer,
+            WYREBOX_DAEMON_FACT_MUTATION_INSERT, "account-b", &fixture->b1,
+            "view-projects");
+    a_ops_insert = append_fact_mutation (fixture->writer,
+            WYREBOX_DAEMON_FACT_MUTATION_INSERT, "account-a", &fixture->a2,
+            "view-ops");
+    a_retract = append_fact_mutation (fixture->writer,
+            WYREBOX_DAEMON_FACT_MUTATION_RETRACT, "account-a", &fixture->a1,
+            "view-projects");
+
+    g_assert_true (run_isolated_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &held, &error));
+    g_assert_no_error (error);
+    assert_single_hold (&held, "account-b", &fixture->b1);
+    g_assert_cmpuint (held.records_scanned, ==, 9);
+    assert_catalog_checkpoint (fixture->catalog_path, &fixture->a1);
+
+    a_projects = expected_fact_row ("account-a", &fixture->a1,
+            "view-projects", a_retract.journal_sequence, a_retract);
+    a_ops = expected_fact_row ("account-a", &fixture->a2, "view-ops", 0,
+            a_ops_insert);
+    held_rows = fact_rows (fixture->catalog_path);
+    expected = g_strdup_printf ("%s; %s", a_projects, a_ops);
+    g_assert_cmpstr (held_rows, ==, expected);
+    g_assert_cmpuint (a_insert.journal_sequence, <,
+        a_retract.journal_sequence);
+
+    make_account_b_inbox_selectable_in (fixture->catalog_path);
+    g_assert_true (run_isolated_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &recovered, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (recovered.holds->len, ==, 0);
+    assert_catalog_checkpoint_at (fixture->catalog_path, a_retract);
+    b_projects = expected_fact_row ("account-b", &fixture->b1,
+            "view-projects", 0, b_insert);
+    recovered_rows = fact_rows (fixture->catalog_path);
+    g_clear_pointer (&expected, g_free);
+    expected = g_strdup_printf ("%s; %s; %s", a_projects, a_ops, b_projects);
+    g_assert_cmpstr (recovered_rows, ==, expected);
+
+    seed_account_b_inbox (rebuilt_path, TRUE);
+    g_assert_true (run_isolated_catchup (rebuilt_path, fixture->object_root,
+        fixture->journal_root, &rebuilt, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (rebuilt.holds->len, ==, 0);
+    assert_catalog_checkpoint_at (rebuilt_path, a_retract);
+    rebuilt_rows = fact_rows (rebuilt_path);
+    g_assert_cmpstr (rebuilt_rows, ==, recovered_rows);
+
+    remove_catalog (rebuilt_path);
+}
+
 static void
 test_account_catchup_unknown_flag_target_holds_account (void)
 {
@@ -2215,6 +2349,14 @@ main (int argc, char **argv)
         (void (*)(InterleavedFixture *, gconstpointer))
         interleaved_fixture_set_up,
         test_account_catchup_flag_changes_follow_holds,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_tear_down);
+    g_test_add (
+        "/ingestion/delivery-catchup/accounts/fact-mutations-follow-holds",
+        InterleavedFixture, NULL,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_set_up,
+        test_account_catchup_fact_mutations_follow_holds,
         (void (*)(InterleavedFixture *, gconstpointer))
         interleaved_fixture_tear_down);
     g_test_add_func ("/ingestion/delivery-catchup/accounts/"

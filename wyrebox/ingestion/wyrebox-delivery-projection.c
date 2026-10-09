@@ -86,6 +86,10 @@ wyrebox_delivery_projection_record_clear (WyreboxDeliveryProjectionRecord
         wyrebox_flag_changed_payload_clear (record->flag_change);
         g_clear_pointer (&record->flag_change, g_free);
     }
+    if (record->fact_mutation != NULL) {
+        wyrebox_daemon_fact_mutation_request_clear (record->fact_mutation);
+        g_clear_pointer (&record->fact_mutation, g_free);
+    }
 }
 
 void
@@ -178,6 +182,51 @@ append_flag_changed_record (WyreboxDeliveryProjectionList *out_projection,
     return TRUE;
 }
 
+static gboolean
+append_fact_mutation_record (WyreboxDeliveryProjectionList *out_projection,
+    WyreboxJournalRecord *record, GError **error)
+{
+    g_autoptr (GError) local_error = NULL;
+    g_auto (WyreboxDaemonFactMutationRequest) mutation = { 0 };
+    WyreboxJournalEventType mutation_event =
+        WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
+    WyreboxDeliveryProjectionRecord *entry = NULL;
+
+    if (!wyrebox_daemon_fact_mutation_request_decode (record->payload,
+        &mutation, &local_error) ||
+        !wyrebox_daemon_fact_mutation_request_get_event (&mutation,
+        &mutation_event, &local_error) ||
+        mutation_event != record->event_type) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "failed to decode fact mutation payload at sequence %"
+            G_GUINT64_FORMAT ": %s", record->sequence,
+            local_error != NULL ? local_error->message :
+            "mutation does not match the journal event");
+        return FALSE;
+    }
+
+    entry = g_new0 (WyreboxDeliveryProjectionRecord, 1);
+    entry->journal_offset = record->offset;
+    entry->journal_sequence = record->sequence;
+    entry->account_identity = g_strdup (mutation.scope_id);
+    entry->fact_mutation = g_new0 (WyreboxDaemonFactMutationRequest, 1);
+    *entry->fact_mutation = mutation;
+    memset (&mutation, 0, sizeof (mutation));
+    g_ptr_array_add (out_projection->records, entry);
+    return TRUE;
+}
+
+gboolean
+wyrebox_delivery_projection_record_is_delivery (const
+    WyreboxDeliveryProjectionRecord *record)
+{
+    g_return_val_if_fail (record != NULL, FALSE);
+
+    return record->flag_change == NULL && record->fact_mutation == NULL;
+}
+
 gboolean
 wyrebox_delivery_projection_check_record_object (WyreboxLocalObjectStore
     *object_store, const WyreboxDeliveryProjectionRecord *record,
@@ -238,7 +287,7 @@ wyrebox_delivery_projection_check_record_object (WyreboxLocalObjectStore
 
 static gboolean
 projection_replay (WyreboxDeliveryProjection *self,
-    gboolean include_flag_changes,
+    gboolean include_mutations,
     WyreboxDeliveryProjectionList *out_projection, GError **error)
 {
     g_auto (WyreboxJournalRecord) record = { 0 };
@@ -273,9 +322,20 @@ projection_replay (WyreboxDeliveryProjection *self,
             return FALSE;
         }
 
-        if (include_flag_changes &&
+        if (include_mutations &&
             record.event_type == WYREBOX_JOURNAL_EVENT_FLAG_CHANGED) {
             if (!append_flag_changed_record (out_projection, &record,
+                error)) {
+                wyrebox_delivery_projection_list_clear (out_projection);
+                return FALSE;
+            }
+            continue;
+        }
+
+        if (include_mutations &&
+            (record.event_type == WYREBOX_JOURNAL_EVENT_FACT_INSERTED ||
+            record.event_type == WYREBOX_JOURNAL_EVENT_FACT_RETRACTED)) {
+            if (!append_fact_mutation_record (out_projection, &record,
                 error)) {
                 wyrebox_delivery_projection_list_clear (out_projection);
                 return FALSE;
@@ -311,7 +371,7 @@ wyrebox_delivery_projection_replay_records (WyreboxDeliveryProjection *self,
 }
 
 gboolean
-wyrebox_delivery_projection_replay_records_with_flag_changes
+wyrebox_delivery_projection_replay_records_with_mutations
     (WyreboxDeliveryProjection *self,
     WyreboxDeliveryProjectionList *out_projection, GError **error)
 {
