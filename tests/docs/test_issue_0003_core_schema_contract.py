@@ -226,7 +226,7 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Flags And Keywords As Materialized State",
-        r"KeywordChanged",
+        r"`KeywordChanged` is reserved and never materialized",
     )
 
     assert_section_matches(

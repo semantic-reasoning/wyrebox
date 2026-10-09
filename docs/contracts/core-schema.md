@@ -120,7 +120,9 @@ duplicating raw message objects.
 
 Flags and keywords are not stored in raw RFC 5322 objects.
 They are represented as separate rows in materialized state tables and must be
-derived from `FlagChanged` and `KeywordChanged` journal records.
+derived from `FlagChanged` journal records, each of which carries both the
+system flag and user keyword change of one update. `KeywordChanged` is reserved
+and never materialized.
 
 Mailbox mutations can only change materialized flag/keyword rows and membership
 rows as required by schema contracts.
