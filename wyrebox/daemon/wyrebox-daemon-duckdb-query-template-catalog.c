@@ -615,7 +615,7 @@ wyrebox_daemon_duckdb_query_template_catalog_validate
     if (descriptor == NULL) {
         g_set_error (error,
             G_IO_ERROR,
-            G_IO_ERROR_INVALID_ARGUMENT,
+            G_IO_ERROR_NOT_FOUND,
             "unknown duckdb query template '%s'",
             request->template_id != NULL ? request->template_id : "(null)");
         return FALSE;

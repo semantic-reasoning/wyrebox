@@ -394,7 +394,7 @@ test_catalog_rejects_unknown_template (void)
     g_assert_false (wyrebox_daemon_duckdb_query_template_catalog_validate
             (WYREBOX_DAEMON_CLIENT_IDENTITY_ADMIN_CLI, "account-1", &request,
         &descriptor, &error));
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
     g_assert_null (descriptor);
 }
 
