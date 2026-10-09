@@ -1,6 +1,7 @@
 #include "wyrebox-delivery-catchup.h"
 #include "wyrebox-delivery-materializer.h"
 #include "wyrebox-eml-ingestor.h"
+#include "wyrebox-flag-changed-payload.h"
 #include "wyrebox-journal-reader.h"
 #include "wyrebox-journal-writer.h"
 #include "wyrebox-local-object-store.h"
@@ -1994,6 +1995,206 @@ test_missing_object_fails_single_inbox_catchup (void)
     remove_catalog (catalog_path);
 }
 
+typedef struct
+{
+    guint64 journal_offset;
+    guint64 journal_sequence;
+} JournalPosition;
+
+static JournalPosition
+append_flag_change (WyreboxJournalWriter *writer, const gchar *account_id,
+    const gchar *mailbox_id, guint64 uid, WyreboxFlagChangedMode mode,
+    const gchar *flags, const gchar *keywords)
+{
+    g_auto (GStrv) system_flags = g_strsplit (flags, " ", -1);
+    g_auto (GStrv) user_keywords = g_strsplit (keywords, " ", -1);
+    WyreboxFlagChangedPayload payload = {
+        .account_id = (char *)account_id,
+        .mailbox_id = (char *)mailbox_id,
+        .uidvalidity = 1,
+        .uid = uid,
+        .mode = mode,
+        .system_flags = flags[0] != '\0' ? system_flags : NULL,
+        .user_keywords = keywords[0] != '\0' ? user_keywords : NULL,
+    };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    JournalPosition position = { 0 };
+
+    bytes = wyrebox_flag_changed_payload_encode (&payload, &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_journal_writer_append (writer,
+        WYREBOX_JOURNAL_EVENT_FLAG_CHANGED, bytes, &position.journal_offset,
+        &position.journal_sequence, &error));
+    g_assert_no_error (error);
+    return position;
+}
+
+static gchar *
+flag_rows (const gchar *catalog_path)
+{
+    TestDuckdbFixture duckdb = { 0 };
+    g_autofree gchar *flags = NULL;
+    g_autofree gchar *keywords = NULL;
+
+    open_duckdb_fixture (catalog_path, &duckdb);
+    flags = query_string (duckdb.connection,
+            "SELECT COALESCE(string_agg(mm.account_id || ':' || mm.uid || ' ' || "
+            "f.flag_name || '@' || f.journal_offset, ', ' "
+            "ORDER BY mm.account_id, mm.uid, f.flag_name), '') "
+            "FROM message_flags f JOIN mailbox_memberships mm "
+            "ON mm.membership_id = f.membership_id;");
+    keywords = query_string (duckdb.connection,
+            "SELECT COALESCE(string_agg(mm.account_id || ':' || mm.uid || ' ' || "
+            "k.keyword_name || '@' || k.journal_offset, ', ' "
+            "ORDER BY mm.account_id, mm.uid, k.keyword_name), '') "
+            "FROM message_keywords k JOIN mailbox_memberships mm "
+            "ON mm.membership_id = k.membership_id;");
+    close_duckdb_fixture (&duckdb);
+
+    return g_strdup_printf ("flags [%s] keywords [%s]", flags, keywords);
+}
+
+static void
+assert_catalog_checkpoint_at (const gchar *catalog_path,
+    JournalPosition position)
+{
+    TestDuckdbFixture duckdb = { 0 };
+
+    open_duckdb_fixture (catalog_path, &duckdb);
+    assert_materialization_checkpoint (duckdb.connection,
+        position.journal_offset, position.journal_sequence);
+    close_duckdb_fixture (&duckdb);
+}
+
+static void
+test_account_catchup_flag_changes_follow_holds (InterleavedFixture *fixture,
+    gconstpointer user_data)
+{
+    g_auto (WyreboxDeliveryCatchupReport) held = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) recovered = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) rebuilt = { 0 };
+    g_autofree gchar *rebuilt_path = create_bootstrap_catalog ();
+    g_autofree gchar *expected = NULL;
+    g_autofree gchar *held_rows = NULL;
+    g_autofree gchar *recovered_rows = NULL;
+    g_autofree gchar *rebuilt_rows = NULL;
+    g_autoptr (GError) error = NULL;
+    JournalPosition seen = { 0 };
+    JournalPosition flagged = { 0 };
+    JournalPosition answered = { 0 };
+
+    seen = append_flag_change (fixture->writer, "account-a",
+            "inbox:account-a", 2, WYREBOX_FLAG_CHANGED_MODE_SET, "\\Seen",
+            "work");
+    flagged = append_flag_change (fixture->writer, "account-b", "inbox-b", 1,
+            WYREBOX_FLAG_CHANGED_MODE_SET, "\\Flagged", "");
+    answered = append_flag_change (fixture->writer, "account-a",
+            "inbox:account-a", 1, WYREBOX_FLAG_CHANGED_MODE_REPLACE,
+            "\\Answered",
+            "");
+
+    g_assert_true (run_isolated_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &held, &error));
+    g_assert_no_error (error);
+    assert_single_hold (&held, "account-b", &fixture->b1);
+    g_assert_cmpuint (held.records_scanned, ==, 8);
+    g_assert_cmpuint (held.scanned_through.journal_sequence, ==,
+        answered.journal_sequence);
+    assert_catalog_checkpoint (fixture->catalog_path, &fixture->a1);
+    held_rows = flag_rows (fixture->catalog_path);
+    expected = g_strdup_printf ("flags [account-a:1 \\Answered@%"
+            G_GUINT64_FORMAT ", account-a:2 \\Seen@%" G_GUINT64_FORMAT
+            "] keywords [account-a:2 work@%" G_GUINT64_FORMAT "]",
+            answered.journal_offset, seen.journal_offset, seen.journal_offset);
+    g_assert_cmpstr (held_rows, ==, expected);
+
+    make_account_b_inbox_selectable_in (fixture->catalog_path);
+    g_assert_true (run_isolated_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &recovered, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (recovered.holds->len, ==, 0);
+    assert_catalog_checkpoint_at (fixture->catalog_path, answered);
+    recovered_rows = flag_rows (fixture->catalog_path);
+    g_clear_pointer (&expected, g_free);
+    expected = g_strdup_printf ("flags [account-a:1 \\Answered@%"
+            G_GUINT64_FORMAT ", account-a:2 \\Seen@%" G_GUINT64_FORMAT
+            ", account-b:1 \\Flagged@%" G_GUINT64_FORMAT
+            "] keywords [account-a:2 work@%" G_GUINT64_FORMAT "]",
+            answered.journal_offset, seen.journal_offset,
+            flagged.journal_offset,
+            seen.journal_offset);
+    g_assert_cmpstr (recovered_rows, ==, expected);
+
+    seed_account_b_inbox (rebuilt_path, TRUE);
+    g_assert_true (run_isolated_catchup (rebuilt_path, fixture->object_root,
+        fixture->journal_root, &rebuilt, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (rebuilt.holds->len, ==, 0);
+    assert_catalog_checkpoint_at (rebuilt_path, answered);
+    rebuilt_rows = flag_rows (rebuilt_path);
+    g_assert_cmpstr (rebuilt_rows, ==, recovered_rows);
+
+    remove_catalog (rebuilt_path);
+}
+
+static void
+test_account_catchup_unknown_flag_target_holds_account (void)
+{
+    g_autofree gchar *object_root =
+        g_dir_make_tmp ("wyrebox-delivery-catchup-objects-XXXXXX", NULL);
+    g_autofree gchar *journal_root =
+        g_dir_make_tmp ("wyrebox-delivery-catchup-journal-XXXXXX", NULL);
+    g_autofree gchar *catalog_path = create_bootstrap_catalog ();
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
+    g_autoptr (WyreboxJournalWriter) writer = NULL;
+    g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+    g_auto (WyreboxEmlIngestResult) a1 = { 0 };
+    g_auto (WyreboxEmlIngestResult) a2 = { 0 };
+    g_auto (WyreboxEmlIngestResult) b1 = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) report = { 0 };
+    const WyreboxDeliveryCatchupHold *hold = NULL;
+    g_autofree gchar *rows = NULL;
+    JournalPosition unknown = { 0 };
+
+    ingestor = create_ingestor (object_root, journal_root, &object_store,
+            &writer);
+    ingest_delivery_fixture (ingestor, "simple-crlf.eml", "delivery-a1",
+        "account-a", &a1);
+    unknown = append_flag_change (writer, "account-a", "inbox:account-a", 5,
+            WYREBOX_FLAG_CHANGED_MODE_SET, "\\Seen", "");
+    ingest_delivery_fixture (ingestor, "html-message.eml", "delivery-a2",
+        "account-a", &a2);
+    ingest_delivery_fixture (ingestor, "duplicate-message-id.eml",
+        "delivery-b1", "account-b", &b1);
+
+    g_assert_true (run_isolated_catchup (catalog_path, object_root,
+        journal_root, &report, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (report.holds->len, ==, 1);
+    hold = g_ptr_array_index (report.holds, 0);
+    g_assert_cmpstr (hold->account_id, ==, "account-a");
+    g_assert_cmpuint (hold->journal_offset, ==, unknown.journal_offset);
+    g_assert_cmpuint (hold->journal_sequence, ==, unknown.journal_sequence);
+    g_assert_error (hold->error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+    g_assert_cmpuint (account_inbox_membership_count (catalog_path,
+        "account-a"), ==, 1);
+    g_assert_cmpuint (account_inbox_uid (catalog_path, "account-b", &b1), ==,
+        1);
+    assert_catalog_checkpoint (catalog_path, &a1);
+    rows = flag_rows (catalog_path);
+    g_assert_cmpstr (rows, ==, "flags [] keywords []");
+
+    g_clear_object (&ingestor);
+    g_clear_object (&writer);
+    g_clear_object (&object_store);
+    remove_tree (object_root);
+    remove_tree (journal_root);
+    remove_catalog (catalog_path);
+}
+
 #define ADD_OBJECT_TEST(path, func) \
         g_test_add ("/ingestion/delivery-catchup/accounts/objects/" path, \
             InterleavedFixture, NULL, \
@@ -2008,6 +2209,17 @@ main (int argc, char **argv)
 {
     g_test_init (&argc, &argv, NULL);
 
+    g_test_add (
+        "/ingestion/delivery-catchup/accounts/flag-changes-follow-holds",
+        InterleavedFixture, NULL,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_set_up,
+        test_account_catchup_flag_changes_follow_holds,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_tear_down);
+    g_test_add_func ("/ingestion/delivery-catchup/accounts/"
+        "unknown-flag-target-holds",
+        test_account_catchup_unknown_flag_target_holds_account);
     g_test_add ("/ingestion/delivery-catchup/accounts/holds-unselectable",
         InterleavedFixture, NULL,
         (void (*)(InterleavedFixture *, gconstpointer))

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "wyrebox-flag-changed-payload.h"
 #include "wyrebox-journal-reader.h"
 #include "wyrebox-local-object-store.h"
 
@@ -19,7 +20,7 @@ G_DECLARE_FINAL_TYPE (WyreboxDeliveryProjection,
 typedef struct
 {
   /*
-   * Journal location of the MessageDelivered record.
+   * Journal location of the MessageDelivered or FlagChanged record.
    */
   guint64 journal_offset;
   guint64 journal_sequence;
@@ -64,6 +65,16 @@ typedef struct
   gboolean subject_span_valid;
   guint64 subject_span_start;
   guint64 subject_span_end;
+
+  /*
+   * Decoded payload when the entry is a FlagChanged record, or NULL for a
+   * MessageDelivered record. A flag change has no object key or delivery
+   * metadata; @account_identity is its payload's account.
+   *
+   * Ownership: owned by this record and cleared by
+   * wyrebox_delivery_projection_record_clear().
+   */
+  WyreboxFlagChangedPayload *flag_change;
 } WyreboxDeliveryProjectionRecord;
 
 /*
@@ -128,6 +139,17 @@ gboolean wyrebox_delivery_projection_replay_all (
  * per record with wyrebox_delivery_projection_check_record_object().
  */
 gboolean wyrebox_delivery_projection_replay_records (
+    WyreboxDeliveryProjection *self,
+    WyreboxDeliveryProjectionList *out_projection,
+    GError **error);
+
+/*
+ * Like wyrebox_delivery_projection_replay_records() but also projects
+ * FlagChanged records, in journal order with the deliveries, as entries whose
+ * @flag_change is set. A FlagChanged payload that fails to decode fails the
+ * replay with G_IO_ERROR_INVALID_DATA.
+ */
+gboolean wyrebox_delivery_projection_replay_records_with_flag_changes (
     WyreboxDeliveryProjection *self,
     WyreboxDeliveryProjectionList *out_projection,
     GError **error);
