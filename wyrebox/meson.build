@@ -28,6 +28,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-mailbox-status-request.c',
   'daemon/wyrebox-daemon-mailbox-select-result.c',
   'daemon/wyrebox-daemon-mailbox-select-service.c',
+  'daemon/wyrebox-daemon-mail-event.c',
   'daemon/wyrebox-daemon-mail-event-stream-request.c',
   'daemon/wyrebox-daemon-mail-event-stream-service.c',
   'daemon/wyrebox-daemon-client-identity.c',
