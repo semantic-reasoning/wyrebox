@@ -196,6 +196,12 @@ daemon_message_search_service_duckdb_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_flag_keyword_update_journal_test = executable(
+  'test-daemon-flag-keyword-update-journal',
+  'test-daemon-flag-keyword-update-journal.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_message_search_dispatcher_test = executable(
   'test-daemon-message-search-dispatcher',
   'test-daemon-message-search-dispatcher.c',
@@ -452,6 +458,14 @@ test('daemon message search request', daemon_message_search_request_test)
 test('daemon message search dispatcher', daemon_message_search_dispatcher_test)
 test('daemon message search service duckdb',
   daemon_message_search_service_duckdb_test)
+test(
+  'daemon flag keyword update journal',
+  daemon_flag_keyword_update_journal_test,
+  env: {
+    'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() / 'tests'
+    / 'object-store' / 'fixtures',
+  },
+)
 test('daemon wirelog predicate query request',
   daemon_wirelog_predicate_query_request_test)
 test('daemon wirelog predicate query catalog',
