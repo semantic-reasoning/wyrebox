@@ -1240,3 +1240,207 @@ wyrebox_delivery_materializer_apply_flag_change (WyreboxDeliveryMaterializer
 
     return TRUE;
 }
+
+static void
+append_json_string (GString *json, const gchar *value)
+{
+    g_string_append_c (json, '"');
+    for (const guchar *cursor = (const guchar *)value; *cursor != '\0';
+        cursor++) {
+        switch (*cursor) {
+        case '"':
+            g_string_append (json, "\\\"");
+            break;
+        case '\\':
+            g_string_append (json, "\\\\");
+            break;
+        case '\b':
+            g_string_append (json, "\\b");
+            break;
+        case '\f':
+            g_string_append (json, "\\f");
+            break;
+        case '\n':
+            g_string_append (json, "\\n");
+            break;
+        case '\r':
+            g_string_append (json, "\\r");
+            break;
+        case '\t':
+            g_string_append (json, "\\t");
+            break;
+        default:
+            if (*cursor < 0x20)
+                g_string_append_printf (json, "\\u%04x", *cursor);
+            else
+                g_string_append_c (json, (gchar)*cursor);
+            break;
+        }
+    }
+    g_string_append_c (json, '"');
+}
+
+static gchar *
+fact_arguments_to_json (char **arguments)
+{
+    GString *json = g_string_new ("[");
+
+    for (guint i = 0; arguments != NULL && arguments[i] != NULL; i++) {
+        if (i > 0)
+            g_string_append_c (json, ',');
+        append_json_string (json, arguments[i]);
+    }
+    g_string_append_c (json, ']');
+
+    return g_string_free (json, FALSE);
+}
+
+static void
+append_fact_identity_component (GChecksum *checksum, const gchar *value)
+{
+    g_autofree gchar *length = g_strdup_printf ("%" G_GSIZE_FORMAT ":",
+            strlen (value));
+
+    g_checksum_update (checksum, (const guchar *)length, -1);
+    g_checksum_update (checksum, (const guchar *)value, -1);
+}
+
+static gchar *
+build_fact_id (const gchar *source, const gchar *predicate, char **arguments)
+{
+    g_autoptr (GChecksum) checksum = g_checksum_new (G_CHECKSUM_SHA256);
+
+    append_fact_identity_component (checksum, predicate);
+    append_fact_identity_component (checksum, source);
+    for (guint i = 0; arguments != NULL && arguments[i] != NULL; i++)
+        append_fact_identity_component (checksum, arguments[i]);
+
+    return g_strdup_printf ("fact:%s", g_checksum_get_string (checksum));
+}
+
+static gboolean
+materializer_insert_fact (WyreboxDeliveryMaterializer *self,
+    const WyreboxDaemonFactMutationRequest *mutation, const gchar *fact_id,
+    const gchar *source, guint64 journal_offset, guint64 journal_sequence,
+    GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    g_autofree gchar *args_json = fact_arguments_to_json (mutation->arguments);
+    const gchar *message_id = mutation->arguments != NULL &&
+        mutation->arguments[0] != NULL ? mutation->arguments[0] : "";
+
+    if (!materializer_prepare (self,
+        "UPDATE message_facts SET created_at_unix_us = ?, "
+        "retracted_at_unix_us = 0, journal_offset = ?, journal_sequence = ? "
+        "WHERE fact_id = ? AND retracted_at_unix_us <> 0;", &statement,
+        error) ||
+        !bind_uint64 (statement, 1, journal_sequence, error) ||
+        !bind_uint64 (statement, 2, journal_offset, error) ||
+        !bind_uint64 (statement, 3, journal_sequence, error) ||
+        !bind_varchar (statement, 4, fact_id, error) ||
+        !materializer_execute_prepared (statement, error))
+        return FALSE;
+
+    duckdb_destroy_prepare (&statement);
+    return materializer_prepare (self,
+               "INSERT OR IGNORE INTO message_facts ("
+               "fact_id, account_id, message_id, object_id, predicate, "
+               "args_json, source, confidence_ppm, created_at_unix_us, "
+               "retracted_at_unix_us, journal_offset, journal_sequence"
+               ") SELECT ?, ?, ?, COALESCE(("
+               "SELECT object_id FROM messages "
+               "WHERE message_id = ? AND account_id = ?), ''), "
+               "?, ?, ?, 1000000, ?, 0, ?, ?;", &statement, error)
+           && bind_varchar (statement, 1, fact_id, error)
+           && bind_varchar (statement, 2, mutation->scope_id, error)
+           && bind_varchar (statement, 3, message_id, error)
+           && bind_varchar (statement, 4, message_id, error)
+           && bind_varchar (statement, 5, mutation->scope_id, error)
+           && bind_varchar (statement, 6, mutation->predicate_id, error)
+           && bind_varchar (statement, 7, args_json, error)
+           && bind_varchar (statement, 8, source, error)
+           && bind_uint64 (statement, 9, journal_sequence, error)
+           && bind_uint64 (statement, 10, journal_offset, error)
+           && bind_uint64 (statement, 11, journal_sequence, error)
+           && materializer_execute_prepared (statement, error);
+}
+
+static gboolean
+materializer_retract_fact (WyreboxDeliveryMaterializer *self,
+    const gchar *fact_id, guint64 journal_offset, guint64 journal_sequence,
+    GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+
+    return materializer_prepare (self,
+               "UPDATE message_facts SET retracted_at_unix_us = ?, "
+               "journal_offset = ?, journal_sequence = ? "
+               "WHERE fact_id = ? AND retracted_at_unix_us = 0;", &statement,
+               error)
+           && bind_uint64 (statement, 1, journal_sequence, error)
+           && bind_uint64 (statement, 2, journal_offset, error)
+           && bind_uint64 (statement, 3, journal_sequence, error)
+           && bind_varchar (statement, 4, fact_id, error)
+           && materializer_execute_prepared (statement, error);
+}
+
+gboolean
+wyrebox_delivery_materializer_apply_fact_mutation (WyreboxDeliveryMaterializer
+    *self, const WyreboxDaemonFactMutationRequest *mutation,
+    guint64 journal_offset, guint64 journal_sequence,
+    gboolean advance_checkpoint, GError **error)
+{
+    g_autofree gchar *source = NULL;
+    g_autofree gchar *fact_id = NULL;
+    gboolean applied = FALSE;
+
+    g_return_val_if_fail (WYREBOX_IS_DELIVERY_MATERIALIZER (self), FALSE);
+    g_return_val_if_fail (mutation != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (mutation->scope_id == NULL || mutation->scope_id[0] == '\0' ||
+        mutation->predicate_id == NULL || mutation->predicate_id[0] == '\0' ||
+        journal_sequence == 0) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "fact mutation at sequence %" G_GUINT64_FORMAT
+            " needs a scope, a predicate, and a nonzero journal sequence",
+            journal_sequence);
+        return FALSE;
+    }
+
+    source = g_strdup_printf ("fact-mutation:%s", mutation->scope_id);
+    fact_id = build_fact_id (source, mutation->predicate_id,
+            mutation->arguments);
+
+    if (!materializer_query (self, "BEGIN TRANSACTION;", error))
+        return FALSE;
+
+    switch (mutation->mutation) {
+    case WYREBOX_DAEMON_FACT_MUTATION_INSERT:
+        applied = materializer_insert_fact (self, mutation, fact_id, source,
+                journal_offset, journal_sequence, error);
+        break;
+    case WYREBOX_DAEMON_FACT_MUTATION_RETRACT:
+        applied = materializer_retract_fact (self, fact_id, journal_offset,
+                journal_sequence, error);
+        break;
+    default:
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "unknown fact mutation kind %d", (int)mutation->mutation);
+        break;
+    }
+
+    if (!applied ||
+        (advance_checkpoint && !materializer_save_checkpoint (self,
+        journal_offset, journal_sequence, error)) ||
+        !materializer_query (self, "COMMIT;", error)) {
+        materializer_rollback_quietly (self);
+        return FALSE;
+    }
+
+    return TRUE;
+}

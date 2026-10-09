@@ -1686,6 +1686,232 @@ test_flag_change_without_checkpoint_keeps_checkpoint (void)
     remove_catalog (path);
 }
 
+static gboolean
+apply_fact_mutation (const gchar *path, WyreboxDaemonFactMutationKind kind,
+    const gchar *scope_id, const gchar *const *arguments,
+    guint64 journal_offset, guint64 journal_sequence,
+    gboolean advance_checkpoint, GError **error)
+{
+    WyreboxDaemonFactMutationRequest mutation = {
+        .mutation = kind,
+        .predicate_id = (char *)"project_keyword",
+        .scope_id = (char *)scope_id,
+        .arguments = (char **)arguments,
+    };
+    g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+
+    materializer = wyrebox_delivery_materializer_new_duckdb (path, error);
+    if (materializer == NULL)
+        return FALSE;
+
+    return wyrebox_delivery_materializer_apply_fact_mutation (materializer,
+               &mutation, journal_offset, journal_sequence, advance_checkpoint,
+               error);
+}
+
+static void
+apply_fact_mutation_ok (const gchar *path, WyreboxDaemonFactMutationKind kind,
+    const gchar *const *arguments, guint64 journal_offset,
+    guint64 journal_sequence)
+{
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (apply_fact_mutation (path, kind, "account-1", arguments,
+        journal_offset, journal_sequence, TRUE, &error));
+    g_assert_no_error (error);
+}
+
+/*
+ * One line per message_facts row, ordered by fact_id, without the fact_id.
+ */
+static gchar *
+message_facts_state (const gchar *path)
+{
+    TestDuckdbFixture duckdb = { 0 };
+    gchar *state = NULL;
+
+    open_duckdb_fixture (path, &duckdb);
+    state = query_string (duckdb.connection,
+            "SELECT COALESCE(string_agg(account_id || '|' || message_id || "
+            "'|' || object_id || '|' || predicate || '|' || args_json || "
+            "'|' || source || '|' || confidence_ppm || '|' || "
+            "created_at_unix_us || '|' || retracted_at_unix_us || '|' || "
+            "journal_offset || ':' || journal_sequence, ';' "
+            "ORDER BY fact_id), '') FROM message_facts;");
+    close_duckdb_fixture (&duckdb);
+
+    return state;
+}
+
+#define PROJECT_FACT \
+        "account-1|journal:11:1|sha256:first|project_keyword|" \
+        "[\"journal:11:1\",\"view-projects\"]|fact-mutation:account-1|1000000|"
+
+static void
+test_fact_mutation_insert_retract_reinsert (void)
+{
+    g_autofree gchar *path = create_catalog_with_one_inbox_message ();
+    const gchar *const arguments[] = { "journal:11:1", "view-projects", NULL };
+    TestDuckdbFixture duckdb = { 0 };
+    g_autofree gchar *fact_id = NULL;
+    g_autofree gchar *state = NULL;
+
+    apply_fact_mutation_ok (path, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+        arguments, 30, 2);
+    state = message_facts_state (path);
+    g_assert_cmpstr (state, ==, PROJECT_FACT "2|0|30:2");
+
+    open_duckdb_fixture (path, &duckdb);
+    fact_id = query_string (duckdb.connection,
+            "SELECT fact_id FROM message_facts;");
+    assert_materialization_checkpoint (duckdb.connection, 30, 2);
+    close_duckdb_fixture (&duckdb);
+    g_assert_true (g_str_has_prefix (fact_id, "fact:"));
+    g_assert_cmpuint (strlen (fact_id), ==, strlen ("fact:") + 64);
+
+    apply_fact_mutation_ok (path, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+        arguments, 35, 3);
+    g_clear_pointer (&state, g_free);
+    state = message_facts_state (path);
+    g_assert_cmpstr (state, ==, PROJECT_FACT "2|0|30:2");
+
+    apply_fact_mutation_ok (path, WYREBOX_DAEMON_FACT_MUTATION_RETRACT,
+        arguments, 40, 4);
+    g_clear_pointer (&state, g_free);
+    state = message_facts_state (path);
+    g_assert_cmpstr (state, ==, PROJECT_FACT "2|4|40:4");
+
+    apply_fact_mutation_ok (path, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+        arguments, 50, 5);
+    g_clear_pointer (&state, g_free);
+    state = message_facts_state (path);
+    g_assert_cmpstr (state, ==, PROJECT_FACT "5|0|50:5");
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_table_count (duckdb.connection, "message_facts", 1);
+    assert_materialization_checkpoint (duckdb.connection, 50, 5);
+    close_duckdb_fixture (&duckdb);
+
+    remove_catalog (path);
+}
+
+static void
+apply_fact_mutation_sequence (const gchar *path, guint first, guint last)
+{
+    static const gchar *const first_fact[] = {
+        "journal:11:1", "view-projects", NULL
+    };
+    static const gchar *const second_fact[] = {
+        "journal:11:1", "view-ops", NULL
+    };
+    static const struct
+    {
+        WyreboxDaemonFactMutationKind kind;
+        const gchar *const *arguments;
+    } mutations[] = {
+        {WYREBOX_DAEMON_FACT_MUTATION_INSERT, first_fact},
+        {WYREBOX_DAEMON_FACT_MUTATION_INSERT, second_fact},
+        {WYREBOX_DAEMON_FACT_MUTATION_RETRACT, first_fact},
+        {WYREBOX_DAEMON_FACT_MUTATION_INSERT, first_fact},
+        {WYREBOX_DAEMON_FACT_MUTATION_RETRACT, second_fact},
+    };
+
+    for (guint i = first; i <= last; i++) {
+        apply_fact_mutation_ok (path, mutations[i].kind,
+            mutations[i].arguments, 100 + 10 * i, 10 + i);
+    }
+}
+
+static void
+test_fact_mutation_suffix_reapply_is_idempotent (void)
+{
+    g_autofree gchar *path = create_catalog_with_one_inbox_message ();
+    g_autofree gchar *expected = NULL;
+
+    apply_fact_mutation_sequence (path, 0, 4);
+    expected = message_facts_state (path);
+
+    for (guint first = 0; first <= 4; first++) {
+        g_autofree gchar *state = NULL;
+
+        apply_fact_mutation_sequence (path, first, 4);
+        state = message_facts_state (path);
+        g_assert_cmpstr (state, ==, expected);
+    }
+
+    remove_catalog (path);
+}
+
+static void
+test_fact_mutation_escapes_arguments_and_tolerates_unknown_message (void)
+{
+    g_autofree gchar *path = create_catalog_with_one_inbox_message ();
+    const gchar *const arguments[] = {
+        "journal:99:9", "say \"hi\"\\\n\x01", NULL
+    };
+    const gchar *const no_arguments[] = { NULL };
+    TestDuckdbFixture duckdb = { 0 };
+
+    apply_fact_mutation_ok (path, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+        arguments, 30, 2);
+    apply_fact_mutation_ok (path, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+        no_arguments, 40, 3);
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_query_string (duckdb.connection,
+        "SELECT message_id || '|' || object_id || '|' || args_json "
+        "FROM message_facts WHERE journal_sequence = 2;",
+        "journal:99:9||[\"journal:99:9\",\"say \\\"hi\\\"\\\\\\n\\u0001\"]");
+    assert_query_string (duckdb.connection,
+        "SELECT message_id || '|' || object_id || '|' || args_json "
+        "FROM message_facts WHERE journal_sequence = 3;", "||[]");
+    close_duckdb_fixture (&duckdb);
+
+    remove_catalog (path);
+}
+
+static void
+test_fact_mutation_without_scope_is_invalid_data (void)
+{
+    g_autofree gchar *path = create_catalog_with_one_inbox_message ();
+    const gchar *const arguments[] = { "journal:11:1", "view-projects", NULL };
+    g_autoptr (GError) error = NULL;
+    TestDuckdbFixture duckdb = { 0 };
+
+    g_assert_false (apply_fact_mutation (path,
+        WYREBOX_DAEMON_FACT_MUTATION_INSERT, "", arguments, 30, 2, TRUE,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_table_count (duckdb.connection, "message_facts", 0);
+    assert_materialization_checkpoint (duckdb.connection, 11, 1);
+    close_duckdb_fixture (&duckdb);
+
+    remove_catalog (path);
+}
+
+static void
+test_fact_mutation_without_checkpoint_keeps_checkpoint (void)
+{
+    g_autofree gchar *path = create_catalog_with_one_inbox_message ();
+    const gchar *const arguments[] = { "journal:11:1", "view-projects", NULL };
+    g_autoptr (GError) error = NULL;
+    TestDuckdbFixture duckdb = { 0 };
+
+    g_assert_true (apply_fact_mutation (path,
+        WYREBOX_DAEMON_FACT_MUTATION_INSERT, "account-1", arguments, 30, 2,
+        FALSE, &error));
+    g_assert_no_error (error);
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_table_count (duckdb.connection, "message_facts", 1);
+    assert_materialization_checkpoint (duckdb.connection, 11, 1);
+    close_duckdb_fixture (&duckdb);
+
+    remove_catalog (path);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1754,6 +1980,17 @@ main (int argc, char **argv)
     g_test_add_func (
         "/ingestion/delivery-materializer/flag-change-without-checkpoint",
         test_flag_change_without_checkpoint_keeps_checkpoint);
+    g_test_add_func ("/ingestion/delivery-materializer/fact-mutation",
+        test_fact_mutation_insert_retract_reinsert);
+    g_test_add_func ("/ingestion/delivery-materializer/fact-mutation-suffix",
+        test_fact_mutation_suffix_reapply_is_idempotent);
+    g_test_add_func ("/ingestion/delivery-materializer/fact-mutation-escaping",
+        test_fact_mutation_escapes_arguments_and_tolerates_unknown_message);
+    g_test_add_func ("/ingestion/delivery-materializer/fact-mutation-invalid",
+        test_fact_mutation_without_scope_is_invalid_data);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/fact-mutation-without-checkpoint",
+        test_fact_mutation_without_checkpoint_keeps_checkpoint);
 
     return g_test_run ();
 }

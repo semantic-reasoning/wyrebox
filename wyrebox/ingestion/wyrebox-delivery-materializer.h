@@ -1,5 +1,6 @@
 #pragma once
 
+#include "wyrebox-daemon-fact-mutation-request.h"
 #include "wyrebox-delivery-projection.h"
 #include "wyrebox-flag-changed-payload.h"
 
@@ -103,6 +104,39 @@ gboolean wyrebox_delivery_materializer_apply_to_inbox_full (
 gboolean wyrebox_delivery_materializer_apply_flag_change (
     WyreboxDeliveryMaterializer *self,
     const WyreboxFlagChangedPayload *payload,
+    guint64 journal_offset,
+    guint64 journal_sequence,
+    gboolean advance_checkpoint,
+    GError **error);
+
+/*
+ * Apply the FactInserted or FactRetracted record at
+ * @journal_offset/@journal_sequence to message_facts, in one transaction. The
+ * checkpoint is moved forward to the record when @advance_checkpoint is TRUE.
+ *
+ * A fact belongs to the account named by @mutation's scope and is identified
+ * by its source ("fact-mutation:<scope>"), predicate, and arguments; its
+ * fact_id is "fact:" followed by the SHA-256 of that identity. The first
+ * argument names the message, and object_id is that message's raw object, or
+ * empty when the account has no such materialized message.
+ *
+ * Inserting an active fact and retracting an inactive one change nothing.
+ * Retracting sets retracted_at_unix_us to @journal_sequence; inserting a
+ * retracted fact reactivates it with created_at_unix_us set to
+ * @journal_sequence. Either records the journal position of the change, so
+ * re-applying any suffix of the journal's fact mutations in order reproduces
+ * the same rows.
+ *
+ * A mutation without scope or predicate, a zero @journal_sequence, and DuckDB
+ * constraint violations fail with G_IO_ERROR_INVALID_DATA. Other failures,
+ * such as DuckDB I/O or lock errors, use other codes. On failure nothing is
+ * committed.
+ *
+ * @mutation: (transfer none): decoded fact mutation payload.
+ */
+gboolean wyrebox_delivery_materializer_apply_fact_mutation (
+    WyreboxDeliveryMaterializer *self,
+    const WyreboxDaemonFactMutationRequest *mutation,
     guint64 journal_offset,
     guint64 journal_sequence,
     gboolean advance_checkpoint,
