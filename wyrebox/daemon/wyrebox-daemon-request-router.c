@@ -135,15 +135,21 @@ route_mail_event_stream (WyreboxDaemonMailEventStreamService *service,
                    error);
     }
 
-    return wyrebox_daemon_mail_event_stream_service_handle_identity (service,
-               &(WyreboxDaemonRequestIdentity) {
+    if (wyrebox_daemon_mail_event_stream_service_handle_identity (service,
+        &(WyreboxDaemonRequestIdentity) {
         .request_id = (char *)request_frame->request_id, .caller_identity =
         (char *)request_frame->caller_identity, .account_identity =
         (char *)request_frame->account_identity, .tool_identity =
         (char *)request_frame->tool_identity, .correlation_id =
         (char *)request_frame->correlation_id,
     },
-               request_frame->mail_event_stream, out_frame, error);
+        request_frame->mail_event_stream, out_frame, &local_error))
+        return TRUE;
+
+    return init_error_response (out_frame,
+               request_frame->request_id, request_frame->correlation_id,
+               local_error,
+               error);
 }
 
 static gboolean
