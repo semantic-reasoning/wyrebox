@@ -114,11 +114,14 @@ commit boundary must be reported as temporary failure or remain incomplete, not
 as success.
 
 Flag and keyword mutations are canonical only after the corresponding
-`FlagChanged` or `KeywordChanged` record is durably appended. Group commit is
-allowed for flag and keyword mutations if the caller does not receive durable
-success until the grouped records are durable. Deferred acknowledgement of flag
-or keyword success is allowed; acknowledging success before durable journal
-append is not allowed.
+`FlagChanged` record is durably appended. One flag/keyword update writes
+exactly one `FlagChanged` record carrying the update mode, the system flags,
+and the user keywords together, so a change to both is never split across
+records. `KeywordChanged` is reserved: it is not written and replay does not
+materialize it. Group commit is allowed for flag and keyword mutations if the
+caller does not receive durable success until the grouped records are durable.
+Deferred acknowledgement of flag or keyword success is allowed; acknowledging
+success before durable journal append is not allowed.
 
 ## Replay Behavior
 

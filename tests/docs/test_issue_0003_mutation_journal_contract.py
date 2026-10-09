@@ -197,7 +197,17 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Durability Semantics",
-        r"Flag and keyword mutations are canonical only after the corresponding\s+`FlagChanged` or `KeywordChanged` record is durably appended",
+        r"Flag and keyword mutations are canonical only after the corresponding\s+`FlagChanged` record is durably appended",
+    )
+    assert_section_matches(
+        sections,
+        "## Durability Semantics",
+        r"One flag/keyword update writes exactly one `FlagChanged` record carrying the update mode, the system flags, and the user keywords together",
+    )
+    assert_section_matches(
+        sections,
+        "## Durability Semantics",
+        r"`KeywordChanged` is reserved: it is not written and replay does not materialize it",
     )
     assert_section_matches(
         sections,
