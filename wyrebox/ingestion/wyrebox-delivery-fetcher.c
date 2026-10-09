@@ -1,5 +1,7 @@
 #include "wyrebox-delivery-fetcher.h"
 
+#include "wyrebox-duckdb-shared.h"
+
 #include <duckdb.h>
 #include <gio/gio.h>
 #include <string.h>
@@ -36,16 +38,6 @@ duckdb_prepared_statement_clear (duckdb_prepared_statement *statement)
 /* *INDENT-OFF* */
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_prepared_statement,
     duckdb_prepared_statement_clear)
-/* *INDENT-ON* */
-
-static void
-duckdb_config_clear (duckdb_config *config)
-{
-    duckdb_destroy_config (config);
-}
-
-/* *INDENT-OFF* */
-G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_config, duckdb_config_clear)
 /* *INDENT-ON* */
 
 typedef struct
@@ -204,7 +196,7 @@ fetcher_select_uidvalidity (WyreboxDeliveryFetcher *self,
     if (stored_uidvalidity != requested_uidvalidity) {
         g_set_error (error,
             G_IO_ERROR,
-            G_IO_ERROR_NOT_FOUND,
+            G_IO_ERROR_EXISTS,
             "namespace UIDVALIDITY mismatch for %s/%s/%s",
             account_id, namespace_kind, namespace_id);
         return FALSE;
@@ -401,43 +393,18 @@ WyreboxDeliveryFetcher *
 wyrebox_delivery_fetcher_new_duckdb (const gchar *catalog_path,
     WyreboxLocalObjectStore *object_store, GError **error)
 {
-    const gchar *effective_path = catalog_path;
-    g_auto (duckdb_config) config = NULL;
-    char *open_error = NULL;
     g_autoptr (WyreboxDeliveryFetcher) self = NULL;
 
     g_return_val_if_fail (catalog_path != NULL, NULL);
     g_return_val_if_fail (WYREBOX_IS_LOCAL_OBJECT_STORE (object_store), NULL);
     g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
-    if (g_strcmp0 (catalog_path, ":memory:") == 0)
-        effective_path = NULL;
-
-    if (duckdb_create_config (&config) != DuckDBSuccess ||
-        duckdb_set_config (config, "access_mode",
-        "READ_ONLY") != DuckDBSuccess) {
-        g_set_error (error,
-            G_IO_ERROR,
-            G_IO_ERROR_FAILED,
-            "DuckDB delivery fetcher read-only configuration failed");
-        return NULL;
-    }
-
     self = g_object_new (WYREBOX_TYPE_DELIVERY_FETCHER, NULL);
     self->catalog_path = g_strdup (catalog_path);
     self->object_store = g_object_ref (object_store);
 
-    if (duckdb_open_ext (effective_path, &self->database, config,
-        &open_error) != DuckDBSuccess) {
-        g_set_error (error,
-            G_IO_ERROR,
-            G_IO_ERROR_FAILED,
-            "DuckDB delivery fetcher read-only open failed: %s",
-            open_error != NULL ? open_error : "unknown DuckDB error");
-        if (open_error != NULL)
-            duckdb_free (open_error);
+    if (!wyrebox_duckdb_open_shared (catalog_path, &self->database, error))
         return NULL;
-    }
 
     if (duckdb_connect (self->database, &self->connection) != DuckDBSuccess) {
         g_set_error (error,

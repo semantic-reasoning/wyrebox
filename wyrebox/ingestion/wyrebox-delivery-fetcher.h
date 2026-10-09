@@ -38,10 +38,18 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDeliveryFetchResult,
     wyrebox_delivery_fetch_result_clear)
 
 /*
- * Construct a DuckDB-backed read-only delivery fetcher for @catalog_path.
+ * Construct a DuckDB-backed delivery fetcher for @catalog_path.
+ *
+ * The fetcher only reads, but it opens the process-wide shared instance from
+ * wyrebox_duckdb_open_shared(), so it sees rows committed by in-process
+ * writers after it was constructed.
  *
  * @object_store: (transfer none): immutable raw object store used to load
  *   message bytes after the materialized catalog resolves a visible mailbox UID.
+ *
+ * Fetches fail with G_IO_ERROR_NOT_FOUND when the namespace or a visible UID
+ * is absent in the account, and with G_IO_ERROR_EXISTS when the requested
+ * UIDVALIDITY is stale.
  *
  * Returns: (transfer full): caller-owned fetcher, or NULL with @error set.
  */

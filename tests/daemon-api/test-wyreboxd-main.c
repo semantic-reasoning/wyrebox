@@ -571,6 +571,68 @@ assert_inbox_state (const DaemonRoot *daemon_root, guint64 uid_next,
     assert_mailbox_inbox_state (daemon_root, "inbox:account-1", uid_next,
         message_count);
 }
+
+/*
+ * Fetches a UID from account-1's INBOX as Dovecot acting for
+ * @envelope_account, naming @request_account in the fetch request.
+ */
+static void
+fetch_inbox_uid (const DaemonRoot *daemon_root, const char *envelope_account,
+    const char *request_account, guint64 uid_validity, guint64 uid,
+    WyreboxDaemonResponseFrame *out_frame)
+{
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) encoded = NULL;
+    g_autoptr (GBytes) response = NULL;
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonMessageFetchRequest) request = { 0 };
+
+    g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+        "request-fetch-1", "dovecot", envelope_account, "dovecot-storage",
+        "corr-fetch-1", &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_message_fetch_request_init (&request,
+        request_account, "inbox:account-1",
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, uid_validity, uid,
+        &error));
+    g_assert_no_error (error);
+
+    encoded = wyrebox_daemon_capnp_codec_encode_message_fetch_request
+            (&identity, &request, NULL, &error);
+    g_assert_no_error (error);
+    response = roundtrip_request (daemon_root->socket_path, encoded);
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (response,
+        out_frame, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (out_frame->request_id, ==, "request-fetch-1");
+}
+
+static void
+assert_fetches_message (const DaemonRoot *daemon_root, guint64 uid,
+    const char *delivery_id)
+{
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+    g_autoptr (GBytes) expected = build_message (delivery_id);
+
+    fetch_inbox_uid (daemon_root, "account-1", "account-1", 1, uid, &frame);
+    g_assert_cmpint (frame.kind, ==,
+        WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+    g_assert_true (frame.stream_chunk.end_of_stream);
+    g_assert_true (g_bytes_equal (frame.stream_chunk.bytes, expected));
+}
+
+static void
+assert_fetch_fails (const DaemonRoot *daemon_root,
+    const char *envelope_account, const char *request_account,
+    guint64 uid_validity, guint64 uid, WyreboxDaemonErrorClass error_class)
+{
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+    fetch_inbox_uid (daemon_root, envelope_account, request_account,
+        uid_validity, uid, &frame);
+    g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+    g_assert_cmpint (frame.error.error_class, ==, error_class);
+}
 #endif
 
 static void
@@ -1094,6 +1156,31 @@ test_wyreboxd_catches_up_journal_on_startup (void)
 }
 
 static void
+test_wyreboxd_fetches_message_bytes (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) subprocess = NULL;
+
+    daemon_root_init (&daemon_root);
+    journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
+    subprocess = start_daemon (&daemon_root);
+    deliver (&daemon_root, "delivery-2");
+
+    assert_fetches_message (&daemon_root, 1, "delivery-1");
+    assert_fetches_message (&daemon_root, 2, "delivery-2");
+    assert_fetch_fails (&daemon_root, "account-1", "account-1", 1, 99,
+        WYREBOX_DAEMON_ERROR_NOT_FOUND);
+    assert_fetch_fails (&daemon_root, "account-1", "account-1", 2, 1,
+        WYREBOX_DAEMON_ERROR_CONFLICT);
+    assert_fetch_fails (&daemon_root, "account-2", "account-2", 1, 1,
+        WYREBOX_DAEMON_ERROR_NOT_FOUND);
+    assert_fetch_fails (&daemon_root, "account-2", "account-1", 1, 1,
+        WYREBOX_DAEMON_ERROR_PERMISSION_DENIED);
+
+    stop_daemon (subprocess);
+}
+
+static void
 test_wyreboxd_rebuilds_identical_catalog_after_restart (void)
 {
     g_auto (DaemonRoot) daemon_root = { 0 };
@@ -1281,6 +1368,8 @@ main (int argc, char **argv)
         test_wyreboxd_materializes_delivery_before_receipt);
     g_test_add_func ("/daemon-api/wyreboxd/catches-up-journal-on-startup",
         test_wyreboxd_catches_up_journal_on_startup);
+    g_test_add_func ("/daemon-api/wyreboxd/fetches-message-bytes",
+        test_wyreboxd_fetches_message_bytes);
     g_test_add_func
         ("/daemon-api/wyreboxd/rebuilds-identical-catalog-after-restart",
         test_wyreboxd_rebuilds_identical_catalog_after_restart);
