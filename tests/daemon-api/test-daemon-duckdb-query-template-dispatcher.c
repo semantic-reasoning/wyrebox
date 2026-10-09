@@ -518,7 +518,7 @@ test_duckdb_query_template_dispatcher_rejects_unknown_template (void)
     g_assert_no_error (error);
     g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
     g_assert_cmpint (frame.error.error_class, ==,
-        WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+        WYREBOX_DAEMON_ERROR_NOT_FOUND);
 }
 
 static void
