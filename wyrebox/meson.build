@@ -39,6 +39,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-message-fetch-request.c',
   'daemon/wyrebox-daemon-message-fetch-service.c',
   'daemon/wyrebox-daemon-message-search-dispatcher.c',
+  'daemon/wyrebox-daemon-message-search-duckdb.c',
   'daemon/wyrebox-daemon-message-search-request.c',
   'daemon/wyrebox-daemon-message-search-service.c',
   'daemon/wyrebox-daemon-duckdb-query-template-dispatcher.c',
