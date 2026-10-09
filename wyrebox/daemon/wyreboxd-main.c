@@ -9,6 +9,7 @@
 #include "wyrebox-daemon-delivery-materialization.h"
 #include "wyrebox-daemon-exit-code.h"
 #include "wyrebox-daemon-mailbox-catalog-duckdb.h"
+#include "wyrebox-daemon-message-fetch-service.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-runtime.h"
 #include "wyrebox-daemon-storage.h"
@@ -188,6 +189,8 @@ run_daemon (int argc, char **argv)
     g_autoptr (WyreboxDaemonMailboxCatalogDuckDB) mailbox_catalog = NULL;
     g_autoptr (WyreboxDaemonMailboxListService) mailbox_list_service = NULL;
     g_autoptr (WyreboxDaemonMailboxSelectService) mailbox_select_service = NULL;
+    g_autoptr (WyreboxDeliveryFetcher) fetcher = NULL;
+    g_autoptr (WyreboxDaemonMessageFetchService) message_fetch_service = NULL;
     g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
     g_autoptr (WyreboxJournalWriter) journal_writer = NULL;
     g_autoptr (WyreboxDaemonDeliveryMaterialization) materialization = NULL;
@@ -293,6 +296,15 @@ run_daemon (int argc, char **argv)
         return EX_OSERR;
     }
 
+    fetcher = wyrebox_delivery_fetcher_new_duckdb (catalog_path, object_store,
+            &error);
+    if (fetcher == NULL) {
+        g_printerr ("wyreboxd: %s\n", error->message);
+        return EX_OSERR;
+    }
+    message_fetch_service =
+        wyrebox_daemon_message_fetch_service_new_for_fetcher (fetcher);
+
     materialization = wyrebox_daemon_delivery_materialization_new
             (catalog_path, journal_root_dir, journal_writer, object_store,
             &error);
@@ -317,8 +329,8 @@ run_daemon (int argc, char **argv)
         g_object_ref (materialization), g_object_unref);
     request_adapter = wyrebox_daemon_request_adapter_new (delivery_service,
             NULL,
-            mailbox_list_service, mailbox_select_service, NULL, NULL, NULL,
-            NULL,
+            mailbox_list_service, mailbox_select_service,
+            message_fetch_service, NULL, NULL, NULL,
             decode_request_frame, NULL, NULL, encode_response_frame, NULL,
             NULL);
     server = wyrebox_daemon_connection_server_new (socket_path,

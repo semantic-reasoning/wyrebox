@@ -404,6 +404,51 @@ test_fetcher_fetches_materialized_inbox_uid_after_reopen (void)
 }
 
 static void
+test_fetcher_sees_deliveries_materialized_after_open (void)
+{
+    const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+    g_autofree gchar *catalog_path = create_bootstrap_catalog ();
+    g_autofree gchar *object_root =
+        g_dir_make_tmp ("wyrebox-delivery-fetcher-objects-XXXXXX", NULL);
+    g_autofree gchar *journal_root =
+        g_dir_make_tmp ("wyrebox-delivery-fetcher-journal-XXXXXX", NULL);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) input = NULL;
+    g_autoptr (GBytes) fetched = NULL;
+    g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+    g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
+    g_autoptr (WyreboxDeliveryFetcher) fetcher = NULL;
+
+    g_assert_nonnull (fixture_dir);
+    g_assert_nonnull (object_root);
+    g_assert_nonnull (journal_root);
+
+    object_store = wyrebox_local_object_store_new (object_root, &error);
+    g_assert_no_error (error);
+    fetcher = wyrebox_delivery_fetcher_new_duckdb (catalog_path, object_store,
+            &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (fetcher);
+
+    input = load_fixture_bytes (fixture_dir, "simple-crlf.eml");
+    ingestor = create_ingestor (object_root, journal_root);
+    ingest_bytes (ingestor, input);
+    run_catchup (catalog_path, object_root, journal_root);
+
+    fetched = wyrebox_delivery_fetcher_fetch_bytes (fetcher, "account-1",
+            "mailbox-inbox", 1, 1, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (fetched);
+    assert_bytes_equal (fetched, input);
+
+    g_clear_object (&fetcher);
+    g_clear_object (&ingestor);
+    remove_tree (object_root);
+    remove_tree (journal_root);
+    remove_catalog (catalog_path);
+}
+
+static void
 test_fetcher_fetches_ordinary_and_derived_memberships_as_same_bytes (void)
 {
     const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
@@ -612,7 +657,7 @@ test_fetcher_rejects_derived_uidvalidity_mismatch (void)
             22, 1,
             &error);
     g_assert_null (fetched);
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_EXISTS);
     g_clear_error (&error);
 
     remove_tree (object_root);
@@ -684,7 +729,7 @@ test_fetcher_rejects_wrong_uidvalidity (void)
     g_clear_object (&ingestor);
     fetched = fetch_reopened (catalog_path, object_root, 2, 1, &error);
     g_assert_null (fetched);
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_EXISTS);
     g_clear_error (&error);
 
     remove_tree (object_root);
@@ -773,6 +818,9 @@ main (int argc, char **argv)
 
     g_test_add_func ("/ingestion/delivery-fetcher/fetches-reopened-inbox-uid",
         test_fetcher_fetches_materialized_inbox_uid_after_reopen);
+    g_test_add_func
+        ("/ingestion/delivery-fetcher/sees-deliveries-materialized-after-open",
+        test_fetcher_sees_deliveries_materialized_after_open);
     g_test_add_func ("/ingestion/delivery-fetcher/fetches-derived-view-uid",
         test_fetcher_fetches_ordinary_and_derived_memberships_as_same_bytes);
     g_test_add_func (
