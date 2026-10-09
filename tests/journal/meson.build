@@ -23,6 +23,12 @@ derived_view_membership_changed_payload_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+flag_changed_payload_test = executable(
+  'test-flag-changed-payload',
+  'test-flag-changed-payload.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_audit_payload_test = executable(
   'test-daemon-audit-payload',
   'test-daemon-audit-payload.c',
@@ -52,6 +58,7 @@ test('local journal reader', journal_reader_test)
 test('message delivered payload codec', message_delivered_payload_test)
 test('derived view membership changed payload',
   derived_view_membership_changed_payload_test)
+test('flag changed payload', flag_changed_payload_test)
 test('daemon audit payload', daemon_audit_payload_test)
 test('journal event', journal_event_test)
 test('message delivered journal', message_delivered_journal_test)

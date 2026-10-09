@@ -103,6 +103,7 @@ wyrebox_sources = files(
   'journal/wyrebox-daemon-audit-payload.c',
   'journal/wyrebox-message-delivered-payload.c',
   'journal/wyrebox-derived-view-membership-changed-payload.c',
+  'journal/wyrebox-flag-changed-payload.c',
   'journal/wyrebox-journal-event.c',
   'journal/wyrebox-journal-writer.c',
   'journal/wyrebox-journal-reader.c',
