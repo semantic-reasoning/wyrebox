@@ -4,6 +4,7 @@
 #include "wyrebox-daemon-duckdb-query-template-catalog.h"
 #include "wyrebox-daemon-audit-payload.h"
 #include "wyrebox-daemon-error.h"
+#include "wyrebox-duckdb-shared.h"
 #include "wyrebox-journal-writer.h"
 
 #include <duckdb.h>
@@ -2107,38 +2108,25 @@ WyreboxDaemonDuckDBQueryTemplateService
 wyrebox_daemon_duckdb_query_template_service_new_duckdb (const gchar
     *catalog_path, GError **error)
 {
-    g_auto (duckdb_config) config = NULL;
-    char *open_error = NULL;
     g_autoptr (DuckDBQueryTemplateExecutor) executor = NULL;
     g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) service = NULL;
 
     g_return_val_if_fail (catalog_path != NULL, NULL);
     g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
-    if (duckdb_create_config (&config) != DuckDBSuccess ||
-        duckdb_set_config (config, "access_mode",
-        "READ_ONLY") != DuckDBSuccess) {
+    if (!g_file_test (catalog_path, G_FILE_TEST_IS_REGULAR)) {
         g_set_error (error,
             G_IO_ERROR,
-            G_IO_ERROR_FAILED,
-            "DuckDB query template read-only configuration failed");
+            G_IO_ERROR_NOT_FOUND,
+            "DuckDB query template catalog '%s' does not exist", catalog_path);
         return NULL;
     }
 
     executor = g_new0 (DuckDBQueryTemplateExecutor, 1);
     executor->catalog_path = g_strdup (catalog_path);
 
-    if (duckdb_open_ext (catalog_path, &executor->database, config,
-        &open_error) != DuckDBSuccess) {
-        g_set_error (error,
-            G_IO_ERROR,
-            G_IO_ERROR_FAILED,
-            "DuckDB query template read-only open failed: %s",
-            open_error != NULL ? open_error : "unknown DuckDB error");
-        if (open_error != NULL)
-            duckdb_free (open_error);
+    if (!wyrebox_duckdb_open_shared (catalog_path, &executor->database, error))
         return NULL;
-    }
 
     if (duckdb_connect (executor->database, &executor->connection) !=
         DuckDBSuccess) {

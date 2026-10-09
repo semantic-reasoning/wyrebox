@@ -2748,7 +2748,8 @@ test_duckdb_service_missing_path_fails (void)
     service = wyrebox_daemon_duckdb_query_template_service_new_duckdb (path,
             &error);
     g_assert_null (service);
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+    g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
 }
 
 int
