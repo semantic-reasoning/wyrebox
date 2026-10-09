@@ -28,7 +28,7 @@ search_messages_fixture (const WyreboxDaemonRequestIdentity *identity,
     g_assert_cmpstr (request->account_identity, ==, "account-1");
     g_assert_cmpstr (request->mailbox_id, ==, "mailbox-inbox");
     g_assert_cmpuint (request->uid_validity, ==, 77);
-    g_assert_cmpstr (request->criteria_token, ==, "unseen");
+    g_assert_cmpuint (request->n_criteria, ==, 0);
 
     if (was_called != NULL)
         *was_called = TRUE;
@@ -125,7 +125,8 @@ assert_bad_search_chunk_becomes_error_frame (BadMessageSearchChunkMode mode)
     g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
 
     g_assert_true (wyrebox_daemon_message_search_request_init (&request,
-        "account-1", "mailbox-inbox", 77, "unseen", &error));
+        "account-1", "mailbox-inbox",
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, NULL, 0, &error));
     g_assert_no_error (error);
 
     service = wyrebox_daemon_message_search_service_new
@@ -153,7 +154,8 @@ test_message_search_dispatcher_handles_valid_envelope (void)
     g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
 
     g_assert_true (wyrebox_daemon_message_search_request_init (&request,
-        "account-1", "mailbox-inbox", 77, "unseen", &error));
+        "account-1", "mailbox-inbox",
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, NULL, 0, &error));
     g_assert_no_error (error);
 
     service =
@@ -189,7 +191,8 @@ test_message_search_dispatcher_rejects_unauthorized_caller_with_error_frame
     g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
 
     g_assert_true (wyrebox_daemon_message_search_request_init (&request,
-        "account-1", "mailbox-inbox", 77, "unseen", &error));
+        "account-1", "mailbox-inbox",
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, NULL, 0, &error));
     g_assert_no_error (error);
 
     service =
@@ -219,7 +222,8 @@ test_message_search_dispatcher_rejects_account_mismatch_with_error_frame (void)
     g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
 
     g_assert_true (wyrebox_daemon_message_search_request_init (&request,
-        "account-2", "mailbox-inbox", 77, "unseen", &error));
+        "account-2", "mailbox-inbox",
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, NULL, 0, &error));
     g_assert_no_error (error);
 
     service =
@@ -249,7 +253,8 @@ test_message_search_dispatcher_rejects_missing_request_id_before_service (void)
     g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
 
     g_assert_true (wyrebox_daemon_message_search_request_init (&request,
-        "account-1", "mailbox-inbox", 77, "unseen", &error));
+        "account-1", "mailbox-inbox",
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, NULL, 0, &error));
     g_assert_no_error (error);
 
     service =
@@ -277,7 +282,8 @@ test_message_search_dispatcher_converts_silent_failure_to_error_frame (void)
     g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
 
     g_assert_true (wyrebox_daemon_message_search_request_init (&request,
-        "account-1", "mailbox-inbox", 77, "unseen", &error));
+        "account-1", "mailbox-inbox",
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, NULL, 0, &error));
     g_assert_no_error (error);
 
     service = wyrebox_daemon_message_search_service_new
@@ -320,7 +326,8 @@ test_message_search_dispatcher_normalizes_missing_chunk_correlation_id
     g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
 
     g_assert_true (wyrebox_daemon_message_search_request_init (&request,
-        "account-1", "mailbox-inbox", 77, "unseen", &error));
+        "account-1", "mailbox-inbox",
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, NULL, 0, &error));
     g_assert_no_error (error);
 
     service = wyrebox_daemon_message_search_service_new

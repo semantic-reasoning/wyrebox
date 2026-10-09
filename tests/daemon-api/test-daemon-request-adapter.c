@@ -420,7 +420,8 @@ test_request_adapter_decode (const WyreboxDaemonPeerCredentials
         out_request->correlation_id = "corr-search";
         if (!wyrebox_daemon_message_search_request_init
                 (&decoded_state->message_search_request,
-            "account-1", "mailbox-inbox", 77, "unseen", error))
+            "account-1", "mailbox-inbox",
+            WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, NULL, 0, error))
             return FALSE;
         out_request->operation =
             WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_SEARCH;
@@ -518,7 +519,7 @@ search_messages_fixture (const WyreboxDaemonRequestIdentity *identity,
     g_assert_cmpstr (request->account_identity, ==, "account-1");
     g_assert_cmpstr (request->mailbox_id, ==, "mailbox-inbox");
     g_assert_cmpuint (request->uid_validity, ==, 77);
-    g_assert_cmpstr (request->criteria_token, ==, "unseen");
+    g_assert_cmpuint (request->n_criteria, ==, 0);
 
     *was_called = TRUE;
     bytes = g_bytes_new_static (payload, strlen (payload));

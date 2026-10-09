@@ -433,7 +433,7 @@ search_messages_fixture (const WyreboxDaemonRequestIdentity *identity,
     g_assert_cmpstr (request->account_identity, ==, "account-1");
     g_assert_cmpstr (request->mailbox_id, ==, "mailbox-inbox");
     g_assert_cmpuint (request->uid_validity, ==, 77);
-    g_assert_cmpstr (request->criteria_token, ==, "unseen");
+    g_assert_cmpuint (request->n_criteria, ==, 0);
 
     bytes = g_bytes_new_static (payload, strlen (payload));
 
@@ -1389,7 +1389,8 @@ test_request_router_routes_message_search (void)
     WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
 
     g_assert_true (wyrebox_daemon_message_search_request_init (&request,
-        "account-1", "mailbox-inbox", 77, "unseen", &error));
+        "account-1", "mailbox-inbox",
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, NULL, 0, &error));
     g_assert_no_error (error);
 
     request_frame.request_id = "request-search";
@@ -1462,7 +1463,8 @@ test_request_router_rejects_missing_message_search_service (void)
     WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
 
     g_assert_true (wyrebox_daemon_message_search_request_init (&request,
-        "account-1", "mailbox-inbox", 77, "unseen", &error));
+        "account-1", "mailbox-inbox",
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, NULL, 0, &error));
     g_assert_no_error (error);
 
     request_frame.request_id = "request-search";

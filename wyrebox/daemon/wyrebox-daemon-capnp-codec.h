@@ -50,6 +50,12 @@ GBytes *wyrebox_daemon_capnp_codec_encode_message_fetch_request (
     gpointer user_data,
     GError **error);
 
+GBytes *wyrebox_daemon_capnp_codec_encode_message_search_request (
+    const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMessageSearchRequest *request,
+    gpointer user_data,
+    GError **error);
+
 GBytes *wyrebox_daemon_capnp_codec_encode_duckdb_query_template_request (
     const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonDuckDBQueryTemplateRequest *request,
