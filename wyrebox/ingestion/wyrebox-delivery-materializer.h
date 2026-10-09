@@ -1,6 +1,7 @@
 #pragma once
 
 #include "wyrebox-delivery-projection.h"
+#include "wyrebox-flag-changed-payload.h"
 
 #include <glib-object.h>
 
@@ -79,6 +80,31 @@ gboolean wyrebox_delivery_materializer_apply_to_inbox_full (
     WyreboxDeliveryMaterializer *self,
     const gchar *account_id,
     const WyreboxDeliveryProjectionList *projection,
+    gboolean advance_checkpoint,
+    GError **error);
+
+/*
+ * Apply the FlagChanged record at @journal_offset/@journal_sequence to the
+ * system flags and user keywords of the mailbox membership it targets, in one
+ * transaction. The checkpoint is moved forward to the record when
+ * @advance_checkpoint is TRUE.
+ *
+ * A row records the journal position of the change that added its name; a
+ * name already present is left untouched. Re-applying any suffix of the
+ * journal's flag changes in order therefore reproduces the same rows.
+ *
+ * A target whose membership or UIDVALIDITY is not materialized, and DuckDB
+ * constraint violations, fail with G_IO_ERROR_INVALID_DATA. Other failures,
+ * such as DuckDB I/O or lock errors, use other codes. On failure nothing is
+ * committed.
+ *
+ * @payload: (transfer none): decoded FlagChanged payload.
+ */
+gboolean wyrebox_delivery_materializer_apply_flag_change (
+    WyreboxDeliveryMaterializer *self,
+    const WyreboxFlagChangedPayload *payload,
+    guint64 journal_offset,
+    guint64 journal_sequence,
     gboolean advance_checkpoint,
     GError **error);
 

@@ -722,7 +722,7 @@ materializer_update_uidnext (WyreboxDeliveryMaterializer *self,
 
 static gboolean
 materializer_save_checkpoint (WyreboxDeliveryMaterializer *self,
-    const WyreboxDeliveryProjectionRecord *record, GError **error)
+    guint64 journal_offset, guint64 journal_sequence, GError **error)
 {
     g_auto (duckdb_prepared_statement) statement = NULL;
 
@@ -732,9 +732,9 @@ materializer_save_checkpoint (WyreboxDeliveryMaterializer *self,
         "AND (journal_sequence < ? OR "
         "(journal_sequence = ? AND journal_offset < ?));",
         &statement, error) ||
-        !bind_uint64 (statement, 1, record->journal_sequence, error) ||
-        !bind_uint64 (statement, 2, record->journal_sequence, error) ||
-        !bind_uint64 (statement, 3, record->journal_offset, error) ||
+        !bind_uint64 (statement, 1, journal_sequence, error) ||
+        !bind_uint64 (statement, 2, journal_sequence, error) ||
+        !bind_uint64 (statement, 3, journal_offset, error) ||
         !materializer_execute_prepared_full (statement, FALSE, error))
         return FALSE;
 
@@ -747,8 +747,8 @@ materializer_save_checkpoint (WyreboxDeliveryMaterializer *self,
                "SELECT 1 FROM materialization_checkpoint "
                "WHERE checkpoint_key = 'materialization'" ");", &statement,
                error)
-           && bind_uint64 (statement, 1, record->journal_offset, error)
-           && bind_uint64 (statement, 2, record->journal_sequence, error)
+           && bind_uint64 (statement, 1, journal_offset, error)
+           && bind_uint64 (statement, 2, journal_sequence, error)
            && materializer_execute_prepared_full (statement, FALSE, error);
 }
 
@@ -939,7 +939,8 @@ materializer_apply_in_transaction (WyreboxDeliveryMaterializer *self,
             g_ptr_array_index (projection->records,
                 projection->records->len - 1);
 
-        if (!materializer_save_checkpoint (self, last_record, error))
+        if (!materializer_save_checkpoint (self, last_record->journal_offset,
+            last_record->journal_sequence, error))
             return FALSE;
     }
 
@@ -1001,6 +1002,238 @@ wyrebox_delivery_materializer_apply_to_inbox_full (WyreboxDeliveryMaterializer
     if (!materializer_resolve_inbox_id (self, account_id, &mailbox_id, error) ||
         !materializer_apply_in_transaction (self, account_id, mailbox_id,
         "INBOX", projection, advance_checkpoint, error)) {
+        materializer_rollback_quietly (self);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static gboolean
+materializer_resolve_flag_target (WyreboxDeliveryMaterializer *self,
+    const WyreboxFlagChangedPayload *payload, gchar **out_membership_id,
+    GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    g_auto (duckdb_result) result = { 0 };
+    char *value = NULL;
+
+    if (!materializer_prepare (self,
+        "SELECT mm.membership_id FROM mailbox_memberships mm "
+        "JOIN mailbox_uid_state mus ON mus.account_id = mm.account_id "
+        "AND mus.namespace_kind = 'mailbox' "
+        "AND mus.namespace_id = mm.mailbox_id "
+        "WHERE mm.account_id = ? AND mm.mailbox_id = ? AND mm.uid = ? "
+        "AND mus.uidvalidity = ?;", &statement, error) ||
+        !bind_varchar (statement, 1, payload->account_id, error) ||
+        !bind_varchar (statement, 2, payload->mailbox_id, error) ||
+        !bind_uint64 (statement, 3, payload->uid, error) ||
+        !bind_uint64 (statement, 4, payload->uidvalidity, error))
+        return FALSE;
+
+    if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+        const char *detail = duckdb_result_error (&result);
+
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_FAILED,
+            "DuckDB delivery materializer flag target lookup failed: %s",
+            detail != NULL ? detail : "unknown DuckDB error");
+        return FALSE;
+    }
+
+    if (duckdb_row_count (&result) == 1)
+        value = duckdb_value_varchar (&result, 0, 0);
+    if (value == NULL) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "flag change target %s/%s UIDVALIDITY %" G_GUINT64_FORMAT
+            " UID %" G_GUINT64_FORMAT " is not materialized",
+            payload->account_id, payload->mailbox_id, payload->uidvalidity,
+            payload->uid);
+        return FALSE;
+    }
+
+    *out_membership_id = g_strdup (value);
+    duckdb_free (value);
+    return TRUE;
+}
+
+typedef struct
+{
+    const gchar *table;
+    const gchar *name_column;
+} FlagTable;
+
+static const FlagTable flag_tables[] = {
+    {"message_flags", "flag_name"},
+    {"message_keywords", "keyword_name"},
+};
+
+static gboolean
+materializer_load_flag_names (WyreboxDeliveryMaterializer *self,
+    const FlagTable *table, const gchar *membership_id,
+    GHashTable *out_names, GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    g_auto (duckdb_result) result = { 0 };
+    g_autofree gchar *sql = NULL;
+
+    sql = g_strdup_printf ("SELECT %s FROM %s WHERE membership_id = ?;",
+            table->name_column, table->table);
+    if (!materializer_prepare (self, sql, &statement, error) ||
+        !bind_varchar (statement, 1, membership_id, error))
+        return FALSE;
+
+    if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess) {
+        const char *detail = duckdb_result_error (&result);
+
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_FAILED,
+            "DuckDB delivery materializer %s select failed: %s",
+            table->table, detail != NULL ? detail : "unknown DuckDB error");
+        return FALSE;
+    }
+
+    for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+        char *value = duckdb_value_varchar (&result, 0, row);
+
+        if (value == NULL) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "%s row for %s is malformed", table->table, membership_id);
+            return FALSE;
+        }
+
+        g_hash_table_add (out_names, g_strdup (value));
+        duckdb_free (value);
+    }
+
+    return TRUE;
+}
+
+static gboolean
+materializer_delete_flag_name (WyreboxDeliveryMaterializer *self,
+    const FlagTable *table, const gchar *membership_id, const gchar *name,
+    GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    g_autofree gchar *sql = NULL;
+
+    sql = g_strdup_printf ("DELETE FROM %s WHERE membership_id = ? "
+            "AND %s = ?;", table->table, table->name_column);
+    return materializer_prepare (self, sql, &statement, error)
+           && bind_varchar (statement, 1, membership_id, error)
+           && bind_varchar (statement, 2, name, error)
+           && materializer_execute_prepared (statement, error);
+}
+
+static gboolean
+materializer_insert_flag_name (WyreboxDeliveryMaterializer *self,
+    const FlagTable *table, const WyreboxFlagChangedPayload *payload,
+    const gchar *membership_id, const gchar *name, guint64 journal_offset,
+    guint64 journal_sequence, GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    g_autofree gchar *sql = NULL;
+
+    sql = g_strdup_printf ("INSERT INTO %s (membership_id, account_id, "
+            "mailbox_id, %s, journal_offset, journal_sequence) "
+            "VALUES (?, ?, ?, ?, ?, ?);", table->table, table->name_column);
+    return materializer_prepare (self, sql, &statement, error)
+           && bind_varchar (statement, 1, membership_id, error)
+           && bind_varchar (statement, 2, payload->account_id, error)
+           && bind_varchar (statement, 3, payload->mailbox_id, error)
+           && bind_varchar (statement, 4, name, error)
+           && bind_uint64 (statement, 5, journal_offset, error)
+           && bind_uint64 (statement, 6, journal_sequence, error)
+           && materializer_execute_prepared (statement, error);
+}
+
+static gboolean
+strv_has (char **values, const gchar *name)
+{
+    return values != NULL && g_strv_contains ((const gchar *const *)values,
+               name);
+}
+
+/*
+ * Rows are only inserted for names that are absent and only deleted for names
+ * that are present, so a name is never deleted and re-inserted in one
+ * transaction.
+ */
+static gboolean
+materializer_apply_flag_table (WyreboxDeliveryMaterializer *self,
+    const FlagTable *table, const WyreboxFlagChangedPayload *payload,
+    char **names, const gchar *membership_id, guint64 journal_offset,
+    guint64 journal_sequence, GError **error)
+{
+    g_autoptr (GHashTable) current = NULL;
+    GHashTableIter iter;
+    gpointer key = NULL;
+
+    current = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+    if (!materializer_load_flag_names (self, table, membership_id, current,
+        error))
+        return FALSE;
+
+    if (payload->mode == WYREBOX_FLAG_CHANGED_MODE_REPLACE) {
+        g_hash_table_iter_init (&iter, current);
+        while (g_hash_table_iter_next (&iter, &key, NULL)) {
+            if (!strv_has (names, key) &&
+                !materializer_delete_flag_name (self, table, membership_id,
+                key, error))
+                return FALSE;
+        }
+    }
+
+    for (gsize i = 0; names != NULL && names[i] != NULL; i++) {
+        gboolean present = g_hash_table_contains (current, names[i]);
+
+        if (payload->mode == WYREBOX_FLAG_CHANGED_MODE_CLEAR) {
+            if (present && !materializer_delete_flag_name (self, table,
+                membership_id, names[i], error))
+                return FALSE;
+        } else if (!present && !materializer_insert_flag_name (self, table,
+            payload, membership_id, names[i], journal_offset,
+            journal_sequence, error)) {
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+gboolean
+wyrebox_delivery_materializer_apply_flag_change (WyreboxDeliveryMaterializer
+    *self, const WyreboxFlagChangedPayload *payload, guint64 journal_offset,
+    guint64 journal_sequence, gboolean advance_checkpoint, GError **error)
+{
+    g_autofree gchar *membership_id = NULL;
+
+    g_return_val_if_fail (WYREBOX_IS_DELIVERY_MATERIALIZER (self), FALSE);
+    g_return_val_if_fail (payload != NULL, FALSE);
+    g_return_val_if_fail (payload->account_id != NULL, FALSE);
+    g_return_val_if_fail (payload->mailbox_id != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (!materializer_query (self, "BEGIN TRANSACTION;", error))
+        return FALSE;
+
+    if (!materializer_resolve_flag_target (self, payload, &membership_id,
+        error) ||
+        !materializer_apply_flag_table (self, &flag_tables[0], payload,
+        payload->system_flags, membership_id, journal_offset,
+        journal_sequence, error) ||
+        !materializer_apply_flag_table (self, &flag_tables[1], payload,
+        payload->user_keywords, membership_id, journal_offset,
+        journal_sequence, error) ||
+        (advance_checkpoint && !materializer_save_checkpoint (self,
+        journal_offset, journal_sequence, error)) ||
+        !materializer_query (self, "COMMIT;", error)) {
         materializer_rollback_quietly (self);
         return FALSE;
     }
