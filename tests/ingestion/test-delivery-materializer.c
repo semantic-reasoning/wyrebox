@@ -1463,6 +1463,229 @@ test_apply_to_inbox_constraint_violation_is_invalid_data (void)
     remove_catalog (path);
 }
 
+static char *
+flag_state (duckdb_connection connection, const gchar *table,
+    const gchar *name_column)
+{
+    g_autofree gchar *sql = g_strdup_printf ("SELECT COALESCE(string_agg("
+            "%s || '@' || journal_offset || ':' || journal_sequence || '/' || "
+            "account_id || '/' || mailbox_id, ' ' ORDER BY %s), '') FROM %s "
+            "WHERE membership_id = 'mailbox:inbox:account-1:journal:11:1';",
+            name_column, name_column, table);
+
+    return query_string (connection, sql);
+}
+
+static void
+assert_flag_state (const gchar *path, const gchar *expected_flags,
+    const gchar *expected_keywords)
+{
+    TestDuckdbFixture duckdb = { 0 };
+    g_autofree gchar *flags = NULL;
+    g_autofree gchar *keywords = NULL;
+
+    open_duckdb_fixture (path, &duckdb);
+    flags = flag_state (duckdb.connection, "message_flags", "flag_name");
+    keywords = flag_state (duckdb.connection, "message_keywords",
+            "keyword_name");
+    close_duckdb_fixture (&duckdb);
+
+    g_assert_cmpstr (flags, ==, expected_flags);
+    g_assert_cmpstr (keywords, ==, expected_keywords);
+}
+
+static gchar *
+create_catalog_with_one_inbox_message (void)
+{
+    g_autofree gchar *path = create_bootstrap_catalog ();
+    g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+
+    append_projection_record (&projection, "sha256:first", 101, 1001, 11, 1);
+    apply_projection_to_account_inbox (path, "account-1", &projection);
+    return g_steal_pointer (&path);
+}
+
+static gboolean
+apply_flag_change (const gchar *path, WyreboxFlagChangedMode mode,
+    const gchar *flags, const gchar *keywords,
+    guint64 uidvalidity, guint64 uid, guint64 journal_offset,
+    guint64 journal_sequence, gboolean advance_checkpoint, GError **error)
+{
+    g_auto (GStrv) system_flags = g_strsplit (flags, " ", -1);
+    g_auto (GStrv) user_keywords = g_strsplit (keywords, " ", -1);
+    WyreboxFlagChangedPayload payload = {
+        .account_id = (char *)"account-1",
+        .mailbox_id = (char *)"inbox:account-1",
+        .uidvalidity = uidvalidity,
+        .uid = uid,
+        .mode = mode,
+        .system_flags = flags[0] != '\0' ? system_flags : NULL,
+        .user_keywords = keywords[0] != '\0' ? user_keywords : NULL,
+    };
+
+    g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+
+    materializer = wyrebox_delivery_materializer_new_duckdb (path, error);
+    if (materializer == NULL)
+        return FALSE;
+
+    return wyrebox_delivery_materializer_apply_flag_change (materializer,
+               &payload, journal_offset, journal_sequence, advance_checkpoint,
+               error);
+}
+
+static void
+apply_flag_change_ok (const gchar *path, WyreboxFlagChangedMode mode,
+    const gchar *flags, const gchar *keywords,
+    guint64 journal_offset, guint64 journal_sequence)
+{
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (apply_flag_change (path, mode, flags, keywords, 1,
+        1, journal_offset, journal_sequence, TRUE, &error));
+    g_assert_no_error (error);
+}
+
+#define FLAG_SUFFIX "/account-1/inbox:account-1"
+
+static void
+test_flag_change_set_clear_replace (void)
+{
+    g_autofree gchar *path = create_catalog_with_one_inbox_message ();
+    g_autoptr (GError) error = NULL;
+    TestDuckdbFixture duckdb = { 0 };
+
+    apply_flag_change_ok (path, WYREBOX_FLAG_CHANGED_MODE_SET,
+        "\\Seen \\Flagged", "project-x", 30, 2);
+    assert_flag_state (path,
+        "\\Flagged@30:2" FLAG_SUFFIX " \\Seen@30:2" FLAG_SUFFIX,
+        "project-x@30:2" FLAG_SUFFIX);
+
+    apply_flag_change_ok (path, WYREBOX_FLAG_CHANGED_MODE_SET,
+        "\\Seen \\Answered", "", 40, 3);
+    assert_flag_state (path,
+        "\\Answered@40:3" FLAG_SUFFIX " \\Flagged@30:2" FLAG_SUFFIX
+        " \\Seen@30:2" FLAG_SUFFIX, "project-x@30:2" FLAG_SUFFIX);
+
+    apply_flag_change_ok (path, WYREBOX_FLAG_CHANGED_MODE_CLEAR,
+        "\\Flagged \\Draft", "project-x", 50, 4);
+    assert_flag_state (path,
+        "\\Answered@40:3" FLAG_SUFFIX " \\Seen@30:2" FLAG_SUFFIX, "");
+
+    apply_flag_change_ok (path, WYREBOX_FLAG_CHANGED_MODE_REPLACE,
+        "\\Seen \\Draft", "urgent", 60, 5);
+    assert_flag_state (path,
+        "\\Draft@60:5" FLAG_SUFFIX " \\Seen@30:2" FLAG_SUFFIX,
+        "urgent@60:5" FLAG_SUFFIX);
+
+    apply_flag_change_ok (path, WYREBOX_FLAG_CHANGED_MODE_REPLACE,
+        "", "", 70, 6);
+    assert_flag_state (path, "", "");
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_materialization_checkpoint (duckdb.connection, 70, 6);
+    close_duckdb_fixture (&duckdb);
+
+    remove_catalog (path);
+}
+
+static void
+apply_flag_change_sequence (const gchar *path, guint first, guint last)
+{
+    static const struct
+    {
+        WyreboxFlagChangedMode mode;
+        const gchar *flags;
+        const gchar *keywords;
+    } changes[] = {
+        {WYREBOX_FLAG_CHANGED_MODE_SET, "\\Seen", "a b"},
+        {WYREBOX_FLAG_CHANGED_MODE_CLEAR, "\\Seen", "a"},
+        {WYREBOX_FLAG_CHANGED_MODE_SET, "\\Seen \\Flagged", "a"},
+        {WYREBOX_FLAG_CHANGED_MODE_REPLACE, "\\Flagged \\Draft", "b"},
+        {WYREBOX_FLAG_CHANGED_MODE_SET, "\\Draft", "c"},
+    };
+
+    for (guint i = first; i <= last; i++) {
+        apply_flag_change_ok (path, changes[i].mode, changes[i].flags,
+            changes[i].keywords, 100 + 10 * i, 10 + i);
+    }
+}
+
+static void
+test_flag_change_suffix_reapply_is_idempotent (void)
+{
+    g_autofree gchar *path = create_catalog_with_one_inbox_message ();
+    g_autoptr (GError) error = NULL;
+    TestDuckdbFixture duckdb = { 0 };
+    g_autofree gchar *flags = NULL;
+    g_autofree gchar *keywords = NULL;
+
+    apply_flag_change_sequence (path, 0, 4);
+
+    open_duckdb_fixture (path, &duckdb);
+    flags = flag_state (duckdb.connection, "message_flags", "flag_name");
+    keywords = flag_state (duckdb.connection, "message_keywords",
+            "keyword_name");
+    close_duckdb_fixture (&duckdb);
+    g_assert_cmpstr (flags, ==,
+        "\\Draft@130:13" FLAG_SUFFIX " \\Flagged@120:12" FLAG_SUFFIX);
+    g_assert_cmpstr (keywords, ==,
+        "b@100:10" FLAG_SUFFIX " c@140:14" FLAG_SUFFIX);
+
+    for (guint first = 0; first <= 4; first++) {
+        apply_flag_change_sequence (path, first, 4);
+        assert_flag_state (path, flags, keywords);
+    }
+
+    remove_catalog (path);
+}
+
+static void
+test_flag_change_unknown_target_is_invalid_data (void)
+{
+    g_autofree gchar *path = create_catalog_with_one_inbox_message ();
+    g_autoptr (GError) error = NULL;
+    TestDuckdbFixture duckdb = { 0 };
+
+    g_assert_false (apply_flag_change (path,
+        WYREBOX_FLAG_CHANGED_MODE_SET, "\\Seen", "", 1, 2, 30, 2, TRUE,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_clear_error (&error);
+
+    g_assert_false (apply_flag_change (path,
+        WYREBOX_FLAG_CHANGED_MODE_SET, "\\Seen", "", 2, 1, 30, 2, TRUE,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_table_count (duckdb.connection, "message_flags", 0);
+    assert_materialization_checkpoint (duckdb.connection, 11, 1);
+    close_duckdb_fixture (&duckdb);
+
+    remove_catalog (path);
+}
+
+static void
+test_flag_change_without_checkpoint_keeps_checkpoint (void)
+{
+    g_autofree gchar *path = create_catalog_with_one_inbox_message ();
+    g_autoptr (GError) error = NULL;
+    TestDuckdbFixture duckdb = { 0 };
+
+    g_assert_true (apply_flag_change (path,
+        WYREBOX_FLAG_CHANGED_MODE_SET, "\\Seen", "", 1, 1, 30, 2, FALSE,
+        &error));
+    g_assert_no_error (error);
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_table_count (duckdb.connection, "message_flags", 1);
+    assert_materialization_checkpoint (duckdb.connection, 11, 1);
+    close_duckdb_fixture (&duckdb);
+
+    remove_catalog (path);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1521,6 +1744,16 @@ main (int argc, char **argv)
         test_suffix_overlap_apply_preserves_existing_uids);
     g_test_add_func ("/ingestion/delivery-materializer/rollback-later-failure",
         test_later_record_failure_rolls_back_apply);
+
+    g_test_add_func ("/ingestion/delivery-materializer/flag-change-modes",
+        test_flag_change_set_clear_replace);
+    g_test_add_func ("/ingestion/delivery-materializer/flag-change-suffix",
+        test_flag_change_suffix_reapply_is_idempotent);
+    g_test_add_func ("/ingestion/delivery-materializer/flag-change-unknown",
+        test_flag_change_unknown_target_is_invalid_data);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/flag-change-without-checkpoint",
+        test_flag_change_without_checkpoint_keeps_checkpoint);
 
     return g_test_run ();
 }
