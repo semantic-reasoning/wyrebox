@@ -325,6 +325,43 @@ test_request_router_routes_mail_event_stream (void)
 }
 
 static void
+test_request_router_maps_mail_event_stream_denial_to_error_frame (void)
+{
+    gboolean was_called = FALSE;
+    MailEventStreamFixture fixture = { &was_called };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDaemonMailEventStreamService) service = NULL;
+    g_auto (WyreboxDaemonMailEventStreamRequest) request = { 0 };
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+    WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+    g_assert_true (wyrebox_daemon_mail_event_stream_request_init (&request,
+        "account-1", NULL, NULL, NULL, 0, 0, 0, 0, &error));
+    g_assert_no_error (error);
+
+    service = wyrebox_daemon_mail_event_stream_service_new
+            (stream_mail_events_fixture, &fixture, NULL);
+
+    request_frame.request_id = "request-mail-event";
+    request_frame.caller_identity = "postfix-helper";
+    request_frame.account_identity = "account-1";
+    request_frame.tool_identity = "postfix-pipe";
+    request_frame.correlation_id = "corr-mail-event";
+    request_frame.operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAIL_EVENT_STREAM;
+    request_frame.mail_event_stream = &request;
+
+    g_assert_true (route_with_mail_event_stream (service, &request_frame,
+        &frame, &error));
+    g_assert_no_error (error);
+    g_assert_false (was_called);
+    g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+    g_assert_cmpstr (frame.request_id, ==, "request-mail-event");
+    g_assert_cmpint (frame.error.error_class, ==,
+        WYREBOX_DAEMON_ERROR_PERMISSION_DENIED);
+}
+
+static void
 test_request_router_rejects_missing_mail_event_stream_payload (void)
 {
     g_autoptr (GError) error = NULL;
@@ -2001,6 +2038,10 @@ main (int argc, char **argv)
         test_request_router_rejects_missing_message_search_service);
     g_test_add_func ("/daemon-api/request-router/routes-mail-event-stream",
         test_request_router_routes_mail_event_stream);
+    g_test_add_func
+    (
+        "/daemon-api/request-router/maps-mail-event-stream-denial-to-error-frame",
+        test_request_router_maps_mail_event_stream_denial_to_error_frame);
     g_test_add_func ("/daemon-api/request-router/"
         "rejects-missing-mail-event-stream-payload",
         test_request_router_rejects_missing_mail_event_stream_payload);
