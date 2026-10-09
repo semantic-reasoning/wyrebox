@@ -1640,6 +1640,122 @@ encode_message_search_request (const WyreboxDaemonRequestIdentity *identity,
 }
 
 static gboolean
+validate_flag_keyword_update_encode_input (const WyreboxDaemonRequestIdentity
+    *identity, const WyreboxDaemonFlagKeywordUpdateRequest *request,
+    GError **error)
+{
+    g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
+    g_auto (WyreboxDaemonFlagKeywordUpdateRequest) validated_request = { 0 };
+
+    if (identity == NULL)
+        return set_invalid_argument (error, "request identity is null");
+
+    if (request == NULL)
+        return set_invalid_argument (error,
+                   "flag keyword update request is null");
+
+    if (!wyrebox_daemon_request_identity_init (&validated_identity,
+        identity->request_id,
+        identity->caller_identity,
+        identity->account_identity,
+        identity->tool_identity, identity->correlation_id, error))
+        return FALSE;
+
+    return wyrebox_daemon_flag_keyword_update_request_init (&validated_request,
+        request->account_identity,
+        request->mailbox_id,
+        request->uid_validity,
+        request->mailbox_uid,
+        request->mode,
+        (const char *const *)request->system_flags,
+        (const char *const *)request->user_keywords, error);
+}
+
+static void
+encode_strv (capnp::List < capnp::Text >::Builder values,
+    const char *const *strv)
+{
+    for (guint i = 0; strv != NULL && strv[i] != NULL; i++)
+        values.set (i, strv[i]);
+}
+
+static gboolean
+encode_flag_keyword_update_request (const WyreboxDaemonRequestIdentity
+    *identity, const WyreboxDaemonFlagKeywordUpdateRequest *request,
+    GBytes **out_bytes, GError **error)
+{
+    try {
+        FlagKeywordUpdateMode encoded_mode = FlagKeywordUpdateMode::SET;
+        guint n_system_flags = 0;
+        guint n_user_keywords = 0;
+
+        if (!validate_flag_keyword_update_encode_input (identity, request,
+            error))
+            return FALSE;
+
+        switch (request->mode) {
+        case WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET:
+            encoded_mode = FlagKeywordUpdateMode::SET;
+            break;
+        case WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_CLEAR:
+            encoded_mode = FlagKeywordUpdateMode::CLEAR;
+            break;
+        case WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_REPLACE:
+            encoded_mode = FlagKeywordUpdateMode::REPLACE;
+            break;
+        default:
+            return set_invalid_argument (error,
+                       "flag keyword update mode is unknown");
+        }
+
+        if (request->system_flags != NULL)
+            n_system_flags = g_strv_length (request->system_flags);
+        if (request->user_keywords != NULL)
+            n_user_keywords = g_strv_length (request->user_keywords);
+
+        capnp::MallocMessageBuilder request_builder;
+        auto request_frame = request_builder.initRoot < RequestFrame > ();
+
+        auto request_identity = request_frame.initIdentity ();
+        request_identity.setRequestId (identity->request_id);
+        request_identity.setCallerIdentity (identity->caller_identity != NULL
+        ? identity->caller_identity : "");
+        request_identity.setAccountIdentity (identity->account_identity != NULL
+        ? identity->account_identity : "");
+        request_identity.setToolIdentity (identity->tool_identity != NULL
+        ? identity->tool_identity : "");
+        request_identity.setCorrelationId (identity->correlation_id != NULL
+        ? identity->correlation_id : "");
+
+        auto flag_keyword_update = request_frame.initFlagKeywordUpdate ();
+        flag_keyword_update.setAccountIdentity (request->account_identity);
+        flag_keyword_update.setMailboxId (request->mailbox_id);
+        flag_keyword_update.setUidValidity (request->uid_validity);
+        flag_keyword_update.setMailboxUid (request->mailbox_uid);
+        flag_keyword_update.setMode (encoded_mode);
+        encode_strv (flag_keyword_update.initSystemFlags (n_system_flags),
+            (const char *const *)request->system_flags);
+        encode_strv (flag_keyword_update.initUserKeywords (n_user_keywords),
+            (const char *const *)request->user_keywords);
+
+        auto words = capnp::messageToFlatArray (request_builder);
+        auto bytes = words.asBytes ();
+        *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "flag keyword update request encode failed: %s", e.what ());
+    }
+
+    return FALSE;
+}
+
+static gboolean
 validate_duckdb_query_template_encode_input (const WyreboxDaemonRequestIdentity
     *identity, const WyreboxDaemonDuckDBQueryTemplateRequest *request,
     GError **error)
@@ -2369,6 +2485,25 @@ wyrebox_daemon_capnp_codec_encode_message_search_request (const
     g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
     if (!encode_message_search_request (identity, request, &out_bytes, error))
+        return NULL;
+
+    return g_steal_pointer (&out_bytes);
+}
+
+GBytes *
+wyrebox_daemon_capnp_codec_encode_flag_keyword_update_request (const
+    WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonFlagKeywordUpdateRequest *request, gpointer user_data,
+    GError **error)
+{
+    g_autoptr (GBytes) out_bytes = NULL;
+
+    (void)user_data;
+
+    g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+    if (!encode_flag_keyword_update_request (identity, request, &out_bytes,
+        error))
         return NULL;
 
     return g_steal_pointer (&out_bytes);

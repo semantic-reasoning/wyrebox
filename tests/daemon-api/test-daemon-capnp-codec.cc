@@ -1420,6 +1420,64 @@ assert_message_search_request_encoder_round_trip (void)
 }
 
 static void
+assert_flag_keyword_update_request_encoder_round_trip (void)
+{
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) encoded = NULL;
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonFlagKeywordUpdateRequest) request = { 0 };
+    WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+    gpointer decoded_state = NULL;
+    GDestroyNotify decoded_state_clear = NULL;
+    const char *system_flags[] = { "\\Seen", "\\Flagged", NULL };
+    const char *user_keywords[] = { "work", NULL };
+
+    g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+        "request-encode-flag-keyword", "dovecot", "account-1",
+        "dovecot-storage", "corr-flag-keyword", &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_flag_keyword_update_request_init (&request,
+        "account-1", "inbox:account-1", 77, 42,
+        WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_REPLACE, system_flags,
+        user_keywords, &error));
+    g_assert_no_error (error);
+
+    encoded = wyrebox_daemon_capnp_codec_encode_flag_keyword_update_request
+            (&identity, &request, NULL, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (encoded);
+
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+        encoded,
+        &decoded, &decoded_state, &decoded_state_clear, NULL, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (decoded.request_id, ==, "request-encode-flag-keyword");
+    g_assert_cmpint (decoded.operation, ==,
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FLAG_KEYWORD_UPDATE);
+    g_assert_nonnull (decoded.flag_keyword_update);
+    g_assert_cmpstr (decoded.flag_keyword_update->account_identity, ==,
+        "account-1");
+    g_assert_cmpstr (decoded.flag_keyword_update->mailbox_id, ==,
+        "inbox:account-1");
+    g_assert_cmpuint (decoded.flag_keyword_update->uid_validity, ==, 77);
+    g_assert_cmpuint (decoded.flag_keyword_update->mailbox_uid, ==, 42);
+    g_assert_cmpint (decoded.flag_keyword_update->mode, ==,
+        WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_REPLACE);
+    g_assert_true (g_strv_equal ((const char *const *)
+            decoded.flag_keyword_update->system_flags, system_flags));
+    g_assert_true (g_strv_equal ((const char *const *)
+            decoded.flag_keyword_update->user_keywords, user_keywords));
+
+    decoded_state_clear (decoded_state);
+    g_clear_pointer (&encoded, g_bytes_unref);
+
+    encoded = wyrebox_daemon_capnp_codec_encode_flag_keyword_update_request
+            (&identity, NULL, NULL, &error);
+    g_assert_null (encoded);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
 assert_request_bytes_rejects_message_search_missing_account (void)
 {
     g_autoptr (GBytes) request =
@@ -4579,6 +4637,9 @@ main (int argc, char **argv)
     g_test_add_func (
         "/daemon-api/capnp/codec/message-search-encoder-round-trip",
         assert_message_search_request_encoder_round_trip);
+    g_test_add_func (
+        "/daemon-api/capnp/codec/flag-keyword-update-encoder-round-trip",
+        assert_flag_keyword_update_request_encoder_round_trip);
     g_test_add_func
         ("/daemon-api/capnp/codec/decode-wirelog-predicate-query-bindings",
         assert_request_bytes_decode_wirelog_predicate_query_with_bindings);
