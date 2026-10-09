@@ -621,6 +621,61 @@ assert_fetches_message (const DaemonRoot *daemon_root, guint64 uid,
     g_assert_true (g_bytes_equal (frame.stream_chunk.bytes, expected));
 }
 
+/*
+ * Searches account-1's INBOX for messages whose subject contains @subject,
+ * or for every message when @subject is NULL.
+ */
+static void
+search_inbox (const DaemonRoot *daemon_root, guint64 uid_validity,
+    const char *subject, WyreboxDaemonResponseFrame *out_frame)
+{
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) encoded = NULL;
+    g_autoptr (GBytes) response = NULL;
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonMessageSearchRequest) request = { 0 };
+    WyreboxDaemonMessageSearchCriterion criterion = {
+        WYREBOX_DAEMON_MESSAGE_SEARCH_CRITERION_SUBJECT_CONTAINS,
+        (char *)subject, 0
+    };
+
+    g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+        "request-search-1", "dovecot", "account-1", "dovecot-storage",
+        "corr-search-1", &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_message_search_request_init (&request,
+        "account-1", "inbox:account-1",
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, uid_validity,
+        subject != NULL ? &criterion : NULL, subject != NULL ? 1 : 0,
+        &error));
+    g_assert_no_error (error);
+
+    encoded = wyrebox_daemon_capnp_codec_encode_message_search_request
+            (&identity, &request, NULL, &error);
+    g_assert_no_error (error);
+    response = roundtrip_request (daemon_root->socket_path, encoded);
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (response,
+        out_frame, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (out_frame->request_id, ==, "request-search-1");
+}
+
+static void
+assert_search_finds (const DaemonRoot *daemon_root, const char *subject,
+    const char *expected_uids)
+{
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+    gsize size = 0;
+    const char *data = NULL;
+
+    search_inbox (daemon_root, 1, subject, &frame);
+    g_assert_cmpint (frame.kind, ==,
+        WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+    g_assert_true (frame.stream_chunk.end_of_stream);
+    data = g_bytes_get_data (frame.stream_chunk.bytes, &size);
+    g_assert_cmpmem (data, size, expected_uids, strlen (expected_uids));
+}
+
 static void
 assert_fetch_fails (const DaemonRoot *daemon_root,
     const char *envelope_account, const char *request_account,
@@ -1181,6 +1236,30 @@ test_wyreboxd_fetches_message_bytes (void)
 }
 
 static void
+test_wyreboxd_searches_messages (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) subprocess = NULL;
+    g_auto (WyreboxDaemonResponseFrame) stale = { 0 };
+
+    daemon_root_init (&daemon_root);
+    journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
+    subprocess = start_daemon (&daemon_root);
+    deliver (&daemon_root, "delivery-2");
+
+    assert_search_finds (&daemon_root, NULL, "1\n2\n");
+    assert_search_finds (&daemon_root, "DELIVERY-2", "2\n");
+    assert_search_finds (&daemon_root, "delivery-3", "");
+
+    search_inbox (&daemon_root, 2, NULL, &stale);
+    g_assert_cmpint (stale.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+    g_assert_cmpint (stale.error.error_class, ==,
+        WYREBOX_DAEMON_ERROR_CONFLICT);
+
+    stop_daemon (subprocess);
+}
+
+static void
 test_wyreboxd_rebuilds_identical_catalog_after_restart (void)
 {
     g_auto (DaemonRoot) daemon_root = { 0 };
@@ -1370,6 +1449,8 @@ main (int argc, char **argv)
         test_wyreboxd_catches_up_journal_on_startup);
     g_test_add_func ("/daemon-api/wyreboxd/fetches-message-bytes",
         test_wyreboxd_fetches_message_bytes);
+    g_test_add_func ("/daemon-api/wyreboxd/searches-messages",
+        test_wyreboxd_searches_messages);
     g_test_add_func
         ("/daemon-api/wyreboxd/rebuilds-identical-catalog-after-restart",
         test_wyreboxd_rebuilds_identical_catalog_after_restart);
