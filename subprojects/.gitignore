@@ -1,6 +1,9 @@
 /*
 !/.gitignore
 !/*.wrap
+# Redirects Meson generates for dependencies wirelog provides itself.
+/nanoarrow.wrap
+/xxhash.wrap
 !/packagefiles/
 /packagefiles/*
 !/packagefiles/duckdb-prebuilt-linux/
