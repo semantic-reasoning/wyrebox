@@ -3,6 +3,7 @@
 #include <glib/gstdio.h>
 
 #include "wyrebox-build-config.h"
+#include "wyrebox-daemon-audit-payload.h"
 #include "wyrebox-daemon-frame-io.h"
 #include "wyrebox-daemon-mailbox-list-result.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
@@ -14,6 +15,7 @@
 #include "wyrebox-daemon-storage.h"
 #include "wyrebox-dovecot-daemon-client.h"
 #include "wyrebox-eml-ingestor.h"
+#include "wyrebox-journal-reader.h"
 #include "wyrebox-journal-writer.h"
 #include "wyrebox-local-object-store.h"
 
@@ -734,6 +736,130 @@ assert_inbox_flags (const DaemonRoot *daemon_root,
     }
 }
 
+/*
+ * Runs @template_id over the socket with one parameter, scoped to account-1.
+ */
+static void
+query_template (const DaemonRoot *daemon_root, const char *caller_identity,
+    const char *template_id, const char *parameter,
+    WyreboxDaemonResponseFrame *out_frame)
+{
+    const char *parameters[] = { parameter, NULL };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) encoded = NULL;
+    g_autoptr (GBytes) response = NULL;
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) request = { 0 };
+
+    g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+        "request-template-1", caller_identity, "account-1", "template-tool",
+        "corr-template-1", &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_duckdb_query_template_request_init
+            (&request, "query-1", template_id, "account-1", parameters,
+        &error));
+    g_assert_no_error (error);
+
+    encoded = wyrebox_daemon_capnp_codec_encode_duckdb_query_template_request
+            (&identity, &request, NULL, &error);
+    g_assert_no_error (error);
+    response = roundtrip_request (daemon_root->socket_path, encoded);
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (response,
+        out_frame, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (out_frame->request_id, ==, "request-template-1");
+}
+
+/*
+ * Counts DuckDB query-template audit records in the journal with
+ * @outcome and @template_id.
+ */
+static guint
+count_template_audit_records (const DaemonRoot *daemon_root,
+    WyreboxDaemonAuditOutcome outcome, const char *template_id)
+{
+    g_autoptr (WyreboxJournalReader) reader = NULL;
+    g_autoptr (GError) error = NULL;
+    gboolean eof = FALSE;
+    guint count = 0;
+
+    reader = wyrebox_journal_reader_new (daemon_root->journal_dir, &error);
+    g_assert_no_error (error);
+
+    while (TRUE) {
+        g_auto (WyreboxJournalRecord) record = { 0 };
+        g_auto (WyreboxDaemonAuditPayload) payload = { 0 };
+
+        if (!wyrebox_journal_reader_read_next (reader, &record, &eof,
+            &error)) {
+            g_assert_no_error (error);
+            g_assert_true (eof);
+            break;
+        }
+        if (record.event_type != WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED)
+            continue;
+
+        g_assert_true (wyrebox_daemon_audit_payload_decode (record.payload,
+            &payload, &error));
+        g_assert_no_error (error);
+        if (payload.operation ==
+            WYREBOX_DAEMON_AUDIT_OPERATION_DUCKDB_QUERY_TEMPLATE &&
+            payload.outcome == outcome &&
+            g_strcmp0 (payload.template_id, template_id) == 0)
+            count++;
+    }
+
+    return count;
+}
+
+/*
+ * Reads @account_id's mail events after the given cursor as
+ * @caller_identity acting for the same account.
+ */
+static void
+read_mail_events (const DaemonRoot *daemon_root, const char *caller_identity,
+    const char *account_id, guint64 after_offset, guint64 after_sequence,
+    WyreboxDaemonResponseFrame *out_frame)
+{
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) encoded = NULL;
+    g_autoptr (GBytes) response = NULL;
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonMailEventStreamRequest) request = { 0 };
+
+    g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+        "request-events-1", caller_identity, account_id, "event-tool",
+        "corr-events-1", &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_mail_event_stream_request_init (&request,
+        account_id, NULL, NULL, NULL, after_offset, after_sequence, 0, 0,
+        &error));
+    g_assert_no_error (error);
+
+    encoded = wyrebox_daemon_capnp_codec_encode_mail_event_stream_request
+            (&identity, &request, NULL, &error);
+    g_assert_no_error (error);
+    response = roundtrip_request (daemon_root->socket_path, encoded);
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (response,
+        out_frame, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (out_frame->request_id, ==, "request-events-1");
+}
+
+static void
+assert_mail_events_end (const DaemonRoot *daemon_root, const char *account_id,
+    guint64 after_offset, guint64 after_sequence)
+{
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+    read_mail_events (daemon_root, "admin-cli", account_id, after_offset,
+        after_sequence, &frame);
+    g_assert_cmpint (frame.kind, ==,
+        WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+    g_assert_true (frame.stream_chunk.end_of_stream);
+    g_assert_cmpuint (g_bytes_get_size (frame.stream_chunk.bytes), ==, 0);
+}
+
 static void
 assert_fetch_fails (const DaemonRoot *daemon_root,
     const char *envelope_account, const char *request_account,
@@ -1318,6 +1444,116 @@ test_wyreboxd_searches_messages (void)
 }
 
 static void
+test_wyreboxd_queries_templates (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) subprocess = NULL;
+    const char *const untouched[] = { "", NULL };
+
+    daemon_root_init (&daemon_root);
+    subprocess = start_daemon (&daemon_root);
+    deliver (&daemon_root, "delivery-1");
+
+    assert_inbox_flags (&daemon_root, untouched);
+    g_assert_cmpuint (count_template_audit_records (&daemon_root,
+        WYREBOX_DAEMON_AUDIT_OUTCOME_SUCCESS, "mailbox.uid_map.v1"), ==, 1);
+
+    {
+        g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+        query_template (&daemon_root, "dovecot", "unknown.template.v1",
+            "inbox:account-1", &frame);
+        g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+        g_assert_cmpint (frame.error.error_class, ==,
+            WYREBOX_DAEMON_ERROR_NOT_FOUND);
+    }
+    {
+        g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+        query_template (&daemon_root, "postfix-helper", "mailbox.uid_map.v1",
+            "inbox:account-1", &frame);
+        g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+        g_assert_cmpint (frame.error.error_class, ==,
+            WYREBOX_DAEMON_ERROR_PERMISSION_DENIED);
+    }
+    g_assert_cmpuint (count_template_audit_records (&daemon_root,
+        WYREBOX_DAEMON_AUDIT_OUTCOME_FAILURE, "unknown.template.v1"), ==, 1);
+    g_assert_cmpuint (count_template_audit_records (&daemon_root,
+        WYREBOX_DAEMON_AUDIT_OUTCOME_FAILURE, "mailbox.uid_map.v1"), ==, 1);
+
+    stop_daemon (subprocess);
+    g_clear_object (&subprocess);
+
+    subprocess = start_daemon (&daemon_root);
+    assert_inbox_flags (&daemon_root, untouched);
+    stop_daemon (subprocess);
+}
+
+static void
+test_wyreboxd_streams_mail_events (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) subprocess = NULL;
+    g_autoptr (GBytes) request = NULL;
+    g_autoptr (GBytes) response = NULL;
+    g_auto (WyreboxDaemonResponseFrame) receipt = { 0 };
+    g_autoptr (GError) error = NULL;
+    g_autofree char *expected_offset = NULL;
+    const char *data = NULL;
+    gsize size = 0;
+
+    daemon_root_init (&daemon_root);
+    subprocess = start_daemon (&daemon_root);
+    assert_mail_events_end (&daemon_root, "account-1", 0, 0);
+
+    request = build_delivery_request ("delivery-1");
+    response = roundtrip_request (daemon_root.socket_path, request);
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (response,
+        &receipt, &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (receipt.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+    expected_offset = g_strdup_printf ("\noffset=%" G_GUINT64_FORMAT "\n",
+            receipt.success.journal_offset);
+
+    {
+        g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+        read_mail_events (&daemon_root, "admin-cli", "account-1", 0, 0,
+            &frame);
+        g_assert_cmpint (frame.kind, ==,
+            WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+        g_assert_false (frame.stream_chunk.end_of_stream);
+        g_assert_cmpuint (frame.stream_chunk.chunk_index, ==,
+            receipt.success.journal_offset);
+        data = g_bytes_get_data (frame.stream_chunk.bytes, &size);
+        g_assert_true (g_strstr_len (data, size,
+            "wyrebox-mail-event/1\n") == data);
+        g_assert_nonnull (g_strstr_len (data, size, expected_offset));
+        g_assert_nonnull (g_strstr_len (data, size,
+            "\nevent_type=MessageDelivered\n"));
+        g_assert_nonnull (g_strstr_len (data, size,
+            "\ndelivery_id=delivery-1\n"));
+        g_assert_null (g_strstr_len (data, size, "recipient@example.com"));
+    }
+
+    assert_mail_events_end (&daemon_root, "account-1",
+        receipt.success.journal_offset, receipt.success.journal_sequence);
+    assert_mail_events_end (&daemon_root, "account-2", 0, 0);
+
+    {
+        g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+        read_mail_events (&daemon_root, "postfix-helper", "account-1", 0, 0,
+            &frame);
+        g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+        g_assert_cmpint (frame.error.error_class, ==,
+            WYREBOX_DAEMON_ERROR_PERMISSION_DENIED);
+    }
+
+    stop_daemon (subprocess);
+}
+
+static void
 test_wyreboxd_updates_flags (void)
 {
     g_auto (DaemonRoot) daemon_root = { 0 };
@@ -1583,6 +1819,10 @@ main (int argc, char **argv)
         test_wyreboxd_searches_messages);
     g_test_add_func ("/daemon-api/wyreboxd/updates-flags",
         test_wyreboxd_updates_flags);
+    g_test_add_func ("/daemon-api/wyreboxd/queries-templates",
+        test_wyreboxd_queries_templates);
+    g_test_add_func ("/daemon-api/wyreboxd/streams-mail-events",
+        test_wyreboxd_streams_mail_events);
     g_test_add_func
         ("/daemon-api/wyreboxd/rebuilds-identical-catalog-after-restart",
         test_wyreboxd_rebuilds_identical_catalog_after_restart);

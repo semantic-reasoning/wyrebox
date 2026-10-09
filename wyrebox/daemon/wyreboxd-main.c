@@ -10,6 +10,7 @@
 #include "wyrebox-daemon-duckdb-query-template-service.h"
 #include "wyrebox-daemon-exit-code.h"
 #include "wyrebox-daemon-flag-keyword-update-journal.h"
+#include "wyrebox-daemon-mail-event-stream-service.h"
 #include "wyrebox-daemon-mailbox-catalog-duckdb.h"
 #include "wyrebox-daemon-message-fetch-service.h"
 #include "wyrebox-daemon-message-search-duckdb.h"
@@ -205,6 +206,8 @@ run_daemon (int argc, char **argv)
     g_autoptr (
         WyreboxDaemonFlagKeywordUpdateService) flag_keyword_update_service
         = NULL;
+    g_autoptr (WyreboxDaemonMailEventStreamService) mail_event_stream_service =
+        NULL;
     g_autoptr (WyreboxDaemonRequestAdapter) request_adapter = NULL;
     g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
     g_autoptr (GMainLoop) loop = NULL;
@@ -344,6 +347,16 @@ run_daemon (int argc, char **argv)
         g_printerr ("wyreboxd: %s\n", error->message);
         return EX_OSERR;
     }
+    wyrebox_daemon_duckdb_query_template_service_set_audit_writer
+        (query_template_service, journal_writer);
+
+    mail_event_stream_service =
+        wyrebox_daemon_mail_event_stream_service_new_from_journal_writer
+            (journal_root_dir, journal_writer, &error);
+    if (mail_event_stream_service == NULL) {
+        g_printerr ("wyreboxd: %s\n", error->message);
+        return EX_OSERR;
+    }
 
     flag_keyword_update_service =
         wyrebox_daemon_flag_keyword_update_service_new_journaled (catalog_path,
@@ -368,6 +381,8 @@ run_daemon (int argc, char **argv)
             encode_response_frame, NULL, NULL);
     wyrebox_daemon_request_adapter_set_duckdb_query_template_service
         (request_adapter, query_template_service);
+    wyrebox_daemon_request_adapter_set_mail_event_stream_service
+        (request_adapter, mail_event_stream_service);
     server = wyrebox_daemon_connection_server_new (socket_path,
             request_adapter);
 
