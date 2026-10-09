@@ -1,13 +1,16 @@
 #include "wyrebox-daemon-mail-event-stream-service.h"
 #include "wyrebox-daemon-client-identity.h"
+#include "wyrebox-daemon-mail-event.h"
 #include "wyrebox-journal-event.h"
 #include "wyrebox-journal-reader.h"
+#include "wyrebox-journal-writer.h"
 
 #include <gio/gio.h>
 
 typedef struct
 {
     char *journal_root_dir;
+    WyreboxJournalWriter *journal_writer;
 } WyreboxDaemonMailEventStreamJournalSource;
 
 struct _WyreboxDaemonMailEventStreamService
@@ -108,6 +111,7 @@ wyrebox_daemon_mail_event_stream_journal_source_free
         return;
 
     g_clear_pointer (&source->journal_root_dir, g_free);
+    g_clear_object (&source->journal_writer);
     g_free (source);
 }
 
@@ -115,12 +119,8 @@ static gboolean
 journal_event_matches_request (const WyreboxJournalRecord *record,
     const WyreboxDaemonMailEventStreamRequest *request)
 {
-    if (record->offset < request->after_journal_offset)
-        return FALSE;
-
-    if (request->after_journal_offset != 0 &&
-        record->offset == request->after_journal_offset &&
-        record->sequence <= request->after_journal_sequence)
+    if (request->after_journal_sequence != 0 &&
+        record->offset <= request->after_journal_offset)
         return FALSE;
 
     if (request->event_type != NULL &&
@@ -143,34 +143,35 @@ read_next_matching_journal_event (const WyreboxDaemonRequestIdentity *identity,
     g_autoptr (GError) local_error = NULL;
     gboolean eof = FALSE;
 
-    reader = wyrebox_journal_reader_new (source->journal_root_dir, error);
+    if (source->journal_writer != NULL)
+        reader = wyrebox_journal_reader_new_with_limit
+                (source->journal_root_dir,
+                wyrebox_journal_writer_get_durable_end (source->journal_writer),
+                error);
+    else
+        reader = wyrebox_journal_reader_new (source->journal_root_dir, error);
     if (reader == NULL)
         return FALSE;
 
-    while (wyrebox_journal_reader_read_next (reader, &record, &eof,
+    while (!eof && wyrebox_journal_reader_read_next (reader, &record, &eof,
         &local_error)) {
-        if (!journal_event_matches_request (&record, request)) {
-            wyrebox_journal_record_clear (&record);
-            if (eof)
-                break;
+        g_autoptr (GBytes) event = NULL;
+
+        if (record.payload == NULL)
             continue;
-        }
 
-        if (record.payload == NULL) {
-            g_set_error (error,
-                G_IO_ERROR,
-                G_IO_ERROR_INVALID_DATA,
-                "mail event stream record payload is missing");
-            return FALSE;
-        }
+        if (journal_event_matches_request (&record, request)) {
+            if (!wyrebox_daemon_mail_event_project (&record,
+                request->account_identity, &event, error))
+                return FALSE;
 
-        g_bytes_ref (record.payload);
-        return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
-                   identity->request_id,
-                   NULL,
-                   "mail-event-stream",
-                   identity->correlation_id, record.offset, record.payload, eof,
-                   error);
+            if (event != NULL)
+                return wyrebox_daemon_stream_chunk_frame_init (out_chunk,
+                           identity->request_id, NULL, "mail-event-stream",
+                           identity->correlation_id, record.offset, event,
+                           FALSE, error);
+        }
+        wyrebox_journal_record_clear (&record);
     }
 
     if (local_error != NULL) {
@@ -231,9 +232,9 @@ WyreboxDaemonMailEventStreamService
     return self;
 }
 
-WyreboxDaemonMailEventStreamService *
-wyrebox_daemon_mail_event_stream_service_new_from_journal_root (const char
-    *journal_root_dir, GError **error)
+static WyreboxDaemonMailEventStreamService *
+new_for_journal (const char *journal_root_dir,
+    WyreboxJournalWriter *journal_writer, GError **error)
 {
     WyreboxDaemonMailEventStreamJournalSource *source = NULL;
 
@@ -249,6 +250,8 @@ wyrebox_daemon_mail_event_stream_service_new_from_journal_root (const char
 
     source = g_new0 (WyreboxDaemonMailEventStreamJournalSource, 1);
     source->journal_root_dir = g_strdup (journal_root_dir);
+    if (journal_writer != NULL)
+        source->journal_writer = g_object_ref (journal_writer);
 
     WyreboxDaemonMailEventStreamService *service =
         wyrebox_daemon_mail_event_stream_service_new
@@ -305,4 +308,20 @@ wyrebox_daemon_mail_event_stream_service_handle_identity
 
     return wyrebox_daemon_response_frame_init_stream_chunk (out_frame,
                &response_chunk, error);
+}
+
+WyreboxDaemonMailEventStreamService *
+wyrebox_daemon_mail_event_stream_service_new_from_journal_root (const char
+    *journal_root_dir, GError **error)
+{
+    return new_for_journal (journal_root_dir, NULL, error);
+}
+
+WyreboxDaemonMailEventStreamService *
+wyrebox_daemon_mail_event_stream_service_new_from_journal_writer (const char
+    *journal_root_dir, WyreboxJournalWriter *journal_writer, GError **error)
+{
+    g_return_val_if_fail (WYREBOX_IS_JOURNAL_WRITER (journal_writer), NULL);
+
+    return new_for_journal (journal_root_dir, journal_writer, error);
 }
