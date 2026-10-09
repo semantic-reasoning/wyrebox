@@ -52,6 +52,18 @@ daemon_mailbox_status_request_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_mail_event_test = executable(
+  'test-daemon-mail-event',
+  'test-daemon-mail-event.c',
+  dependencies: [wyrebox_dep],
+)
+
+daemon_mail_event_stream_service_test = executable(
+  'test-daemon-mail-event-stream-service',
+  'test-daemon-mail-event-stream-service.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_mail_event_stream_request_test = executable(
   'test-daemon-mail-event-stream-request',
   'test-daemon-mail-event-stream-request.c',
@@ -419,7 +431,10 @@ test('daemon mailbox list result', daemon_mailbox_list_result_test)
 test('daemon mailbox catalog duckdb', daemon_mailbox_catalog_duckdb_test)
 test('daemon mailbox select request', daemon_mailbox_select_request_test)
 test('daemon mailbox status request', daemon_mailbox_status_request_test)
+test('daemon mail event', daemon_mail_event_test)
 test('daemon mail event stream request', daemon_mail_event_stream_request_test)
+test('daemon mail event stream service',
+  daemon_mail_event_stream_service_test)
 test('daemon derived view package', daemon_derived_view_package_test)
 test('daemon derived view package catalog',
   daemon_derived_view_package_catalog_test)
