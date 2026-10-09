@@ -82,6 +82,10 @@ wyrebox_delivery_projection_record_clear (WyreboxDeliveryProjectionRecord
     record->duplicate_message_id_count = 0;
     record->journal_offset = 0;
     record->journal_sequence = 0;
+    if (record->flag_change != NULL) {
+        wyrebox_flag_changed_payload_clear (record->flag_change);
+        g_clear_pointer (&record->flag_change, g_free);
+    }
 }
 
 void
@@ -146,6 +150,34 @@ append_delivered_record (WyreboxDeliveryProjectionList *out_projection,
     g_ptr_array_add (out_projection->records, entry);
 }
 
+static gboolean
+append_flag_changed_record (WyreboxDeliveryProjectionList *out_projection,
+    WyreboxJournalRecord *record, GError **error)
+{
+    g_autoptr (GError) local_error = NULL;
+    WyreboxDeliveryProjectionRecord *entry = NULL;
+    WyreboxFlagChangedPayload *payload = g_new0 (WyreboxFlagChangedPayload, 1);
+
+    if (!wyrebox_flag_changed_payload_decode (record->payload, payload,
+        &local_error)) {
+        g_free (payload);
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "failed to decode FlagChanged payload at sequence %"
+            G_GUINT64_FORMAT ": %s", record->sequence, local_error->message);
+        return FALSE;
+    }
+
+    entry = g_new0 (WyreboxDeliveryProjectionRecord, 1);
+    entry->journal_offset = record->offset;
+    entry->journal_sequence = record->sequence;
+    entry->account_identity = g_strdup (payload->account_id);
+    entry->flag_change = payload;
+    g_ptr_array_add (out_projection->records, entry);
+    return TRUE;
+}
+
 gboolean
 wyrebox_delivery_projection_check_record_object (WyreboxLocalObjectStore
     *object_store, const WyreboxDeliveryProjectionRecord *record,
@@ -204,8 +236,9 @@ wyrebox_delivery_projection_check_record_object (WyreboxLocalObjectStore
     }
 }
 
-gboolean
-wyrebox_delivery_projection_replay_records (WyreboxDeliveryProjection *self,
+static gboolean
+projection_replay (WyreboxDeliveryProjection *self,
+    gboolean include_flag_changes,
     WyreboxDeliveryProjectionList *out_projection, GError **error)
 {
     g_auto (WyreboxJournalRecord) record = { 0 };
@@ -240,6 +273,16 @@ wyrebox_delivery_projection_replay_records (WyreboxDeliveryProjection *self,
             return FALSE;
         }
 
+        if (include_flag_changes &&
+            record.event_type == WYREBOX_JOURNAL_EVENT_FLAG_CHANGED) {
+            if (!append_flag_changed_record (out_projection, &record,
+                error)) {
+                wyrebox_delivery_projection_list_clear (out_projection);
+                return FALSE;
+            }
+            continue;
+        }
+
         if (record.event_type != WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED)
             continue;
 
@@ -258,6 +301,21 @@ wyrebox_delivery_projection_replay_records (WyreboxDeliveryProjection *self,
 
         append_delivered_record (out_projection, &record, &payload);
     }
+}
+
+gboolean
+wyrebox_delivery_projection_replay_records (WyreboxDeliveryProjection *self,
+    WyreboxDeliveryProjectionList *out_projection, GError **error)
+{
+    return projection_replay (self, FALSE, out_projection, error);
+}
+
+gboolean
+wyrebox_delivery_projection_replay_records_with_flag_changes
+    (WyreboxDeliveryProjection *self,
+    WyreboxDeliveryProjectionList *out_projection, GError **error)
+{
+    return projection_replay (self, TRUE, out_projection, error);
 }
 
 gboolean

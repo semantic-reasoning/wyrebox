@@ -92,8 +92,8 @@ replay_deliveries_after (WyreboxSchemaMetadataStore *metadata_store,
     WyreboxJournalReader *journal_reader,
     WyreboxLocalObjectStore *object_store,
     const WyreboxDeliveryCatchupCursor *resume_after,
-    WyreboxDeliveryProjectionList *out_list, gboolean *out_from_checkpoint,
-    GError **error)
+    gboolean include_flag_changes, WyreboxDeliveryProjectionList *out_list,
+    gboolean *out_from_checkpoint, GError **error)
 {
     g_auto (WyreboxSchemaMigrationMetadataState) metadata = { 0 };
     g_autoptr (WyreboxDeliveryProjection) projection = NULL;
@@ -129,6 +129,11 @@ replay_deliveries_after (WyreboxSchemaMetadataStore *metadata_store,
     if (projection == NULL)
         return FALSE;
 
+    if (include_flag_changes)
+        return
+            wyrebox_delivery_projection_replay_records_with_flag_changes
+                (projection, out_list, error);
+
     return wyrebox_delivery_projection_replay_records (projection, out_list,
                error);
 }
@@ -138,8 +143,12 @@ check_record_objects (WyreboxLocalObjectStore *object_store,
     const GPtrArray *records, GError **error)
 {
     for (guint i = 0; i < records->len; i++) {
-        if (!wyrebox_delivery_projection_check_record_object (object_store,
-            g_ptr_array_index (records, i), error))
+        const WyreboxDeliveryProjectionRecord *record =
+            g_ptr_array_index (records, i);
+
+        if (record->flag_change == NULL &&
+            !wyrebox_delivery_projection_check_record_object (object_store,
+            record, error))
             return FALSE;
     }
 
@@ -166,7 +175,7 @@ wyrebox_delivery_catchup_materialize_inbox (WyreboxSchemaMetadataStore
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
     if (!replay_deliveries_after (metadata_store, journal_reader,
-        object_store, NULL, &list, &from_checkpoint, error) ||
+        object_store, NULL, FALSE, &list, &from_checkpoint, error) ||
         !check_record_objects (object_store, list.records, error))
         return FALSE;
 
@@ -195,6 +204,20 @@ fail_if_any_record_lacks_account (const WyreboxDeliveryProjectionList *list,
     }
 
     return TRUE;
+}
+
+static gboolean
+has_delivery_record (const WyreboxDeliveryProjectionList *list)
+{
+    for (guint i = 0; i < list->records->len; i++) {
+        const WyreboxDeliveryProjectionRecord *record =
+            g_ptr_array_index (list->records, i);
+
+        if (record->flag_change == NULL)
+            return TRUE;
+    }
+
+    return FALSE;
 }
 
 void
@@ -286,11 +309,11 @@ wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
     if (!replay_deliveries_after (metadata_store, journal_reader,
-        object_store, resume_after, &list, &from_checkpoint, error) ||
+        object_store, resume_after, TRUE, &list, &from_checkpoint, error) ||
         !fail_if_any_record_lacks_account (&list, error))
         return FALSE;
 
-    if (list.records->len > 0 &&
+    if (has_delivery_record (&list) &&
         !wyrebox_local_object_store_check_root (object_store, error))
         return FALSE;
 
@@ -320,13 +343,17 @@ wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
         g_autoptr (GError) run_error = NULL;
         guint run_end = run_start;
 
+        gboolean applied = FALSE;
+
         run.records = g_ptr_array_new ();
         while (run_end < list.records->len) {
             WyreboxDeliveryProjectionRecord *record =
                 g_ptr_array_index (list.records, run_end);
 
             if (g_strcmp0 (record->account_identity,
-                first->account_identity) != 0)
+                first->account_identity) != 0 ||
+                (run_end > run_start && (record->flag_change != NULL ||
+                first->flag_change != NULL)))
                 break;
             g_ptr_array_add (run.records, record);
             run_end++;
@@ -336,14 +363,22 @@ wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
         if (is_account_held (holds, first->account_identity))
             continue;
 
-        if (!check_record_objects (object_store, run.records, &run_error)) {
+        if (first->flag_change != NULL) {
+            applied = wyrebox_delivery_materializer_apply_flag_change
+                    (materializer, first->flag_change, first->journal_offset,
+                    first->journal_sequence, from_checkpoint && holds->len == 0,
+                    &run_error);
+        } else if (!check_record_objects (object_store, run.records,
+            &run_error)) {
             add_hold (holds, first, g_steal_pointer (&run_error));
             continue;
+        } else {
+            applied = wyrebox_delivery_materializer_apply_to_inbox_full
+                    (materializer, first->account_identity, &run,
+                    from_checkpoint && holds->len == 0, &run_error);
         }
 
-        if (wyrebox_delivery_materializer_apply_to_inbox_full (materializer,
-            first->account_identity, &run,
-            from_checkpoint && holds->len == 0, &run_error))
+        if (applied)
             continue;
 
         if (!g_error_matches (run_error, G_IO_ERROR,

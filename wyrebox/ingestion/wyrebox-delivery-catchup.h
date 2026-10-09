@@ -75,8 +75,8 @@ typedef struct
  *   journal order of their first unmaterialized record, including holds
  *   carried into a resumed pass; empty when every pending record was
  *   materialized.
- * @records_scanned: delivery records replayed by the pass.
- * @scanned_through: the last delivery record replayed by the pass, or the
+ * @records_scanned: delivery and flag change records replayed by the pass.
+ * @scanned_through: the last record replayed by the pass, or the
  *   position the pass resumed after when it replayed none; not present when a
  *   pass from the checkpoint replayed nothing.
  */
@@ -99,7 +99,13 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDeliveryCatchupReport,
  * of the account recorded in its payload, as resolved by
  * wyrebox_delivery_materializer_apply_to_inbox_full().
  *
- * Consecutive records for the same account are applied in one materializer
+ * FlagChanged records are replayed in journal order with the deliveries. Each
+ * is applied on its own with wyrebox_delivery_materializer_apply_flag_change()
+ * and follows the same hold rules as a delivery run of its account: it is
+ * skipped while the account is held, and a G_IO_ERROR_INVALID_DATA failure,
+ * such as a target that is not materialized, holds the account.
+ *
+ * Consecutive deliveries for the same account are applied in one materializer
  * transaction, in journal order. Before a run is applied, the raw object of
  * each of its records is checked with
  * wyrebox_delivery_projection_check_record_object(). A run whose raw object
@@ -113,7 +119,7 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDeliveryCatchupReport,
  *
  * Returns TRUE when the pass completed, with or without holds. Returns FALSE
  * with @error set when the pass was aborted: on a metadata or journal
- * failure, when records are pending but the object store root fails
+ * failure, when deliveries are pending but the object store root fails
  * wyrebox_local_object_store_check_root(), for example because the object
  * store is not mounted, when a pending record has no account identity
  * (G_IO_ERROR_INVALID_DATA, before anything is materialized), or when
