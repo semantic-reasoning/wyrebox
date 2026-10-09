@@ -190,6 +190,12 @@ daemon_message_search_request_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_message_search_service_duckdb_test = executable(
+  'test-daemon-message-search-service-duckdb',
+  'test-daemon-message-search-service-duckdb.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_message_search_dispatcher_test = executable(
   'test-daemon-message-search-dispatcher',
   'test-daemon-message-search-dispatcher.c',
@@ -444,6 +450,8 @@ test(
 )
 test('daemon message search request', daemon_message_search_request_test)
 test('daemon message search dispatcher', daemon_message_search_dispatcher_test)
+test('daemon message search service duckdb',
+  daemon_message_search_service_duckdb_test)
 test('daemon wirelog predicate query request',
   daemon_wirelog_predicate_query_request_test)
 test('daemon wirelog predicate query catalog',
