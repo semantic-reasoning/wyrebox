@@ -147,7 +147,20 @@ struct MessageSearchRequest {
   accountIdentity @0 :Text;
   mailboxId @1 :Text;
   uidValidity @2 :UInt64;
-  criteriaToken @3 :Text;
+  namespaceKind @3 :MailboxListEntryKind;
+  # Combined with AND; an empty list matches every visible message.
+  criteria @4 :List(MessageSearchCriterion);
+}
+
+struct MessageSearchCriterion {
+  union {
+    subjectContains @0 :Text;
+    fromContains @1 :Text;
+    senderDomain @2 :Text;
+    # Decoded Date header bounds in Unix microseconds.
+    sentSince @3 :Int64;
+    sentBefore @4 :Int64;
+  }
 }
 
 struct FlagKeywordUpdateRequest {

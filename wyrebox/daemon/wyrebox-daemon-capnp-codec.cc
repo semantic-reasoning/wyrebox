@@ -26,304 +26,306 @@
 
 typedef struct
 {
-  char *request_id;
-  char *caller_identity;
-  char *account_identity;
-  char *tool_identity;
-  char *correlation_id;
+    char *request_id;
+    char *caller_identity;
+    char *account_identity;
+    char *tool_identity;
+    char *correlation_id;
 
-  WyreboxDaemonMailboxListRequest mailbox_list;
-  WyreboxDaemonMailboxSelectRequest mailbox_select;
-  WyreboxDaemonMailboxStatusRequest mailbox_status;
-  WyreboxDaemonFactMutationRequest fact_mutation;
-  WyreboxDaemonFactBatchImportRequest fact_batch_import;
-  WyreboxDaemonMessageFetchRequest message_fetch;
-  WyreboxDaemonMessageSearchRequest message_search;
-  WyreboxDaemonWirelogPredicateQueryRequest wirelog_predicate_query;
-  WyreboxDaemonDuckDBQueryTemplateRequest duckdb_query_template;
-  WyreboxDaemonDeliveryIngestionRequest delivery_ingestion;
-  WyreboxDaemonFlagKeywordUpdateRequest flag_keyword_update;
+    WyreboxDaemonMailboxListRequest mailbox_list;
+    WyreboxDaemonMailboxSelectRequest mailbox_select;
+    WyreboxDaemonMailboxStatusRequest mailbox_status;
+    WyreboxDaemonFactMutationRequest fact_mutation;
+    WyreboxDaemonFactBatchImportRequest fact_batch_import;
+    WyreboxDaemonMessageFetchRequest message_fetch;
+    WyreboxDaemonMessageSearchRequest message_search;
+    WyreboxDaemonWirelogPredicateQueryRequest wirelog_predicate_query;
+    WyreboxDaemonDuckDBQueryTemplateRequest duckdb_query_template;
+    WyreboxDaemonDeliveryIngestionRequest delivery_ingestion;
+    WyreboxDaemonFlagKeywordUpdateRequest flag_keyword_update;
 } WyreboxDaemonCapnpDecodedRequestState;
 
 static gboolean
 set_invalid_argument (GError **error, const char *message)
 {
-  g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "%s", message);
-  return FALSE;
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "%s", message);
+    return FALSE;
 }
 
 static gboolean
 set_not_supported (GError **error, const char *message)
 {
-  g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "%s", message);
-  return FALSE;
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "%s", message);
+    return FALSE;
 }
 
 void
 wyrebox_daemon_capnp_codec_decoded_state_clear (gpointer decoded_state)
 {
-  WyreboxDaemonCapnpDecodedRequestState *state =
-      static_cast < WyreboxDaemonCapnpDecodedRequestState * >(decoded_state);
+    WyreboxDaemonCapnpDecodedRequestState *state =
+        static_cast < WyreboxDaemonCapnpDecodedRequestState * > (decoded_state);
 
-  if (state == NULL)
-    return;
+    if (state == NULL)
+        return;
 
-  g_clear_pointer (&state->request_id, g_free);
-  g_clear_pointer (&state->caller_identity, g_free);
-  g_clear_pointer (&state->account_identity, g_free);
-  g_clear_pointer (&state->tool_identity, g_free);
-  g_clear_pointer (&state->correlation_id, g_free);
-  wyrebox_daemon_mailbox_list_request_clear (&state->mailbox_list);
-  wyrebox_daemon_mailbox_select_request_clear (&state->mailbox_select);
-  wyrebox_daemon_mailbox_status_request_clear (&state->mailbox_status);
-  wyrebox_daemon_fact_mutation_request_clear (&state->fact_mutation);
-  wyrebox_daemon_fact_batch_import_request_clear (&state->fact_batch_import);
-  wyrebox_daemon_message_fetch_request_clear (&state->message_fetch);
-  wyrebox_daemon_message_search_request_clear (&state->message_search);
-  wyrebox_daemon_wirelog_predicate_query_request_clear
-      (&state->wirelog_predicate_query);
-  wyrebox_daemon_duckdb_query_template_request_clear
-      (&state->duckdb_query_template);
-  wyrebox_daemon_delivery_ingestion_request_clear (&state->delivery_ingestion);
-  wyrebox_daemon_flag_keyword_update_request_clear
-      (&state->flag_keyword_update);
+    g_clear_pointer (&state->request_id, g_free);
+    g_clear_pointer (&state->caller_identity, g_free);
+    g_clear_pointer (&state->account_identity, g_free);
+    g_clear_pointer (&state->tool_identity, g_free);
+    g_clear_pointer (&state->correlation_id, g_free);
+    wyrebox_daemon_mailbox_list_request_clear (&state->mailbox_list);
+    wyrebox_daemon_mailbox_select_request_clear (&state->mailbox_select);
+    wyrebox_daemon_mailbox_status_request_clear (&state->mailbox_status);
+    wyrebox_daemon_fact_mutation_request_clear (&state->fact_mutation);
+    wyrebox_daemon_fact_batch_import_request_clear (&state->fact_batch_import);
+    wyrebox_daemon_message_fetch_request_clear (&state->message_fetch);
+    wyrebox_daemon_message_search_request_clear (&state->message_search);
+    wyrebox_daemon_wirelog_predicate_query_request_clear
+        (&state->wirelog_predicate_query);
+    wyrebox_daemon_duckdb_query_template_request_clear
+        (&state->duckdb_query_template);
+    wyrebox_daemon_delivery_ingestion_request_clear (
+        &state->delivery_ingestion);
+    wyrebox_daemon_flag_keyword_update_request_clear
+        (&state->flag_keyword_update);
 
-  g_free (state);
+    g_free (state);
 }
 
 static gboolean
 map_fact_mutation_kind (FactMutationKind in, WyreboxDaemonFactMutationKind *out)
 {
-  switch (in) {
+    switch (in) {
     case FactMutationKind::INSERT:
-      *out = WYREBOX_DAEMON_FACT_MUTATION_INSERT;
-      return TRUE;
+        *out = WYREBOX_DAEMON_FACT_MUTATION_INSERT;
+        return TRUE;
     case FactMutationKind::RETRACT:
-      *out = WYREBOX_DAEMON_FACT_MUTATION_RETRACT;
-      return TRUE;
+        *out = WYREBOX_DAEMON_FACT_MUTATION_RETRACT;
+        return TRUE;
     default:
-      return FALSE;
-  }
+        return FALSE;
+    }
 }
 
 static gboolean
 decode_fact_mutation_payload (const FactMutationRequest::Reader & fact_mutation,
     WyreboxDaemonFactMutationRequest *out_request, GError **error)
 {
-  auto arguments = fact_mutation.getArguments ();
-  WyreboxDaemonFactMutationKind mutation = WYREBOX_DAEMON_FACT_MUTATION_INSERT;
-  g_auto (GStrv) argument_vector = NULL;
+    auto arguments = fact_mutation.getArguments ();
+    WyreboxDaemonFactMutationKind mutation =
+        WYREBOX_DAEMON_FACT_MUTATION_INSERT;
+    g_auto (GStrv) argument_vector = NULL;
 
-  if (!map_fact_mutation_kind (fact_mutation.getMutation (), &mutation))
-    return set_invalid_argument (error, "unsupported fact mutation kind");
+    if (!map_fact_mutation_kind (fact_mutation.getMutation (), &mutation))
+        return set_invalid_argument (error, "unsupported fact mutation kind");
 
-  argument_vector = g_new0 (char *, arguments.size () + 1);
-  for (guint i = 0; i < arguments.size (); i++)
-    argument_vector[i] = g_strdup (arguments[i].cStr ());
+    argument_vector = g_new0 (char *, arguments.size () + 1);
+    for (guint i = 0; i < arguments.size (); i++)
+        argument_vector[i] = g_strdup (arguments[i].cStr ());
 
-  return wyrebox_daemon_fact_mutation_request_init (out_request,
-      mutation,
-      fact_mutation.getPredicateId ().cStr (),
-      fact_mutation.getScopeId ().cStr (),
-      (const char *const *) argument_vector, error);
+    return wyrebox_daemon_fact_mutation_request_init (out_request,
+               mutation,
+               fact_mutation.getPredicateId ().cStr (),
+               fact_mutation.getScopeId ().cStr (),
+               (const char *const *)argument_vector, error);
 }
 
 static void
 free_decoded_fact_mutation_request (gpointer data)
 {
-  WyreboxDaemonFactMutationRequest *request =
-      static_cast < WyreboxDaemonFactMutationRequest * >(data);
+    WyreboxDaemonFactMutationRequest *request =
+        static_cast < WyreboxDaemonFactMutationRequest * > (data);
 
-  if (request == NULL)
-    return;
+    if (request == NULL)
+        return;
 
-  wyrebox_daemon_fact_mutation_request_clear (request);
-  g_free (request);
+    wyrebox_daemon_fact_mutation_request_clear (request);
+    g_free (request);
 }
 
 static gboolean
 map_mailbox_list_child_state (WyreboxDaemonMailboxListChildState in,
     MailboxListChildState *out)
 {
-  switch (in) {
+    switch (in) {
     case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN:
-      *out = MailboxListChildState::UNKNOWN;
-      return TRUE;
+        *out = MailboxListChildState::UNKNOWN;
+        return TRUE;
     case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN:
-      *out = MailboxListChildState::HAS_CHILDREN;
-      return TRUE;
+        *out = MailboxListChildState::HAS_CHILDREN;
+        return TRUE;
     case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN:
-      *out = MailboxListChildState::HAS_NO_CHILDREN;
-      return TRUE;
+        *out = MailboxListChildState::HAS_NO_CHILDREN;
+        return TRUE;
     default:
-      return FALSE;
-  }
+        return FALSE;
+    }
 }
 
 static gboolean
 map_mailbox_list_entry_kind (WyreboxDaemonMailboxListEntryKind in,
     MailboxListEntryKind *out)
 {
-  switch (in) {
+    switch (in) {
     case WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY:
-      *out = MailboxListEntryKind::ORDINARY;
-      return TRUE;
+        *out = MailboxListEntryKind::ORDINARY;
+        return TRUE;
     case WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL:
-      *out = MailboxListEntryKind::VIRTUAL;
-      return TRUE;
+        *out = MailboxListEntryKind::VIRTUAL;
+        return TRUE;
     default:
-      return FALSE;
-  }
+        return FALSE;
+    }
 }
 
 static gboolean
 decode_mailbox_list_entry_kind (MailboxListEntryKind in,
     WyreboxDaemonMailboxListEntryKind *out)
 {
-  switch (in) {
+    switch (in) {
     case MailboxListEntryKind::ORDINARY:
-      *out = WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
-      return TRUE;
+        *out = WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
+        return TRUE;
     case MailboxListEntryKind::VIRTUAL:
-      *out = WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL;
-      return TRUE;
+        *out = WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL;
+        return TRUE;
     default:
-      return FALSE;
-  }
+        return FALSE;
+    }
 }
 
 static gboolean
 decode_mailbox_list_child_state (MailboxListChildState in,
     WyreboxDaemonMailboxListChildState *out)
 {
-  switch (in) {
+    switch (in) {
     case MailboxListChildState::UNKNOWN:
-      *out = WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN;
-      return TRUE;
+        *out = WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN;
+        return TRUE;
     case MailboxListChildState::HAS_CHILDREN:
-      *out = WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN;
-      return TRUE;
+        *out = WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN;
+        return TRUE;
     case MailboxListChildState::HAS_NO_CHILDREN:
-      *out = WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN;
-      return TRUE;
+        *out = WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN;
+        return TRUE;
     default:
-      return FALSE;
-  }
+        return FALSE;
+    }
 }
 
 static gboolean
 map_error_class (WyreboxDaemonErrorClass in, ErrorClass *out)
 {
-  switch (in) {
+    switch (in) {
     case WYREBOX_DAEMON_ERROR_TEMPORARY_FAILURE:
-      *out = ErrorClass::TEMPORARY_FAILURE;
-      return TRUE;
+        *out = ErrorClass::TEMPORARY_FAILURE;
+        return TRUE;
     case WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE:
-      *out = ErrorClass::PERMANENT_FAILURE;
-      return TRUE;
+        *out = ErrorClass::PERMANENT_FAILURE;
+        return TRUE;
     case WYREBOX_DAEMON_ERROR_PERMISSION_DENIED:
-      *out = ErrorClass::PERMISSION_DENIED;
-      return TRUE;
+        *out = ErrorClass::PERMISSION_DENIED;
+        return TRUE;
     case WYREBOX_DAEMON_ERROR_NOT_FOUND:
-      *out = ErrorClass::NOT_FOUND;
-      return TRUE;
+        *out = ErrorClass::NOT_FOUND;
+        return TRUE;
     case WYREBOX_DAEMON_ERROR_CONFLICT:
-      *out = ErrorClass::CONFLICT;
-      return TRUE;
+        *out = ErrorClass::CONFLICT;
+        return TRUE;
     case WYREBOX_DAEMON_ERROR_INTERNAL_ERROR:
-      *out = ErrorClass::INTERNAL_ERROR;
-      return TRUE;
+        *out = ErrorClass::INTERNAL_ERROR;
+        return TRUE;
     default:
-      return FALSE;
-  }
+        return FALSE;
+    }
 }
 
 static gboolean
 decode_error_class (ErrorClass in, WyreboxDaemonErrorClass *out)
 {
-  switch (in) {
+    switch (in) {
     case ErrorClass::TEMPORARY_FAILURE:
-      *out = WYREBOX_DAEMON_ERROR_TEMPORARY_FAILURE;
-      return TRUE;
+        *out = WYREBOX_DAEMON_ERROR_TEMPORARY_FAILURE;
+        return TRUE;
     case ErrorClass::PERMANENT_FAILURE:
-      *out = WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE;
-      return TRUE;
+        *out = WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE;
+        return TRUE;
     case ErrorClass::PERMISSION_DENIED:
-      *out = WYREBOX_DAEMON_ERROR_PERMISSION_DENIED;
-      return TRUE;
+        *out = WYREBOX_DAEMON_ERROR_PERMISSION_DENIED;
+        return TRUE;
     case ErrorClass::NOT_FOUND:
-      *out = WYREBOX_DAEMON_ERROR_NOT_FOUND;
-      return TRUE;
+        *out = WYREBOX_DAEMON_ERROR_NOT_FOUND;
+        return TRUE;
     case ErrorClass::CONFLICT:
-      *out = WYREBOX_DAEMON_ERROR_CONFLICT;
-      return TRUE;
+        *out = WYREBOX_DAEMON_ERROR_CONFLICT;
+        return TRUE;
     case ErrorClass::INTERNAL_ERROR:
-      *out = WYREBOX_DAEMON_ERROR_INTERNAL_ERROR;
-      return TRUE;
+        *out = WYREBOX_DAEMON_ERROR_INTERNAL_ERROR;
+        return TRUE;
     default:
-      return FALSE;
-  }
+        return FALSE;
+    }
 }
 
 static gboolean
 map_flag_keyword_update_mode (FlagKeywordUpdateMode in,
     WyreboxDaemonFlagKeywordUpdateMode *out)
 {
-  switch (in) {
+    switch (in) {
     case FlagKeywordUpdateMode::SET:
-      *out = WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET;
-      return TRUE;
+        *out = WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET;
+        return TRUE;
     case FlagKeywordUpdateMode::CLEAR:
-      *out = WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_CLEAR;
-      return TRUE;
+        *out = WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_CLEAR;
+        return TRUE;
     case FlagKeywordUpdateMode::REPLACE:
-      *out = WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_REPLACE;
-      return TRUE;
+        *out = WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_REPLACE;
+        return TRUE;
     default:
-      return FALSE;
-  }
+        return FALSE;
+    }
 }
 
 static gboolean
-decode_strv (const capnp::List < capnp::Text >::Reader & value_list,
+decode_strv (const capnp::List < capnp::Text > ::Reader & value_list,
     gchar ***out_values)
 {
-  g_auto (GStrv) copied = NULL;
-  gsize value_count = value_list.size ();
+    g_auto (GStrv) copied = NULL;
+    gsize value_count = value_list.size ();
 
-  g_return_val_if_fail (out_values != NULL, FALSE);
+    g_return_val_if_fail (out_values != NULL, FALSE);
 
-  *out_values = NULL;
+    *out_values = NULL;
 
-  if (value_count == 0)
+    if (value_count == 0)
+        return TRUE;
+
+    copied = g_new0 (gchar *, value_count + 1);
+    for (gsize i = 0; i < value_count; i++)
+        copied[i] = g_strdup (value_list[i].cStr ());
+
+    *out_values = g_steal_pointer (&copied);
     return TRUE;
-
-  copied = g_new0 (gchar *, value_count + 1);
-  for (gsize i = 0; i < value_count; i++)
-    copied[i] = g_strdup (value_list[i].cStr ());
-
-  *out_values = g_steal_pointer (&copied);
-  return TRUE;
 }
 
 static gboolean
 decode_request_identity (const RequestFrame::Reader & request_frame,
     WyreboxDaemonCapnpDecodedRequestState *state, GError **error)
 {
-  auto identity = request_frame.getIdentity ();
-  const char *request_id = identity.getRequestId ().cStr ();
+    auto identity = request_frame.getIdentity ();
+    const char *request_id = identity.getRequestId ().cStr ();
 
-  if (request_id == NULL || *request_id == '\0')
-    return set_invalid_argument (error,
-        "request frame identity.request_id is required");
+    if (request_id == NULL || *request_id == '\0')
+        return set_invalid_argument (error,
+                   "request frame identity.request_id is required");
 
-  state->request_id = g_strdup (request_id);
-  state->caller_identity = g_strdup (identity.getCallerIdentity ().cStr ());
-  state->account_identity = g_strdup (identity.getAccountIdentity ().cStr ());
-  state->tool_identity = g_strdup (identity.getToolIdentity ().cStr ());
-  state->correlation_id = g_strdup (identity.getCorrelationId ().cStr ());
+    state->request_id = g_strdup (request_id);
+    state->caller_identity = g_strdup (identity.getCallerIdentity ().cStr ());
+    state->account_identity = g_strdup (identity.getAccountIdentity ().cStr ());
+    state->tool_identity = g_strdup (identity.getToolIdentity ().cStr ());
+    state->correlation_id = g_strdup (identity.getCorrelationId ().cStr ());
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
@@ -331,37 +333,37 @@ decode_mailbox_list_request (const RequestFrame::Reader & request_frame,
     WyreboxDaemonCapnpDecodedRequestState *state,
     WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
 {
-  auto mailbox_list = request_frame.getMailboxList ();
+    auto mailbox_list = request_frame.getMailboxList ();
 
-  if (!decode_request_identity (request_frame, state, error))
-    return FALSE;
+    if (!decode_request_identity (request_frame, state, error))
+        return FALSE;
 
-  if (state->account_identity == NULL || *state->account_identity == '\0')
-    return set_invalid_argument (error,
-        "request frame mailboxList.accountIdentity is required");
+    if (state->account_identity == NULL || *state->account_identity == '\0')
+        return set_invalid_argument (error,
+                   "request frame mailboxList.accountIdentity is required");
 
-  if (!wyrebox_daemon_mailbox_list_request_init (&state->mailbox_list,
-          mailbox_list.getAccountIdentity ().cStr (),
-          mailbox_list.getNamespacePrefix ().cStr (), error))
-    return FALSE;
+    if (!wyrebox_daemon_mailbox_list_request_init (&state->mailbox_list,
+        mailbox_list.getAccountIdentity ().cStr (),
+        mailbox_list.getNamespacePrefix ().cStr (), error))
+        return FALSE;
 
-  out_request_frame->request_id = state->request_id;
-  out_request_frame->caller_identity = state->caller_identity;
-  out_request_frame->account_identity = state->account_identity;
-  out_request_frame->tool_identity = state->tool_identity;
-  out_request_frame->correlation_id = state->correlation_id;
-  out_request_frame->operation =
-      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_LIST;
-  out_request_frame->mailbox_list = &state->mailbox_list;
-  out_request_frame->mailbox_select = NULL;
-  out_request_frame->fact_mutation = NULL;
-  out_request_frame->message_fetch = NULL;
-  out_request_frame->message_search = NULL;
-  out_request_frame->wirelog_predicate_query = NULL;
-  out_request_frame->duckdb_query_template = NULL;
-  out_request_frame->flag_keyword_update = NULL;
+    out_request_frame->request_id = state->request_id;
+    out_request_frame->caller_identity = state->caller_identity;
+    out_request_frame->account_identity = state->account_identity;
+    out_request_frame->tool_identity = state->tool_identity;
+    out_request_frame->correlation_id = state->correlation_id;
+    out_request_frame->operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_LIST;
+    out_request_frame->mailbox_list = &state->mailbox_list;
+    out_request_frame->mailbox_select = NULL;
+    out_request_frame->fact_mutation = NULL;
+    out_request_frame->message_fetch = NULL;
+    out_request_frame->message_search = NULL;
+    out_request_frame->wirelog_predicate_query = NULL;
+    out_request_frame->duckdb_query_template = NULL;
+    out_request_frame->flag_keyword_update = NULL;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
@@ -369,35 +371,35 @@ decode_mailbox_select_request (const RequestFrame::Reader & request_frame,
     WyreboxDaemonCapnpDecodedRequestState *state,
     WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
 {
-  auto mailbox_select = request_frame.getMailboxSelect ();
+    auto mailbox_select = request_frame.getMailboxSelect ();
 
-  if (!decode_request_identity (request_frame, state, error))
-    return FALSE;
+    if (!decode_request_identity (request_frame, state, error))
+        return FALSE;
 
-  if (!wyrebox_daemon_mailbox_select_request_init (&state->mailbox_select,
-          mailbox_select.getAccountIdentity ().cStr (),
-          mailbox_select.getMailboxId ().cStr (),
-          mailbox_select.getMailboxName ().cStr (), error))
-    return FALSE;
+    if (!wyrebox_daemon_mailbox_select_request_init (&state->mailbox_select,
+        mailbox_select.getAccountIdentity ().cStr (),
+        mailbox_select.getMailboxId ().cStr (),
+        mailbox_select.getMailboxName ().cStr (), error))
+        return FALSE;
 
-  out_request_frame->request_id = state->request_id;
-  out_request_frame->caller_identity = state->caller_identity;
-  out_request_frame->account_identity = state->account_identity;
-  out_request_frame->tool_identity = state->tool_identity;
-  out_request_frame->correlation_id = state->correlation_id;
-  out_request_frame->operation =
-      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_SELECT;
-  out_request_frame->mailbox_list = NULL;
-  out_request_frame->mailbox_select = &state->mailbox_select;
-  out_request_frame->mailbox_status = NULL;
-  out_request_frame->fact_mutation = NULL;
-  out_request_frame->message_fetch = NULL;
-  out_request_frame->message_search = NULL;
-  out_request_frame->wirelog_predicate_query = NULL;
-  out_request_frame->duckdb_query_template = NULL;
-  out_request_frame->flag_keyword_update = NULL;
+    out_request_frame->request_id = state->request_id;
+    out_request_frame->caller_identity = state->caller_identity;
+    out_request_frame->account_identity = state->account_identity;
+    out_request_frame->tool_identity = state->tool_identity;
+    out_request_frame->correlation_id = state->correlation_id;
+    out_request_frame->operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_SELECT;
+    out_request_frame->mailbox_list = NULL;
+    out_request_frame->mailbox_select = &state->mailbox_select;
+    out_request_frame->mailbox_status = NULL;
+    out_request_frame->fact_mutation = NULL;
+    out_request_frame->message_fetch = NULL;
+    out_request_frame->message_search = NULL;
+    out_request_frame->wirelog_predicate_query = NULL;
+    out_request_frame->duckdb_query_template = NULL;
+    out_request_frame->flag_keyword_update = NULL;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
@@ -405,35 +407,35 @@ decode_mailbox_status_request (const RequestFrame::Reader & request_frame,
     WyreboxDaemonCapnpDecodedRequestState *state,
     WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
 {
-  auto mailbox_status = request_frame.getMailboxStatus ();
+    auto mailbox_status = request_frame.getMailboxStatus ();
 
-  if (!decode_request_identity (request_frame, state, error))
-    return FALSE;
+    if (!decode_request_identity (request_frame, state, error))
+        return FALSE;
 
-  if (!wyrebox_daemon_mailbox_status_request_init (&state->mailbox_status,
-          mailbox_status.getAccountIdentity ().cStr (),
-          mailbox_status.getMailboxId ().cStr (),
-          mailbox_status.getMailboxName ().cStr (), error))
-    return FALSE;
+    if (!wyrebox_daemon_mailbox_status_request_init (&state->mailbox_status,
+        mailbox_status.getAccountIdentity ().cStr (),
+        mailbox_status.getMailboxId ().cStr (),
+        mailbox_status.getMailboxName ().cStr (), error))
+        return FALSE;
 
-  out_request_frame->request_id = state->request_id;
-  out_request_frame->caller_identity = state->caller_identity;
-  out_request_frame->account_identity = state->account_identity;
-  out_request_frame->tool_identity = state->tool_identity;
-  out_request_frame->correlation_id = state->correlation_id;
-  out_request_frame->operation =
-      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_STATUS;
-  out_request_frame->mailbox_list = NULL;
-  out_request_frame->mailbox_select = NULL;
-  out_request_frame->mailbox_status = &state->mailbox_status;
-  out_request_frame->fact_mutation = NULL;
-  out_request_frame->message_fetch = NULL;
-  out_request_frame->message_search = NULL;
-  out_request_frame->wirelog_predicate_query = NULL;
-  out_request_frame->duckdb_query_template = NULL;
-  out_request_frame->flag_keyword_update = NULL;
+    out_request_frame->request_id = state->request_id;
+    out_request_frame->caller_identity = state->caller_identity;
+    out_request_frame->account_identity = state->account_identity;
+    out_request_frame->tool_identity = state->tool_identity;
+    out_request_frame->correlation_id = state->correlation_id;
+    out_request_frame->operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MAILBOX_STATUS;
+    out_request_frame->mailbox_list = NULL;
+    out_request_frame->mailbox_select = NULL;
+    out_request_frame->mailbox_status = &state->mailbox_status;
+    out_request_frame->fact_mutation = NULL;
+    out_request_frame->message_fetch = NULL;
+    out_request_frame->message_search = NULL;
+    out_request_frame->wirelog_predicate_query = NULL;
+    out_request_frame->duckdb_query_template = NULL;
+    out_request_frame->flag_keyword_update = NULL;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
@@ -441,45 +443,46 @@ decode_fact_mutation_request (const RequestFrame::Reader & request_frame,
     WyreboxDaemonCapnpDecodedRequestState *state,
     WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
 {
-  auto fact_mutation = request_frame.getFactMutation ();
-  auto arguments = fact_mutation.getArguments ();
-  WyreboxDaemonFactMutationKind mutation = WYREBOX_DAEMON_FACT_MUTATION_INSERT;
-  g_auto (GStrv) argument_vector = NULL;
+    auto fact_mutation = request_frame.getFactMutation ();
+    auto arguments = fact_mutation.getArguments ();
+    WyreboxDaemonFactMutationKind mutation =
+        WYREBOX_DAEMON_FACT_MUTATION_INSERT;
+    g_auto (GStrv) argument_vector = NULL;
 
-  if (!decode_request_identity (request_frame, state, error))
-    return FALSE;
+    if (!decode_request_identity (request_frame, state, error))
+        return FALSE;
 
-  if (!map_fact_mutation_kind (fact_mutation.getMutation (), &mutation))
-    return set_invalid_argument (error, "unsupported fact mutation kind");
+    if (!map_fact_mutation_kind (fact_mutation.getMutation (), &mutation))
+        return set_invalid_argument (error, "unsupported fact mutation kind");
 
-  argument_vector = g_new0 (char *, arguments.size () + 1);
-  for (guint i = 0; i < arguments.size (); i++)
-    argument_vector[i] = g_strdup (arguments[i].cStr ());
+    argument_vector = g_new0 (char *, arguments.size () + 1);
+    for (guint i = 0; i < arguments.size (); i++)
+        argument_vector[i] = g_strdup (arguments[i].cStr ());
 
-  if (!wyrebox_daemon_fact_mutation_request_init (&state->fact_mutation,
-          mutation,
-          fact_mutation.getPredicateId ().cStr (),
-          fact_mutation.getScopeId ().cStr (),
-          (const char *const *) argument_vector, error))
-    return FALSE;
+    if (!wyrebox_daemon_fact_mutation_request_init (&state->fact_mutation,
+        mutation,
+        fact_mutation.getPredicateId ().cStr (),
+        fact_mutation.getScopeId ().cStr (),
+        (const char *const *)argument_vector, error))
+        return FALSE;
 
-  out_request_frame->request_id = state->request_id;
-  out_request_frame->caller_identity = state->caller_identity;
-  out_request_frame->account_identity = state->account_identity;
-  out_request_frame->tool_identity = state->tool_identity;
-  out_request_frame->correlation_id = state->correlation_id;
-  out_request_frame->operation =
-      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_MUTATION;
-  out_request_frame->mailbox_list = NULL;
-  out_request_frame->mailbox_select = NULL;
-  out_request_frame->fact_mutation = &state->fact_mutation;
-  out_request_frame->message_fetch = NULL;
-  out_request_frame->message_search = NULL;
-  out_request_frame->wirelog_predicate_query = NULL;
-  out_request_frame->duckdb_query_template = NULL;
-  out_request_frame->flag_keyword_update = NULL;
+    out_request_frame->request_id = state->request_id;
+    out_request_frame->caller_identity = state->caller_identity;
+    out_request_frame->account_identity = state->account_identity;
+    out_request_frame->tool_identity = state->tool_identity;
+    out_request_frame->correlation_id = state->correlation_id;
+    out_request_frame->operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_MUTATION;
+    out_request_frame->mailbox_list = NULL;
+    out_request_frame->mailbox_select = NULL;
+    out_request_frame->fact_mutation = &state->fact_mutation;
+    out_request_frame->message_fetch = NULL;
+    out_request_frame->message_search = NULL;
+    out_request_frame->wirelog_predicate_query = NULL;
+    out_request_frame->duckdb_query_template = NULL;
+    out_request_frame->flag_keyword_update = NULL;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
@@ -487,61 +490,63 @@ decode_fact_batch_import_request (const RequestFrame::Reader & request_frame,
     WyreboxDaemonCapnpDecodedRequestState *state,
     WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
 {
-  auto fact_batch_import = request_frame.getFactBatchImport ();
-  auto entries = fact_batch_import.getEntries ();
-  g_autoptr (GPtrArray) decoded_entries = NULL;
-  g_autofree const WyreboxDaemonFactMutationRequest **entry_vector = NULL;
+    auto fact_batch_import = request_frame.getFactBatchImport ();
+    auto entries = fact_batch_import.getEntries ();
+    g_autoptr (GPtrArray) decoded_entries = NULL;
+    g_autofree const WyreboxDaemonFactMutationRequest **entry_vector = NULL;
 
-  if (!decode_request_identity (request_frame, state, error))
-    return FALSE;
+    if (!decode_request_identity (request_frame, state, error))
+        return FALSE;
 
-  if (entries.size () > WYREBOX_DAEMON_FACT_BATCH_IMPORT_REQUEST_MAX_ENTRIES)
-    return set_invalid_argument (error,
-        "fact batch import exceeds max entries");
+    if (entries.size () > WYREBOX_DAEMON_FACT_BATCH_IMPORT_REQUEST_MAX_ENTRIES)
+        return set_invalid_argument (error,
+                   "fact batch import exceeds max entries");
 
-  decoded_entries = g_ptr_array_new_with_free_func
-      (free_decoded_fact_mutation_request);
+    decoded_entries = g_ptr_array_new_with_free_func
+            (free_decoded_fact_mutation_request);
 
-  for (guint i = 0; i < entries.size (); i++) {
-    WyreboxDaemonFactMutationRequest *entry =
-        g_new0 (WyreboxDaemonFactMutationRequest, 1);
+    for (guint i = 0; i < entries.size (); i++) {
+        WyreboxDaemonFactMutationRequest *entry =
+            g_new0 (WyreboxDaemonFactMutationRequest, 1);
 
-    if (!decode_fact_mutation_payload (entries[i], entry, error)) {
-      free_decoded_fact_mutation_request (entry);
-      return FALSE;
+        if (!decode_fact_mutation_payload (entries[i], entry, error)) {
+            free_decoded_fact_mutation_request (entry);
+            return FALSE;
+        }
+
+        g_ptr_array_add (decoded_entries, entry);
     }
 
-    g_ptr_array_add (decoded_entries, entry);
-  }
+    entry_vector = g_new0 (const WyreboxDaemonFactMutationRequest *,
+            decoded_entries->len);
+    for (guint i = 0; i < decoded_entries->len; i++)
+        entry_vector[i] = static_cast <
+            const WyreboxDaemonFactMutationRequest *>
+            (g_ptr_array_index (decoded_entries, i));
 
-  entry_vector = g_new0 (const WyreboxDaemonFactMutationRequest *,
-      decoded_entries->len);
-  for (guint i = 0; i < decoded_entries->len; i++)
-    entry_vector[i] = static_cast < const WyreboxDaemonFactMutationRequest *>
-        (g_ptr_array_index (decoded_entries, i));
+    if (!wyrebox_daemon_fact_batch_import_request_init
+            (&state->fact_batch_import, entry_vector, decoded_entries->len,
+        error))
+        return FALSE;
 
-  if (!wyrebox_daemon_fact_batch_import_request_init
-      (&state->fact_batch_import, entry_vector, decoded_entries->len, error))
-    return FALSE;
+    out_request_frame->request_id = state->request_id;
+    out_request_frame->caller_identity = state->caller_identity;
+    out_request_frame->account_identity = state->account_identity;
+    out_request_frame->tool_identity = state->tool_identity;
+    out_request_frame->correlation_id = state->correlation_id;
+    out_request_frame->operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_BATCH_IMPORT;
+    out_request_frame->mailbox_list = NULL;
+    out_request_frame->mailbox_select = NULL;
+    out_request_frame->fact_mutation = NULL;
+    out_request_frame->fact_batch_import = &state->fact_batch_import;
+    out_request_frame->message_fetch = NULL;
+    out_request_frame->message_search = NULL;
+    out_request_frame->wirelog_predicate_query = NULL;
+    out_request_frame->duckdb_query_template = NULL;
+    out_request_frame->flag_keyword_update = NULL;
 
-  out_request_frame->request_id = state->request_id;
-  out_request_frame->caller_identity = state->caller_identity;
-  out_request_frame->account_identity = state->account_identity;
-  out_request_frame->tool_identity = state->tool_identity;
-  out_request_frame->correlation_id = state->correlation_id;
-  out_request_frame->operation =
-      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_BATCH_IMPORT;
-  out_request_frame->mailbox_list = NULL;
-  out_request_frame->mailbox_select = NULL;
-  out_request_frame->fact_mutation = NULL;
-  out_request_frame->fact_batch_import = &state->fact_batch_import;
-  out_request_frame->message_fetch = NULL;
-  out_request_frame->message_search = NULL;
-  out_request_frame->wirelog_predicate_query = NULL;
-  out_request_frame->duckdb_query_template = NULL;
-  out_request_frame->flag_keyword_update = NULL;
-
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
@@ -549,43 +554,43 @@ decode_message_fetch_request (const RequestFrame::Reader & request_frame,
     WyreboxDaemonCapnpDecodedRequestState *state,
     WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
 {
-  auto message_fetch = request_frame.getMessageFetch ();
-  WyreboxDaemonMailboxListEntryKind namespace_kind =
-      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
+    auto message_fetch = request_frame.getMessageFetch ();
+    WyreboxDaemonMailboxListEntryKind namespace_kind =
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
 
-  if (!decode_request_identity (request_frame, state, error))
-    return FALSE;
+    if (!decode_request_identity (request_frame, state, error))
+        return FALSE;
 
-  if (!decode_mailbox_list_entry_kind (message_fetch.getNamespaceKind (),
-          &namespace_kind))
-    return set_invalid_argument (error,
-        "message FETCH namespace_kind is unknown");
+    if (!decode_mailbox_list_entry_kind (message_fetch.getNamespaceKind (),
+        &namespace_kind))
+        return set_invalid_argument (error,
+                   "message FETCH namespace_kind is unknown");
 
-  if (!wyrebox_daemon_message_fetch_request_init (&state->message_fetch,
-          message_fetch.getAccountIdentity ().cStr (),
-          message_fetch.getMailboxId ().cStr (),
-          namespace_kind,
-          message_fetch.getUidValidity (),
-          message_fetch.getMailboxUid (), error))
-    return FALSE;
+    if (!wyrebox_daemon_message_fetch_request_init (&state->message_fetch,
+        message_fetch.getAccountIdentity ().cStr (),
+        message_fetch.getMailboxId ().cStr (),
+        namespace_kind,
+        message_fetch.getUidValidity (),
+        message_fetch.getMailboxUid (), error))
+        return FALSE;
 
-  out_request_frame->request_id = state->request_id;
-  out_request_frame->caller_identity = state->caller_identity;
-  out_request_frame->account_identity = state->account_identity;
-  out_request_frame->tool_identity = state->tool_identity;
-  out_request_frame->correlation_id = state->correlation_id;
-  out_request_frame->operation =
-      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_FETCH;
-  out_request_frame->mailbox_list = NULL;
-  out_request_frame->mailbox_select = NULL;
-  out_request_frame->fact_mutation = NULL;
-  out_request_frame->message_fetch = &state->message_fetch;
-  out_request_frame->message_search = NULL;
-  out_request_frame->wirelog_predicate_query = NULL;
-  out_request_frame->duckdb_query_template = NULL;
-  out_request_frame->flag_keyword_update = NULL;
+    out_request_frame->request_id = state->request_id;
+    out_request_frame->caller_identity = state->caller_identity;
+    out_request_frame->account_identity = state->account_identity;
+    out_request_frame->tool_identity = state->tool_identity;
+    out_request_frame->correlation_id = state->correlation_id;
+    out_request_frame->operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_FETCH;
+    out_request_frame->mailbox_list = NULL;
+    out_request_frame->mailbox_select = NULL;
+    out_request_frame->fact_mutation = NULL;
+    out_request_frame->message_fetch = &state->message_fetch;
+    out_request_frame->message_search = NULL;
+    out_request_frame->wirelog_predicate_query = NULL;
+    out_request_frame->duckdb_query_template = NULL;
+    out_request_frame->flag_keyword_update = NULL;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
@@ -593,35 +598,89 @@ decode_message_search_request (const RequestFrame::Reader & request_frame,
     WyreboxDaemonCapnpDecodedRequestState *state,
     WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
 {
-  auto message_search = request_frame.getMessageSearch ();
+    auto message_search = request_frame.getMessageSearch ();
+    auto encoded_criteria = message_search.getCriteria ();
+    WyreboxDaemonMailboxListEntryKind namespace_kind =
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
+    g_autofree WyreboxDaemonMessageSearchCriterion *criteria = NULL;
+    guint n_criteria = encoded_criteria.size ();
 
-  if (!decode_request_identity (request_frame, state, error))
-    return FALSE;
+    if (!decode_request_identity (request_frame, state, error))
+        return FALSE;
 
-  if (!wyrebox_daemon_message_search_request_init (&state->message_search,
-          message_search.getAccountIdentity ().cStr (),
-          message_search.getMailboxId ().cStr (),
-          message_search.getUidValidity (),
-          message_search.getCriteriaToken ().cStr (), error))
-    return FALSE;
+    if (!decode_mailbox_list_entry_kind (message_search.getNamespaceKind (),
+        &namespace_kind))
+        return set_invalid_argument (error,
+                   "message SEARCH namespace_kind is unknown");
 
-  out_request_frame->request_id = state->request_id;
-  out_request_frame->caller_identity = state->caller_identity;
-  out_request_frame->account_identity = state->account_identity;
-  out_request_frame->tool_identity = state->tool_identity;
-  out_request_frame->correlation_id = state->correlation_id;
-  out_request_frame->operation =
-      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_SEARCH;
-  out_request_frame->mailbox_list = NULL;
-  out_request_frame->mailbox_select = NULL;
-  out_request_frame->fact_mutation = NULL;
-  out_request_frame->message_fetch = NULL;
-  out_request_frame->message_search = &state->message_search;
-  out_request_frame->wirelog_predicate_query = NULL;
-  out_request_frame->duckdb_query_template = NULL;
-  out_request_frame->flag_keyword_update = NULL;
+    if (n_criteria > WYREBOX_DAEMON_MESSAGE_SEARCH_MAX_CRITERIA)
+        return set_invalid_argument (error,
+                   "message SEARCH has too many criteria");
 
-  return TRUE;
+    /* Text points into the message reader; init() copies it. */
+    criteria = g_new0 (WyreboxDaemonMessageSearchCriterion, n_criteria + 1);
+    for (guint i = 0; i < n_criteria; i++) {
+        auto encoded = encoded_criteria[i];
+
+        switch (encoded.which ()) {
+        case MessageSearchCriterion::SUBJECT_CONTAINS:
+            criteria[i].kind =
+                WYREBOX_DAEMON_MESSAGE_SEARCH_CRITERION_SUBJECT_CONTAINS;
+            criteria[i].text =
+                const_cast < char * > (encoded.getSubjectContains ().cStr ());
+            break;
+        case MessageSearchCriterion::FROM_CONTAINS:
+            criteria[i].kind =
+                WYREBOX_DAEMON_MESSAGE_SEARCH_CRITERION_FROM_CONTAINS;
+            criteria[i].text =
+                const_cast < char * > (encoded.getFromContains ().cStr ());
+            break;
+        case MessageSearchCriterion::SENDER_DOMAIN:
+            criteria[i].kind =
+                WYREBOX_DAEMON_MESSAGE_SEARCH_CRITERION_SENDER_DOMAIN;
+            criteria[i].text =
+                const_cast < char * > (encoded.getSenderDomain ().cStr ());
+            break;
+        case MessageSearchCriterion::SENT_SINCE:
+            criteria[i].kind =
+                WYREBOX_DAEMON_MESSAGE_SEARCH_CRITERION_SENT_SINCE;
+            criteria[i].unix_us = encoded.getSentSince ();
+            break;
+        case MessageSearchCriterion::SENT_BEFORE:
+            criteria[i].kind =
+                WYREBOX_DAEMON_MESSAGE_SEARCH_CRITERION_SENT_BEFORE;
+            criteria[i].unix_us = encoded.getSentBefore ();
+            break;
+        default:
+            return set_invalid_argument (error,
+                       "message SEARCH criterion kind is unknown");
+        }
+    }
+
+    if (!wyrebox_daemon_message_search_request_init (&state->message_search,
+        message_search.getAccountIdentity ().cStr (),
+        message_search.getMailboxId ().cStr (),
+        namespace_kind,
+        message_search.getUidValidity (), criteria, n_criteria, error))
+        return FALSE;
+
+    out_request_frame->request_id = state->request_id;
+    out_request_frame->caller_identity = state->caller_identity;
+    out_request_frame->account_identity = state->account_identity;
+    out_request_frame->tool_identity = state->tool_identity;
+    out_request_frame->correlation_id = state->correlation_id;
+    out_request_frame->operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_SEARCH;
+    out_request_frame->mailbox_list = NULL;
+    out_request_frame->mailbox_select = NULL;
+    out_request_frame->fact_mutation = NULL;
+    out_request_frame->message_fetch = NULL;
+    out_request_frame->message_search = &state->message_search;
+    out_request_frame->wirelog_predicate_query = NULL;
+    out_request_frame->duckdb_query_template = NULL;
+    out_request_frame->flag_keyword_update = NULL;
+
+    return TRUE;
 }
 
 static gboolean
@@ -629,44 +688,45 @@ decode_wirelog_predicate_query_request (const RequestFrame::Reader &
     request_frame, WyreboxDaemonCapnpDecodedRequestState *state,
     WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
 {
-  auto wirelog_predicate_query = request_frame.getWirelogPredicateQuery ();
-  g_auto (GStrv) bindings = NULL;
+    auto wirelog_predicate_query = request_frame.getWirelogPredicateQuery ();
+    g_auto (GStrv) bindings = NULL;
 
-  if (!decode_request_identity (request_frame, state, error))
-    return FALSE;
+    if (!decode_request_identity (request_frame, state, error))
+        return FALSE;
 
-  if (!decode_strv (wirelog_predicate_query.getBindings (), &bindings))
-    return FALSE;
+    if (!decode_strv (wirelog_predicate_query.getBindings (), &bindings))
+        return FALSE;
 
-  if (bindings == NULL)
-    bindings = g_new0 (char *, 1);
+    if (bindings == NULL)
+        bindings = g_new0 (char *, 1);
 
-  if (!wyrebox_daemon_wirelog_predicate_query_request_init
-      (&state->wirelog_predicate_query,
-          wirelog_predicate_query.getQueryId ().cStr (),
-          wirelog_predicate_query.getPredicateId ().cStr (),
-          wirelog_predicate_query.getScopeId ().cStr (),
-          (const char *const *) bindings, error))
-    return FALSE;
+    if (!wyrebox_daemon_wirelog_predicate_query_request_init
+            (&state->wirelog_predicate_query,
+        wirelog_predicate_query.getQueryId ().cStr (),
+        wirelog_predicate_query.getPredicateId ().cStr (),
+        wirelog_predicate_query.getScopeId ().cStr (),
+        (const char *const *)bindings, error))
+        return FALSE;
 
-  out_request_frame->request_id = state->request_id;
-  out_request_frame->caller_identity = state->caller_identity;
-  out_request_frame->account_identity = state->account_identity;
-  out_request_frame->tool_identity = state->tool_identity;
-  out_request_frame->correlation_id = state->correlation_id;
-  out_request_frame->operation =
-      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY;
-  out_request_frame->mailbox_list = NULL;
-  out_request_frame->mailbox_select = NULL;
-  out_request_frame->fact_mutation = NULL;
-  out_request_frame->message_fetch = NULL;
-  out_request_frame->message_search = NULL;
-  out_request_frame->wirelog_predicate_query = &state->wirelog_predicate_query;
-  out_request_frame->duckdb_query_template = NULL;
-  out_request_frame->delivery_ingestion = NULL;
-  out_request_frame->flag_keyword_update = NULL;
+    out_request_frame->request_id = state->request_id;
+    out_request_frame->caller_identity = state->caller_identity;
+    out_request_frame->account_identity = state->account_identity;
+    out_request_frame->tool_identity = state->tool_identity;
+    out_request_frame->correlation_id = state->correlation_id;
+    out_request_frame->operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY;
+    out_request_frame->mailbox_list = NULL;
+    out_request_frame->mailbox_select = NULL;
+    out_request_frame->fact_mutation = NULL;
+    out_request_frame->message_fetch = NULL;
+    out_request_frame->message_search = NULL;
+    out_request_frame->wirelog_predicate_query =
+        &state->wirelog_predicate_query;
+    out_request_frame->duckdb_query_template = NULL;
+    out_request_frame->delivery_ingestion = NULL;
+    out_request_frame->flag_keyword_update = NULL;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
@@ -674,44 +734,44 @@ decode_duckdb_query_template_request (const RequestFrame::Reader &
     request_frame, WyreboxDaemonCapnpDecodedRequestState *state,
     WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
 {
-  auto duckdb_query_template = request_frame.getDuckDBQueryTemplate ();
-  g_auto (GStrv) parameters = NULL;
+    auto duckdb_query_template = request_frame.getDuckDBQueryTemplate ();
+    g_auto (GStrv) parameters = NULL;
 
-  if (!decode_request_identity (request_frame, state, error))
-    return FALSE;
+    if (!decode_request_identity (request_frame, state, error))
+        return FALSE;
 
-  if (!decode_strv (duckdb_query_template.getParameters (), &parameters))
-    return FALSE;
+    if (!decode_strv (duckdb_query_template.getParameters (), &parameters))
+        return FALSE;
 
-  if (parameters == NULL)
-    parameters = g_new0 (char *, 1);
+    if (parameters == NULL)
+        parameters = g_new0 (char *, 1);
 
-  if (!wyrebox_daemon_duckdb_query_template_request_init
-      (&state->duckdb_query_template,
-          duckdb_query_template.getQueryId ().cStr (),
-          duckdb_query_template.getTemplateId ().cStr (),
-          duckdb_query_template.getScopeId ().cStr (),
-          (const char *const *) parameters, error))
-    return FALSE;
+    if (!wyrebox_daemon_duckdb_query_template_request_init
+            (&state->duckdb_query_template,
+        duckdb_query_template.getQueryId ().cStr (),
+        duckdb_query_template.getTemplateId ().cStr (),
+        duckdb_query_template.getScopeId ().cStr (),
+        (const char *const *)parameters, error))
+        return FALSE;
 
-  out_request_frame->request_id = state->request_id;
-  out_request_frame->caller_identity = state->caller_identity;
-  out_request_frame->account_identity = state->account_identity;
-  out_request_frame->tool_identity = state->tool_identity;
-  out_request_frame->correlation_id = state->correlation_id;
-  out_request_frame->operation =
-      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE;
-  out_request_frame->mailbox_list = NULL;
-  out_request_frame->mailbox_select = NULL;
-  out_request_frame->fact_mutation = NULL;
-  out_request_frame->message_fetch = NULL;
-  out_request_frame->message_search = NULL;
-  out_request_frame->wirelog_predicate_query = NULL;
-  out_request_frame->duckdb_query_template = &state->duckdb_query_template;
-  out_request_frame->delivery_ingestion = NULL;
-  out_request_frame->flag_keyword_update = NULL;
+    out_request_frame->request_id = state->request_id;
+    out_request_frame->caller_identity = state->caller_identity;
+    out_request_frame->account_identity = state->account_identity;
+    out_request_frame->tool_identity = state->tool_identity;
+    out_request_frame->correlation_id = state->correlation_id;
+    out_request_frame->operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE;
+    out_request_frame->mailbox_list = NULL;
+    out_request_frame->mailbox_select = NULL;
+    out_request_frame->fact_mutation = NULL;
+    out_request_frame->message_fetch = NULL;
+    out_request_frame->message_search = NULL;
+    out_request_frame->wirelog_predicate_query = NULL;
+    out_request_frame->duckdb_query_template = &state->duckdb_query_template;
+    out_request_frame->delivery_ingestion = NULL;
+    out_request_frame->flag_keyword_update = NULL;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
@@ -719,45 +779,46 @@ decode_delivery_ingestion_request (const RequestFrame::Reader & request_frame,
     WyreboxDaemonCapnpDecodedRequestState *state,
     WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
 {
-  auto delivery_ingestion = request_frame.getDeliveryIngestion ();
-  auto message_bytes = delivery_ingestion.getMessageBytes ();
-  g_auto (GStrv) recipients = NULL;
-  g_autoptr (GBytes) decoded_message_bytes = NULL;
+    auto delivery_ingestion = request_frame.getDeliveryIngestion ();
+    auto message_bytes = delivery_ingestion.getMessageBytes ();
+    g_auto (GStrv) recipients = NULL;
+    g_autoptr (GBytes) decoded_message_bytes = NULL;
 
-  if (!decode_request_identity (request_frame, state, error))
-    return FALSE;
+    if (!decode_request_identity (request_frame, state, error))
+        return FALSE;
 
-  if (!decode_strv (delivery_ingestion.getRecipients (), &recipients))
-    return FALSE;
+    if (!decode_strv (delivery_ingestion.getRecipients (), &recipients))
+        return FALSE;
 
-  decoded_message_bytes =
-      g_bytes_new (message_bytes.begin (), message_bytes.size ());
+    decoded_message_bytes =
+        g_bytes_new (message_bytes.begin (), message_bytes.size ());
 
-  if (!wyrebox_daemon_delivery_ingestion_request_init
-      (&state->delivery_ingestion, delivery_ingestion.getDeliveryId ().cStr (),
-          delivery_ingestion.getQueueId ().cStr (),
-          delivery_ingestion.getEnvelopeSender ().cStr (),
-          (const gchar * const *) recipients, decoded_message_bytes, error))
-    return FALSE;
+    if (!wyrebox_daemon_delivery_ingestion_request_init
+            (&state->delivery_ingestion,
+        delivery_ingestion.getDeliveryId ().cStr (),
+        delivery_ingestion.getQueueId ().cStr (),
+        delivery_ingestion.getEnvelopeSender ().cStr (),
+        (const gchar * const *)recipients, decoded_message_bytes, error))
+        return FALSE;
 
-  out_request_frame->request_id = state->request_id;
-  out_request_frame->caller_identity = state->caller_identity;
-  out_request_frame->account_identity = state->account_identity;
-  out_request_frame->tool_identity = state->tool_identity;
-  out_request_frame->correlation_id = state->correlation_id;
-  out_request_frame->operation =
-      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION;
-  out_request_frame->mailbox_list = NULL;
-  out_request_frame->mailbox_select = NULL;
-  out_request_frame->fact_mutation = NULL;
-  out_request_frame->message_fetch = NULL;
-  out_request_frame->message_search = NULL;
-  out_request_frame->wirelog_predicate_query = NULL;
-  out_request_frame->duckdb_query_template = NULL;
-  out_request_frame->delivery_ingestion = &state->delivery_ingestion;
-  out_request_frame->flag_keyword_update = NULL;
+    out_request_frame->request_id = state->request_id;
+    out_request_frame->caller_identity = state->caller_identity;
+    out_request_frame->account_identity = state->account_identity;
+    out_request_frame->tool_identity = state->tool_identity;
+    out_request_frame->correlation_id = state->correlation_id;
+    out_request_frame->operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION;
+    out_request_frame->mailbox_list = NULL;
+    out_request_frame->mailbox_select = NULL;
+    out_request_frame->fact_mutation = NULL;
+    out_request_frame->message_fetch = NULL;
+    out_request_frame->message_search = NULL;
+    out_request_frame->wirelog_predicate_query = NULL;
+    out_request_frame->duckdb_query_template = NULL;
+    out_request_frame->delivery_ingestion = &state->delivery_ingestion;
+    out_request_frame->flag_keyword_update = NULL;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
@@ -765,51 +826,52 @@ decode_flag_keyword_update_request (const RequestFrame::Reader & request_frame,
     WyreboxDaemonCapnpDecodedRequestState *state,
     WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
 {
-  auto flag_keyword_update = request_frame.getFlagKeywordUpdate ();
-  WyreboxDaemonFlagKeywordUpdateMode c_mode =
-      WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET;
-  g_auto (GStrv) system_flags = NULL;
-  g_auto (GStrv) user_keywords = NULL;
+    auto flag_keyword_update = request_frame.getFlagKeywordUpdate ();
+    WyreboxDaemonFlagKeywordUpdateMode c_mode =
+        WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET;
+    g_auto (GStrv) system_flags = NULL;
+    g_auto (GStrv) user_keywords = NULL;
 
-  if (!decode_request_identity (request_frame, state, error))
-    return FALSE;
+    if (!decode_request_identity (request_frame, state, error))
+        return FALSE;
 
-  if (!map_flag_keyword_update_mode (flag_keyword_update.getMode (), &c_mode))
-    return set_invalid_argument (error, "unsupported flag keyword update mode");
+    if (!map_flag_keyword_update_mode (flag_keyword_update.getMode (), &c_mode))
+        return set_invalid_argument (error,
+                   "unsupported flag keyword update mode");
 
-  if (!decode_strv (flag_keyword_update.getSystemFlags (), &system_flags))
-    return FALSE;
+    if (!decode_strv (flag_keyword_update.getSystemFlags (), &system_flags))
+        return FALSE;
 
-  if (!decode_strv (flag_keyword_update.getUserKeywords (), &user_keywords))
-    return FALSE;
+    if (!decode_strv (flag_keyword_update.getUserKeywords (), &user_keywords))
+        return FALSE;
 
-  if (!wyrebox_daemon_flag_keyword_update_request_init
-      (&state->flag_keyword_update,
-          flag_keyword_update.getAccountIdentity ().cStr (),
-          flag_keyword_update.getMailboxId ().cStr (),
-          flag_keyword_update.getUidValidity (),
-          flag_keyword_update.getMailboxUid (), c_mode,
-          (const char *const *) system_flags,
-          (const char *const *) user_keywords, error))
-    return FALSE;
+    if (!wyrebox_daemon_flag_keyword_update_request_init
+            (&state->flag_keyword_update,
+        flag_keyword_update.getAccountIdentity ().cStr (),
+        flag_keyword_update.getMailboxId ().cStr (),
+        flag_keyword_update.getUidValidity (),
+        flag_keyword_update.getMailboxUid (), c_mode,
+        (const char *const *)system_flags,
+        (const char *const *)user_keywords, error))
+        return FALSE;
 
-  out_request_frame->request_id = state->request_id;
-  out_request_frame->caller_identity = state->caller_identity;
-  out_request_frame->account_identity = state->account_identity;
-  out_request_frame->tool_identity = state->tool_identity;
-  out_request_frame->correlation_id = state->correlation_id;
-  out_request_frame->operation =
-      WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FLAG_KEYWORD_UPDATE;
-  out_request_frame->mailbox_list = NULL;
-  out_request_frame->mailbox_select = NULL;
-  out_request_frame->fact_mutation = NULL;
-  out_request_frame->message_fetch = NULL;
-  out_request_frame->message_search = NULL;
-  out_request_frame->wirelog_predicate_query = NULL;
-  out_request_frame->duckdb_query_template = NULL;
-  out_request_frame->flag_keyword_update = &state->flag_keyword_update;
+    out_request_frame->request_id = state->request_id;
+    out_request_frame->caller_identity = state->caller_identity;
+    out_request_frame->account_identity = state->account_identity;
+    out_request_frame->tool_identity = state->tool_identity;
+    out_request_frame->correlation_id = state->correlation_id;
+    out_request_frame->operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FLAG_KEYWORD_UPDATE;
+    out_request_frame->mailbox_list = NULL;
+    out_request_frame->mailbox_select = NULL;
+    out_request_frame->fact_mutation = NULL;
+    out_request_frame->message_fetch = NULL;
+    out_request_frame->message_search = NULL;
+    out_request_frame->wirelog_predicate_query = NULL;
+    out_request_frame->duckdb_query_template = NULL;
+    out_request_frame->flag_keyword_update = &state->flag_keyword_update;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
@@ -818,264 +880,267 @@ decode_request_frame (const capnp::word *words,
     WyreboxDaemonCapnpDecodedRequestState *state,
     WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
 {
-  try {
-    capnp::FlatArrayMessageReader request_reader (kj::ArrayPtr <
-        const capnp::word > (words, word_count));
-    auto request_frame = request_reader.getRoot < RequestFrame > ();
+    try {
+        capnp::FlatArrayMessageReader request_reader (kj::ArrayPtr <
+            const capnp::word > (words, word_count));
+        auto request_frame = request_reader.getRoot < RequestFrame > ();
 
-    switch (request_frame.which ()) {
-      case RequestFrame::MAILBOX_LIST:
-        return decode_mailbox_list_request (request_frame,
-            state, out_request_frame, error);
-      case RequestFrame::DELIVERY_INGESTION:
-        return decode_delivery_ingestion_request (request_frame,
-            state, out_request_frame, error);
-    case RequestFrame::MAILBOX_SELECT:
-      return decode_mailbox_select_request (request_frame,
-          state, out_request_frame, error);
-    case RequestFrame::MAILBOX_STATUS:
-      return decode_mailbox_status_request (request_frame,
-          state, out_request_frame, error);
-    case RequestFrame::MESSAGE_FETCH:
-      return decode_message_fetch_request (request_frame,
-          state, out_request_frame, error);
-      case RequestFrame::MESSAGE_SEARCH:
-        return decode_message_search_request (request_frame,
-            state, out_request_frame, error);
-      case RequestFrame::FLAG_KEYWORD_UPDATE:
-        return decode_flag_keyword_update_request (request_frame,
-            state, out_request_frame, error);
-      case RequestFrame::FACT_MUTATION:
-        return decode_fact_mutation_request (request_frame,
-            state, out_request_frame, error);
-      case RequestFrame::FACT_BATCH_IMPORT:
-        return decode_fact_batch_import_request (request_frame,
-            state, out_request_frame, error);
-      case RequestFrame::WIRELOG_PREDICATE_QUERY:
-        return decode_wirelog_predicate_query_request (request_frame,
-            state, out_request_frame, error);
-      case RequestFrame::DUCK_D_B_QUERY_TEMPLATE:
-        return decode_duckdb_query_template_request (request_frame,
-            state, out_request_frame, error);
-      default:
-        return set_not_supported (error, "unsupported request frame union arm");
+        switch (request_frame.which ()) {
+        case RequestFrame::MAILBOX_LIST:
+            return decode_mailbox_list_request (request_frame,
+                       state, out_request_frame, error);
+        case RequestFrame::DELIVERY_INGESTION:
+            return decode_delivery_ingestion_request (request_frame,
+                       state, out_request_frame, error);
+        case RequestFrame::MAILBOX_SELECT:
+            return decode_mailbox_select_request (request_frame,
+                       state, out_request_frame, error);
+        case RequestFrame::MAILBOX_STATUS:
+            return decode_mailbox_status_request (request_frame,
+                       state, out_request_frame, error);
+        case RequestFrame::MESSAGE_FETCH:
+            return decode_message_fetch_request (request_frame,
+                       state, out_request_frame, error);
+        case RequestFrame::MESSAGE_SEARCH:
+            return decode_message_search_request (request_frame,
+                       state, out_request_frame, error);
+        case RequestFrame::FLAG_KEYWORD_UPDATE:
+            return decode_flag_keyword_update_request (request_frame,
+                       state, out_request_frame, error);
+        case RequestFrame::FACT_MUTATION:
+            return decode_fact_mutation_request (request_frame,
+                       state, out_request_frame, error);
+        case RequestFrame::FACT_BATCH_IMPORT:
+            return decode_fact_batch_import_request (request_frame,
+                       state, out_request_frame, error);
+        case RequestFrame::WIRELOG_PREDICATE_QUERY:
+            return decode_wirelog_predicate_query_request (request_frame,
+                       state, out_request_frame, error);
+        case RequestFrame::DUCK_D_B_QUERY_TEMPLATE:
+            return decode_duckdb_query_template_request (request_frame,
+                       state, out_request_frame, error);
+        default:
+            return set_not_supported (error,
+                       "unsupported request frame union arm");
+        }
     }
-  }
-  catch (const std::exception & e)
-  {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA, "request frame decode failed: %s", e.what ());
-  }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA, "request frame decode failed: %s",
+            e.what ());
+    }
 
-  return FALSE;
+    return FALSE;
 }
 
 static gboolean
 decode_success_response (const ResponseFrame::Reader & response_frame,
     WyreboxDaemonResponseFrame *out_response_frame, GError **error)
 {
-  auto success = response_frame.getSuccess ();
-  g_auto (WyreboxDaemonSuccessReceipt) receipt = { 0 };
-  const char *request_id = response_frame.getRequestId ().cStr ();
-  const char *payload_request_id = success.getRequestId ().cStr ();
-  const char *correlation_id = response_frame.getCorrelationId ().cStr ();
+    auto success = response_frame.getSuccess ();
+    g_auto (WyreboxDaemonSuccessReceipt) receipt = { 0 };
+    const char *request_id = response_frame.getRequestId ().cStr ();
+    const char *payload_request_id = success.getRequestId ().cStr ();
+    const char *correlation_id = response_frame.getCorrelationId ().cStr ();
 
-  if (request_id == NULL || *request_id == '\0')
-    return set_invalid_argument (error,
-        "response frame request_id is required");
+    if (request_id == NULL || *request_id == '\0')
+        return set_invalid_argument (error,
+                   "response frame request_id is required");
 
-  if (payload_request_id == NULL || *payload_request_id == '\0')
-    return set_invalid_argument (error,
-        "success response request_id is required");
+    if (payload_request_id == NULL || *payload_request_id == '\0')
+        return set_invalid_argument (error,
+                   "success response request_id is required");
 
-  if (g_strcmp0 (request_id, payload_request_id) != 0)
-    return set_invalid_argument (error,
-        "success response request_id does not match frame envelope");
+    if (g_strcmp0 (request_id, payload_request_id) != 0)
+        return set_invalid_argument (error,
+                   "success response request_id does not match frame envelope");
 
-  receipt.request_id = g_strdup (request_id);
-  receipt.durable_marker = g_strdup (success.getDurableMarker ().cStr ());
-  receipt.journal_offset = success.getJournalOffset ();
-  receipt.journal_sequence = success.getJournalSequence ();
-  receipt.summary = g_strdup (success.getSummary ().cStr ());
+    receipt.request_id = g_strdup (request_id);
+    receipt.durable_marker = g_strdup (success.getDurableMarker ().cStr ());
+    receipt.journal_offset = success.getJournalOffset ();
+    receipt.journal_sequence = success.getJournalSequence ();
+    receipt.summary = g_strdup (success.getSummary ().cStr ());
 
-  return wyrebox_daemon_response_frame_init_success (out_response_frame,
-      &receipt, correlation_id, error);
+    return wyrebox_daemon_response_frame_init_success (out_response_frame,
+               &receipt, correlation_id, error);
 }
 
 static gboolean
 decode_error_response (const ResponseFrame::Reader & response_frame,
     WyreboxDaemonResponseFrame *out_response_frame, GError **error)
 {
-  auto response_error = response_frame.getError ();
-  g_auto (WyreboxDaemonErrorFrame) error_frame = { 0 };
-  WyreboxDaemonErrorClass error_class = WYREBOX_DAEMON_ERROR_INTERNAL_ERROR;
-  const char *request_id = response_frame.getRequestId ().cStr ();
-  const char *payload_request_id = response_error.getRequestId ().cStr ();
-  const char *correlation_id = response_frame.getCorrelationId ().cStr ();
+    auto response_error = response_frame.getError ();
+    g_auto (WyreboxDaemonErrorFrame) error_frame = { 0 };
+    WyreboxDaemonErrorClass error_class = WYREBOX_DAEMON_ERROR_INTERNAL_ERROR;
+    const char *request_id = response_frame.getRequestId ().cStr ();
+    const char *payload_request_id = response_error.getRequestId ().cStr ();
+    const char *correlation_id = response_frame.getCorrelationId ().cStr ();
 
-  if (request_id == NULL || *request_id == '\0')
-    return set_invalid_argument (error,
-        "response frame request_id is required");
+    if (request_id == NULL || *request_id == '\0')
+        return set_invalid_argument (error,
+                   "response frame request_id is required");
 
-  if (payload_request_id == NULL || *payload_request_id == '\0')
-    return set_invalid_argument (error,
-        "error response request_id is required");
+    if (payload_request_id == NULL || *payload_request_id == '\0')
+        return set_invalid_argument (error,
+                   "error response request_id is required");
 
-  if (g_strcmp0 (request_id, payload_request_id) != 0)
-    return set_invalid_argument (error,
-        "error response request_id does not match frame envelope");
+    if (g_strcmp0 (request_id, payload_request_id) != 0)
+        return set_invalid_argument (error,
+                   "error response request_id does not match frame envelope");
 
-  if (!decode_error_class (response_error.getErrorClass (), &error_class))
-    return set_invalid_argument (error, "unsupported daemon error class");
+    if (!decode_error_class (response_error.getErrorClass (), &error_class))
+        return set_invalid_argument (error, "unsupported daemon error class");
 
-  if (!wyrebox_daemon_error_frame_init (&error_frame,
-          request_id,
-          error_class,
-          response_error.getMessage ().cStr (),
-          response_error.getRetryHint ().cStr (), error))
-    return FALSE;
+    if (!wyrebox_daemon_error_frame_init (&error_frame,
+        request_id,
+        error_class,
+        response_error.getMessage ().cStr (),
+        response_error.getRetryHint ().cStr (), error))
+        return FALSE;
 
-  return wyrebox_daemon_response_frame_init_error (out_response_frame,
-      &error_frame, correlation_id, error);
+    return wyrebox_daemon_response_frame_init_error (out_response_frame,
+               &error_frame, correlation_id, error);
 }
 
 static gboolean
 decode_mailbox_list_response (const ResponseFrame::Reader & response_frame,
     WyreboxDaemonResponseFrame *out_response_frame, GError **error)
 {
-  auto response_list = response_frame.getMailboxList ();
-  auto entries = response_list.getEntries ();
-  g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
-  const char *request_id = response_frame.getRequestId ().cStr ();
-  const char *payload_request_id = response_list.getRequestId ().cStr ();
-  const char *correlation_id = response_frame.getCorrelationId ().cStr ();
+    auto response_list = response_frame.getMailboxList ();
+    auto entries = response_list.getEntries ();
+    g_auto (WyreboxDaemonMailboxListResult) result = { 0 };
+    const char *request_id = response_frame.getRequestId ().cStr ();
+    const char *payload_request_id = response_list.getRequestId ().cStr ();
+    const char *correlation_id = response_frame.getCorrelationId ().cStr ();
 
-  if (request_id == NULL || *request_id == '\0')
-    return set_invalid_argument (error,
-        "response frame request_id is required");
+    if (request_id == NULL || *request_id == '\0')
+        return set_invalid_argument (error,
+                   "response frame request_id is required");
 
-  if (payload_request_id == NULL || *payload_request_id == '\0')
-    return set_invalid_argument (error,
-        "mailbox LIST response request_id is required");
+    if (payload_request_id == NULL || *payload_request_id == '\0')
+        return set_invalid_argument (error,
+                   "mailbox LIST response request_id is required");
 
-  if (g_strcmp0 (request_id, payload_request_id) != 0)
-    return set_invalid_argument (error,
-        "mailbox LIST response request_id does not match frame envelope");
+    if (g_strcmp0 (request_id, payload_request_id) != 0)
+        return set_invalid_argument (error,
+                   "mailbox LIST response request_id does not match frame envelope");
 
-  wyrebox_daemon_mailbox_list_result_init_empty (&result);
+    wyrebox_daemon_mailbox_list_result_init_empty (&result);
 
-  for (guint i = 0; i < entries.size (); i++) {
-    auto entry = entries[i];
-    WyreboxDaemonMailboxListEntryKind kind =
-        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
-    WyreboxDaemonMailboxListChildState child_state =
-        WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN;
+    for (guint i = 0; i < entries.size (); i++) {
+        auto entry = entries[i];
+        WyreboxDaemonMailboxListEntryKind kind =
+            WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
+        WyreboxDaemonMailboxListChildState child_state =
+            WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN;
 
-    if (!decode_mailbox_list_entry_kind (entry.getKind (), &kind))
-      return set_invalid_argument (error,
-          "unsupported mailbox LIST entry kind");
+        if (!decode_mailbox_list_entry_kind (entry.getKind (), &kind))
+            return set_invalid_argument (error,
+                       "unsupported mailbox LIST entry kind");
 
-    if (!decode_mailbox_list_child_state (entry.getChildState (),
+        if (!decode_mailbox_list_child_state (entry.getChildState (),
             &child_state))
-      return set_invalid_argument (error,
-          "unsupported mailbox LIST child state");
+            return set_invalid_argument (error,
+                       "unsupported mailbox LIST child state");
 
-    if (!wyrebox_daemon_mailbox_list_result_append_entry (&result,
+        if (!wyrebox_daemon_mailbox_list_result_append_entry (&result,
             kind,
             entry.getMailboxId ().cStr (),
             entry.getMailboxName ().cStr (),
             entry.getHierarchyDelimiter ().cStr (),
             entry.getSpecialUse ().cStr (),
             entry.getSelectable (), child_state, error))
-      return FALSE;
-  }
+            return FALSE;
+    }
 
-  return wyrebox_daemon_response_frame_init_mailbox_list (out_response_frame,
-      request_id, correlation_id, &result, error);
+    return wyrebox_daemon_response_frame_init_mailbox_list (out_response_frame,
+               request_id, correlation_id, &result, error);
 }
 
 static gboolean
 decode_mailbox_select_response (const ResponseFrame::Reader & response_frame,
     WyreboxDaemonResponseFrame *out_response_frame, GError **error)
 {
-  auto response_select = response_frame.getMailboxSelect ();
-  g_auto (WyreboxDaemonMailboxSelectResult) result = { };
-  WyreboxDaemonMailboxListEntryKind kind =
-      WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
-  const char *request_id = response_frame.getRequestId ().cStr ();
-  const char *payload_request_id = response_select.getRequestId ().cStr ();
-  const char *correlation_id = response_frame.getCorrelationId ().cStr ();
+    auto response_select = response_frame.getMailboxSelect ();
+    g_auto (WyreboxDaemonMailboxSelectResult) result = { };
+    WyreboxDaemonMailboxListEntryKind kind =
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
+    const char *request_id = response_frame.getRequestId ().cStr ();
+    const char *payload_request_id = response_select.getRequestId ().cStr ();
+    const char *correlation_id = response_frame.getCorrelationId ().cStr ();
 
-  if (request_id == NULL || *request_id == '\0')
-    return set_invalid_argument (error,
-        "response frame request_id is required");
+    if (request_id == NULL || *request_id == '\0')
+        return set_invalid_argument (error,
+                   "response frame request_id is required");
 
-  if (payload_request_id == NULL || *payload_request_id == '\0')
-    return set_invalid_argument (error,
-        "mailbox SELECT response request_id is required");
+    if (payload_request_id == NULL || *payload_request_id == '\0')
+        return set_invalid_argument (error,
+                   "mailbox SELECT response request_id is required");
 
-  if (g_strcmp0 (request_id, payload_request_id) != 0)
-    return set_invalid_argument (error,
-        "mailbox SELECT response request_id does not match frame envelope");
+    if (g_strcmp0 (request_id, payload_request_id) != 0)
+        return set_invalid_argument (error,
+                   "mailbox SELECT response request_id does not match frame envelope");
 
-  if (!decode_mailbox_list_entry_kind (response_select.getKind (), &kind))
-    return set_invalid_argument (error,
-        "unsupported mailbox select result kind");
+    if (!decode_mailbox_list_entry_kind (response_select.getKind (), &kind))
+        return set_invalid_argument (error,
+                   "unsupported mailbox select result kind");
 
-  if (!wyrebox_daemon_mailbox_select_result_init (&result,
-          kind,
-          response_select.getMailboxId ().cStr (),
-          response_select.getMailboxName ().cStr (),
-          response_select.getUidValidity (),
-          response_select.getUidNext (),
-          response_select.getMessageCount (), error))
-    return FALSE;
+    if (!wyrebox_daemon_mailbox_select_result_init (&result,
+        kind,
+        response_select.getMailboxId ().cStr (),
+        response_select.getMailboxName ().cStr (),
+        response_select.getUidValidity (),
+        response_select.getUidNext (),
+        response_select.getMessageCount (), error))
+        return FALSE;
 
-  return wyrebox_daemon_response_frame_init_mailbox_select (out_response_frame,
-      request_id, correlation_id, &result, error);
+    return wyrebox_daemon_response_frame_init_mailbox_select (
+        out_response_frame,
+        request_id, correlation_id, &result, error);
 }
 
 static gboolean
 decode_stream_chunk_response (const ResponseFrame::Reader & response_frame,
     WyreboxDaemonResponseFrame *out_response_frame, GError **error)
 {
-  auto response_chunk = response_frame.getStreamChunk ();
-  g_auto (WyreboxDaemonStreamChunkFrame) stream_chunk = { 0 };
-  const char *request_id = response_frame.getRequestId ().cStr ();
-  const char *payload_request_id = response_chunk.getRequestId ().cStr ();
-  const char *correlation_id = response_frame.getCorrelationId ().cStr ();
-  const char *chunk_bytes_ptr =
-      (const char *) response_chunk.getBytes ().begin ();
-  gsize chunk_size = response_chunk.getBytes ().size ();
-  g_autoptr (GBytes) chunk_bytes = NULL;
+    auto response_chunk = response_frame.getStreamChunk ();
+    g_auto (WyreboxDaemonStreamChunkFrame) stream_chunk = { 0 };
+    const char *request_id = response_frame.getRequestId ().cStr ();
+    const char *payload_request_id = response_chunk.getRequestId ().cStr ();
+    const char *correlation_id = response_frame.getCorrelationId ().cStr ();
+    const char *chunk_bytes_ptr =
+        (const char *)response_chunk.getBytes ().begin ();
+    gsize chunk_size = response_chunk.getBytes ().size ();
+    g_autoptr (GBytes) chunk_bytes = NULL;
 
-  if (request_id == NULL || *request_id == '\0')
-    return set_invalid_argument (error,
-        "response frame request_id is required");
+    if (request_id == NULL || *request_id == '\0')
+        return set_invalid_argument (error,
+                   "response frame request_id is required");
 
-  if (payload_request_id == NULL || *payload_request_id == '\0')
-    return set_invalid_argument (error,
-        "stream chunk response request_id is required");
+    if (payload_request_id == NULL || *payload_request_id == '\0')
+        return set_invalid_argument (error,
+                   "stream chunk response request_id is required");
 
-  if (g_strcmp0 (request_id, payload_request_id) != 0)
-    return set_invalid_argument (error,
-        "stream chunk response request_id does not match frame envelope");
+    if (g_strcmp0 (request_id, payload_request_id) != 0)
+        return set_invalid_argument (error,
+                   "stream chunk response request_id does not match frame envelope");
 
-  if (chunk_size > 0)
-    chunk_bytes = g_bytes_new (chunk_bytes_ptr, chunk_size);
+    if (chunk_size > 0)
+        chunk_bytes = g_bytes_new (chunk_bytes_ptr, chunk_size);
 
-  if (!wyrebox_daemon_stream_chunk_frame_init (&stream_chunk,
-          request_id,
-          response_chunk.getMessageId ().cStr (),
-          response_chunk.getQueryId ().cStr (),
-          correlation_id,
-          response_chunk.getChunkIndex (),
-          chunk_bytes, response_chunk.getEndOfStream (), error))
-    return FALSE;
+    if (!wyrebox_daemon_stream_chunk_frame_init (&stream_chunk,
+        request_id,
+        response_chunk.getMessageId ().cStr (),
+        response_chunk.getQueryId ().cStr (),
+        correlation_id,
+        response_chunk.getChunkIndex (),
+        chunk_bytes, response_chunk.getEndOfStream (), error))
+        return FALSE;
 
-  return wyrebox_daemon_response_frame_init_stream_chunk (out_response_frame,
-      &stream_chunk, error);
+    return wyrebox_daemon_response_frame_init_stream_chunk (out_response_frame,
+               &stream_chunk, error);
 }
 
 static gboolean
@@ -1083,40 +1148,41 @@ decode_response_frame (const capnp::word *words,
     gsize word_count,
     WyreboxDaemonResponseFrame *out_response_frame, GError **error)
 {
-  try {
-    capnp::FlatArrayMessageReader response_reader (kj::ArrayPtr <
-        const capnp::word > (words, word_count));
-    auto response_frame = response_reader.getRoot < ResponseFrame > ();
+    try {
+        capnp::FlatArrayMessageReader response_reader (kj::ArrayPtr <
+            const capnp::word > (words, word_count));
+        auto response_frame = response_reader.getRoot < ResponseFrame > ();
 
-    switch (response_frame.which ()) {
-      case ResponseFrame::SUCCESS:
-        return decode_success_response (response_frame,
-            out_response_frame, error);
-      case ResponseFrame::ERROR:
-        return decode_error_response (response_frame,
-            out_response_frame, error);
-      case ResponseFrame::MAILBOX_SELECT:
-        return decode_mailbox_select_response (response_frame,
-            out_response_frame, error);
-      case ResponseFrame::STREAM_CHUNK:
-        return decode_stream_chunk_response (response_frame,
-            out_response_frame, error);
-      case ResponseFrame::MAILBOX_LIST:
-        return decode_mailbox_list_response (response_frame,
-            out_response_frame, error);
-      default:
-        return set_not_supported (error,
-            "unsupported response frame union arm");
+        switch (response_frame.which ()) {
+        case ResponseFrame::SUCCESS:
+            return decode_success_response (response_frame,
+                       out_response_frame, error);
+        case ResponseFrame::ERROR:
+            return decode_error_response (response_frame,
+                       out_response_frame, error);
+        case ResponseFrame::MAILBOX_SELECT:
+            return decode_mailbox_select_response (response_frame,
+                       out_response_frame, error);
+        case ResponseFrame::STREAM_CHUNK:
+            return decode_stream_chunk_response (response_frame,
+                       out_response_frame, error);
+        case ResponseFrame::MAILBOX_LIST:
+            return decode_mailbox_list_response (response_frame,
+                       out_response_frame, error);
+        default:
+            return set_not_supported (error,
+                       "unsupported response frame union arm");
+        }
     }
-  }
-  catch (const std::exception & e)
-  {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA, "response frame decode failed: %s", e.what ());
-  }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA, "response frame decode failed: %s",
+            e.what ());
+    }
 
-  return FALSE;
+    return FALSE;
 }
 
 static gboolean
@@ -1124,144 +1190,177 @@ validate_delivery_ingestion_encode_input (const WyreboxDaemonRequestIdentity
     *identity, const WyreboxDaemonDeliveryIngestionRequest *request,
     GError **error)
 {
-  g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
-  g_auto (WyreboxDaemonDeliveryIngestionRequest) validated_request = { 0 };
+    g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
+    g_auto (WyreboxDaemonDeliveryIngestionRequest) validated_request = { 0 };
 
-  if (identity == NULL)
-    return set_invalid_argument (error, "request identity is null");
+    if (identity == NULL)
+        return set_invalid_argument (error, "request identity is null");
 
-  if (request == NULL)
-    return set_invalid_argument (error, "delivery ingestion request is null");
+    if (request == NULL)
+        return set_invalid_argument (error,
+                   "delivery ingestion request is null");
 
-  if (!wyrebox_daemon_request_identity_init (&validated_identity,
-          identity->request_id,
-          identity->caller_identity,
-          identity->account_identity,
-          identity->tool_identity, identity->correlation_id, error))
-    return FALSE;
+    if (!wyrebox_daemon_request_identity_init (&validated_identity,
+        identity->request_id,
+        identity->caller_identity,
+        identity->account_identity,
+        identity->tool_identity, identity->correlation_id, error))
+        return FALSE;
 
-  if (!wyrebox_daemon_delivery_ingestion_request_init (&validated_request,
-          request->delivery_id,
-          request->queue_id,
-          request->envelope_sender,
-          (const gchar * const *) request->recipients,
-          request->message_bytes, error))
-    return FALSE;
+    if (!wyrebox_daemon_delivery_ingestion_request_init (&validated_request,
+        request->delivery_id,
+        request->queue_id,
+        request->envelope_sender,
+        (const gchar * const *)request->recipients,
+        request->message_bytes, error))
+        return FALSE;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
 validate_mailbox_select_encode_input (const WyreboxDaemonRequestIdentity
     *identity, const WyreboxDaemonMailboxSelectRequest *request, GError **error)
 {
-  g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
-  g_auto (WyreboxDaemonMailboxSelectRequest) validated_request = { 0 };
+    g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
+    g_auto (WyreboxDaemonMailboxSelectRequest) validated_request = { 0 };
 
-  if (identity == NULL)
-    return set_invalid_argument (error, "request identity is null");
+    if (identity == NULL)
+        return set_invalid_argument (error, "request identity is null");
 
-  if (request == NULL)
-    return set_invalid_argument (error, "mailbox select request is null");
+    if (request == NULL)
+        return set_invalid_argument (error, "mailbox select request is null");
 
-  if (!wyrebox_daemon_request_identity_init (&validated_identity,
-          identity->request_id,
-          identity->caller_identity,
-          identity->account_identity,
-          identity->tool_identity, identity->correlation_id, error))
-    return FALSE;
+    if (!wyrebox_daemon_request_identity_init (&validated_identity,
+        identity->request_id,
+        identity->caller_identity,
+        identity->account_identity,
+        identity->tool_identity, identity->correlation_id, error))
+        return FALSE;
 
-  if (!wyrebox_daemon_mailbox_select_request_init (&validated_request,
-          request->account_identity,
-          request->mailbox_id, request->mailbox_name, error))
-    return FALSE;
+    if (!wyrebox_daemon_mailbox_select_request_init (&validated_request,
+        request->account_identity,
+        request->mailbox_id, request->mailbox_name, error))
+        return FALSE;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
 validate_mailbox_status_encode_input (const WyreboxDaemonRequestIdentity
     *identity, const WyreboxDaemonMailboxStatusRequest *request, GError **error)
 {
-  g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
-  g_auto (WyreboxDaemonMailboxStatusRequest) validated_request = { 0 };
+    g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
+    g_auto (WyreboxDaemonMailboxStatusRequest) validated_request = { 0 };
 
-  if (identity == NULL)
-    return set_invalid_argument (error, "request identity is null");
+    if (identity == NULL)
+        return set_invalid_argument (error, "request identity is null");
 
-  if (request == NULL)
-    return set_invalid_argument (error, "mailbox status request is null");
+    if (request == NULL)
+        return set_invalid_argument (error, "mailbox status request is null");
 
-  if (!wyrebox_daemon_request_identity_init (&validated_identity,
-          identity->request_id,
-          identity->caller_identity,
-          identity->account_identity,
-          identity->tool_identity, identity->correlation_id, error))
-    return FALSE;
+    if (!wyrebox_daemon_request_identity_init (&validated_identity,
+        identity->request_id,
+        identity->caller_identity,
+        identity->account_identity,
+        identity->tool_identity, identity->correlation_id, error))
+        return FALSE;
 
-  if (!wyrebox_daemon_mailbox_status_request_init (&validated_request,
-          request->account_identity,
-          request->mailbox_id, request->mailbox_name, error))
-    return FALSE;
+    if (!wyrebox_daemon_mailbox_status_request_init (&validated_request,
+        request->account_identity,
+        request->mailbox_id, request->mailbox_name, error))
+        return FALSE;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
 validate_mailbox_list_encode_input (const WyreboxDaemonRequestIdentity
     *identity, const WyreboxDaemonMailboxListRequest *request, GError **error)
 {
-  g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
-  g_auto (WyreboxDaemonMailboxListRequest) validated_request = { 0 };
+    g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
+    g_auto (WyreboxDaemonMailboxListRequest) validated_request = { 0 };
 
-  if (identity == NULL)
-    return set_invalid_argument (error, "request identity is null");
+    if (identity == NULL)
+        return set_invalid_argument (error, "request identity is null");
 
-  if (request == NULL)
-    return set_invalid_argument (error, "mailbox list request is null");
+    if (request == NULL)
+        return set_invalid_argument (error, "mailbox list request is null");
 
-  if (!wyrebox_daemon_request_identity_init (&validated_identity,
-          identity->request_id,
-          identity->caller_identity,
-          identity->account_identity,
-          identity->tool_identity, identity->correlation_id, error))
-    return FALSE;
+    if (!wyrebox_daemon_request_identity_init (&validated_identity,
+        identity->request_id,
+        identity->caller_identity,
+        identity->account_identity,
+        identity->tool_identity, identity->correlation_id, error))
+        return FALSE;
 
-  if (!wyrebox_daemon_mailbox_list_request_init (&validated_request,
-          request->account_identity, request->namespace_prefix, error))
-    return FALSE;
+    if (!wyrebox_daemon_mailbox_list_request_init (&validated_request,
+        request->account_identity, request->namespace_prefix, error))
+        return FALSE;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
 validate_message_fetch_encode_input (const WyreboxDaemonRequestIdentity
     *identity, const WyreboxDaemonMessageFetchRequest *request, GError **error)
 {
-  g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
-  g_auto (WyreboxDaemonMessageFetchRequest) validated_request = { 0 };
+    g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
+    g_auto (WyreboxDaemonMessageFetchRequest) validated_request = { 0 };
 
-  if (identity == NULL)
-    return set_invalid_argument (error, "request identity is null");
+    if (identity == NULL)
+        return set_invalid_argument (error, "request identity is null");
 
-  if (request == NULL)
-    return set_invalid_argument (error, "message fetch request is null");
+    if (request == NULL)
+        return set_invalid_argument (error, "message fetch request is null");
 
-  if (!wyrebox_daemon_request_identity_init (&validated_identity,
-          identity->request_id,
-          identity->caller_identity,
-          identity->account_identity,
-          identity->tool_identity, identity->correlation_id, error))
-    return FALSE;
+    if (!wyrebox_daemon_request_identity_init (&validated_identity,
+        identity->request_id,
+        identity->caller_identity,
+        identity->account_identity,
+        identity->tool_identity, identity->correlation_id, error))
+        return FALSE;
 
-  if (!wyrebox_daemon_message_fetch_request_init (&validated_request,
-          request->account_identity,
-          request->mailbox_id,
-          request->namespace_kind,
-          request->uid_validity, request->mailbox_uid, error))
-    return FALSE;
+    if (!wyrebox_daemon_message_fetch_request_init (&validated_request,
+        request->account_identity,
+        request->mailbox_id,
+        request->namespace_kind,
+        request->uid_validity, request->mailbox_uid, error))
+        return FALSE;
 
-  return TRUE;
+    return TRUE;
+}
+
+static gboolean
+validate_message_search_encode_input (const WyreboxDaemonRequestIdentity
+    *identity, const WyreboxDaemonMessageSearchRequest *request,
+    GError **error)
+{
+    g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
+    g_auto (WyreboxDaemonMessageSearchRequest) validated_request = { 0 };
+
+    if (identity == NULL)
+        return set_invalid_argument (error, "request identity is null");
+
+    if (request == NULL)
+        return set_invalid_argument (error, "message search request is null");
+
+    if (!wyrebox_daemon_request_identity_init (&validated_identity,
+        identity->request_id,
+        identity->caller_identity,
+        identity->account_identity,
+        identity->tool_identity, identity->correlation_id, error))
+        return FALSE;
+
+    if (!wyrebox_daemon_message_search_request_init (&validated_request,
+        request->account_identity,
+        request->mailbox_id,
+        request->namespace_kind,
+        request->uid_validity, request->criteria, request->n_criteria,
+        error))
+        return FALSE;
+
+    return TRUE;
 }
 
 static gboolean
@@ -1269,44 +1368,44 @@ encode_mailbox_list_request (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonMailboxListRequest *request, GBytes **out_bytes,
     GError **error)
 {
-  try {
-    if (!validate_mailbox_list_encode_input (identity, request, error))
-      return FALSE;
+    try {
+        if (!validate_mailbox_list_encode_input (identity, request, error))
+            return FALSE;
 
-    capnp::MallocMessageBuilder request_builder;
-    auto request_frame = request_builder.initRoot < RequestFrame > ();
+        capnp::MallocMessageBuilder request_builder;
+        auto request_frame = request_builder.initRoot < RequestFrame > ();
 
-    auto request_identity = request_frame.initIdentity ();
-    request_identity.setRequestId (identity->request_id);
-    request_identity.setCallerIdentity (identity->caller_identity != NULL
+        auto request_identity = request_frame.initIdentity ();
+        request_identity.setRequestId (identity->request_id);
+        request_identity.setCallerIdentity (identity->caller_identity != NULL
         ? identity->caller_identity : "");
-    request_identity.setAccountIdentity (identity->account_identity != NULL
+        request_identity.setAccountIdentity (identity->account_identity != NULL
         ? identity->account_identity : "");
-    request_identity.setToolIdentity (identity->tool_identity != NULL
+        request_identity.setToolIdentity (identity->tool_identity != NULL
         ? identity->tool_identity : "");
-    request_identity.setCorrelationId (identity->correlation_id != NULL
+        request_identity.setCorrelationId (identity->correlation_id != NULL
         ? identity->correlation_id : "");
 
-    auto mailbox_list = request_frame.initMailboxList ();
-    mailbox_list.setAccountIdentity (request->account_identity);
-    mailbox_list.setNamespacePrefix (request->namespace_prefix != NULL
+        auto mailbox_list = request_frame.initMailboxList ();
+        mailbox_list.setAccountIdentity (request->account_identity);
+        mailbox_list.setNamespacePrefix (request->namespace_prefix != NULL
         ? request->namespace_prefix : "");
 
-    auto words = capnp::messageToFlatArray (request_builder);
-    auto bytes = words.asBytes ();
-    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+        auto words = capnp::messageToFlatArray (request_builder);
+        auto bytes = words.asBytes ();
+        *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
 
-    return TRUE;
-  }
-  catch (const std::exception & e)
-  {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "mailbox LIST request encode failed: %s", e.what ());
-  }
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "mailbox LIST request encode failed: %s", e.what ());
+    }
 
-  return FALSE;
+    return FALSE;
 }
 
 static gboolean
@@ -1314,46 +1413,46 @@ encode_mailbox_select_request (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonMailboxSelectRequest *request,
     GBytes **out_bytes, GError **error)
 {
-  try {
-    if (!validate_mailbox_select_encode_input (identity, request, error))
-      return FALSE;
+    try {
+        if (!validate_mailbox_select_encode_input (identity, request, error))
+            return FALSE;
 
-    capnp::MallocMessageBuilder request_builder;
-    auto request_frame = request_builder.initRoot < RequestFrame > ();
+        capnp::MallocMessageBuilder request_builder;
+        auto request_frame = request_builder.initRoot < RequestFrame > ();
 
-    auto request_identity = request_frame.initIdentity ();
-    request_identity.setRequestId (identity->request_id);
-    request_identity.setCallerIdentity (identity->caller_identity != NULL
+        auto request_identity = request_frame.initIdentity ();
+        request_identity.setRequestId (identity->request_id);
+        request_identity.setCallerIdentity (identity->caller_identity != NULL
         ? identity->caller_identity : "");
-    request_identity.setAccountIdentity (identity->account_identity != NULL
+        request_identity.setAccountIdentity (identity->account_identity != NULL
         ? identity->account_identity : "");
-    request_identity.setToolIdentity (identity->tool_identity != NULL
+        request_identity.setToolIdentity (identity->tool_identity != NULL
         ? identity->tool_identity : "");
-    request_identity.setCorrelationId (identity->correlation_id != NULL
+        request_identity.setCorrelationId (identity->correlation_id != NULL
         ? identity->correlation_id : "");
 
-    auto mailbox_select = request_frame.initMailboxSelect ();
-    mailbox_select.setAccountIdentity (request->account_identity);
-    mailbox_select.setMailboxId (request->mailbox_id != NULL
+        auto mailbox_select = request_frame.initMailboxSelect ();
+        mailbox_select.setAccountIdentity (request->account_identity);
+        mailbox_select.setMailboxId (request->mailbox_id != NULL
         ? request->mailbox_id : "");
-    mailbox_select.setMailboxName (request->mailbox_name != NULL
+        mailbox_select.setMailboxName (request->mailbox_name != NULL
         ? request->mailbox_name : "");
 
-    auto words = capnp::messageToFlatArray (request_builder);
-    auto bytes = words.asBytes ();
-    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+        auto words = capnp::messageToFlatArray (request_builder);
+        auto bytes = words.asBytes ();
+        *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
 
-    return TRUE;
-  }
-  catch (const std::exception & e)
-  {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "mailbox SELECT request encode failed: %s", e.what ());
-  }
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "mailbox SELECT request encode failed: %s", e.what ());
+    }
 
-  return FALSE;
+    return FALSE;
 }
 
 static gboolean
@@ -1361,46 +1460,46 @@ encode_mailbox_status_request (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonMailboxStatusRequest *request,
     GBytes **out_bytes, GError **error)
 {
-  try {
-    if (!validate_mailbox_status_encode_input (identity, request, error))
-      return FALSE;
+    try {
+        if (!validate_mailbox_status_encode_input (identity, request, error))
+            return FALSE;
 
-    capnp::MallocMessageBuilder request_builder;
-    auto request_frame = request_builder.initRoot < RequestFrame > ();
+        capnp::MallocMessageBuilder request_builder;
+        auto request_frame = request_builder.initRoot < RequestFrame > ();
 
-    auto request_identity = request_frame.initIdentity ();
-    request_identity.setRequestId (identity->request_id);
-    request_identity.setCallerIdentity (identity->caller_identity != NULL
+        auto request_identity = request_frame.initIdentity ();
+        request_identity.setRequestId (identity->request_id);
+        request_identity.setCallerIdentity (identity->caller_identity != NULL
         ? identity->caller_identity : "");
-    request_identity.setAccountIdentity (identity->account_identity != NULL
+        request_identity.setAccountIdentity (identity->account_identity != NULL
         ? identity->account_identity : "");
-    request_identity.setToolIdentity (identity->tool_identity != NULL
+        request_identity.setToolIdentity (identity->tool_identity != NULL
         ? identity->tool_identity : "");
-    request_identity.setCorrelationId (identity->correlation_id != NULL
+        request_identity.setCorrelationId (identity->correlation_id != NULL
         ? identity->correlation_id : "");
 
-    auto mailbox_status = request_frame.initMailboxStatus ();
-    mailbox_status.setAccountIdentity (request->account_identity);
-    mailbox_status.setMailboxId (request->mailbox_id != NULL
+        auto mailbox_status = request_frame.initMailboxStatus ();
+        mailbox_status.setAccountIdentity (request->account_identity);
+        mailbox_status.setMailboxId (request->mailbox_id != NULL
         ? request->mailbox_id : "");
-    mailbox_status.setMailboxName (request->mailbox_name != NULL
+        mailbox_status.setMailboxName (request->mailbox_name != NULL
         ? request->mailbox_name : "");
 
-    auto words = capnp::messageToFlatArray (request_builder);
-    auto bytes = words.asBytes ();
-    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+        auto words = capnp::messageToFlatArray (request_builder);
+        auto bytes = words.asBytes ();
+        *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
 
-    return TRUE;
-  }
-  catch (const std::exception & e)
-  {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "mailbox STATUS request encode failed: %s", e.what ());
-  }
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "mailbox STATUS request encode failed: %s", e.what ());
+    }
 
-  return FALSE;
+    return FALSE;
 }
 
 static gboolean
@@ -1408,55 +1507,136 @@ encode_message_fetch_request (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonMessageFetchRequest *request, GBytes **out_bytes,
     GError **error)
 {
-  try {
-    MailboxListEntryKind encoded_namespace_kind =
-        MailboxListEntryKind::ORDINARY;
+    try {
+        MailboxListEntryKind encoded_namespace_kind =
+            MailboxListEntryKind::ORDINARY;
 
-    if (!validate_message_fetch_encode_input (identity, request, error))
-      return FALSE;
+        if (!validate_message_fetch_encode_input (identity, request, error))
+            return FALSE;
 
-    if (!map_mailbox_list_entry_kind (request->namespace_kind,
+        if (!map_mailbox_list_entry_kind (request->namespace_kind,
             &encoded_namespace_kind))
-      return set_invalid_argument (error,
-          "message FETCH namespace_kind is unknown");
+            return set_invalid_argument (error,
+                       "message FETCH namespace_kind is unknown");
 
-    capnp::MallocMessageBuilder request_builder;
-    auto request_frame = request_builder.initRoot < RequestFrame > ();
+        capnp::MallocMessageBuilder request_builder;
+        auto request_frame = request_builder.initRoot < RequestFrame > ();
 
-    auto request_identity = request_frame.initIdentity ();
-    request_identity.setRequestId (identity->request_id);
-    request_identity.setCallerIdentity (identity->caller_identity != NULL
+        auto request_identity = request_frame.initIdentity ();
+        request_identity.setRequestId (identity->request_id);
+        request_identity.setCallerIdentity (identity->caller_identity != NULL
         ? identity->caller_identity : "");
-    request_identity.setAccountIdentity (identity->account_identity != NULL
+        request_identity.setAccountIdentity (identity->account_identity != NULL
         ? identity->account_identity : "");
-    request_identity.setToolIdentity (identity->tool_identity != NULL
+        request_identity.setToolIdentity (identity->tool_identity != NULL
         ? identity->tool_identity : "");
-    request_identity.setCorrelationId (identity->correlation_id != NULL
+        request_identity.setCorrelationId (identity->correlation_id != NULL
         ? identity->correlation_id : "");
 
-    auto message_fetch = request_frame.initMessageFetch ();
-    message_fetch.setAccountIdentity (request->account_identity);
-    message_fetch.setMailboxId (request->mailbox_id != NULL
+        auto message_fetch = request_frame.initMessageFetch ();
+        message_fetch.setAccountIdentity (request->account_identity);
+        message_fetch.setMailboxId (request->mailbox_id != NULL
         ? request->mailbox_id : "");
-    message_fetch.setUidValidity (request->uid_validity);
-    message_fetch.setMailboxUid (request->mailbox_uid);
-    message_fetch.setNamespaceKind (encoded_namespace_kind);
+        message_fetch.setUidValidity (request->uid_validity);
+        message_fetch.setMailboxUid (request->mailbox_uid);
+        message_fetch.setNamespaceKind (encoded_namespace_kind);
 
-    auto words = capnp::messageToFlatArray (request_builder);
-    auto bytes = words.asBytes ();
-    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+        auto words = capnp::messageToFlatArray (request_builder);
+        auto bytes = words.asBytes ();
+        *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
 
-    return TRUE;
-  }
-  catch (const std::exception & e)
-  {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "message FETCH request encode failed: %s", e.what ());
-  }
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "message FETCH request encode failed: %s", e.what ());
+    }
 
-  return FALSE;
+    return FALSE;
+}
+
+static gboolean
+encode_message_search_request (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMessageSearchRequest *request, GBytes **out_bytes,
+    GError **error)
+{
+    try {
+        MailboxListEntryKind encoded_namespace_kind =
+            MailboxListEntryKind::ORDINARY;
+
+        if (!validate_message_search_encode_input (identity, request, error))
+            return FALSE;
+
+        if (!map_mailbox_list_entry_kind (request->namespace_kind,
+            &encoded_namespace_kind))
+            return set_invalid_argument (error,
+                       "message SEARCH namespace_kind is unknown");
+
+        capnp::MallocMessageBuilder request_builder;
+        auto request_frame = request_builder.initRoot < RequestFrame > ();
+
+        auto request_identity = request_frame.initIdentity ();
+        request_identity.setRequestId (identity->request_id);
+        request_identity.setCallerIdentity (identity->caller_identity != NULL
+        ? identity->caller_identity : "");
+        request_identity.setAccountIdentity (identity->account_identity != NULL
+        ? identity->account_identity : "");
+        request_identity.setToolIdentity (identity->tool_identity != NULL
+        ? identity->tool_identity : "");
+        request_identity.setCorrelationId (identity->correlation_id != NULL
+        ? identity->correlation_id : "");
+
+        auto message_search = request_frame.initMessageSearch ();
+        message_search.setAccountIdentity (request->account_identity);
+        message_search.setMailboxId (request->mailbox_id);
+        message_search.setUidValidity (request->uid_validity);
+        message_search.setNamespaceKind (encoded_namespace_kind);
+
+        auto criteria = message_search.initCriteria (request->n_criteria);
+        for (guint i = 0; i < request->n_criteria; i++) {
+            const WyreboxDaemonMessageSearchCriterion *criterion =
+                &request->criteria[i];
+
+            switch (criterion->kind) {
+            case WYREBOX_DAEMON_MESSAGE_SEARCH_CRITERION_SUBJECT_CONTAINS:
+                criteria[i].setSubjectContains (criterion->text);
+                break;
+            case WYREBOX_DAEMON_MESSAGE_SEARCH_CRITERION_FROM_CONTAINS:
+                criteria[i].setFromContains (criterion->text);
+                break;
+            case WYREBOX_DAEMON_MESSAGE_SEARCH_CRITERION_SENDER_DOMAIN:
+                criteria[i].setSenderDomain (criterion->text);
+                break;
+            case WYREBOX_DAEMON_MESSAGE_SEARCH_CRITERION_SENT_SINCE:
+                criteria[i].setSentSince (criterion->unix_us);
+                break;
+            case WYREBOX_DAEMON_MESSAGE_SEARCH_CRITERION_SENT_BEFORE:
+                criteria[i].setSentBefore (criterion->unix_us);
+                break;
+            default:
+                return set_invalid_argument (error,
+                           "message SEARCH criterion kind is unknown");
+            }
+        }
+
+        auto words = capnp::messageToFlatArray (request_builder);
+        auto bytes = words.asBytes ();
+        *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "message SEARCH request encode failed: %s", e.what ());
+    }
+
+    return FALSE;
 }
 
 static gboolean
@@ -1464,30 +1644,30 @@ validate_duckdb_query_template_encode_input (const WyreboxDaemonRequestIdentity
     *identity, const WyreboxDaemonDuckDBQueryTemplateRequest *request,
     GError **error)
 {
-  g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
-  g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) validated_request = { 0 };
+    g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
+    g_auto (WyreboxDaemonDuckDBQueryTemplateRequest) validated_request = { 0 };
 
-  if (identity == NULL)
-    return set_invalid_argument (error, "request identity is null");
+    if (identity == NULL)
+        return set_invalid_argument (error, "request identity is null");
 
-  if (request == NULL)
-    return set_invalid_argument (error,
-        "duckdb query template request is null");
+    if (request == NULL)
+        return set_invalid_argument (error,
+                   "duckdb query template request is null");
 
-  if (!wyrebox_daemon_request_identity_init (&validated_identity,
-          identity->request_id,
-          identity->caller_identity,
-          identity->account_identity,
-          identity->tool_identity, identity->correlation_id, error))
-    return FALSE;
+    if (!wyrebox_daemon_request_identity_init (&validated_identity,
+        identity->request_id,
+        identity->caller_identity,
+        identity->account_identity,
+        identity->tool_identity, identity->correlation_id, error))
+        return FALSE;
 
-  if (!wyrebox_daemon_duckdb_query_template_request_init (&validated_request,
-          request->query_id,
-          request->template_id,
-          request->scope_id, (const char *const *) request->parameters, error))
-    return FALSE;
+    if (!wyrebox_daemon_duckdb_query_template_request_init (&validated_request,
+        request->query_id,
+        request->template_id,
+        request->scope_id, (const char *const *)request->parameters, error))
+        return FALSE;
 
-  return TRUE;
+    return TRUE;
 }
 
 static gboolean
@@ -1495,55 +1675,56 @@ encode_duckdb_query_template_request (const WyreboxDaemonRequestIdentity
     *identity, const WyreboxDaemonDuckDBQueryTemplateRequest *request,
     GBytes **out_bytes, GError **error)
 {
-  gsize parameter_count = 0;
+    gsize parameter_count = 0;
 
-  try {
-    if (!validate_duckdb_query_template_encode_input (identity, request, error))
-      return FALSE;
+    try {
+        if (!validate_duckdb_query_template_encode_input (identity, request,
+            error))
+            return FALSE;
 
-    while (request->parameters != NULL
-        && request->parameters[parameter_count] != NULL)
-      parameter_count++;
+        while (request->parameters != NULL
+            && request->parameters[parameter_count] != NULL)
+            parameter_count++;
 
-    capnp::MallocMessageBuilder request_builder;
-    auto request_frame = request_builder.initRoot < RequestFrame > ();
+        capnp::MallocMessageBuilder request_builder;
+        auto request_frame = request_builder.initRoot < RequestFrame > ();
 
-    auto request_identity = request_frame.initIdentity ();
-    request_identity.setRequestId (identity->request_id);
-    request_identity.setCallerIdentity (identity->caller_identity != NULL
+        auto request_identity = request_frame.initIdentity ();
+        request_identity.setRequestId (identity->request_id);
+        request_identity.setCallerIdentity (identity->caller_identity != NULL
         ? identity->caller_identity : "");
-    request_identity.setAccountIdentity (identity->account_identity != NULL
+        request_identity.setAccountIdentity (identity->account_identity != NULL
         ? identity->account_identity : "");
-    request_identity.setToolIdentity (identity->tool_identity != NULL
+        request_identity.setToolIdentity (identity->tool_identity != NULL
         ? identity->tool_identity : "");
-    request_identity.setCorrelationId (identity->correlation_id != NULL
+        request_identity.setCorrelationId (identity->correlation_id != NULL
         ? identity->correlation_id : "");
 
-    auto duckdb_query_template = request_frame.initDuckDBQueryTemplate ();
-    duckdb_query_template.setQueryId (request->query_id);
-    duckdb_query_template.setTemplateId (request->template_id);
-    duckdb_query_template.setScopeId (request->scope_id);
+        auto duckdb_query_template = request_frame.initDuckDBQueryTemplate ();
+        duckdb_query_template.setQueryId (request->query_id);
+        duckdb_query_template.setTemplateId (request->template_id);
+        duckdb_query_template.setScopeId (request->scope_id);
 
-    auto encoded_parameter_values =
-        duckdb_query_template.initParameters (parameter_count);
-    for (gsize i = 0; i < parameter_count; i++)
-      encoded_parameter_values.set (i, request->parameters[i]);
+        auto encoded_parameter_values =
+            duckdb_query_template.initParameters (parameter_count);
+        for (gsize i = 0; i < parameter_count; i++)
+            encoded_parameter_values.set (i, request->parameters[i]);
 
-    auto words = capnp::messageToFlatArray (request_builder);
-    auto bytes = words.asBytes ();
-    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+        auto words = capnp::messageToFlatArray (request_builder);
+        auto bytes = words.asBytes ();
+        *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
 
-    return TRUE;
-  }
-  catch (const std::exception & e)
-  {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "duckdb query template request encode failed: %s", e.what ());
-  }
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "duckdb query template request encode failed: %s", e.what ());
+    }
 
-  return FALSE;
+    return FALSE;
 }
 
 static gboolean
@@ -1551,391 +1732,407 @@ encode_delivery_ingestion_request (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonDeliveryIngestionRequest *request,
     GBytes **out_bytes, GError **error)
 {
-  try {
-    gsize message_size = 0;
-    const guint8 *message_data = NULL;
-    guint recipient_count = 0;
+    try {
+        gsize message_size = 0;
+        const guint8 *message_data = NULL;
+        guint recipient_count = 0;
 
-    if (!validate_delivery_ingestion_encode_input (identity, request, error))
-      return FALSE;
+        if (!validate_delivery_ingestion_encode_input (identity, request,
+            error))
+            return FALSE;
 
-    while (request->recipients[recipient_count] != NULL)
-      recipient_count++;
+        while (request->recipients[recipient_count] != NULL)
+            recipient_count++;
 
-    message_data =
-        static_cast < const guint8 *>(g_bytes_get_data (request->message_bytes,
+        message_data =
+            static_cast < const guint8 *>
+            (g_bytes_get_data (request->message_bytes,
             &message_size));
 
-    capnp::MallocMessageBuilder request_builder;
-    auto request_frame = request_builder.initRoot < RequestFrame > ();
+        capnp::MallocMessageBuilder request_builder;
+        auto request_frame = request_builder.initRoot < RequestFrame > ();
 
-    auto request_identity = request_frame.initIdentity ();
-    request_identity.setRequestId (identity->request_id);
-    request_identity.setCallerIdentity (identity->caller_identity != NULL
+        auto request_identity = request_frame.initIdentity ();
+        request_identity.setRequestId (identity->request_id);
+        request_identity.setCallerIdentity (identity->caller_identity != NULL
         ? identity->caller_identity : "");
-    request_identity.setAccountIdentity (identity->account_identity != NULL
+        request_identity.setAccountIdentity (identity->account_identity != NULL
         ? identity->account_identity : "");
-    request_identity.setToolIdentity (identity->tool_identity != NULL
+        request_identity.setToolIdentity (identity->tool_identity != NULL
         ? identity->tool_identity : "");
-    request_identity.setCorrelationId (identity->correlation_id != NULL
+        request_identity.setCorrelationId (identity->correlation_id != NULL
         ? identity->correlation_id : "");
 
-    auto delivery_ingestion = request_frame.initDeliveryIngestion ();
-    delivery_ingestion.setDeliveryId (request->delivery_id);
-    delivery_ingestion.setQueueId (request->queue_id != NULL
+        auto delivery_ingestion = request_frame.initDeliveryIngestion ();
+        delivery_ingestion.setDeliveryId (request->delivery_id);
+        delivery_ingestion.setQueueId (request->queue_id != NULL
         ? request->queue_id : "");
-    delivery_ingestion.setEnvelopeSender (request->envelope_sender != NULL
+        delivery_ingestion.setEnvelopeSender (request->envelope_sender != NULL
         ? request->envelope_sender : "");
 
-    auto encoded_recipients =
-        delivery_ingestion.initRecipients (recipient_count);
-    for (guint i = 0; i < recipient_count; i++)
-      encoded_recipients.set (i, request->recipients[i]);
+        auto encoded_recipients =
+            delivery_ingestion.initRecipients (recipient_count);
+        for (guint i = 0; i < recipient_count; i++)
+            encoded_recipients.set (i, request->recipients[i]);
 
-    delivery_ingestion.setMessageBytes (kj::arrayPtr (reinterpret_cast <
-            const capnp::byte * >(message_data), message_size));
+        delivery_ingestion.setMessageBytes (kj::arrayPtr (reinterpret_cast <
+            const capnp::byte * > (message_data), message_size));
 
-    auto words = capnp::messageToFlatArray (request_builder);
-    auto bytes = words.asBytes ();
-    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+        auto words = capnp::messageToFlatArray (request_builder);
+        auto bytes = words.asBytes ();
+        *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
 
-    return TRUE;
-  }
-  catch (const std::exception & e)
-  {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "delivery ingestion request encode failed: %s", e.what ());
-  }
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "delivery ingestion request encode failed: %s", e.what ());
+    }
 
-  return FALSE;
+    return FALSE;
 }
 
 static gboolean
 encode_success_response (const WyreboxDaemonResponseFrame *response_frame,
     GBytes **out_bytes, GError **error)
 {
-  try {
-    if (response_frame->request_id == NULL
-        || *response_frame->request_id == '\0')
-      return set_invalid_argument (error,
-          "response frame request_id is required");
+    try {
+        if (response_frame->request_id == NULL
+            || *response_frame->request_id == '\0')
+            return set_invalid_argument (error,
+                       "response frame request_id is required");
 
-    if (response_frame->success.durable_marker == NULL ||
-        *response_frame->success.durable_marker == '\0')
-      return set_invalid_argument (error,
-          "success response durable marker is required");
+        if (response_frame->success.durable_marker == NULL ||
+            *response_frame->success.durable_marker == '\0')
+            return set_invalid_argument (error,
+                       "success response durable marker is required");
 
-    if (response_frame->success.summary == NULL ||
-        *response_frame->success.summary == '\0')
-      return set_invalid_argument (error,
-          "success response summary is required");
+        if (response_frame->success.summary == NULL ||
+            *response_frame->success.summary == '\0')
+            return set_invalid_argument (error,
+                       "success response summary is required");
 
-    capnp::MallocMessageBuilder response_builder;
-    auto response_frame_message =
-        response_builder.initRoot < ResponseFrame > ();
-    auto response_success = response_frame_message.initSuccess ();
+        capnp::MallocMessageBuilder response_builder;
+        auto response_frame_message =
+            response_builder.initRoot < ResponseFrame > ();
+        auto response_success = response_frame_message.initSuccess ();
 
-    response_frame_message.setRequestId (response_frame->request_id);
-    response_frame_message.setCorrelationId (response_frame->correlation_id !=
-        NULL ? response_frame->correlation_id : "");
+        response_frame_message.setRequestId (response_frame->request_id);
+        response_frame_message.setCorrelationId (
+            response_frame->correlation_id !=
+            NULL ? response_frame->correlation_id : "");
 
-    response_success.setRequestId (response_frame->success.request_id != NULL &&
-        *response_frame->success.request_id != '\0'
+        response_success.setRequestId (response_frame->success.request_id !=
+            NULL &&
+            *response_frame->success.request_id != '\0'
         ? response_frame->success.request_id : response_frame->request_id);
-    response_success.setDurableMarker (response_frame->success.durable_marker);
-    response_success.setJournalOffset (response_frame->success.journal_offset);
-    response_success.setSummary (response_frame->success.summary);
-    response_success.setJournalSequence (response_frame->
-        success.journal_sequence);
+        response_success.setDurableMarker (
+            response_frame->success.durable_marker);
+        response_success.setJournalOffset (
+            response_frame->success.journal_offset);
+        response_success.setSummary (response_frame->success.summary);
+        response_success.setJournalSequence (response_frame->
+            success.journal_sequence);
 
-    auto words = capnp::messageToFlatArray (response_builder);
-    auto bytes = words.asBytes ();
-    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+        auto words = capnp::messageToFlatArray (response_builder);
+        auto bytes = words.asBytes ();
+        *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
 
-    return TRUE;
-  }
-  catch (const std::exception & e)
-  {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "success response encode failed: %s", e.what ());
-  }
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "success response encode failed: %s", e.what ());
+    }
 
-  return FALSE;
+    return FALSE;
 }
 
 static gboolean
 encode_mailbox_list_response (const WyreboxDaemonResponseFrame *response_frame,
     GBytes **out_bytes, GError **error)
 {
-  try {
-    auto *result = response_frame->mailbox_list.entries;
+    try {
+        auto *result = response_frame->mailbox_list.entries;
 
-    if (response_frame->request_id == NULL
-        || *response_frame->request_id == '\0')
-      return set_invalid_argument (error,
-          "response frame request_id is required");
+        if (response_frame->request_id == NULL
+            || *response_frame->request_id == '\0')
+            return set_invalid_argument (error,
+                       "response frame request_id is required");
 
-    if (result == NULL)
-      return set_invalid_argument (error,
-          "mailbox LIST response requires result entries");
+        if (result == NULL)
+            return set_invalid_argument (error,
+                       "mailbox LIST response requires result entries");
 
-    capnp::MallocMessageBuilder response_builder;
-    auto response_frame_message =
-        response_builder.initRoot < ResponseFrame > ();
-    auto response_list = response_frame_message.initMailboxList ();
+        capnp::MallocMessageBuilder response_builder;
+        auto response_frame_message =
+            response_builder.initRoot < ResponseFrame > ();
+        auto response_list = response_frame_message.initMailboxList ();
 
-    response_frame_message.setRequestId (response_frame->request_id);
-    response_frame_message.setCorrelationId (response_frame->correlation_id !=
-        NULL ? response_frame->correlation_id : "");
+        response_frame_message.setRequestId (response_frame->request_id);
+        response_frame_message.setCorrelationId (
+            response_frame->correlation_id !=
+            NULL ? response_frame->correlation_id : "");
 
-    response_list.setRequestId (response_frame->request_id);
-    auto entries = response_list.initEntries (result->len);
+        response_list.setRequestId (response_frame->request_id);
+        auto entries = response_list.initEntries (result->len);
 
-    for (guint i = 0; i < result->len; i++) {
-      const WyreboxDaemonMailboxListEntry *entry =
-          static_cast <
-          const WyreboxDaemonMailboxListEntry * >(result->pdata[i]);
-      auto encoded_entry = entries[i];
-      MailboxListEntryKind encoded_kind = MailboxListEntryKind::ORDINARY;
-      MailboxListChildState encoded_child_state =
-          MailboxListChildState::UNKNOWN;
+        for (guint i = 0; i < result->len; i++) {
+            const WyreboxDaemonMailboxListEntry *entry =
+                static_cast <
+                const WyreboxDaemonMailboxListEntry * > (result->pdata[i]);
+            auto encoded_entry = entries[i];
+            MailboxListEntryKind encoded_kind = MailboxListEntryKind::ORDINARY;
+            MailboxListChildState encoded_child_state =
+                MailboxListChildState::UNKNOWN;
 
-      if (!map_mailbox_list_entry_kind (entry->kind, &encoded_kind)
-          || !map_mailbox_list_child_state (entry->child_state,
-              &encoded_child_state))
-        return set_invalid_argument (error,
-            "unsupported mailbox list entry enum value");
+            if (!map_mailbox_list_entry_kind (entry->kind, &encoded_kind)
+                || !map_mailbox_list_child_state (entry->child_state,
+                &encoded_child_state))
+                return set_invalid_argument (error,
+                           "unsupported mailbox list entry enum value");
 
-      encoded_entry.setKind (encoded_kind);
-      encoded_entry.setMailboxId (entry->mailbox_id !=
-          NULL ? entry->mailbox_id : "");
-      encoded_entry.setMailboxName (entry->mailbox_name !=
-          NULL ? entry->mailbox_name : "");
-      encoded_entry.setHierarchyDelimiter (entry->hierarchy_delimiter !=
-          NULL ? entry->hierarchy_delimiter : "");
-      encoded_entry.setSpecialUse (entry->special_use !=
-          NULL ? entry->special_use : "");
-      encoded_entry.setSelectable (entry->is_selectable);
-      encoded_entry.setChildState (encoded_child_state);
+            encoded_entry.setKind (encoded_kind);
+            encoded_entry.setMailboxId (entry->mailbox_id !=
+                NULL ? entry->mailbox_id : "");
+            encoded_entry.setMailboxName (entry->mailbox_name !=
+                NULL ? entry->mailbox_name : "");
+            encoded_entry.setHierarchyDelimiter (entry->hierarchy_delimiter !=
+                NULL ? entry->hierarchy_delimiter : "");
+            encoded_entry.setSpecialUse (entry->special_use !=
+                NULL ? entry->special_use : "");
+            encoded_entry.setSelectable (entry->is_selectable);
+            encoded_entry.setChildState (encoded_child_state);
+        }
+
+        auto words = capnp::messageToFlatArray (response_builder);
+        auto bytes = words.asBytes ();
+        *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "mailbox LIST response encode failed: %s", e.what ());
     }
 
-    auto words = capnp::messageToFlatArray (response_builder);
-    auto bytes = words.asBytes ();
-    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
-
-    return TRUE;
-  }
-  catch (const std::exception & e)
-  {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "mailbox LIST response encode failed: %s", e.what ());
-  }
-
-  return FALSE;
+    return FALSE;
 }
 
 static gboolean
 encode_stream_chunk_response (const WyreboxDaemonResponseFrame *response_frame,
     GBytes **out_bytes, GError **error)
 {
-  try {
-    const WyreboxDaemonStreamChunkFrame *chunk = &response_frame->stream_chunk;
-    const guint8 *chunk_bytes = NULL;
-    gsize chunk_size = 0;
+    try {
+        const WyreboxDaemonStreamChunkFrame *chunk =
+            &response_frame->stream_chunk;
+        const guint8 *chunk_bytes = NULL;
+        gsize chunk_size = 0;
 
-    if (response_frame->request_id == NULL
-        || *response_frame->request_id == '\0')
-      return set_invalid_argument (error,
-          "response frame request_id is required");
+        if (response_frame->request_id == NULL
+            || *response_frame->request_id == '\0')
+            return set_invalid_argument (error,
+                       "response frame request_id is required");
 
-    if (chunk->request_id == NULL || *chunk->request_id == '\0')
-      return set_invalid_argument (error,
-          "stream chunk response request_id is required");
+        if (chunk->request_id == NULL || *chunk->request_id == '\0')
+            return set_invalid_argument (error,
+                       "stream chunk response request_id is required");
 
-    if (g_strcmp0 (response_frame->request_id, chunk->request_id) != 0)
-      return set_invalid_argument (error,
-          "stream chunk response request_id does not match frame envelope");
+        if (g_strcmp0 (response_frame->request_id, chunk->request_id) != 0)
+            return set_invalid_argument (error,
+                       "stream chunk response request_id does not match frame envelope");
 
-    const bool has_message_id =
-        chunk->message_id != NULL && *chunk->message_id != '\0';
-    const bool has_query_id =
-        chunk->query_id != NULL && *chunk->query_id != '\0';
+        const bool has_message_id =
+            chunk->message_id != NULL && *chunk->message_id != '\0';
+        const bool has_query_id =
+            chunk->query_id != NULL && *chunk->query_id != '\0';
 
-    if (has_message_id == has_query_id)
-      return set_invalid_argument (error,
-          "stream chunk response requires exactly one of message_id or query_id");
+        if (has_message_id == has_query_id)
+            return set_invalid_argument (error,
+                       "stream chunk response requires exactly one of message_id or query_id");
 
-    if (chunk->bytes != NULL)
-      chunk_bytes =
-          static_cast < const guint8 *>(g_bytes_get_data (chunk->bytes,
-            &chunk_size));
+        if (chunk->bytes != NULL)
+            chunk_bytes =
+                static_cast < const guint8 *> (g_bytes_get_data (chunk->bytes,
+                &chunk_size));
 
-    if (!chunk->end_of_stream && chunk_size == 0)
-      return set_invalid_argument (error,
-          "non-final stream chunk response requires bytes");
+        if (!chunk->end_of_stream && chunk_size == 0)
+            return set_invalid_argument (error,
+                       "non-final stream chunk response requires bytes");
 
-    capnp::MallocMessageBuilder response_builder;
-    auto response_frame_message =
-        response_builder.initRoot < ResponseFrame > ();
-    auto response_chunk = response_frame_message.initStreamChunk ();
+        capnp::MallocMessageBuilder response_builder;
+        auto response_frame_message =
+            response_builder.initRoot < ResponseFrame > ();
+        auto response_chunk = response_frame_message.initStreamChunk ();
 
-    response_frame_message.setRequestId (response_frame->request_id);
-    response_frame_message.setCorrelationId (response_frame->correlation_id !=
-        NULL ? response_frame->correlation_id : "");
+        response_frame_message.setRequestId (response_frame->request_id);
+        response_frame_message.setCorrelationId (
+            response_frame->correlation_id !=
+            NULL ? response_frame->correlation_id : "");
 
-    response_chunk.setRequestId (chunk->request_id);
-    response_chunk.setMessageId (chunk->message_id !=
-        NULL ? chunk->message_id : "");
-    response_chunk.setQueryId (chunk->query_id != NULL ? chunk->query_id : "");
-    response_chunk.setCorrelationId (chunk->correlation_id !=
-        NULL ? chunk->correlation_id : "");
-    response_chunk.setChunkIndex (chunk->chunk_index);
-    response_chunk.setBytes (kj::arrayPtr (reinterpret_cast <
-            const capnp::byte * >(chunk_bytes), chunk_size));
-    response_chunk.setEndOfStream (chunk->end_of_stream);
+        response_chunk.setRequestId (chunk->request_id);
+        response_chunk.setMessageId (chunk->message_id !=
+            NULL ? chunk->message_id : "");
+        response_chunk.setQueryId (chunk->query_id !=
+            NULL ? chunk->query_id : "");
+        response_chunk.setCorrelationId (chunk->correlation_id !=
+            NULL ? chunk->correlation_id : "");
+        response_chunk.setChunkIndex (chunk->chunk_index);
+        response_chunk.setBytes (kj::arrayPtr (reinterpret_cast <
+            const capnp::byte * > (chunk_bytes), chunk_size));
+        response_chunk.setEndOfStream (chunk->end_of_stream);
 
-    auto words = capnp::messageToFlatArray (response_builder);
-    auto bytes = words.asBytes ();
-    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+        auto words = capnp::messageToFlatArray (response_builder);
+        auto bytes = words.asBytes ();
+        *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
 
-    return TRUE;
-  }
-  catch (const std::exception & e)
-  {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "stream chunk response encode failed: %s", e.what ());
-  }
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "stream chunk response encode failed: %s", e.what ());
+    }
 
-  return FALSE;
+    return FALSE;
 }
 
 static gboolean
 encode_mailbox_select_response (const WyreboxDaemonResponseFrame
     *response_frame, GBytes **out_bytes, GError **error)
 {
-  try {
-    const WyreboxDaemonMailboxSelectResult *result =
-        &response_frame->mailbox_select;
-    MailboxListEntryKind encoded_kind = MailboxListEntryKind::ORDINARY;
+    try {
+        const WyreboxDaemonMailboxSelectResult *result =
+            &response_frame->mailbox_select;
+        MailboxListEntryKind encoded_kind = MailboxListEntryKind::ORDINARY;
 
-    if (response_frame->request_id == NULL
-        || *response_frame->request_id == '\0')
-      return set_invalid_argument (error,
-          "response frame request_id is required");
+        if (response_frame->request_id == NULL
+            || *response_frame->request_id == '\0')
+            return set_invalid_argument (error,
+                       "response frame request_id is required");
 
-    if (!map_mailbox_list_entry_kind (result->kind, &encoded_kind))
-      return set_invalid_argument (error,
-          "unsupported mailbox select result kind");
+        if (!map_mailbox_list_entry_kind (result->kind, &encoded_kind))
+            return set_invalid_argument (error,
+                       "unsupported mailbox select result kind");
 
-    if (result->mailbox_id == NULL || *result->mailbox_id == '\0')
-      return set_invalid_argument (error,
-          "mailbox SELECT response mailbox_id is required");
+        if (result->mailbox_id == NULL || *result->mailbox_id == '\0')
+            return set_invalid_argument (error,
+                       "mailbox SELECT response mailbox_id is required");
 
-    if (result->mailbox_name == NULL || *result->mailbox_name == '\0')
-      return set_invalid_argument (error,
-          "mailbox SELECT response mailbox_name is required");
+        if (result->mailbox_name == NULL || *result->mailbox_name == '\0')
+            return set_invalid_argument (error,
+                       "mailbox SELECT response mailbox_name is required");
 
-    if (result->uid_validity == 0)
-      return set_invalid_argument (error,
-          "mailbox SELECT response uidvalidity is required");
+        if (result->uid_validity == 0)
+            return set_invalid_argument (error,
+                       "mailbox SELECT response uidvalidity is required");
 
-    if (result->uid_next == 0)
-      return set_invalid_argument (error,
-          "mailbox SELECT response uidnext is required");
+        if (result->uid_next == 0)
+            return set_invalid_argument (error,
+                       "mailbox SELECT response uidnext is required");
 
-    capnp::MallocMessageBuilder response_builder;
-    auto response_frame_message =
-        response_builder.initRoot < ResponseFrame > ();
-    auto response_select = response_frame_message.initMailboxSelect ();
+        capnp::MallocMessageBuilder response_builder;
+        auto response_frame_message =
+            response_builder.initRoot < ResponseFrame > ();
+        auto response_select = response_frame_message.initMailboxSelect ();
 
-    response_frame_message.setRequestId (response_frame->request_id);
-    response_frame_message.setCorrelationId (response_frame->correlation_id !=
-        NULL ? response_frame->correlation_id : "");
+        response_frame_message.setRequestId (response_frame->request_id);
+        response_frame_message.setCorrelationId (
+            response_frame->correlation_id !=
+            NULL ? response_frame->correlation_id : "");
 
-    response_select.setRequestId (response_frame->request_id);
-    response_select.setKind (encoded_kind);
-    response_select.setMailboxId (result->mailbox_id);
-    response_select.setMailboxName (result->mailbox_name);
-    response_select.setUidValidity (result->uid_validity);
-    response_select.setUidNext (result->uid_next);
-    response_select.setMessageCount (result->message_count);
+        response_select.setRequestId (response_frame->request_id);
+        response_select.setKind (encoded_kind);
+        response_select.setMailboxId (result->mailbox_id);
+        response_select.setMailboxName (result->mailbox_name);
+        response_select.setUidValidity (result->uid_validity);
+        response_select.setUidNext (result->uid_next);
+        response_select.setMessageCount (result->message_count);
 
-    auto words = capnp::messageToFlatArray (response_builder);
-    auto bytes = words.asBytes ();
-    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+        auto words = capnp::messageToFlatArray (response_builder);
+        auto bytes = words.asBytes ();
+        *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
 
-    return TRUE;
-  }
-  catch (const std::exception & e)
-  {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA,
-        "mailbox SELECT response encode failed: %s", e.what ());
-  }
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "mailbox SELECT response encode failed: %s", e.what ());
+    }
 
-  return FALSE;
+    return FALSE;
 }
 
 static gboolean
 encode_error_response (const WyreboxDaemonResponseFrame *response_frame,
     GBytes **out_bytes, GError **error)
 {
-  try {
-    ErrorClass encoded_error_class = ErrorClass::INTERNAL_ERROR;
+    try {
+        ErrorClass encoded_error_class = ErrorClass::INTERNAL_ERROR;
 
-    if (response_frame->request_id == NULL
-        || *response_frame->request_id == '\0')
-      return set_invalid_argument (error,
-          "response frame request_id is required");
+        if (response_frame->request_id == NULL
+            || *response_frame->request_id == '\0')
+            return set_invalid_argument (error,
+                       "response frame request_id is required");
 
-    if (response_frame->error.message == NULL
-        || *response_frame->error.message == '\0')
-      return set_invalid_argument (error, "error frame message is required");
+        if (response_frame->error.message == NULL
+            || *response_frame->error.message == '\0')
+            return set_invalid_argument (error,
+                       "error frame message is required");
 
-    if (!map_error_class (response_frame->error.error_class,
+        if (!map_error_class (response_frame->error.error_class,
             &encoded_error_class))
-      return set_invalid_argument (error, "unsupported daemon error class");
+            return set_invalid_argument (error,
+                       "unsupported daemon error class");
 
-    capnp::MallocMessageBuilder response_builder;
-    auto response_frame_message =
-        response_builder.initRoot < ResponseFrame > ();
-    auto response_error = response_frame_message.initError ();
+        capnp::MallocMessageBuilder response_builder;
+        auto response_frame_message =
+            response_builder.initRoot < ResponseFrame > ();
+        auto response_error = response_frame_message.initError ();
 
-    response_frame_message.setRequestId (response_frame->request_id);
-    response_frame_message.setCorrelationId (response_frame->correlation_id !=
-        NULL ? response_frame->correlation_id : "");
+        response_frame_message.setRequestId (response_frame->request_id);
+        response_frame_message.setCorrelationId (
+            response_frame->correlation_id !=
+            NULL ? response_frame->correlation_id : "");
 
-    response_error.setRequestId (response_frame->error.request_id != NULL
-        && *response_frame->error.request_id !=
-        '\0' ? response_frame->error.request_id : response_frame->request_id);
-    response_error.setErrorClass (encoded_error_class);
-    response_error.setMessage (response_frame->error.message);
-    response_error.setRetryHint (response_frame->error.retry_hint != NULL
+        response_error.setRequestId (response_frame->error.request_id != NULL
+            && *response_frame->error.request_id !=
+            '\0' ? response_frame->error.request_id :
+            response_frame->request_id);
+        response_error.setErrorClass (encoded_error_class);
+        response_error.setMessage (response_frame->error.message);
+        response_error.setRetryHint (response_frame->error.retry_hint != NULL
         ? response_frame->error.retry_hint : "");
 
-    auto words = capnp::messageToFlatArray (response_builder);
-    auto bytes = words.asBytes ();
-    *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+        auto words = capnp::messageToFlatArray (response_builder);
+        auto bytes = words.asBytes ();
+        *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
 
-    return TRUE;
-  }
-  catch (const std::exception & e)
-  {
-    g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_INVALID_DATA, "error response encode failed: %s", e.what ());
-  }
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA, "error response encode failed: %s",
+            e.what ());
+    }
 
-  return FALSE;
+    return FALSE;
 }
 
 gboolean
@@ -1945,53 +2142,53 @@ wyrebox_daemon_capnp_codec_decode_request_frame (const
     gpointer *out_decoded_state, GDestroyNotify *out_decoded_state_clear,
     gpointer user_data, GError **error)
 {
-  (void) peer_credentials;
-  (void) user_data;
+    (void)peer_credentials;
+    (void)user_data;
 
-  g_return_val_if_fail (out_request_frame != NULL, FALSE);
-  g_return_val_if_fail (out_decoded_state != NULL, FALSE);
-  g_return_val_if_fail (out_decoded_state_clear != NULL, FALSE);
-  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+    g_return_val_if_fail (out_request_frame != NULL, FALSE);
+    g_return_val_if_fail (out_decoded_state != NULL, FALSE);
+    g_return_val_if_fail (out_decoded_state_clear != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  if (request == NULL)
-    return set_invalid_argument (error, "request payload is null");
+    if (request == NULL)
+        return set_invalid_argument (error, "request payload is null");
 
-  const gsize payload_size = g_bytes_get_size (request);
-  if (payload_size == 0)
-    return set_invalid_argument (error, "request payload is empty");
+    const gsize payload_size = g_bytes_get_size (request);
+    if (payload_size == 0)
+        return set_invalid_argument (error, "request payload is empty");
 
-  if (payload_size % sizeof (capnp::word) != 0)
-    return set_invalid_argument (error,
-        "request payload size is not a valid Cap'n Proto byte size");
+    if (payload_size % sizeof (capnp::word) != 0)
+        return set_invalid_argument (error,
+                   "request payload size is not a valid Cap'n Proto byte size");
 
-  g_autofree guint8 *payload_copy = NULL;
-  const guint8 *payload_data =
-      static_cast < const guint8 * >(g_bytes_get_data (request, NULL));
-  payload_copy =
-      static_cast < guint8 * >(g_memdup2 (payload_data, payload_size));
-  if (payload_copy == NULL)
-    return set_invalid_argument (error,
-        "failed to allocate request payload copy");
+    g_autofree guint8 *payload_copy = NULL;
+    const guint8 *payload_data =
+        static_cast < const guint8 * > (g_bytes_get_data (request, NULL));
+    payload_copy =
+        static_cast < guint8 * > (g_memdup2 (payload_data, payload_size));
+    if (payload_copy == NULL)
+        return set_invalid_argument (error,
+                   "failed to allocate request payload copy");
 
-  *out_request_frame = (WyreboxDaemonDecodedRequestFrame) {
-  0};
-  auto state =
-      static_cast <
-      WyreboxDaemonCapnpDecodedRequestState *
-      >(g_malloc0 (sizeof (WyreboxDaemonCapnpDecodedRequestState)));
+    *out_request_frame = (WyreboxDaemonDecodedRequestFrame) {
+        0
+    };
+    auto state =
+        static_cast <
+        WyreboxDaemonCapnpDecodedRequestState *
+        > (g_malloc0 (sizeof (WyreboxDaemonCapnpDecodedRequestState)));
 
-  if (!decode_request_frame (reinterpret_cast <
-          const capnp::word * >(payload_copy),
-          payload_size / sizeof (capnp::word), state, out_request_frame, error))
-  {
-    wyrebox_daemon_capnp_codec_decoded_state_clear (state);
-    return FALSE;
-  }
+    if (!decode_request_frame (reinterpret_cast <
+        const capnp::word * > (payload_copy),
+        payload_size / sizeof (capnp::word), state, out_request_frame, error)){
+        wyrebox_daemon_capnp_codec_decoded_state_clear (state);
+        return FALSE;
+    }
 
-  *out_decoded_state = state;
-  *out_decoded_state_clear = wyrebox_daemon_capnp_codec_decoded_state_clear;
+    *out_decoded_state = state;
+    *out_decoded_state_clear = wyrebox_daemon_capnp_codec_decoded_state_clear;
 
-  return TRUE;
+    return TRUE;
 }
 
 GBytes *
@@ -1999,72 +2196,73 @@ wyrebox_daemon_capnp_codec_encode_response_frame (const
     WyreboxDaemonResponseFrame *response_frame, gpointer user_data,
     GError **error)
 {
-  g_autoptr (GBytes) out_bytes = NULL;
+    g_autoptr (GBytes) out_bytes = NULL;
 
-  (void) user_data;
+    (void)user_data;
 
-  g_return_val_if_fail (response_frame != NULL, NULL);
-  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+    g_return_val_if_fail (response_frame != NULL, NULL);
+    g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
-  switch (response_frame->kind) {
+    switch (response_frame->kind) {
     case WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS:
-      if (!encode_success_response (response_frame, &out_bytes, error))
-        return NULL;
-      return g_steal_pointer (&out_bytes);
+        if (!encode_success_response (response_frame, &out_bytes, error))
+            return NULL;
+        return g_steal_pointer (&out_bytes);
     case WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_LIST:
-      if (!encode_mailbox_list_response (response_frame, &out_bytes, error))
-        return NULL;
-      return g_steal_pointer (&out_bytes);
+        if (!encode_mailbox_list_response (response_frame, &out_bytes, error))
+            return NULL;
+        return g_steal_pointer (&out_bytes);
     case WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK:
-      if (!encode_stream_chunk_response (response_frame, &out_bytes, error))
-        return NULL;
-      return g_steal_pointer (&out_bytes);
+        if (!encode_stream_chunk_response (response_frame, &out_bytes, error))
+            return NULL;
+        return g_steal_pointer (&out_bytes);
     case WYREBOX_DAEMON_RESPONSE_FRAME_MAILBOX_SELECT:
-      if (!encode_mailbox_select_response (response_frame, &out_bytes, error))
-        return NULL;
-      return g_steal_pointer (&out_bytes);
+        if (!encode_mailbox_select_response (response_frame, &out_bytes, error))
+            return NULL;
+        return g_steal_pointer (&out_bytes);
     case WYREBOX_DAEMON_RESPONSE_FRAME_ERROR:
-      if (!encode_error_response (response_frame, &out_bytes, error))
-        return NULL;
-      return g_steal_pointer (&out_bytes);
+        if (!encode_error_response (response_frame, &out_bytes, error))
+            return NULL;
+        return g_steal_pointer (&out_bytes);
     default:
-      g_set_error (error,
-          G_IO_ERROR,
-          G_IO_ERROR_NOT_SUPPORTED, "unsupported response frame kind");
-      return NULL;
-  }
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_NOT_SUPPORTED, "unsupported response frame kind");
+        return NULL;
+    }
 }
 
 gboolean
 wyrebox_daemon_capnp_codec_decode_response_frame (GBytes *response,
     WyreboxDaemonResponseFrame *out_response_frame, GError **error)
 {
-  g_return_val_if_fail (out_response_frame != NULL, FALSE);
-  g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+    g_return_val_if_fail (out_response_frame != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-  if (response == NULL)
-    return set_invalid_argument (error, "response payload is null");
+    if (response == NULL)
+        return set_invalid_argument (error, "response payload is null");
 
-  const gsize payload_size = g_bytes_get_size (response);
-  if (payload_size == 0)
-    return set_invalid_argument (error, "response payload is empty");
+    const gsize payload_size = g_bytes_get_size (response);
+    if (payload_size == 0)
+        return set_invalid_argument (error, "response payload is empty");
 
-  if (payload_size % sizeof (capnp::word) != 0)
-    return set_invalid_argument (error,
-        "response payload size is not a valid Cap'n Proto byte size");
+    if (payload_size % sizeof (capnp::word) != 0)
+        return set_invalid_argument (error,
+                   "response payload size is not a valid Cap'n Proto byte size");
 
-  g_autofree guint8 *payload_copy = NULL;
-  const guint8 *payload_data =
-      static_cast < const guint8 * >(g_bytes_get_data (response, NULL));
-  payload_copy =
-      static_cast < guint8 * >(g_memdup2 (payload_data, payload_size));
-  if (payload_copy == NULL)
-    return set_invalid_argument (error,
-        "failed to allocate response payload copy");
+    g_autofree guint8 *payload_copy = NULL;
+    const guint8 *payload_data =
+        static_cast < const guint8 * > (g_bytes_get_data (response, NULL));
+    payload_copy =
+        static_cast < guint8 * > (g_memdup2 (payload_data, payload_size));
+    if (payload_copy == NULL)
+        return set_invalid_argument (error,
+                   "failed to allocate response payload copy");
 
-  return decode_response_frame (reinterpret_cast <
-      const capnp::word * >(payload_copy), payload_size / sizeof (capnp::word),
-      out_response_frame, error);
+    return decode_response_frame (reinterpret_cast <
+               const capnp::word * > (payload_copy),
+               payload_size / sizeof (capnp::word),
+               out_response_frame, error);
 }
 
 GBytes *
@@ -2073,16 +2271,17 @@ wyrebox_daemon_capnp_codec_encode_delivery_ingestion_request (const
     const WyreboxDaemonDeliveryIngestionRequest *request, gpointer user_data,
     GError **error)
 {
-  g_autoptr (GBytes) out_bytes = NULL;
+    g_autoptr (GBytes) out_bytes = NULL;
 
-  (void) user_data;
+    (void)user_data;
 
-  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+    g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
-  if (!encode_delivery_ingestion_request (identity, request, &out_bytes, error))
-    return NULL;
+    if (!encode_delivery_ingestion_request (identity, request, &out_bytes,
+        error))
+        return NULL;
 
-  return g_steal_pointer (&out_bytes);
+    return g_steal_pointer (&out_bytes);
 }
 
 GBytes *
@@ -2091,16 +2290,16 @@ wyrebox_daemon_capnp_codec_encode_mailbox_list_request (const
     const WyreboxDaemonMailboxListRequest *request, gpointer user_data,
     GError **error)
 {
-  g_autoptr (GBytes) out_bytes = NULL;
+    g_autoptr (GBytes) out_bytes = NULL;
 
-  (void) user_data;
+    (void)user_data;
 
-  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+    g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
-  if (!encode_mailbox_list_request (identity, request, &out_bytes, error))
-    return NULL;
+    if (!encode_mailbox_list_request (identity, request, &out_bytes, error))
+        return NULL;
 
-  return g_steal_pointer (&out_bytes);
+    return g_steal_pointer (&out_bytes);
 }
 
 GBytes *
@@ -2109,16 +2308,16 @@ wyrebox_daemon_capnp_codec_encode_mailbox_select_request (const
     const WyreboxDaemonMailboxSelectRequest *request, gpointer user_data,
     GError **error)
 {
-  g_autoptr (GBytes) out_bytes = NULL;
+    g_autoptr (GBytes) out_bytes = NULL;
 
-  (void) user_data;
+    (void)user_data;
 
-  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+    g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
-  if (!encode_mailbox_select_request (identity, request, &out_bytes, error))
-    return NULL;
+    if (!encode_mailbox_select_request (identity, request, &out_bytes, error))
+        return NULL;
 
-  return g_steal_pointer (&out_bytes);
+    return g_steal_pointer (&out_bytes);
 }
 
 GBytes *
@@ -2127,16 +2326,16 @@ wyrebox_daemon_capnp_codec_encode_mailbox_status_request (const
     const WyreboxDaemonMailboxStatusRequest *request, gpointer user_data,
     GError **error)
 {
-  g_autoptr (GBytes) out_bytes = NULL;
+    g_autoptr (GBytes) out_bytes = NULL;
 
-  (void) user_data;
+    (void)user_data;
 
-  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+    g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
-  if (!encode_mailbox_status_request (identity, request, &out_bytes, error))
-    return NULL;
+    if (!encode_mailbox_status_request (identity, request, &out_bytes, error))
+        return NULL;
 
-  return g_steal_pointer (&out_bytes);
+    return g_steal_pointer (&out_bytes);
 }
 
 GBytes *
@@ -2145,16 +2344,34 @@ wyrebox_daemon_capnp_codec_encode_message_fetch_request (const
     const WyreboxDaemonMessageFetchRequest *request, gpointer user_data,
     GError **error)
 {
-  g_autoptr (GBytes) out_bytes = NULL;
+    g_autoptr (GBytes) out_bytes = NULL;
 
-  (void) user_data;
+    (void)user_data;
 
-  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+    g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
-  if (!encode_message_fetch_request (identity, request, &out_bytes, error))
-    return NULL;
+    if (!encode_message_fetch_request (identity, request, &out_bytes, error))
+        return NULL;
 
-  return g_steal_pointer (&out_bytes);
+    return g_steal_pointer (&out_bytes);
+}
+
+GBytes *
+wyrebox_daemon_capnp_codec_encode_message_search_request (const
+    WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMessageSearchRequest *request, gpointer user_data,
+    GError **error)
+{
+    g_autoptr (GBytes) out_bytes = NULL;
+
+    (void)user_data;
+
+    g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+    if (!encode_message_search_request (identity, request, &out_bytes, error))
+        return NULL;
+
+    return g_steal_pointer (&out_bytes);
 }
 
 GBytes *
@@ -2163,15 +2380,15 @@ wyrebox_daemon_capnp_codec_encode_duckdb_query_template_request (const
     const WyreboxDaemonDuckDBQueryTemplateRequest *request, gpointer user_data,
     GError **error)
 {
-  g_autoptr (GBytes) out_bytes = NULL;
+    g_autoptr (GBytes) out_bytes = NULL;
 
-  (void) user_data;
+    (void)user_data;
 
-  g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+    g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
-  if (!encode_duckdb_query_template_request (identity, request, &out_bytes,
-          error))
-    return NULL;
+    if (!encode_duckdb_query_template_request (identity, request, &out_bytes,
+        error))
+        return NULL;
 
-  return g_steal_pointer (&out_bytes);
+    return g_steal_pointer (&out_bytes);
 }
