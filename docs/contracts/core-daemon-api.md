@@ -284,9 +284,10 @@ Dovecot plugins or local callers. It accepts message FETCH inputs only.
 ## Message Search Operation Contract
 
 Message SEARCH is a Dovecot-facing SEARCH call over the Cap'n Proto-over-UDS
-daemon API. This section defines operation behavior only; it does not define
-concrete `.capnp` schemas, field layouts, generated code, Dovecot backend
-implementation, or the concrete criteria schema.
+daemon API. This section defines operation behavior, the search criteria, and
+the result encoding; the request layout is `MessageSearchRequest` in
+`wyrebox/wyrebox-daemon-api.capnp`. It does not define generated code or the
+Dovecot backend implementation.
 
 Every SEARCH request carries request and caller identity sufficient for
 `wyreboxd` to authorize and correlate the operation:
@@ -304,15 +305,34 @@ SEARCH must not return results outside the authorized selected ordinary mailbox
 or virtual mailbox view.
 
 SEARCH criteria are IMAP-derived search criteria supplied as daemon operation
-inputs, not arbitrary SQL or raw DuckDB query strings. The concrete criteria
-schema is deferred to a later `.capnp` schema slice, but the semantic boundary
-is fixed here: Dovecot plugins request IMAP-search behavior from `wyreboxd`;
-they do not submit database or Datalog query text.
+inputs, not arbitrary SQL or raw DuckDB query strings: Dovecot plugins request
+IMAP-search behavior from `wyreboxd`; they do not submit database or Datalog
+query text. A request names the namespace kind of the selected mailbox
+(ordinary mailbox or virtual mailbox) and carries a list of typed criteria, all
+of which must match:
+
+- `subjectContains` and `fromContains` are substring matches against decoded
+  Subject and From metadata that fold ASCII letters only, like
+  `messages.subject_contains.v1`. Non-ASCII letters, and the characters `%`,
+  `_`, and `\`, match literally.
+- `senderDomain` matches the normalized sender domain exactly after ASCII
+  lowercasing.
+- `sentSince` (inclusive) and `sentBefore` (exclusive) bound the decoded Date
+  header in Unix microseconds. Messages without a decoded date never match
+  them.
+
+An empty criteria list matches every visible message in the selected mailbox.
+A request carries at most 16 criteria, and every text criterion is non-empty
+valid UTF-8 of at most 256 bytes without control characters. Other requests are
+invalid arguments, which the daemon reports as `permanent failure`.
 
 SEARCH returns mailbox-scoped UIDs or equivalent mailbox-scoped message
 references suitable for Dovecot, not raw object-store keys as client-visible
 result identity. A matching raw message object may therefore have different
-returned identities in an ordinary mailbox and in a virtual mailbox.
+returned identities in an ordinary mailbox and in a virtual mailbox. A
+successful SEARCH returns one final stream chunk with query ID `message-search`
+whose bytes list the matching visible UIDs in ascending order, each as ASCII
+decimal followed by a newline; no match returns empty bytes.
 
 For an ordinary selected mailbox, SEARCH evaluates only that selected mailbox's
 membership. For a selected virtual mailbox, SEARCH is evaluated within that
@@ -659,8 +679,7 @@ issue-0004 units:
 - concrete DuckDB query-template `.capnp` schemas and field layouts
 - template catalog implementation
 
-Concrete SEARCH `.capnp` schemas, field layouts, and criteria payloads are
-deferred. Concrete flag/keyword `.capnp` schemas and field layouts are
+Concrete flag/keyword `.capnp` schemas and field layouts are
 deferred. Concrete fact mutation `.capnp` schemas and field layouts are
 deferred. Concrete Wirelog predicate query `.capnp` schemas and field layouts
 are deferred. Concrete DuckDB query-template `.capnp` schemas and field layouts
