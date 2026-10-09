@@ -99,11 +99,14 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDeliveryCatchupReport,
  * of the account recorded in its payload, as resolved by
  * wyrebox_delivery_materializer_apply_to_inbox_full().
  *
- * FlagChanged records are replayed in journal order with the deliveries. Each
- * is applied on its own with wyrebox_delivery_materializer_apply_flag_change()
- * and follows the same hold rules as a delivery run of its account: it is
- * skipped while the account is held, and a G_IO_ERROR_INVALID_DATA failure,
- * such as a target that is not materialized, holds the account.
+ * FlagChanged, FactInserted, and FactRetracted records are replayed in journal
+ * order with the deliveries. Each is applied on its own with
+ * wyrebox_delivery_materializer_apply_flag_change() or
+ * wyrebox_delivery_materializer_apply_fact_mutation() and follows the same
+ * hold rules as a delivery run of its account (a fact mutation's account is
+ * its scope): it is skipped while the account is held, and a
+ * G_IO_ERROR_INVALID_DATA failure, such as a flag target that is not
+ * materialized, holds the account.
  *
  * Consecutive deliveries for the same account are applied in one materializer
  * transaction, in journal order. Before a run is applied, the raw object of

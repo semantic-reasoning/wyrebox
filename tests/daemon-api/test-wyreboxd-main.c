@@ -4,6 +4,7 @@
 
 #include "wyrebox-build-config.h"
 #include "wyrebox-daemon-audit-payload.h"
+#include "wyrebox-daemon-fact-mutation-request.h"
 #include "wyrebox-daemon-frame-io.h"
 #include "wyrebox-daemon-mailbox-list-result.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
@@ -452,6 +453,31 @@ catalog_snapshot (const char *catalog_path)
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \
     WYREBOX_HAVE_CAPNP_SERIALIZATION
+/*
+ * Appends a fact mutation to the journal from the test process while wyreboxd
+ * is not running.
+ */
+static void
+journal_fact_offline (const DaemonRoot *daemon_root,
+    WyreboxDaemonFactMutationKind kind, const char *account_id,
+    const char *const *arguments)
+{
+    g_autoptr (WyreboxJournalWriter) writer = NULL;
+    g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
+    g_autoptr (GError) error = NULL;
+    guint64 offset = 0;
+    guint64 sequence = 0;
+
+    writer = wyrebox_journal_writer_new (daemon_root->journal_dir, &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_fact_mutation_request_init (&request, kind,
+        "project_keyword", account_id, arguments, &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_fact_mutation_request_append_journal
+            (&request, writer, &offset, &sequence, &error));
+    g_assert_no_error (error);
+}
+
 static GBytes *
 build_delivery_request (const char *delivery_id)
 {
@@ -1554,6 +1580,65 @@ test_wyreboxd_streams_mail_events (void)
 }
 
 static void
+test_wyreboxd_materializes_journaled_facts (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) subprocess = NULL;
+    g_autofree char *catalog_wal_path = NULL;
+    g_autofree char *before = NULL;
+    g_autofree char *after_rebuild = NULL;
+    const char *const projects[] = { "journal:0:1", "view-projects", NULL };
+    const char *const ops[] = { "journal:0:1", "view-ops", NULL };
+    const char *facts_sql =
+        "SELECT string_agg(account_id || ' ' || message_id || ' ' || "
+        "(object_id <> '') || ' ' || args_json || ' ' || "
+        "retracted_at_unix_us || '@' || journal_offset || ':' || "
+        "journal_sequence, '; ' ORDER BY fact_id) FROM message_facts;";
+
+    daemon_root_init (&daemon_root);
+    catalog_wal_path = g_strconcat (daemon_root.catalog_path, ".wal", NULL);
+    journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
+    journal_fact_offline (&daemon_root, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+        "account-1", projects);
+    journal_fact_offline (&daemon_root, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+        "account-1", ops);
+    journal_fact_offline (&daemon_root, WYREBOX_DAEMON_FACT_MUTATION_RETRACT,
+        "account-1", ops);
+
+    subprocess = start_daemon (&daemon_root);
+    {
+        g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+        const char *data = NULL;
+        gsize size = 0;
+
+        query_template (&daemon_root, "admin-cli",
+            "message.facts_by_message_id.v1", "journal:0:1", &frame);
+        g_assert_cmpint (frame.kind, ==,
+            WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+        data = g_bytes_get_data (frame.stream_chunk.bytes, &size);
+        g_assert_nonnull (g_strstr_len (data, size, "view-projects"));
+        g_assert_nonnull (g_strstr_len (data, size, "view-ops"));
+        g_assert_nonnull (g_strstr_len (data, size,
+            "fact-mutation:account-1"));
+    }
+    stop_daemon (subprocess);
+    g_clear_object (&subprocess);
+
+    before = query_catalog_string (daemon_root.catalog_path, facts_sql);
+    g_assert_nonnull (strstr (before, "account-1 journal:0:1 true "));
+    g_assert_nonnull (strstr (before, "view-ops\"] 4@"));
+    g_assert_nonnull (strstr (before, "view-projects\"] 0@"));
+
+    g_assert_cmpint (g_remove (daemon_root.catalog_path), ==, 0);
+    (void)g_remove (catalog_wal_path);
+    subprocess = start_daemon (&daemon_root);
+    stop_daemon (subprocess);
+    after_rebuild = query_catalog_string (daemon_root.catalog_path,
+            facts_sql);
+    g_assert_cmpstr (after_rebuild, ==, before);
+}
+
+static void
 test_wyreboxd_updates_flags (void)
 {
     g_auto (DaemonRoot) daemon_root = { 0 };
@@ -1823,6 +1908,8 @@ main (int argc, char **argv)
         test_wyreboxd_queries_templates);
     g_test_add_func ("/daemon-api/wyreboxd/streams-mail-events",
         test_wyreboxd_streams_mail_events);
+    g_test_add_func ("/daemon-api/wyreboxd/materializes-journaled-facts",
+        test_wyreboxd_materializes_journaled_facts);
     g_test_add_func
         ("/daemon-api/wyreboxd/rebuilds-identical-catalog-after-restart",
         test_wyreboxd_rebuilds_identical_catalog_after_restart);

@@ -92,7 +92,7 @@ replay_deliveries_after (WyreboxSchemaMetadataStore *metadata_store,
     WyreboxJournalReader *journal_reader,
     WyreboxLocalObjectStore *object_store,
     const WyreboxDeliveryCatchupCursor *resume_after,
-    gboolean include_flag_changes, WyreboxDeliveryProjectionList *out_list,
+    gboolean include_mutations, WyreboxDeliveryProjectionList *out_list,
     gboolean *out_from_checkpoint, GError **error)
 {
     g_auto (WyreboxSchemaMigrationMetadataState) metadata = { 0 };
@@ -129,9 +129,9 @@ replay_deliveries_after (WyreboxSchemaMetadataStore *metadata_store,
     if (projection == NULL)
         return FALSE;
 
-    if (include_flag_changes)
+    if (include_mutations)
         return
-            wyrebox_delivery_projection_replay_records_with_flag_changes
+            wyrebox_delivery_projection_replay_records_with_mutations
                 (projection, out_list, error);
 
     return wyrebox_delivery_projection_replay_records (projection, out_list,
@@ -146,7 +146,7 @@ check_record_objects (WyreboxLocalObjectStore *object_store,
         const WyreboxDeliveryProjectionRecord *record =
             g_ptr_array_index (records, i);
 
-        if (record->flag_change == NULL &&
+        if (wyrebox_delivery_projection_record_is_delivery (record) &&
             !wyrebox_delivery_projection_check_record_object (object_store,
             record, error))
             return FALSE;
@@ -213,7 +213,7 @@ has_delivery_record (const WyreboxDeliveryProjectionList *list)
         const WyreboxDeliveryProjectionRecord *record =
             g_ptr_array_index (list->records, i);
 
-        if (record->flag_change == NULL)
+        if (wyrebox_delivery_projection_record_is_delivery (record))
             return TRUE;
     }
 
@@ -352,8 +352,9 @@ wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
 
             if (g_strcmp0 (record->account_identity,
                 first->account_identity) != 0 ||
-                (run_end > run_start && (record->flag_change != NULL ||
-                first->flag_change != NULL)))
+                (run_end > run_start &&
+                (!wyrebox_delivery_projection_record_is_delivery (record) ||
+                !wyrebox_delivery_projection_record_is_delivery (first))))
                 break;
             g_ptr_array_add (run.records, record);
             run_end++;
@@ -366,6 +367,11 @@ wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
         if (first->flag_change != NULL) {
             applied = wyrebox_delivery_materializer_apply_flag_change
                     (materializer, first->flag_change, first->journal_offset,
+                    first->journal_sequence, from_checkpoint && holds->len == 0,
+                    &run_error);
+        } else if (first->fact_mutation != NULL) {
+            applied = wyrebox_delivery_materializer_apply_fact_mutation
+                    (materializer, first->fact_mutation, first->journal_offset,
                     first->journal_sequence, from_checkpoint && holds->len == 0,
                     &run_error);
         } else if (!check_record_objects (object_store, run.records,
