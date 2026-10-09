@@ -99,7 +99,7 @@ jobs:
       ASAN_OPTIONS: "abort_on_error=1:halt_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1"
       UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
       # DuckDB version built from source on architectures without a prebuilt.
-      DUCKDB_VERSION: v1.5.2
+      DUCKDB_VERSION: v1.5.6
       DUCKDB_ROOT: ${{ github.workspace }}/duckdb-install
 
     steps:
