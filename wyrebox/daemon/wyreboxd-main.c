@@ -10,6 +10,7 @@
 #include "wyrebox-daemon-exit-code.h"
 #include "wyrebox-daemon-mailbox-catalog-duckdb.h"
 #include "wyrebox-daemon-message-fetch-service.h"
+#include "wyrebox-daemon-message-search-duckdb.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-runtime.h"
 #include "wyrebox-daemon-storage.h"
@@ -191,6 +192,7 @@ run_daemon (int argc, char **argv)
     g_autoptr (WyreboxDaemonMailboxSelectService) mailbox_select_service = NULL;
     g_autoptr (WyreboxDeliveryFetcher) fetcher = NULL;
     g_autoptr (WyreboxDaemonMessageFetchService) message_fetch_service = NULL;
+    g_autoptr (WyreboxDaemonMessageSearchService) message_search_service = NULL;
     g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
     g_autoptr (WyreboxJournalWriter) journal_writer = NULL;
     g_autoptr (WyreboxDaemonDeliveryMaterialization) materialization = NULL;
@@ -305,6 +307,14 @@ run_daemon (int argc, char **argv)
     message_fetch_service =
         wyrebox_daemon_message_fetch_service_new_for_fetcher (fetcher);
 
+    message_search_service =
+        wyrebox_daemon_message_search_service_new_duckdb (catalog_path,
+            &error);
+    if (message_search_service == NULL) {
+        g_printerr ("wyreboxd: %s\n", error->message);
+        return EX_OSERR;
+    }
+
     materialization = wyrebox_daemon_delivery_materialization_new
             (catalog_path, journal_root_dir, journal_writer, object_store,
             &error);
@@ -330,7 +340,7 @@ run_daemon (int argc, char **argv)
     request_adapter = wyrebox_daemon_request_adapter_new (delivery_service,
             NULL,
             mailbox_list_service, mailbox_select_service,
-            message_fetch_service, NULL, NULL, NULL,
+            message_fetch_service, message_search_service, NULL, NULL,
             decode_request_frame, NULL, NULL, encode_response_frame, NULL,
             NULL);
     server = wyrebox_daemon_connection_server_new (socket_path,
