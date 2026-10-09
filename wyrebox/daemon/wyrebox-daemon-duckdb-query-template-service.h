@@ -33,6 +33,12 @@ wyrebox_daemon_duckdb_query_template_service_new (
     gpointer user_data,
     GDestroyNotify user_data_destroy);
 
+/*
+ * Executes the cataloged templates against the process-wide DuckDB instance
+ * for @catalog_path, so results observe writes made by wyreboxd in the same
+ * process. Templates are fixed SELECT statements; callers never supply SQL.
+ * A missing catalog fails with G_IO_ERROR_NOT_FOUND instead of being created.
+ */
 WyreboxDaemonDuckDBQueryTemplateService *
 wyrebox_daemon_duckdb_query_template_service_new_duckdb (
     const gchar *catalog_path,
