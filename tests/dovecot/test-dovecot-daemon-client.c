@@ -1281,9 +1281,9 @@ test_dovecot_daemon_client_load_uid_map_succeeds_with_ordered_rows (void)
     g_autoptr (GError) error = NULL;
     FakeServer server = { 0 };
     const char *uid_map_csv =
-        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n"
-        "account-1,mailbox-inbox,77,42,message-1,object-1\n"
-        "account-1,mailbox-inbox,77,43,message-2,object-2\n";
+        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id,flags\n"
+        "account-1,mailbox-inbox,77,42,message-1,object-1,\\Seen $Label1\n"
+        "account-1,mailbox-inbox,77,43,message-2,object-2,\n";
 
     fake_server_start (&server, socket_path, FAKE_SERVER_UID_MAP_CSV_RESPONSE,
         NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
@@ -1298,6 +1298,18 @@ test_dovecot_daemon_client_load_uid_map_succeeds_with_ordered_rows (void)
         "account-1",
         "mailbox-inbox",
         77, 2, "42", "message-1", "object-1", "43", "message-2", "object-2");
+    {
+        const WyreboxDovecotMailboxUidMapRow *first =
+            g_ptr_array_index (snapshot.rows, 0);
+        const WyreboxDovecotMailboxUidMapRow *second =
+            g_ptr_array_index (snapshot.rows, 1);
+
+        g_assert_cmpuint (g_strv_length (first->flags), ==, 2);
+        g_assert_cmpstr (first->flags[0], ==, "\\Seen");
+        g_assert_cmpstr (first->flags[1], ==, "$Label1");
+        g_assert_nonnull (second->flags);
+        g_assert_cmpuint (g_strv_length (second->flags), ==, 0);
+    }
     fake_server_join (&server);
     remove_tree (root);
 }
@@ -1311,7 +1323,7 @@ test_dovecot_daemon_client_load_uid_map_succeeds_with_empty_map (void)
     g_autoptr (GError) error = NULL;
     FakeServer server = { 0 };
     const char *uid_map_csv =
-        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n";
+        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id,flags\n";
 
     fake_server_start (&server, socket_path, FAKE_SERVER_UID_MAP_CSV_RESPONSE,
         NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
@@ -1356,6 +1368,10 @@ test_dovecot_daemon_client_load_uid_map_succeeds_with_derived_view_schema (void)
     assert_uid_map_rows (&snapshot,
         "account-1", "view-projects", 77, 1, "42", "message-1", "object-1",
         NULL, NULL, NULL);
+    g_assert_nonnull (((WyreboxDovecotMailboxUidMapRow *)
+        g_ptr_array_index (snapshot.rows, 0))->flags);
+    g_assert_cmpuint (g_strv_length (((WyreboxDovecotMailboxUidMapRow *)
+        g_ptr_array_index (snapshot.rows, 0))->flags), ==, 0);
     fake_server_join (&server);
     remove_tree (root);
 }
@@ -1397,8 +1413,8 @@ test_dovecot_daemon_client_load_uid_map_rejects_mismatched_rows (void)
     g_autoptr (GError) error = NULL;
     FakeServer server = { 0 };
     const char *uid_map_csv =
-        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n"
-        "account-2,mailbox-inbox,77,42,message-1,object-1\n";
+        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id,flags\n"
+        "account-2,mailbox-inbox,77,42,message-1,object-1,\n";
 
     fake_server_start (&server, socket_path, FAKE_SERVER_UID_MAP_CSV_RESPONSE,
         NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
@@ -1414,6 +1430,56 @@ test_dovecot_daemon_client_load_uid_map_rejects_mismatched_rows (void)
 }
 
 static void
+assert_uid_map_csv_rejected (const char *uid_map_csv)
+{
+    g_autofree char *root = NULL;
+    g_autofree char *socket_path = make_socket_path (&root);
+    g_auto (WyreboxDovecotMailboxUidMapSnapshot) snapshot = { 0 };
+    g_autoptr (GError) error = NULL;
+    FakeServer server = { 0 };
+
+    fake_server_start (&server, socket_path, FAKE_SERVER_UID_MAP_CSV_RESPONSE,
+        NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+    server.uid_map_csv = uid_map_csv;
+
+    g_assert_false (wyrebox_dovecot_daemon_client_load_uid_map (socket_path,
+        "account-1", "mailbox-inbox",
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, &snapshot, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    assert_uid_map_snapshot_is_cleared (&snapshot);
+    fake_server_join (&server);
+    remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_load_uid_map_rejects_header_without_flags (void)
+{
+    assert_uid_map_csv_rejected
+        ("account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n"
+        "account-1,mailbox-inbox,77,42,message-1,object-1\n");
+}
+
+static void
+test_dovecot_daemon_client_load_uid_map_rejects_malformed_flags (void)
+{
+    static const char *const malformed[] = {
+        " \\Seen",
+        "\\Seen ",
+        "\\Seen  work",
+    };
+
+    for (gsize i = 0; i < G_N_ELEMENTS (malformed); i++) {
+        g_autofree char *uid_map_csv =
+            g_strdup_printf
+                ("account_id,mailbox_id,uidvalidity,uid,message_id,object_id,"
+                "flags\naccount-1,mailbox-inbox,77,42,message-1,object-1,%s\n",
+                malformed[i]);
+
+        assert_uid_map_csv_rejected (uid_map_csv);
+    }
+}
+
+static void
 test_dovecot_daemon_client_load_uid_map_rejects_mismatched_request_id (void)
 {
     g_autofree char *root = NULL;
@@ -1422,8 +1488,8 @@ test_dovecot_daemon_client_load_uid_map_rejects_mismatched_request_id (void)
     g_autoptr (GError) error = NULL;
     FakeServer server = { 0 };
     const char *uid_map_csv =
-        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n"
-        "account-1,mailbox-inbox,77,42,message-1,object-1\n";
+        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id,flags\n"
+        "account-1,mailbox-inbox,77,42,message-1,object-1,\n";
 
     fake_server_start (&server, socket_path, FAKE_SERVER_UID_MAP_CSV_RESPONSE,
         NULL, "mismatched-request-id", NULL,
@@ -1493,8 +1559,8 @@ test_dovecot_daemon_client_load_uid_map_rejects_mismatched_query_id (void)
     g_autoptr (GError) error = NULL;
     FakeServer server = { 0 };
     const char *uid_map_csv =
-        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n"
-        "account-1,mailbox-inbox,77,42,message-1,object-1\n";
+        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id,flags\n"
+        "account-1,mailbox-inbox,77,42,message-1,object-1,\n";
 
     fake_server_start (&server, socket_path, FAKE_SERVER_UID_MAP_CSV_RESPONSE,
         NULL, NULL, "mismatched-query-id",
@@ -1927,6 +1993,12 @@ main (int argc, char **argv)
     g_test_add_func
         ("/dovecot/daemon-client/load-uid-map-rejects-mismatched-request-id",
         test_dovecot_daemon_client_load_uid_map_rejects_mismatched_request_id);
+    g_test_add_func
+        ("/dovecot/daemon-client/load-uid-map-rejects-header-without-flags",
+        test_dovecot_daemon_client_load_uid_map_rejects_header_without_flags);
+    g_test_add_func
+        ("/dovecot/daemon-client/load-uid-map-rejects-malformed-flags",
+        test_dovecot_daemon_client_load_uid_map_rejects_malformed_flags);
     g_test_add_func
         ("/dovecot/daemon-client/load-uid-map-rejects-mismatched-query-id",
         test_dovecot_daemon_client_load_uid_map_rejects_mismatched_query_id);

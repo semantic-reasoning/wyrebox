@@ -30,6 +30,7 @@ wyrebox_dovecot_mailbox_uid_map_row_clear (WyreboxDovecotMailboxUidMapRow *row)
     row->uid = 0;
     g_clear_pointer (&row->message_id, g_free);
     g_clear_pointer (&row->object_id, g_free);
+    g_clear_pointer (&row->flags, g_strfreev);
 }
 
 void
@@ -374,6 +375,31 @@ parse_uid_map_uint64 (const char *value,
 }
 
 static gboolean
+parse_uid_map_flags (const char *value, GStrv *out_flags, GError **error)
+{
+    g_auto (GStrv) flags = NULL;
+
+    if (value[0] == '\0') {
+        *out_flags = g_new0 (char *, 1);
+        return TRUE;
+    }
+
+    flags = g_strsplit (value, " ", -1);
+    for (gsize i = 0; flags[i] != NULL; i++) {
+        if (flags[i][0] == '\0') {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "UID map row flags must be single-space separated");
+            return FALSE;
+        }
+    }
+
+    *out_flags = g_steal_pointer (&flags);
+    return TRUE;
+}
+
+static gboolean
 append_uid_map_row_from_csv_fields (GPtrArray *row_fields,
     const char *account_id,
     const char *mailbox_id,
@@ -390,7 +416,8 @@ append_uid_map_row_from_csv_fields (GPtrArray *row_fields,
     WyreboxDovecotMailboxUidMapRow *row = NULL;
     guint64 parsed_uid_validity = 0;
     guint64 parsed_uid = 0;
-    gsize expected_field_count = is_derived_view ? 7 : 6;
+    g_auto (GStrv) flags = NULL;
+    gsize expected_field_count = 7;
 
     if (row_fields->len != expected_field_count) {
         g_set_error (error,
@@ -410,6 +437,9 @@ append_uid_map_row_from_csv_fields (GPtrArray *row_fields,
     row_object_id = g_ptr_array_index (row_fields, 5);
     if (is_derived_view)
         row_rule_version_hash = g_ptr_array_index (row_fields, 6);
+    else if (!parse_uid_map_flags (g_ptr_array_index (row_fields, 6), &flags,
+        error))
+        return FALSE;
 
     if (g_strcmp0 (row_account_id, account_id) != 0) {
         g_set_error (error,
@@ -482,6 +512,7 @@ append_uid_map_row_from_csv_fields (GPtrArray *row_fields,
     row->uid = parsed_uid;
     row->message_id = g_strdup (row_message_id);
     row->object_id = g_strdup (row_object_id);
+    row->flags = flags != NULL ? g_steal_pointer (&flags) : g_new0 (char *, 1);
     g_ptr_array_add (rows, row);
 
     return TRUE;
@@ -515,14 +546,15 @@ append_uid_map_record (GPtrArray *row_fields,
                     "UID map CSV header is invalid");
                 return FALSE;
             }
-        } else if (row_fields->len != 6
+        } else if (row_fields->len != 7
             || g_strcmp0 (g_ptr_array_index (row_fields, 0), "account_id") != 0
             || g_strcmp0 (g_ptr_array_index (row_fields, 1), "mailbox_id") != 0
             || g_strcmp0 (g_ptr_array_index (row_fields, 2), "uidvalidity") != 0
             || g_strcmp0 (g_ptr_array_index (row_fields, 3), "uid") != 0
             || g_strcmp0 (g_ptr_array_index (row_fields, 4), "message_id") != 0
             || g_strcmp0 (g_ptr_array_index (row_fields, 5),
-            "object_id") != 0) {
+            "object_id") != 0
+            || g_strcmp0 (g_ptr_array_index (row_fields, 6), "flags") != 0) {
             g_set_error (error,
                 G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
                 "UID map CSV header is invalid");

@@ -167,6 +167,7 @@ test_catalog_exposes_uid_map_result_schema (void)
         {"uid", "UBIGINT", FALSE, NULL},
         {"message_id", "VARCHAR", FALSE, NULL},
         {"object_id", "VARCHAR", FALSE, NULL},
+        {"flags", "VARCHAR", FALSE, NULL},
     };
     static const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor
         derived_view_expected[] = {
