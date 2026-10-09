@@ -677,6 +677,64 @@ assert_search_finds (const DaemonRoot *daemon_root, const char *subject,
 }
 
 static void
+update_inbox_flags (const DaemonRoot *daemon_root, guint64 uid_validity,
+    guint64 uid, WyreboxDaemonFlagKeywordUpdateMode mode,
+    const char *const *system_flags, const char *const *user_keywords,
+    WyreboxDaemonResponseFrame *out_frame)
+{
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) encoded = NULL;
+    g_autoptr (GBytes) response = NULL;
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonFlagKeywordUpdateRequest) request = { 0 };
+
+    g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+        "request-flags-1", "dovecot", "account-1", "dovecot-storage",
+        "corr-flags-1", &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_flag_keyword_update_request_init (&request,
+        "account-1", "inbox:account-1", uid_validity, uid, mode,
+        system_flags, user_keywords, &error));
+    g_assert_no_error (error);
+
+    encoded = wyrebox_daemon_capnp_codec_encode_flag_keyword_update_request
+            (&identity, &request, NULL, &error);
+    g_assert_no_error (error);
+    response = roundtrip_request (daemon_root->socket_path, encoded);
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (response,
+        out_frame, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (out_frame->request_id, ==, "request-flags-1");
+}
+
+/*
+ * Asserts the flags column of account-1's INBOX UID map, one
+ * space-separated entry per UID in @expected_flags.
+ */
+static void
+assert_inbox_flags (const DaemonRoot *daemon_root,
+    const char *const *expected_flags)
+{
+    g_auto (WyreboxDovecotMailboxUidMapSnapshot) snapshot = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_load_uid_map
+            (daemon_root->socket_path, "account-1", "inbox:account-1",
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 1, &snapshot, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (snapshot.rows->len, ==, g_strv_length ((char **)
+        expected_flags));
+    for (guint i = 0; i < snapshot.rows->len; i++) {
+        const WyreboxDovecotMailboxUidMapRow *row =
+            g_ptr_array_index (snapshot.rows, i);
+        g_autofree char *joined = g_strjoinv (" ", row->flags);
+
+        g_assert_cmpuint (row->uid, ==, i + 1);
+        g_assert_cmpstr (joined, ==, expected_flags[i]);
+    }
+}
+
+static void
 assert_fetch_fails (const DaemonRoot *daemon_root,
     const char *envelope_account, const char *request_account,
     guint64 uid_validity, guint64 uid, WyreboxDaemonErrorClass error_class)
@@ -1260,6 +1318,78 @@ test_wyreboxd_searches_messages (void)
 }
 
 static void
+test_wyreboxd_updates_flags (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) subprocess = NULL;
+    const char *const set_flags[] = { "\\Seen", "\\Flagged", NULL };
+    const char *const set_keywords[] = { "work", NULL };
+    const char *const clear_flags[] = { "\\Flagged", NULL };
+    const char *const updated[] = { "", "\\Seen work", NULL };
+    const char *const untouched[] = { "", "", NULL };
+    g_autofree char *catalog_wal_path = NULL;
+
+    daemon_root_init (&daemon_root);
+    catalog_wal_path = g_strconcat (daemon_root.catalog_path, ".wal", NULL);
+    journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
+    subprocess = start_daemon (&daemon_root);
+    deliver (&daemon_root, "delivery-2");
+    assert_inbox_flags (&daemon_root, untouched);
+
+    {
+        g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+        update_inbox_flags (&daemon_root, 1, 2,
+            WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET, set_flags,
+            set_keywords, &frame);
+        g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+    }
+    {
+        g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+        update_inbox_flags (&daemon_root, 1, 2,
+            WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_CLEAR, clear_flags, NULL,
+            &frame);
+        g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+    }
+    assert_inbox_flags (&daemon_root, updated);
+
+    {
+        g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+        update_inbox_flags (&daemon_root, 1, 99,
+            WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET, set_flags, NULL,
+            &frame);
+        g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+        g_assert_cmpint (frame.error.error_class, ==,
+            WYREBOX_DAEMON_ERROR_NOT_FOUND);
+    }
+    {
+        g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+        update_inbox_flags (&daemon_root, 2, 1,
+            WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET, set_flags, NULL,
+            &frame);
+        g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+        g_assert_cmpint (frame.error.error_class, ==,
+            WYREBOX_DAEMON_ERROR_CONFLICT);
+    }
+    stop_daemon (subprocess);
+    g_clear_object (&subprocess);
+
+    subprocess = start_daemon (&daemon_root);
+    assert_inbox_flags (&daemon_root, updated);
+    stop_daemon (subprocess);
+    g_clear_object (&subprocess);
+
+    g_assert_cmpint (g_remove (daemon_root.catalog_path), ==, 0);
+    (void)g_remove (catalog_wal_path);
+    subprocess = start_daemon (&daemon_root);
+    assert_inbox_flags (&daemon_root, updated);
+    stop_daemon (subprocess);
+}
+
+static void
 test_wyreboxd_rebuilds_identical_catalog_after_restart (void)
 {
     g_auto (DaemonRoot) daemon_root = { 0 };
@@ -1451,6 +1581,8 @@ main (int argc, char **argv)
         test_wyreboxd_fetches_message_bytes);
     g_test_add_func ("/daemon-api/wyreboxd/searches-messages",
         test_wyreboxd_searches_messages);
+    g_test_add_func ("/daemon-api/wyreboxd/updates-flags",
+        test_wyreboxd_updates_flags);
     g_test_add_func
         ("/daemon-api/wyreboxd/rebuilds-identical-catalog-after-restart",
         test_wyreboxd_rebuilds_identical_catalog_after_restart);

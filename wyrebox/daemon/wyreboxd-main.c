@@ -7,7 +7,9 @@
 #include "wyrebox-daemon-connection-server.h"
 #include "wyrebox-daemon-delivery-ingestion-service.h"
 #include "wyrebox-daemon-delivery-materialization.h"
+#include "wyrebox-daemon-duckdb-query-template-service.h"
 #include "wyrebox-daemon-exit-code.h"
+#include "wyrebox-daemon-flag-keyword-update-journal.h"
 #include "wyrebox-daemon-mailbox-catalog-duckdb.h"
 #include "wyrebox-daemon-message-fetch-service.h"
 #include "wyrebox-daemon-message-search-duckdb.h"
@@ -198,6 +200,11 @@ run_daemon (int argc, char **argv)
     g_autoptr (WyreboxDaemonDeliveryMaterialization) materialization = NULL;
     g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
     g_autoptr (WyreboxDaemonDeliveryIngestionService) delivery_service = NULL;
+    g_autoptr (WyreboxDaemonDuckDBQueryTemplateService) query_template_service =
+        NULL;
+    g_autoptr (
+        WyreboxDaemonFlagKeywordUpdateService) flag_keyword_update_service
+        = NULL;
     g_autoptr (WyreboxDaemonRequestAdapter) request_adapter = NULL;
     g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
     g_autoptr (GMainLoop) loop = NULL;
@@ -330,6 +337,22 @@ run_daemon (int argc, char **argv)
         return wyrebox_daemon_exit_code_for_startup_error (error);
     }
 
+    query_template_service =
+        wyrebox_daemon_duckdb_query_template_service_new_duckdb (catalog_path,
+            &error);
+    if (query_template_service == NULL) {
+        g_printerr ("wyreboxd: %s\n", error->message);
+        return EX_OSERR;
+    }
+
+    flag_keyword_update_service =
+        wyrebox_daemon_flag_keyword_update_service_new_journaled (catalog_path,
+            journal_writer, materialization, &error);
+    if (flag_keyword_update_service == NULL) {
+        g_printerr ("wyreboxd: %s\n", error->message);
+        return EX_OSERR;
+    }
+
     ingestor = wyrebox_eml_ingestor_new_with_journal (object_store,
             journal_writer);
     delivery_service =
@@ -340,9 +363,11 @@ run_daemon (int argc, char **argv)
     request_adapter = wyrebox_daemon_request_adapter_new (delivery_service,
             NULL,
             mailbox_list_service, mailbox_select_service,
-            message_fetch_service, message_search_service, NULL, NULL,
-            decode_request_frame, NULL, NULL, encode_response_frame, NULL,
-            NULL);
+            message_fetch_service, message_search_service, NULL,
+            flag_keyword_update_service, decode_request_frame, NULL, NULL,
+            encode_response_frame, NULL, NULL);
+    wyrebox_daemon_request_adapter_set_duckdb_query_template_service
+        (request_adapter, query_template_service);
     server = wyrebox_daemon_connection_server_new (socket_path,
             request_adapter);
 
