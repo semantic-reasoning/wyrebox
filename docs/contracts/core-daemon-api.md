@@ -643,6 +643,11 @@ records, and it does not mutate DuckDB, Wirelog, object-store metadata, raw
 objects, or journal state. It may read daemon-owned DuckDB materialized state
 needed to authorize and evaluate the structured template query.
 
+`wyreboxd` itself records each query outcome, including denials and unknown
+templates, as a daemon audit record in the journal. Audit records are not
+mutation records: replay does not derive mailbox, DuckDB, or Wirelog state from
+them.
+
 This operation does not expose arbitrary SQL, raw DuckDB query strings, write
 SQL, DDL/DML, direct DuckDB query execution, DuckDB mutation, Wirelog
 mutation/query, object-store metadata mutation, direct journal append/write, or
@@ -651,6 +656,30 @@ inputs only.
 
 Concrete DuckDB query-template `.capnp` schemas and field layouts are
 deferred. The template catalog implementation is deferred.
+
+## Mail Event Stream Operation Contract
+
+The mail event stream is a read-only daemon operation that projects one
+account's journal records into mail events. Callers must be an admin CLI,
+trusted tool, or Dovecot plugin acting for the requested account; other callers
+receive `permission denied`.
+
+The stream carries `MessageDelivered`, `FlagChanged`, and
+`DerivedViewMembershipChanged` events for the requested account. Audit and fact
+records are not streamed. Events never include raw message bytes, recipients,
+header metadata, or object keys.
+
+Each event is UTF-8 text. The first line is `wyrebox-mail-event/1`, followed by
+`key=value` lines: `offset`, `sequence`, `event_type`, `account`, then
+type-specific fields. Values escape `%`, control characters, and DEL as `%XX`.
+
+The cursor is the journal offset and sequence of the last event a caller has
+seen. A zero cursor starts at the beginning of the journal; otherwise each
+response carries the first matching event after the cursor. A data chunk has
+`end_of_stream` false and its `chunk_index` set to the event's journal offset.
+When no further event exists, the response is one empty chunk with
+`end_of_stream` true. Reads stop at the journal's durable end, and each request
+scans the journal from its start.
 
 ## State Authority Boundary
 
