@@ -16,6 +16,8 @@ typedef struct
   guint64 uid;
   char *message_id;
   char *object_id;
+  /* System flags followed by user keywords; never NULL, empty for views. */
+  GStrv flags;
 } WyreboxDovecotMailboxUidMapRow;
 
 void wyrebox_dovecot_mailbox_uid_map_row_clear (

@@ -38,6 +38,8 @@ static const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor
     {"uid", "UBIGINT", FALSE, "Mailbox UID"},
     {"message_id", "VARCHAR", FALSE, "Raw message identifier"},
     {"object_id", "VARCHAR", FALSE, "Raw message object identifier"},
+    {"flags", "VARCHAR", FALSE,
+     "Space-separated system flags, then user keywords, each sorted"},
 };
 
 static const WyreboxDaemonDuckDBQueryTemplateResultColumnDescriptor

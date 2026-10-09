@@ -475,8 +475,9 @@ duckdb_query_template_append_uid_map_row (GString *csv,
     g_auto (DuckDBOwnedString) mailbox_id = NULL;
     g_auto (DuckDBOwnedString) message_id = NULL;
     g_auto (DuckDBOwnedString) object_id = NULL;
+    g_auto (DuckDBOwnedString) flags = NULL;
 
-    for (idx_t column = 0; column < 6; column++) {
+    for (idx_t column = 0; column < 7; column++) {
         if (duckdb_value_is_null (result, column, row)) {
             g_set_error (error,
                 G_IO_ERROR,
@@ -490,6 +491,7 @@ duckdb_query_template_append_uid_map_row (GString *csv,
     mailbox_id = duckdb_value_varchar (result, 1, row);
     message_id = duckdb_value_varchar (result, 4, row);
     object_id = duckdb_value_varchar (result, 5, row);
+    flags = duckdb_value_varchar (result, 6, row);
 
     csv_append_value (csv, account_id);
     g_string_append_c (csv, ',');
@@ -502,6 +504,8 @@ duckdb_query_template_append_uid_map_row (GString *csv,
     csv_append_value (csv, message_id);
     g_string_append_c (csv, ',');
     csv_append_value (csv, object_id);
+    g_string_append_c (csv, ',');
+    csv_append_value (csv, flags);
     g_string_append_c (csv, '\n');
 
     return TRUE;
@@ -827,7 +831,14 @@ duckdb_query_template_execute_uid_map (DuckDBQueryTemplateExecutor *executor,
 {
     static const gchar *sql =
         "SELECT mm.account_id, mm.mailbox_id, mus.uidvalidity, "
-        "mm.uid, mm.message_id, m.object_id "
+        "mm.uid, mm.message_id, m.object_id, "
+        "COALESCE((SELECT string_agg(attr.name, ' ' "
+        "ORDER BY attr.rank, attr.name) FROM ("
+        "SELECT mf.flag_name AS name, 0 AS rank FROM message_flags mf "
+        "WHERE mf.membership_id = mm.membership_id "
+        "UNION ALL "
+        "SELECT mk.keyword_name AS name, 1 AS rank FROM message_keywords mk "
+        "WHERE mk.membership_id = mm.membership_id) attr), '') AS flags "
         "FROM mailbox_memberships mm "
         "JOIN mailbox_uid_state mus ON mus.account_id = mm.account_id "
         "AND mus.namespace_kind = 'mailbox' "

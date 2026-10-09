@@ -69,6 +69,11 @@ bootstrap_catalog (const gchar *path)
             WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
             0, 1, &error));
     g_assert_no_error (error);
+    g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (
+            store,
+            WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_ATTRIBUTE_TABLES,
+            1, 2, &error));
+    g_assert_no_error (error);
 
     g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (
             store,
@@ -159,6 +164,19 @@ seed_catalog (const gchar *path)
         "'message-other-mailbox', 4, TRUE, 'rule-hash-archive', 13),"
         "('derived-membership-other-account', 'account-2', 'view-important', "
         "'message-other-account', 5, TRUE, 'rule-hash-other-account', 14);");
+    exec_sql (connection,
+        "INSERT INTO message_flags (membership_id, account_id, mailbox_id, "
+        "flag_name, journal_offset, journal_sequence) VALUES "
+        "('membership-a', 'account-1', 'mailbox-inbox', '\\Seen', 7, 7),"
+        "('membership-a', 'account-1', 'mailbox-inbox', '\\Flagged', 8, 8),"
+        "('membership-a-archive', 'account-1', 'mailbox-archive', "
+        "'\\Deleted', 9, 9);");
+    exec_sql (connection,
+        "INSERT INTO message_keywords (membership_id, account_id, mailbox_id, "
+        "keyword_name, journal_offset, journal_sequence) VALUES "
+        "('membership-a', 'account-1', 'mailbox-inbox', 'work', 7, 7),"
+        "('membership-a', 'account-1', 'mailbox-inbox', '$Label1', 8, 8),"
+        "('membership-b', 'account-1', 'mailbox-inbox', 'later', 9, 9);");
 }
 
 static void
@@ -1482,9 +1500,10 @@ test_duckdb_service_returns_uid_map_csv (void)
 
     csv = dispatch_uid_map_csv (path, "account-1", "mailbox-inbox");
     g_assert_cmpstr (csv, ==,
-        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n"
-        "account-1,mailbox-inbox,77,1,message-a,object-a\n"
-        "account-1,mailbox-inbox,77,2,message-b,object-b\n");
+        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id,flags\n"
+        "account-1,mailbox-inbox,77,1,message-a,object-a,"
+        "\\Flagged \\Seen $Label1 work\n"
+        "account-1,mailbox-inbox,77,2,message-b,object-b,later\n");
     (void)g_remove (path);
 }
 
@@ -1499,7 +1518,7 @@ test_duckdb_service_empty_result_is_header_only (void)
 
     csv = dispatch_uid_map_csv (path, "account-1", "mailbox-missing");
     g_assert_cmpstr (csv, ==,
-        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n");
+        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id,flags\n");
     (void)g_remove (path);
 }
 
@@ -1514,9 +1533,9 @@ test_duckdb_service_isolates_cross_account_rows (void)
 
     csv = dispatch_uid_map_csv (path, "account-2", "mailbox-inbox");
     g_assert_cmpstr (csv, ==,
-        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n"
+        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id,flags\n"
         "account-2,mailbox-inbox,99,5,message-other-account,"
-        "object-other-account\n");
+        "object-other-account,\n");
     (void)g_remove (path);
 }
 
@@ -1533,9 +1552,9 @@ test_duckdb_service_treats_sql_looking_mailbox_as_value (void)
     csv = dispatch_uid_map_csv (path, "account-1",
             "mailbox'; DROP TABLE messages; --");
     g_assert_cmpstr (csv, ==,
-        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id\n"
+        "account_id,mailbox_id,uidvalidity,uid,message_id,object_id,flags\n"
         "account-1,mailbox'; DROP TABLE messages; --,123,6,"
-        "message-sql-looking,object-sql-looking\n");
+        "message-sql-looking,object-sql-looking,\n");
     (void)g_remove (path);
 }
 
