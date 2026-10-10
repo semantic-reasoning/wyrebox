@@ -449,6 +449,35 @@ GPtrArray *wyrebox_wirelog_derived_membership_snapshot_from_rules_and_facts
     (const char *rules_source, GPtrArray *facts, const char *relation_name,
     GError **error)
 {
+    return
+        wyrebox_wirelog_derived_membership_snapshot_from_rules_facts_and_symbols
+            (rules_source, facts, NULL, relation_name, error);
+}
+
+static gboolean
+preintern_known_symbols (wirelog_easy_session_t *session,
+    GHashTable *known_symbols_by_id, const char *const *known_symbols,
+    GError **error)
+{
+    for (guint i = 0; known_symbols != NULL && known_symbols[i] != NULL; i++) {
+        if (known_symbols[i][0] == '\0')
+            continue;
+
+        if (!remember_known_symbol (known_symbols_by_id,
+            wirelog_easy_intern (session, known_symbols[i]), known_symbols[i],
+            error))
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+GPtrArray *
+wyrebox_wirelog_derived_membership_snapshot_from_rules_facts_and_symbols
+    (const char *rules_source, GPtrArray *facts,
+    const char *const *known_symbols, const char *relation_name,
+    GError **error)
+{
     g_autofree char *source = NULL;
     g_autoptr (GPtrArray) memberships = NULL;
     g_autoptr (GHashTable) known_symbols_by_id = NULL;
@@ -484,7 +513,9 @@ GPtrArray *wyrebox_wirelog_derived_membership_snapshot_from_rules_and_facts
     known_symbols_by_id = g_hash_table_new_full (int64_hash, int64_equal,
             g_free, g_free);
 
-    if (!preintern_fact_symbols (session, known_symbols_by_id, facts, error))
+    if (!preintern_fact_symbols (session, known_symbols_by_id, facts, error) ||
+        !preintern_known_symbols (session, known_symbols_by_id, known_symbols,
+        error))
         goto fail;
 
     context.memberships = memberships;

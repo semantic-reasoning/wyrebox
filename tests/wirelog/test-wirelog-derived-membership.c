@@ -266,6 +266,33 @@ test_snapshot_rejects_unknown_symbol_id (void)
 }
 
 static void
+test_snapshot_resolves_extra_known_symbols (void)
+{
+    static const char *const known_symbols[] = { "view-from-rule", NULL };
+    g_autoptr (GPtrArray) facts = new_fact_array ();
+    g_autoptr (GPtrArray) memberships = NULL;
+    g_autoptr (GError) error = NULL;
+
+    add_fact (facts, "source_message", "message-1", "flag");
+    add_fact (facts, "source_message", "message-2", "other");
+
+    memberships =
+        wyrebox_wirelog_derived_membership_snapshot_from_rules_facts_and_symbols
+            (".decl source_message(message_id: symbol, marker: symbol)\n"
+            ".decl show_in_virtual_folder(view_id: symbol, message_id: symbol)\n"
+            "show_in_virtual_folder(\"view-from-rule\", message_id) :- "
+            "source_message(message_id, \"flag\").\n",
+            facts, known_symbols, "show_in_virtual_folder", &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (memberships);
+    g_assert_cmpuint (memberships->len, ==, 1);
+    g_assert_cmpstr (membership_at (memberships, 0)->view_id, ==,
+        "view-from-rule");
+    g_assert_cmpstr (membership_at (memberships, 0)->message_id, ==,
+        "message-1");
+}
+
+static void
 test_snapshot_rejects_wrong_arity (void)
 {
     g_autoptr (GPtrArray) facts = new_fact_array ();
@@ -314,6 +341,8 @@ main (int argc, char **argv)
         test_snapshot_known_symbol_memberships);
     g_test_add_func ("/wirelog/derived-membership/snapshot-unknown-symbol",
         test_snapshot_rejects_unknown_symbol_id);
+    g_test_add_func ("/wirelog/derived-membership/snapshot-extra-symbols",
+        test_snapshot_resolves_extra_known_symbols);
     g_test_add_func ("/wirelog/derived-membership/snapshot-wrong-arity",
         test_snapshot_rejects_wrong_arity);
 
