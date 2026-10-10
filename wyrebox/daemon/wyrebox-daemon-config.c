@@ -1,5 +1,6 @@
 #include "wyrebox-daemon-config.h"
 #include "wyrebox-daemon-runtime.h"
+#include "wyrebox-derived-view-imap-name.h"
 
 #include <gio/gio.h>
 #include <glib/gstdio.h>
@@ -7,6 +8,12 @@
 #include <errno.h>
 #include <string.h>
 #include <sys/stat.h>
+
+typedef struct
+{
+    char *view_id;
+    char *imap_name;
+} ConfigView;
 
 struct _WyreboxDaemonConfig
 {
@@ -17,6 +24,8 @@ struct _WyreboxDaemonConfig
     char *journal_root_dir;
     char *object_root_dir;
     char *catalog_path;
+    char *wirelog_rules_path;
+    GPtrArray *views;
 };
 
 G_DEFINE_TYPE (WyreboxDaemonConfig, wyrebox_daemon_config, G_TYPE_OBJECT);
@@ -69,21 +78,161 @@ config_line_is_comment_or_blank (const char *line)
            *cursor == ';';
 }
 
+typedef enum
+{
+    CONFIG_SECTION_NONE,
+    CONFIG_SECTION_DAEMON,
+    CONFIG_SECTION_WIRELOG,
+    CONFIG_SECTION_VIEW,
+} ConfigSection;
+
+static void
+config_view_free (gpointer data)
+{
+    ConfigView *view = data;
+
+    g_free (view->view_id);
+    g_free (view->imap_name);
+    g_free (view);
+}
+
 static gboolean
-parse_daemon_config_file (const char *config_path, const char *contents,
-    char **out_socket_path, char **out_journal_root_dir,
-    char **out_object_root_dir, char **out_catalog_path, GError **error)
+view_id_is_valid (const char *view_id)
+{
+    if (*view_id == '\0')
+        return FALSE;
+
+    for (const char *cursor = view_id; *cursor != '\0'; cursor++) {
+        if (!g_ascii_isalnum (*cursor) && *cursor != '-' && *cursor != '_' &&
+            *cursor != '.')
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+static gboolean
+assign_once (const char *config_path, const char *section, const char *key,
+    const char *value, char **slot, GError **error)
+{
+    if (*slot != NULL) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config '%s' defines %s %s more than once",
+            config_path, section, key);
+        return FALSE;
+    }
+
+    *slot = g_strdup (value);
+    return TRUE;
+}
+
+static gboolean
+begin_section (WyreboxDaemonConfig *self, const char *config_path,
+    const char *name, ConfigSection *section, ConfigView **view,
+    GError **error)
+{
+    *view = NULL;
+
+    if (g_strcmp0 (name, "daemon") == 0) {
+        *section = CONFIG_SECTION_DAEMON;
+        return TRUE;
+    }
+
+    if (g_strcmp0 (name, "wirelog") == 0) {
+        *section = CONFIG_SECTION_WIRELOG;
+        return TRUE;
+    }
+
+    if (g_str_has_prefix (name, "view:")) {
+        const char *view_id = name + strlen ("view:");
+
+        if (!view_id_is_valid (view_id)) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "daemon config '%s' has invalid view id '%s'; use letters, "
+                "digits, '-', '_', or '.'", config_path, view_id);
+            return FALSE;
+        }
+
+        for (guint i = 0; i < self->views->len; i++) {
+            const ConfigView *existing = g_ptr_array_index (self->views, i);
+
+            if (g_strcmp0 (existing->view_id, view_id) == 0) {
+                g_set_error (error,
+                    G_IO_ERROR,
+                    G_IO_ERROR_INVALID_DATA,
+                    "daemon config '%s' defines view '%s' more than once",
+                    config_path, view_id);
+                return FALSE;
+            }
+        }
+
+        *view = g_new0 (ConfigView, 1);
+        (*view)->view_id = g_strdup (view_id);
+        g_ptr_array_add (self->views, *view);
+        *section = CONFIG_SECTION_VIEW;
+        return TRUE;
+    }
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon config '%s' has unsupported section '%s'", config_path, name);
+    return FALSE;
+}
+
+static gboolean
+assign_key (WyreboxDaemonConfig *self, const char *config_path,
+    ConfigSection section, ConfigView *view, const char *key,
+    const char *value, GError **error)
+{
+    switch (section) {
+    case CONFIG_SECTION_DAEMON:
+        if (g_strcmp0 (key, "socket_path") == 0)
+            return assign_once (config_path, "[daemon]", key, value,
+                       &self->socket_path, error);
+        if (g_strcmp0 (key, "journal_root_dir") == 0)
+            return assign_once (config_path, "[daemon]", key, value,
+                       &self->journal_root_dir, error);
+        if (g_strcmp0 (key, "object_root_dir") == 0)
+            return assign_once (config_path, "[daemon]", key, value,
+                       &self->object_root_dir, error);
+        if (g_strcmp0 (key, "catalog_path") == 0)
+            return assign_once (config_path, "[daemon]", key, value,
+                       &self->catalog_path, error);
+        break;
+    case CONFIG_SECTION_WIRELOG:
+        if (g_strcmp0 (key, "rules_path") == 0)
+            return assign_once (config_path, "[wirelog]", key, value,
+                       &self->wirelog_rules_path, error);
+        break;
+    case CONFIG_SECTION_VIEW:
+        if (g_strcmp0 (key, "imap_name") == 0)
+            return assign_once (config_path, "view", key, value,
+                       &view->imap_name, error);
+        break;
+    case CONFIG_SECTION_NONE:
+    default:
+        g_assert_not_reached ();
+    }
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_INVALID_DATA,
+        "daemon config '%s' has unknown key '%s'", config_path, key);
+    return FALSE;
+}
+
+static gboolean
+parse_daemon_config_file (WyreboxDaemonConfig *self, const char *config_path,
+    const char *contents, GError **error)
 {
     g_auto (GStrv) lines = NULL;
-    gboolean in_daemon_section = FALSE;
-    gboolean seen_socket_path = FALSE;
-    gboolean seen_journal_root_dir = FALSE;
-    gboolean seen_object_root_dir = FALSE;
-    gboolean seen_catalog_path = FALSE;
-    char *socket_path = NULL;
-    char *journal_root_dir = NULL;
-    char *object_root_dir = NULL;
-    char *catalog_path = NULL;
+    ConfigSection section = CONFIG_SECTION_NONE;
+    ConfigView *view = NULL;
 
     lines = g_strsplit (contents, "\n", -1);
 
@@ -106,30 +255,24 @@ parse_daemon_config_file (const char *config_path, const char *contents,
                     G_IO_ERROR_INVALID_DATA,
                     "daemon config '%s' has malformed section header: %s",
                     config_path, line);
-                goto out;
+                return FALSE;
             }
 
             *section_end = '\0';
-            in_daemon_section = g_strcmp0 (line + 1, "daemon") == 0;
-            if (!in_daemon_section) {
-                g_set_error (error,
-                    G_IO_ERROR,
-                    G_IO_ERROR_INVALID_DATA,
-                    "daemon config '%s' has unsupported section '%s'",
-                    config_path, line + 1);
-                goto out;
-            }
+            if (!begin_section (self, config_path, line + 1, &section, &view,
+                error))
+                return FALSE;
 
             continue;
         }
 
-        if (!in_daemon_section) {
+        if (section == CONFIG_SECTION_NONE) {
             g_set_error (error,
                 G_IO_ERROR,
                 G_IO_ERROR_INVALID_DATA,
                 "daemon config '%s' must define a [daemon] section before %s",
                 config_path, line);
-            goto out;
+            return FALSE;
         }
 
         separator = strchr (line, '=');
@@ -139,7 +282,7 @@ parse_daemon_config_file (const char *config_path, const char *contents,
                 G_IO_ERROR_INVALID_DATA,
                 "daemon config '%s' has malformed assignment: %s", config_path,
                 line);
-            goto out;
+            return FALSE;
         }
 
         *separator = '\0';
@@ -152,96 +295,91 @@ parse_daemon_config_file (const char *config_path, const char *contents,
                 G_IO_ERROR_INVALID_DATA,
                 "daemon config '%s' has an empty key near %s",
                 config_path, separator + 1);
-            goto out;
+            return FALSE;
         }
 
-        if (g_strcmp0 (key, "socket_path") == 0) {
-            if (seen_socket_path) {
-                g_set_error (error,
-                    G_IO_ERROR,
-                    G_IO_ERROR_INVALID_DATA,
-                    "daemon config '%s' defines socket_path more than once",
-                    config_path);
-                goto out;
-            }
-
-            socket_path = g_strdup (value);
-            seen_socket_path = TRUE;
-            continue;
-        }
-
-        if (g_strcmp0 (key, "journal_root_dir") == 0) {
-            if (seen_journal_root_dir) {
-                g_set_error (error,
-                    G_IO_ERROR,
-                    G_IO_ERROR_INVALID_DATA,
-                    "daemon config '%s' defines journal_root_dir more than once",
-                    config_path);
-                goto out;
-            }
-
-            journal_root_dir = g_strdup (value);
-            seen_journal_root_dir = TRUE;
-            continue;
-        }
-
-        if (g_strcmp0 (key, "object_root_dir") == 0) {
-            if (seen_object_root_dir) {
-                g_set_error (error,
-                    G_IO_ERROR,
-                    G_IO_ERROR_INVALID_DATA,
-                    "daemon config '%s' defines object_root_dir more than once",
-                    config_path);
-                goto out;
-            }
-
-            object_root_dir = g_strdup (value);
-            seen_object_root_dir = TRUE;
-            continue;
-        }
-
-        if (g_strcmp0 (key, "catalog_path") == 0) {
-            if (seen_catalog_path) {
-                g_set_error (error,
-                    G_IO_ERROR,
-                    G_IO_ERROR_INVALID_DATA,
-                    "daemon config '%s' defines catalog_path more than once",
-                    config_path);
-                goto out;
-            }
-
-            catalog_path = g_strdup (value);
-            seen_catalog_path = TRUE;
-            continue;
-        }
-
-        g_set_error (error,
-            G_IO_ERROR,
-            G_IO_ERROR_INVALID_DATA,
-            "daemon config '%s' has unknown key '%s'", config_path, key);
-        goto out;
+        if (!assign_key (self, config_path, section, view, key, value, error))
+            return FALSE;
     }
 
-    if (!seen_socket_path) {
+    if (self->socket_path == NULL) {
         g_set_error (error,
             G_IO_ERROR,
             G_IO_ERROR_INVALID_DATA,
             "daemon config '%s' is missing socket_path", config_path);
-        goto out;
+        return FALSE;
     }
 
-    *out_socket_path = g_steal_pointer (&socket_path);
-    *out_journal_root_dir = g_steal_pointer (&journal_root_dir);
-    *out_object_root_dir = g_steal_pointer (&object_root_dir);
-    *out_catalog_path = g_steal_pointer (&catalog_path);
     return TRUE;
+}
 
-out:
-    g_clear_pointer (&socket_path, g_free);
-    g_clear_pointer (&journal_root_dir, g_free);
-    g_clear_pointer (&object_root_dir, g_free);
-    g_clear_pointer (&catalog_path, g_free);
-    return FALSE;
+static gboolean
+validate_wirelog_views (const WyreboxDaemonConfig *self, GError **error)
+{
+    if (self->wirelog_rules_path != NULL &&
+        !g_path_is_absolute (self->wirelog_rules_path)) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config [wirelog] rules_path must be absolute: %s",
+            self->wirelog_rules_path);
+        return FALSE;
+    }
+
+    if (self->views->len > 0 && self->wirelog_rules_path == NULL) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config view sections require [wirelog] rules_path");
+        return FALSE;
+    }
+
+    for (guint i = 0; i < self->views->len; i++) {
+        const ConfigView *view = g_ptr_array_index (self->views, i);
+        g_autoptr (GError) name_error = NULL;
+
+        if (view->imap_name == NULL) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "daemon config view '%s' is missing imap_name", view->view_id);
+            return FALSE;
+        }
+
+        if (!wyrebox_derived_view_imap_name_validate_stored (view->imap_name,
+            &name_error)) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "daemon config view '%s' has invalid imap_name: %s",
+                view->view_id, name_error->message);
+            return FALSE;
+        }
+
+        if (g_ascii_strcasecmp (view->imap_name, "INBOX") == 0) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "daemon config view '%s' has invalid imap_name: INBOX is "
+                "reserved", view->view_id);
+            return FALSE;
+        }
+
+        for (guint j = 0; j < i; j++) {
+            const ConfigView *other = g_ptr_array_index (self->views, j);
+
+            if (g_strcmp0 (other->imap_name, view->imap_name) == 0) {
+                g_set_error (error,
+                    G_IO_ERROR,
+                    G_IO_ERROR_INVALID_DATA,
+                    "daemon config views '%s' and '%s' share imap_name '%s'",
+                    other->view_id, view->view_id, view->imap_name);
+                return FALSE;
+            }
+        }
+    }
+
+    return TRUE;
 }
 
 static void
@@ -254,6 +392,8 @@ wyrebox_daemon_config_finalize (GObject *object)
     g_clear_pointer (&self->journal_root_dir, g_free);
     g_clear_pointer (&self->object_root_dir, g_free);
     g_clear_pointer (&self->catalog_path, g_free);
+    g_clear_pointer (&self->wirelog_rules_path, g_free);
+    g_clear_pointer (&self->views, g_ptr_array_unref);
 
     G_OBJECT_CLASS (wyrebox_daemon_config_parent_class)->finalize (object);
 }
@@ -269,6 +409,7 @@ wyrebox_daemon_config_class_init (WyreboxDaemonConfigClass *klass)
 static void
 wyrebox_daemon_config_init (WyreboxDaemonConfig *self)
 {
+    self->views = g_ptr_array_new_with_free_func (config_view_free);
 }
 
 gboolean
@@ -352,18 +493,14 @@ wyrebox_daemon_config_validate_for_startup (const WyreboxDaemonConfig *self,
         return FALSE;
     }
 
-    return TRUE;
+    return validate_wirelog_views (self, error);
 }
 
 WyreboxDaemonConfig *
 wyrebox_daemon_config_new_from_file (const char *config_path, GError **error)
 {
     g_autofree char *contents = NULL;
-    g_autofree char *socket_path = NULL;
-    g_autofree char *journal_root_dir = NULL;
-    g_autofree char *object_root_dir = NULL;
-    g_autofree char *catalog_path = NULL;
-    WyreboxDaemonConfig *self = NULL;
+    g_autoptr (WyreboxDaemonConfig) self = NULL;
 
     g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
@@ -388,17 +525,10 @@ wyrebox_daemon_config_new_from_file (const char *config_path, GError **error)
     if (!g_file_get_contents (config_path, &contents, NULL, error))
         return NULL;
 
-    if (!parse_daemon_config_file (config_path, contents,
-        &socket_path, &journal_root_dir, &object_root_dir, &catalog_path,
-        error))
-        return NULL;
-
     self = g_object_new (WYREBOX_TYPE_DAEMON_CONFIG, NULL);
     self->config_path = g_strdup (config_path);
-    self->socket_path = g_steal_pointer (&socket_path);
-    self->journal_root_dir = g_steal_pointer (&journal_root_dir);
-    self->object_root_dir = g_steal_pointer (&object_root_dir);
-    self->catalog_path = g_steal_pointer (&catalog_path);
+    if (!parse_daemon_config_file (self, config_path, contents, error))
+        return NULL;
 
     if (self->journal_root_dir == NULL)
         self->journal_root_dir =
@@ -409,13 +539,10 @@ wyrebox_daemon_config_new_from_file (const char *config_path, GError **error)
     if (self->catalog_path == NULL)
         self->catalog_path = g_strdup (WYREBOX_DAEMON_DEFAULT_CATALOG_PATH);
 
-    if (!wyrebox_daemon_config_validate_for_startup (self, error)) {
-        g_object_unref (self);
-        self = NULL;
+    if (!wyrebox_daemon_config_validate_for_startup (self, error))
         return NULL;
-    }
 
-    return self;
+    return g_steal_pointer (&self);
 }
 
 const char *
@@ -456,4 +583,45 @@ wyrebox_daemon_config_get_catalog_path (WyreboxDaemonConfig *self)
     g_return_val_if_fail (WYREBOX_IS_DAEMON_CONFIG (self), NULL);
 
     return self->catalog_path;
+}
+
+const char *
+wyrebox_daemon_config_get_wirelog_rules_path (WyreboxDaemonConfig *self)
+{
+    g_return_val_if_fail (WYREBOX_IS_DAEMON_CONFIG (self), NULL);
+
+    return self->wirelog_rules_path;
+}
+
+guint
+wyrebox_daemon_config_get_n_views (WyreboxDaemonConfig *self)
+{
+    g_return_val_if_fail (WYREBOX_IS_DAEMON_CONFIG (self), 0);
+
+    return self->views->len;
+}
+
+const char *
+wyrebox_daemon_config_get_view_id (WyreboxDaemonConfig *self, guint index)
+{
+    const ConfigView *view = NULL;
+
+    g_return_val_if_fail (WYREBOX_IS_DAEMON_CONFIG (self), NULL);
+    g_return_val_if_fail (index < self->views->len, NULL);
+
+    view = g_ptr_array_index (self->views, index);
+    return view->view_id;
+}
+
+const char *
+wyrebox_daemon_config_get_view_imap_name (WyreboxDaemonConfig *self,
+    guint index)
+{
+    const ConfigView *view = NULL;
+
+    g_return_val_if_fail (WYREBOX_IS_DAEMON_CONFIG (self), NULL);
+    g_return_val_if_fail (index < self->views->len, NULL);
+
+    view = g_ptr_array_index (self->views, index);
+    return view->imap_name;
 }
