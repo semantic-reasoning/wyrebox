@@ -2,24 +2,29 @@
 
 ## Status
 
-Accepted for issue #8 before any storage plugin implementation.
+Accepted for issue #8 before any storage plugin implementation. Amended by
+issue #354: the baseline is Dovecot `2.4.2` (ADR 0004).
 
 ## Scope
 
 This contract defines the minimal Dovecot source requirements WyreBox checks in CI
 before writing storage backend code. It validates that the provided source tree
-matches the expected Dovecot 2.3.21.1 storage ABI surface and does not attempt to
+matches the expected Dovecot 2.4.2 storage ABI surface and does not attempt to
 build or link against Dovecot.
 
 ## Pinned Source
 
-WyreBox pins source-contract validation to Dovecot `2.3.21.1` before plugin code.
+WyreBox pins source-contract validation to Dovecot `2.4.2`.
 The checker requires that:
 
-- `AC_INIT([Dovecot],[2.3.21.1],...)` is present.
+- `AC_INIT([Dovecot],[2.4.2],...)` is present.
 - `DOVECOT_ABI_VERSION` is declared.
-- `configure.ac` defines the ABI template `2.3.ABIv21($PACKAGE_VERSION)`.
+- `configure.ac` defines `DOVECOT_ABI_VERSION` as `2.4.ABIv2`.
 - `config.h.in` exposes the `DOVECOT_ABI_VERSION` configuration placeholder.
+
+Upstream Dovecot `2.4` generates its version and ABI strings in `configure.ac`
+through m4 helper scripts, so these literal checks describe the checked-in
+fixture bundle layout rather than an upstream checkout.
 
 ## Required Files
 

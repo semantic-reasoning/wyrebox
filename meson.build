@@ -345,14 +345,6 @@ if dovecot_backend_option.enabled()
     #error DOVECOT_ABI_VERSION must be defined by the configured build config.h
     #endif
 
-    #ifndef HAVE__BOOL
-    #error HAVE__BOOL must be defined by the configured build config.h
-    #endif
-
-    #ifndef HAVE_SOCKLEN_T
-    #error HAVE_SOCKLEN_T must be defined by the configured build config.h
-    #endif
-
     #ifndef OFF_T_MAX
     #error OFF_T_MAX must be defined by the configured build config.h
     #endif
@@ -723,18 +715,21 @@ if fs.is_file('/usr/lib/dovecot/libdovecot-storage.so')
     'docs issue 0289 postfix dovecot e2e recipe',
     python,
     args: files('tests/docs/test_issue_0289_postfix_dovecot_e2e_recipe.py'),
+    is_parallel: false,
   )
 
   test(
     'docs issue 0293 dovecot imap fetch recipe',
     python,
     args: files('tests/docs/test_issue_0293_dovecot_imap_fetch_recipe.py'),
+    is_parallel: false,
   )
 
   test(
     'docs issue 0292 postfix to dovecot e2e recipe',
     python,
     args: files('tests/docs/test_issue_0292_postfix_to_dovecot_e2e_recipe.py'),
+    is_parallel: false,
   )
 endif
 

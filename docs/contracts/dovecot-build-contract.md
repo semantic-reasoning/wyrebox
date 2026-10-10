@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted for issue #8 before any storage plugin implementation.
+Accepted for issue #8 before any storage plugin implementation. Amended by
+issue #354: the baseline is Dovecot `2.4.2` (ADR 0004).
 
 ## Scope
 
@@ -24,12 +25,10 @@ can be included with the source-tree headers.
 ## Required Build Config Header Items
 
 `dovecot_build_dir/config.h` must define
-`DOVECOT_ABI_VERSION` as exactly `2.3.ABIv21(2.3.21.1)`.
+`DOVECOT_ABI_VERSION` as exactly `2.4.ABIv2`.
 
 It must also define at least:
 
-- `HAVE__BOOL`
-- `HAVE_SOCKLEN_T`
 - `OFF_T_MAX`
 - `PRIuUOFF_T`
 - `SIZEOF_INT`
@@ -37,6 +36,9 @@ It must also define at least:
 - `SIZEOF_VOID_P`
 - `SSIZE_T_MAX`
 - `UOFF_T_MAX`
+
+Dovecot `2.4.2` no longer defines `HAVE__BOOL` or `HAVE_SOCKLEN_T`, so the
+contract does not require them.
 
 It must also define one `uoff_t` selector macro:
 
@@ -59,7 +61,7 @@ WyreBox checks this contract in two phases when the backend is enabled:
 2. A Meson `compiles()` probe includes `config.h`, `lib.h`, and
    the Dovecot module and storage hook headers from the configured source/build
    paths to confirm compilation compatibility. The probe uses `gnu11`, matching
-   the C dialect expected by the pinned Dovecot 2.3.x headers on modern
+   the C dialect expected by the pinned Dovecot 2.4.x headers on modern
    compilers, and includes the Dovecot `src/lib-index`, `src/lib`,
    `src/lib-mail`, and `src/lib-storage` header directories.
 

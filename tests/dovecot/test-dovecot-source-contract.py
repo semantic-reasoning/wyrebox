@@ -96,7 +96,7 @@ def run_checker_with_private_header_mutation(
 ) -> subprocess.CompletedProcess:
     with tempfile.TemporaryDirectory() as tempdir:
         source_dir = Path(tempdir) / "dovecot-source"
-        shutil.copytree(FIXTURES_DIR / "valid-2.3.21.1", source_dir)
+        shutil.copytree(FIXTURES_DIR / "valid-2.4.2", source_dir)
         private_header = source_dir / "src/lib-storage/mail-storage-private.h"
         text = private_header.read_text(encoding="utf-8")
         assert old in text, f"mutation target not found: {old!r}"
@@ -110,7 +110,7 @@ def run_checker_with_list_private_header_mutation(
 ) -> subprocess.CompletedProcess:
     with tempfile.TemporaryDirectory() as tempdir:
         source_dir = Path(tempdir) / "dovecot-source"
-        shutil.copytree(FIXTURES_DIR / "valid-2.3.21.1", source_dir)
+        shutil.copytree(FIXTURES_DIR / "valid-2.4.2", source_dir)
         private_header = source_dir / "src/lib-storage/mailbox-list-private.h"
         text = private_header.read_text(encoding="utf-8")
         assert old in text, f"mutation target not found: {old!r}"
@@ -124,7 +124,7 @@ def run_checker_with_storage_header_mutation(
 ) -> subprocess.CompletedProcess:
     with tempfile.TemporaryDirectory() as tempdir:
         source_dir = Path(tempdir) / "dovecot-source"
-        shutil.copytree(FIXTURES_DIR / "valid-2.3.21.1", source_dir)
+        shutil.copytree(FIXTURES_DIR / "valid-2.4.2", source_dir)
         storage_header = source_dir / "src/lib-storage/mail-storage.h"
         text = storage_header.read_text(encoding="utf-8")
         assert old in text, f"mutation target not found: {old!r}"
@@ -133,13 +133,13 @@ def run_checker_with_storage_header_mutation(
 
 
 def test_dovecot_source_contract_happy_path() -> None:
-    run_checker(FIXTURES_DIR / "valid-2.3.21.1")
+    run_checker(FIXTURES_DIR / "valid-2.4.2")
 
 
 def test_dovecot_source_contract_env_override() -> None:
     run_checker(
         None,
-        env={"WYREBOX_DOVECOT_SOURCE_DIR": str(FIXTURES_DIR / "valid-2.3.21.1")},
+        env={"WYREBOX_DOVECOT_SOURCE_DIR": str(FIXTURES_DIR / "valid-2.4.2")},
     )
 
 
@@ -153,14 +153,14 @@ def test_dovecot_source_contract_missing_required_file() -> None:
 def test_dovecot_source_contract_wrong_version() -> None:
     assert_named_fixture_fails_with(
         "wrong-version",
-        ["unexpected Dovecot version 2.3.20.0; expected 2.3.21.1"],
+        ["unexpected Dovecot version 2.4.1; expected 2.4.2"],
     )
 
 
 def test_dovecot_source_contract_wrong_abi_template() -> None:
     assert_named_fixture_fails_with(
         "wrong-abi-template",
-        ["DOVECOT_ABI_VERSION must use template 2.3.ABIv21($PACKAGE_VERSION)"],
+        ["DOVECOT_ABI_VERSION must use template 2.4.ABIv2"],
     )
 
 
@@ -270,7 +270,7 @@ def test_dovecot_source_contract_missing_source_directory() -> None:
     run_checker(
         None,
         env={"WYREBOX_DOVECOT_SOURCE_DIR": ""},
-        cwd=FIXTURES_DIR / "valid-2.3.21.1",
+        cwd=FIXTURES_DIR / "valid-2.4.2",
         expect_success=False,
     )
 
