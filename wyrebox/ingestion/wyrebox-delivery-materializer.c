@@ -196,6 +196,21 @@ bind_uint64 (duckdb_prepared_statement statement, idx_t index,
 }
 
 static gboolean
+bind_boolean (duckdb_prepared_statement statement, idx_t index,
+    gboolean value, GError **error)
+{
+    if (duckdb_bind_boolean (statement, index, value) == DuckDBSuccess)
+        return TRUE;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "DuckDB delivery materializer boolean bind failed at index %"
+        G_GUINT64_FORMAT, (guint64)index);
+    return FALSE;
+}
+
+static gboolean
 bind_nullable_uint64 (duckdb_prepared_statement statement, idx_t index,
     gboolean has_value, guint64 value, GError **error)
 {
@@ -1435,6 +1450,312 @@ wyrebox_delivery_materializer_apply_fact_mutation (WyreboxDeliveryMaterializer
     }
 
     if (!applied ||
+        (advance_checkpoint && !materializer_save_checkpoint (self,
+        journal_offset, journal_sequence, error)) ||
+        !materializer_query (self, "COMMIT;", error)) {
+        materializer_rollback_quietly (self);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static gboolean
+materializer_insert_extracted_fact (WyreboxDeliveryMaterializer *self,
+    const WyreboxFactsExtractedPayload *payload, const WyreboxFactRecord *fact,
+    guint64 journal_offset, guint64 journal_sequence, GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    g_autofree gchar *fact_id = NULL;
+    g_autofree gchar *args_json = NULL;
+
+    if (fact->predicate == NULL || fact->source == NULL || fact->args == NULL
+        || g_strcmp0 (fact->args[0], payload->message_id) != 0) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "extracted fact at sequence %" G_GUINT64_FORMAT
+            " does not describe message %s", journal_sequence,
+            payload->message_id);
+        return FALSE;
+    }
+
+    fact_id = build_fact_id (fact->source, fact->predicate, fact->args);
+    args_json = fact_arguments_to_json (fact->args);
+
+    return materializer_prepare (self,
+               "INSERT OR IGNORE INTO message_facts ("
+               "fact_id, account_id, message_id, object_id, predicate, "
+               "args_json, source, confidence_ppm, created_at_unix_us, "
+               "retracted_at_unix_us, journal_offset, journal_sequence"
+               ") SELECT ?, ?, ?, COALESCE(("
+               "SELECT object_id FROM messages "
+               "WHERE message_id = ? AND account_id = ?), ''), "
+               "?, ?, ?, ?, ?, 0, ?, ?;", &statement, error)
+           && bind_varchar (statement, 1, fact_id, error)
+           && bind_varchar (statement, 2, payload->account_id, error)
+           && bind_varchar (statement, 3, payload->message_id, error)
+           && bind_varchar (statement, 4, payload->message_id, error)
+           && bind_varchar (statement, 5, payload->account_id, error)
+           && bind_varchar (statement, 6, fact->predicate, error)
+           && bind_varchar (statement, 7, args_json, error)
+           && bind_varchar (statement, 8, fact->source, error)
+           && bind_uint64 (statement, 9, fact->confidence_ppm, error)
+           && bind_uint64 (statement, 10, journal_sequence, error)
+           && bind_uint64 (statement, 11, journal_offset, error)
+           && bind_uint64 (statement, 12, journal_sequence, error)
+           && materializer_execute_prepared (statement, error);
+}
+
+static gboolean
+materializer_insert_fact_extraction (WyreboxDeliveryMaterializer *self,
+    const WyreboxFactsExtractedPayload *payload, guint64 journal_offset,
+    guint64 journal_sequence, gboolean *out_inserted, GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    guint64 existing = 0;
+
+    if (!materializer_prepare (self,
+        "SELECT count(*) FROM message_fact_extractions "
+        "WHERE account_id = ? AND message_id = ?;", &statement, error) ||
+        !bind_varchar (statement, 1, payload->account_id, error) ||
+        !bind_varchar (statement, 2, payload->message_id, error) ||
+        !materializer_count_prepared (statement, &existing, error))
+        return FALSE;
+
+    *out_inserted = existing == 0;
+    if (existing != 0)
+        return TRUE;
+
+    duckdb_destroy_prepare (&statement);
+    return materializer_prepare (self,
+               "INSERT INTO message_fact_extractions ("
+               "account_id, message_id, fact_count, journal_offset, "
+               "journal_sequence) VALUES (?, ?, ?, ?, ?);", &statement, error)
+           && bind_varchar (statement, 1, payload->account_id, error)
+           && bind_varchar (statement, 2, payload->message_id, error)
+           && bind_uint64 (statement, 3,
+               payload->facts != NULL ? payload->facts->len : 0, error)
+           && bind_uint64 (statement, 4, journal_offset, error)
+           && bind_uint64 (statement, 5, journal_sequence, error)
+           && materializer_execute_prepared (statement, error);
+}
+
+static gboolean
+materializer_apply_facts_extracted_rows (WyreboxDeliveryMaterializer *self,
+    const WyreboxFactsExtractedPayload *payload, guint64 journal_offset,
+    guint64 journal_sequence, GError **error)
+{
+    gboolean inserted = FALSE;
+
+    if (!materializer_insert_fact_extraction (self, payload, journal_offset,
+        journal_sequence, &inserted, error))
+        return FALSE;
+
+    for (guint i = 0; inserted && payload->facts != NULL &&
+        i < payload->facts->len; i++) {
+        if (!materializer_insert_extracted_fact (self, payload,
+            g_ptr_array_index (payload->facts, i), journal_offset,
+            journal_sequence, error))
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+gboolean
+wyrebox_delivery_materializer_apply_facts_extracted (WyreboxDeliveryMaterializer
+    *self, const WyreboxFactsExtractedPayload *payload,
+    guint64 journal_offset, guint64 journal_sequence,
+    gboolean advance_checkpoint, GError **error)
+{
+    g_return_val_if_fail (WYREBOX_IS_DELIVERY_MATERIALIZER (self), FALSE);
+    g_return_val_if_fail (payload != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (payload->account_id == NULL || payload->account_id[0] == '\0' ||
+        payload->message_id == NULL || payload->message_id[0] == '\0' ||
+        journal_sequence == 0) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "facts extraction at sequence %" G_GUINT64_FORMAT
+            " needs an account, a message, and a nonzero journal sequence",
+            journal_sequence);
+        return FALSE;
+    }
+
+    if (!materializer_query (self, "BEGIN TRANSACTION;", error))
+        return FALSE;
+
+    if (!materializer_apply_facts_extracted_rows (self, payload,
+        journal_offset, journal_sequence, error) ||
+        (advance_checkpoint && !materializer_save_checkpoint (self,
+        journal_offset, journal_sequence, error)) ||
+        !materializer_query (self, "COMMIT;", error)) {
+        materializer_rollback_quietly (self);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static gboolean
+materializer_upsert_view_membership (WyreboxDeliveryMaterializer *self,
+    const WyreboxDerivedViewMembershipChangedPayload *payload, GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    guint64 existing = 0;
+    guint64 conflicting = 0;
+
+    if (!materializer_prepare (self,
+        "SELECT count(*), count(*) FILTER (WHERE account_id <> ? "
+        "OR view_id <> ? OR message_id <> ? OR uid <> ? "
+        "OR rule_version_hash <> ?) "
+        "FROM derived_view_memberships WHERE membership_id = ?;",
+        &statement, error) ||
+        !bind_varchar (statement, 1, payload->account_id, error) ||
+        !bind_varchar (statement, 2, payload->view_id, error) ||
+        !bind_varchar (statement, 3, payload->message_id, error) ||
+        !bind_uint64 (statement, 4, payload->uid, error) ||
+        !bind_varchar (statement, 5, payload->rule_version_hash, error) ||
+        !bind_varchar (statement, 6, payload->membership_id, error))
+        return FALSE;
+
+    {
+        g_auto (duckdb_result) result = { 0 };
+
+        if (duckdb_execute_prepared (statement, &result) != DuckDBSuccess ||
+            duckdb_row_count (&result) != 1) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_FAILED,
+                "DuckDB delivery materializer membership lookup failed: %s",
+                duckdb_result_error (&result) != NULL ?
+                duckdb_result_error (&result) : "unexpected result");
+            return FALSE;
+        }
+        existing = duckdb_value_uint64 (&result, 0, 0);
+        conflicting = duckdb_value_uint64 (&result, 1, 0);
+    }
+    duckdb_destroy_prepare (&statement);
+
+    if (conflicting != 0) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "derived view membership %s changed identity or UID %"
+            G_GUINT64_FORMAT, payload->membership_id, payload->uid);
+        return FALSE;
+    }
+
+    if (existing != 0)
+        return materializer_prepare (self,
+                   "UPDATE derived_view_memberships SET is_visible = ?, "
+                   "materialized_at_unix_us = ? WHERE membership_id = ?;",
+                   &statement, error)
+               && bind_boolean (statement, 1, payload->is_visible, error)
+               && bind_uint64 (statement, 2,
+                   payload->materialized_at_unix_us, error)
+               && bind_varchar (statement, 3, payload->membership_id, error)
+               && materializer_execute_prepared (statement, error);
+
+    return materializer_prepare (self,
+               "INSERT INTO derived_view_memberships ("
+               "membership_id, account_id, view_id, message_id, uid, "
+               "is_visible, rule_version_hash, materialized_at_unix_us"
+               ") VALUES (?, ?, ?, ?, ?, ?, ?, ?);", &statement, error)
+           && bind_varchar (statement, 1, payload->membership_id, error)
+           && bind_varchar (statement, 2, payload->account_id, error)
+           && bind_varchar (statement, 3, payload->view_id, error)
+           && bind_varchar (statement, 4, payload->message_id, error)
+           && bind_uint64 (statement, 5, payload->uid, error)
+           && bind_boolean (statement, 6, payload->is_visible, error)
+           && bind_varchar (statement, 7, payload->rule_version_hash, error)
+           && bind_uint64 (statement, 8, payload->materialized_at_unix_us,
+               error)
+           && materializer_execute_prepared (statement, error);
+}
+
+static gboolean
+materializer_advance_view_uid_state (WyreboxDeliveryMaterializer *self,
+    const WyreboxDerivedViewMembershipChangedPayload *payload, GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    guint64 mismatched = 0;
+
+    if (!materializer_prepare (self,
+        "INSERT OR IGNORE INTO mailbox_uid_state ("
+        "account_id, namespace_kind, namespace_id, uidnext, uidvalidity"
+        ") VALUES (?, 'derived_view', ?, ?, ?);", &statement, error) ||
+        !bind_varchar (statement, 1, payload->account_id, error) ||
+        !bind_varchar (statement, 2, payload->view_id, error) ||
+        !bind_uint64 (statement, 3, payload->uid + 1, error) ||
+        !bind_uint64 (statement, 4, payload->uidvalidity, error) ||
+        !materializer_execute_prepared (statement, error))
+        return FALSE;
+
+    duckdb_destroy_prepare (&statement);
+    if (!materializer_prepare (self,
+        "SELECT count(*) FROM mailbox_uid_state WHERE account_id = ? "
+        "AND namespace_kind = 'derived_view' AND namespace_id = ? "
+        "AND uidvalidity <> ?;", &statement, error) ||
+        !bind_varchar (statement, 1, payload->account_id, error) ||
+        !bind_varchar (statement, 2, payload->view_id, error) ||
+        !bind_uint64 (statement, 3, payload->uidvalidity, error) ||
+        !materializer_count_prepared (statement, &mismatched, error))
+        return FALSE;
+
+    if (mismatched != 0) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "derived view %s has a different UIDVALIDITY than %"
+            G_GUINT64_FORMAT, payload->view_id, payload->uidvalidity);
+        return FALSE;
+    }
+
+    duckdb_destroy_prepare (&statement);
+    return materializer_prepare (self,
+               "UPDATE mailbox_uid_state SET uidnext = ? WHERE account_id = ? "
+               "AND namespace_kind = 'derived_view' AND namespace_id = ? "
+               "AND uidnext < ?;", &statement, error)
+           && bind_uint64 (statement, 1, payload->uid + 1, error)
+           && bind_varchar (statement, 2, payload->account_id, error)
+           && bind_varchar (statement, 3, payload->view_id, error)
+           && bind_uint64 (statement, 4, payload->uid + 1, error)
+           && materializer_execute_prepared (statement, error);
+}
+
+gboolean
+wyrebox_delivery_materializer_apply_membership_change (
+    WyreboxDeliveryMaterializer *self,
+    const WyreboxDerivedViewMembershipChangedPayload *payload,
+    guint64 journal_offset, guint64 journal_sequence,
+    gboolean advance_checkpoint, GError **error)
+{
+    g_return_val_if_fail (WYREBOX_IS_DELIVERY_MATERIALIZER (self), FALSE);
+    g_return_val_if_fail (payload != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (payload->account_id == NULL || payload->view_id == NULL ||
+        payload->message_id == NULL || payload->membership_id == NULL ||
+        payload->rule_version_hash == NULL || payload->uid == 0 ||
+        payload->uid == G_MAXUINT64 || payload->uidvalidity == 0) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "derived view membership change at sequence %" G_GUINT64_FORMAT
+            " is incomplete", journal_sequence);
+        return FALSE;
+    }
+
+    if (!materializer_query (self, "BEGIN TRANSACTION;", error))
+        return FALSE;
+
+    if (!materializer_insert_account (self, payload->account_id, error) ||
+        !materializer_upsert_view_membership (self, payload, error) ||
+        !materializer_advance_view_uid_state (self, payload, error) ||
         (advance_checkpoint && !materializer_save_checkpoint (self,
         journal_offset, journal_sequence, error)) ||
         !materializer_query (self, "COMMIT;", error)) {

@@ -90,6 +90,15 @@ wyrebox_delivery_projection_record_clear (WyreboxDeliveryProjectionRecord
         wyrebox_daemon_fact_mutation_request_clear (record->fact_mutation);
         g_clear_pointer (&record->fact_mutation, g_free);
     }
+    if (record->facts_extracted != NULL) {
+        wyrebox_facts_extracted_payload_clear (record->facts_extracted);
+        g_clear_pointer (&record->facts_extracted, g_free);
+    }
+    if (record->membership_change != NULL) {
+        wyrebox_derived_view_membership_changed_payload_clear
+            (record->membership_change);
+        g_clear_pointer (&record->membership_change, g_free);
+    }
 }
 
 void
@@ -218,13 +227,74 @@ append_fact_mutation_record (WyreboxDeliveryProjectionList *out_projection,
     return TRUE;
 }
 
+static gboolean
+append_facts_extracted_record (WyreboxDeliveryProjectionList *out_projection,
+    WyreboxJournalRecord *record, GError **error)
+{
+    g_autoptr (GError) local_error = NULL;
+    WyreboxDeliveryProjectionRecord *entry = NULL;
+    WyreboxFactsExtractedPayload *payload =
+        g_new0 (WyreboxFactsExtractedPayload, 1);
+
+    if (!wyrebox_facts_extracted_payload_decode (record->payload, payload,
+        &local_error)) {
+        g_free (payload);
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "failed to decode FactsExtracted payload at sequence %"
+            G_GUINT64_FORMAT ": %s", record->sequence, local_error->message);
+        return FALSE;
+    }
+
+    entry = g_new0 (WyreboxDeliveryProjectionRecord, 1);
+    entry->journal_offset = record->offset;
+    entry->journal_sequence = record->sequence;
+    entry->account_identity = g_strdup (payload->account_id);
+    entry->facts_extracted = payload;
+    g_ptr_array_add (out_projection->records, entry);
+    return TRUE;
+}
+
+static gboolean
+append_membership_change_record (WyreboxDeliveryProjectionList
+    *out_projection, WyreboxJournalRecord *record, GError **error)
+{
+    g_autoptr (GError) local_error = NULL;
+    WyreboxDeliveryProjectionRecord *entry = NULL;
+    WyreboxDerivedViewMembershipChangedPayload *payload =
+        g_new0 (WyreboxDerivedViewMembershipChangedPayload, 1);
+
+    if (!wyrebox_derived_view_membership_changed_payload_decode
+            (record->payload, payload, &local_error)) {
+        wyrebox_derived_view_membership_changed_payload_clear (payload);
+        g_free (payload);
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "failed to decode DerivedViewMembershipChanged payload at "
+            "sequence %" G_GUINT64_FORMAT ": %s", record->sequence,
+            local_error != NULL ? local_error->message : "unknown error");
+        return FALSE;
+    }
+
+    entry = g_new0 (WyreboxDeliveryProjectionRecord, 1);
+    entry->journal_offset = record->offset;
+    entry->journal_sequence = record->sequence;
+    entry->account_identity = g_strdup (payload->account_id);
+    entry->membership_change = payload;
+    g_ptr_array_add (out_projection->records, entry);
+    return TRUE;
+}
+
 gboolean
 wyrebox_delivery_projection_record_is_delivery (const
     WyreboxDeliveryProjectionRecord *record)
 {
     g_return_val_if_fail (record != NULL, FALSE);
 
-    return record->flag_change == NULL && record->fact_mutation == NULL;
+    return record->flag_change == NULL && record->fact_mutation == NULL &&
+           record->facts_extracted == NULL && record->membership_change == NULL;
 }
 
 gboolean
@@ -336,6 +406,27 @@ projection_replay (WyreboxDeliveryProjection *self,
             (record.event_type == WYREBOX_JOURNAL_EVENT_FACT_INSERTED ||
             record.event_type == WYREBOX_JOURNAL_EVENT_FACT_RETRACTED)) {
             if (!append_fact_mutation_record (out_projection, &record,
+                error)) {
+                wyrebox_delivery_projection_list_clear (out_projection);
+                return FALSE;
+            }
+            continue;
+        }
+
+        if (include_mutations &&
+            record.event_type == WYREBOX_JOURNAL_EVENT_FACTS_EXTRACTED) {
+            if (!append_facts_extracted_record (out_projection, &record,
+                error)) {
+                wyrebox_delivery_projection_list_clear (out_projection);
+                return FALSE;
+            }
+            continue;
+        }
+
+        if (include_mutations &&
+            record.event_type ==
+            WYREBOX_JOURNAL_EVENT_DERIVED_VIEW_MEMBERSHIP_CHANGED) {
+            if (!append_membership_change_record (out_projection, &record,
                 error)) {
                 wyrebox_delivery_projection_list_clear (out_projection);
                 return FALSE;
