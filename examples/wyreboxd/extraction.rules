@@ -1,0 +1,4 @@
+[dictionary:apollo]
+field=subject
+match=apollo
+project=apollo

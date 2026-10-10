@@ -295,11 +295,62 @@ Refresh:
   with the same backoff. The `show_in_virtual_folder.v1` predicate query over
   the daemon socket returns the current derived memberships for inspection.
 
+Delivery-time facts:
+
+- `extraction_rules_path` in `[wirelog]` names an optional extraction rules
+  file. It must be absolute and requires `rules_path`:
+
+  ```ini
+  [wirelog]
+  rules_path=/etc/wyrebox/views.dl
+  extraction_rules_path=/etc/wyrebox/extraction.rules
+  ```
+
+- When views are configured, `wyreboxd` extracts facts from every delivered
+  message before refreshing its account. Header facts such as `message_id`,
+  `replies_to`, `references`, `participant`, and `sender_domain` are always
+  extracted. The rules file adds dictionary and regex rules, one group per
+  rule, applied in file order:
+
+  ```ini
+  [dictionary:apollo]
+  field=subject
+  match=apollo
+  project=apollo
+
+  [regex:invoice]
+  field=subject
+  predicate=reference_candidate
+  pattern=INV-[0-9]+
+  capture_group=0
+  ```
+
+  A dictionary rule emits `project_keyword(message_id, project)` when `match`
+  occurs in `field`, ignoring case. Fields, predicates, and matching follow
+  `docs/contracts/deterministic-fact-extraction.md`. `pattern` is read
+  verbatim, so backslashes need no escaping. `capture_group` defaults to 0.
+- A missing or unreadable rules file, an unknown group or key, or an invalid
+  field, predicate, or pattern stops startup with `EX_CONFIG` (78).
+- The extracted facts of a message are appended as one `FactsExtracted`
+  journal record, and the raw message object is not changed. Facts are
+  extracted once per message: changed extraction rules apply to later
+  deliveries, while existing messages keep their facts. Each startup extracts
+  facts for messages that do not have them yet.
+- Extracted facts are visible to the view rules like inserted facts, so a rule
+  can follow `replies_to` and `message_id` facts to place a whole thread in a
+  view, whatever order its messages arrive in.
+- An extraction failure, such as an unreadable message object, holds the
+  account like a refresh failure. The log line reads
+  `held account <account> at virtual mailbox refresh: fact extraction failed:
+  message <message id>: <error>`.
+- Virtual mailbox membership changes are journaled, so rebuilding the catalog
+  from the journal reproduces the same facts, memberships, virtual UIDs, and
+  UIDVALIDITY without appending new records.
+
 Known limitations:
 
 - Changing the `imap_name` of an existing view conflicts with the stored view
   and holds the account at refresh. Use a new view id instead.
-- A catalog rebuild does not yet reproduce earlier virtual UIDs.
 - Startup refreshes every account, which grows with the number of accounts.
 
 ## Permission Mismatch Behavior

@@ -9,6 +9,7 @@
 #include "wyrebox-daemon-delivery-materialization.h"
 #include "wyrebox-daemon-duckdb-query-template-service.h"
 #include "wyrebox-daemon-exit-code.h"
+#include "wyrebox-daemon-fact-extraction.h"
 #include "wyrebox-daemon-fact-mutation-service.h"
 #include "wyrebox-daemon-flag-keyword-update-journal.h"
 #include "wyrebox-daemon-mail-event-stream-service.h"
@@ -168,6 +169,14 @@ materialize_after_fact_commit (const char *scope_id, gpointer user_data)
 }
 
 static gboolean
+extract_account_facts (const char *account_id, guint *out_appended,
+    gpointer user_data, GError **error)
+{
+    return wyrebox_daemon_fact_extraction_extract_account (user_data,
+               account_id, out_appended, error);
+}
+
+static gboolean
 refresh_wirelog_views (const char *account_id, gpointer user_data,
     GError **error)
 {
@@ -176,23 +185,35 @@ refresh_wirelog_views (const char *account_id, gpointer user_data,
 }
 
 /*
- * Loads the configured rules and views, or leaves @out_views NULL when the
- * config has no [wirelog] section.
+ * Loads the configured rules, views, and fact extraction rules, or leaves
+ * @out_views and @out_extraction_rules NULL when the config has no [wirelog]
+ * section. Without an extraction rules file only header facts are extracted.
  */
 static gboolean
 load_wirelog_views (WyreboxDaemonConfig *config,
-    WyreboxDaemonWirelogViews **out_views, GError **error)
+    WyreboxDaemonWirelogViews **out_views,
+    WyreboxFactExtractionRules **out_extraction_rules, GError **error)
 {
     const char *rules_path = wyrebox_daemon_config_get_wirelog_rules_path
             (config);
+    const char *extraction_rules_path =
+        wyrebox_daemon_config_get_extraction_rules_path (config);
     g_autoptr (WyreboxDaemonWirelogViews) views = NULL;
+    g_autoptr (WyreboxFactExtractionRules) extraction_rules = NULL;
 
     *out_views = NULL;
+    *out_extraction_rules = NULL;
     if (rules_path == NULL)
         return TRUE;
 
     views = wyrebox_daemon_wirelog_views_new (rules_path, error);
     if (views == NULL)
+        return FALSE;
+
+    extraction_rules = extraction_rules_path != NULL ?
+        wyrebox_fact_extraction_rules_new_from_file (extraction_rules_path,
+            error) : wyrebox_fact_extraction_rules_new_empty ();
+    if (extraction_rules == NULL)
         return FALSE;
 
     for (guint i = 0; i < wyrebox_daemon_config_get_n_views (config); i++) {
@@ -203,29 +224,40 @@ load_wirelog_views (WyreboxDaemonConfig *config,
     }
 
     *out_views = g_steal_pointer (&views);
+    *out_extraction_rules = g_steal_pointer (&extraction_rules);
     return TRUE;
 }
 
 /*
- * Every account is refreshed by the first pass, which also covers rule
- * changes and refreshes interrupted by a restart.
+ * Every account is extracted and refreshed by the first pass, which also
+ * covers messages delivered before extraction was configured, rule changes,
+ * and refreshes interrupted by a restart.
  */
 static gboolean
 attach_wirelog_views (WyreboxDaemonWirelogViews *views,
+    WyreboxFactExtractionRules *extraction_rules,
     WyreboxDaemonDeliveryMaterialization *materialization,
-    const char *catalog_path, WyreboxJournalWriter *journal_writer,
-    GError **error)
+    const char *catalog_path, WyreboxLocalObjectStore *object_store,
+    WyreboxJournalWriter *journal_writer, GError **error)
 {
     g_auto (GStrv) accounts = NULL;
+    g_autoptr (WyreboxDaemonFactExtraction) extraction = NULL;
 
     if (!wyrebox_daemon_wirelog_views_open_catalog (views, catalog_path,
         journal_writer, error))
+        return FALSE;
+
+    extraction = wyrebox_daemon_fact_extraction_new (catalog_path,
+            extraction_rules, object_store, journal_writer, error);
+    if (extraction == NULL)
         return FALSE;
 
     accounts = wyrebox_daemon_wirelog_views_list_accounts (views, error);
     if (accounts == NULL)
         return FALSE;
 
+    wyrebox_daemon_delivery_materialization_set_extract_func (materialization,
+        extract_account_facts, g_steal_pointer (&extraction), g_object_unref);
     wyrebox_daemon_delivery_materialization_set_refresh_func (materialization,
         refresh_wirelog_views, g_object_ref (views), g_object_unref);
     for (guint i = 0; accounts[i] != NULL; i++) {
@@ -289,6 +321,7 @@ run_daemon (int argc, char **argv)
     g_autoptr (WyreboxDaemonMailEventStreamService) mail_event_stream_service =
         NULL;
     g_autoptr (WyreboxDaemonWirelogViews) wirelog_views = NULL;
+    g_autoptr (WyreboxFactExtractionRules) extraction_rules = NULL;
     g_autoptr (WyreboxDaemonFactMutationService) fact_mutation_service = NULL;
     g_autoptr (WyreboxDaemonWirelogPredicateQueryService)
     wirelog_predicate_query_service = NULL;
@@ -318,7 +351,8 @@ run_daemon (int argc, char **argv)
         return EX_CONFIG;
     }
 
-    if (!load_wirelog_views (config, &wirelog_views, &error)) {
+    if (!load_wirelog_views (config, &wirelog_views, &extraction_rules,
+        &error)) {
         g_printerr ("wyreboxd: %s\n", error->message);
         return EX_CONFIG;
     }
@@ -423,7 +457,8 @@ run_daemon (int argc, char **argv)
     }
 
     if (wirelog_views != NULL && !attach_wirelog_views (wirelog_views,
-        materialization, catalog_path, journal_writer, &error)) {
+        extraction_rules, materialization, catalog_path, object_store,
+        journal_writer, &error)) {
         g_printerr ("wyreboxd: %s\n", error->message);
         return EX_OSERR;
     }

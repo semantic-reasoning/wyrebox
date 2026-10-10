@@ -91,6 +91,9 @@ and views:
   mutation records.
 - `message_facts`: fact rows materialized from fact mutation records and derived
   sources.
+- `message_fact_extractions`: one row per message whose delivery-time facts
+  were extracted, with the fact count and the `FactsExtracted` journal
+  position.
 - `derived_view_memberships`: Wirelog-derived membership rows for virtual mailbox
   views, referencing `derived_views.view_id` and `messages.message_id`.
 - `schema_metadata`: schema contract metadata including schema version.
@@ -138,6 +141,12 @@ A retraction keeps the row and records the retracting journal sequence in
 `retracted_at_unix_us`; a later insert of the same fact reactivates it.
 Replaying the journal into an empty catalog reproduces the same rows.
 
+Facts extracted at delivery come from `FactsExtracted` records. Replay inserts
+the facts and one `message_fact_extractions` row for the message; facts that
+already exist are kept. `DerivedViewMembershipChanged` records restore
+`derived_view_memberships` rows and the view's `mailbox_uid_state`, so a
+rebuilt catalog keeps the same virtual UIDs and UIDVALIDITY.
+
 ## Schema Versioning And Migration Policy
 
 `schema_metadata` stores an explicit `schema_version` value.
@@ -157,7 +166,8 @@ applicable.
 
 Replay must converge on equivalent `objects`, `messages`, `mailbox_memberships`,
 `accounts`, `mailboxes`, `derived_views`, `message_flags`, `message_keywords`,
-`mailbox_uid_state`, `message_facts`, `derived_view_memberships`, and
+`mailbox_uid_state`, `message_facts`, `message_fact_extractions`,
+`derived_view_memberships`, and
 `schema_metadata` content for the same accepted journal prefix.
 
 `materialization_checkpoint` must track durable replay position and allow restart
