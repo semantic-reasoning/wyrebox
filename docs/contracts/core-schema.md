@@ -94,6 +94,10 @@ and views:
 - `message_fact_extractions`: one row per message whose delivery-time facts
   were extracted, with the fact count and the `FactsExtracted` journal
   position.
+- `derived_view_refresh_state`: per account, the journal sequence the last
+  derived view refresh covered and a hash of the rules and views it used.
+  It is rebuildable: without a row, the next refresh evaluates every message
+  of the account.
 - `derived_view_memberships`: Wirelog-derived membership rows for virtual mailbox
   views, referencing `derived_views.view_id` and `messages.message_id`.
 - `schema_metadata`: schema contract metadata including schema version.

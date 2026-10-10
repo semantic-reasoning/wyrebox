@@ -15,6 +15,7 @@ typedef struct
     char *view_id;
     char *imap_name;
     char *definition_ref;
+    WyreboxDaemonViewScope scope;
 } WirelogView;
 
 struct _WyreboxDaemonWirelogViews
@@ -31,6 +32,8 @@ struct _WyreboxDaemonWirelogViews
     WyreboxDerivedViewMaterializer *materializer;
     duckdb_database database;
     duckdb_connection connection;
+    guint batch_size;
+    guint64 loaded_fact_count;
 };
 
 G_DEFINE_TYPE (WyreboxDaemonWirelogViews, wyrebox_daemon_wirelog_views,
@@ -122,6 +125,7 @@ wyrebox_daemon_wirelog_views_init (WyreboxDaemonWirelogViews *self)
     self->views = g_ptr_array_new_with_free_func (wirelog_view_free);
     self->known_symbols = g_ptr_array_new ();
     g_ptr_array_add (self->known_symbols, NULL);
+    self->batch_size = WYREBOX_DAEMON_WIRELOG_VIEWS_DEFAULT_BATCH_SIZE;
 }
 
 /*
@@ -206,7 +210,8 @@ wyrebox_daemon_wirelog_views_new (const char *rules_path, GError **error)
 
 gboolean
 wyrebox_daemon_wirelog_views_add_view (WyreboxDaemonWirelogViews *self,
-    const char *view_id, const char *imap_name, GError **error)
+    const char *view_id, const char *imap_name, WyreboxDaemonViewScope scope,
+    GError **error)
 {
     WirelogView *view = NULL;
 
@@ -230,6 +235,7 @@ wyrebox_daemon_wirelog_views_add_view (WyreboxDaemonWirelogViews *self,
     view->view_id = g_strdup (view_id);
     view->imap_name = g_strdup (imap_name);
     view->definition_ref = g_strdup_printf ("wirelog:%s", view_id);
+    view->scope = scope;
     g_ptr_array_add (self->views, view);
 
     g_ptr_array_insert (self->known_symbols, self->known_symbols->len - 1,
@@ -451,6 +457,46 @@ malformed:
     return NULL;
 }
 
+/*
+ * Appends the facts of a predicate, args_json, source, confidence_ppm,
+ * created_at_unix_us result whose predicate the rules declare.
+ */
+static gboolean
+append_fact_rows (WyreboxDaemonWirelogViews *self, duckdb_result *result,
+    GPtrArray *facts, GError **error)
+{
+    idx_t rows = duckdb_row_count (result);
+
+    for (idx_t row = 0; row < rows; row++) {
+        g_autofree char *predicate = result_string (result, 0, row);
+        g_autofree char *args_json = NULL;
+        g_autofree char *source = NULL;
+        g_auto (GStrv) args = NULL;
+        WyreboxFactRecord *record = NULL;
+
+        if (!g_hash_table_contains (self->declared_predicates, predicate))
+            continue;
+
+        args_json = result_string (result, 1, row);
+        source = result_string (result, 2, row);
+        args = parse_args_json (args_json, error);
+        if (args == NULL)
+            return FALSE;
+
+        record = g_new0 (WyreboxFactRecord, 1);
+        if (!wyrebox_fact_record_init (record, predicate,
+            (const char *const *)args, source,
+            (guint32)duckdb_value_uint64 (result, 3, row),
+            duckdb_value_uint64 (result, 4, row), error)) {
+            fact_record_ptr_free (record);
+            return FALSE;
+        }
+        g_ptr_array_add (facts, record);
+    }
+
+    return TRUE;
+}
+
 static GPtrArray *
 load_account_facts (WyreboxDaemonWirelogViews *self, const char *account_id,
     GError **error)
@@ -459,7 +505,6 @@ load_account_facts (WyreboxDaemonWirelogViews *self, const char *account_id,
     g_auto (duckdb_result) result = { 0 };
     g_autoptr (GPtrArray) facts =
         g_ptr_array_new_with_free_func (fact_record_ptr_free);
-    idx_t rows = 0;
 
     if (!views_prepare (self,
         "SELECT predicate, args_json, source, confidence_ppm, "
@@ -475,36 +520,9 @@ load_account_facts (WyreboxDaemonWirelogViews *self, const char *account_id,
         return NULL;
     }
 
-    if (!views_execute (statement, &result, error))
+    if (!views_execute (statement, &result, error) ||
+        !append_fact_rows (self, &result, facts, error))
         return NULL;
-
-    rows = duckdb_row_count (&result);
-    for (idx_t row = 0; row < rows; row++) {
-        g_autofree char *predicate = result_string (&result, 0, row);
-        g_autofree char *args_json = NULL;
-        g_autofree char *source = NULL;
-        g_auto (GStrv) args = NULL;
-        WyreboxFactRecord *record = NULL;
-
-        if (!g_hash_table_contains (self->declared_predicates, predicate))
-            continue;
-
-        args_json = result_string (&result, 1, row);
-        source = result_string (&result, 2, row);
-        args = parse_args_json (args_json, error);
-        if (args == NULL)
-            return NULL;
-
-        record = g_new0 (WyreboxFactRecord, 1);
-        if (!wyrebox_fact_record_init (record, predicate,
-            (const char *const *)args, source,
-            (guint32)duckdb_value_uint64 (&result, 3, row),
-            duckdb_value_uint64 (&result, 4, row), error)) {
-            fact_record_ptr_free (record);
-            return NULL;
-        }
-        g_ptr_array_add (facts, record);
-    }
 
     return g_steal_pointer (&facts);
 }
@@ -570,29 +588,415 @@ memberships_of_existing_messages (WyreboxDaemonWirelogViews *self,
     return g_steal_pointer (&selected);
 }
 
-gboolean
-wyrebox_daemon_wirelog_views_refresh_account (WyreboxDaemonWirelogViews *self,
-    const char *account_id, GError **error)
+static gboolean
+bind_uint64 (duckdb_prepared_statement statement, idx_t index, guint64 value,
+    GError **error)
 {
-    g_autoptr (GPtrArray) memberships = NULL;
-    guint64 now = (guint64)g_get_real_time ();
-
-    g_return_val_if_fail (WYREBOX_IS_DAEMON_WIRELOG_VIEWS (self), FALSE);
-    g_return_val_if_fail (account_id != NULL, FALSE);
-    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
-
-    if (self->views->len == 0)
+    if (duckdb_bind_uint64 (statement, index, value) == DuckDBSuccess)
         return TRUE;
 
-    memberships = wyrebox_daemon_wirelog_views_evaluate (self, account_id,
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED, "failed to bind Wirelog views sequence");
+    return FALSE;
+}
+
+static gboolean
+bind_varchar (duckdb_prepared_statement statement, idx_t index,
+    const char *value, GError **error)
+{
+    if (duckdb_bind_varchar (statement, index, value) == DuckDBSuccess)
+        return TRUE;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED, "failed to bind Wirelog views value");
+    return FALSE;
+}
+
+static const char *
+view_scope_name (WyreboxDaemonViewScope scope)
+{
+    switch (scope) {
+    case WYREBOX_DAEMON_VIEW_SCOPE_MESSAGE:
+        return "message";
+    case WYREBOX_DAEMON_VIEW_SCOPE_THREAD:
+        return "thread";
+    case WYREBOX_DAEMON_VIEW_SCOPE_ACCOUNT:
+    default:
+        return "account";
+    }
+}
+
+/*
+ * Identifies the rules and views a refresh evaluated, so that a change to
+ * either makes the next refresh evaluate every message again.
+ */
+static char *
+refresh_config_hash (WyreboxDaemonWirelogViews *self)
+{
+    g_autoptr (GChecksum) checksum = g_checksum_new (G_CHECKSUM_SHA256);
+
+    g_checksum_update (checksum, (const guchar *)self->rule_version_hash,
+        strlen (self->rule_version_hash) + 1);
+    for (guint i = 0; i < self->views->len; i++) {
+        const WirelogView *view = g_ptr_array_index (self->views, i);
+        const char *fields[] = {
+            view->view_id,
+            view->imap_name,
+            view_scope_name (view->scope),
+        };
+
+        for (guint j = 0; j < G_N_ELEMENTS (fields); j++)
+            g_checksum_update (checksum, (const guchar *)fields[j],
+                strlen (fields[j]) + 1);
+    }
+
+    return g_strdup_printf ("sha256:%s", g_checksum_get_string (checksum));
+}
+
+static gboolean
+read_refresh_state (WyreboxDaemonWirelogViews *self, const char *account_id,
+    char **out_config_hash, guint64 *out_sequence, GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    g_auto (duckdb_result) result = { 0 };
+
+    *out_config_hash = NULL;
+    *out_sequence = 0;
+    if (!views_prepare (self,
+        "SELECT refresh_config_hash, refreshed_journal_sequence "
+        "FROM derived_view_refresh_state WHERE account_id = ?;", &statement,
+        error) ||
+        !bind_varchar (statement, 1, account_id, error) ||
+        !views_execute (statement, &result, error))
+        return FALSE;
+
+    if (duckdb_row_count (&result) == 0)
+        return TRUE;
+
+    *out_config_hash = result_string (&result, 0, 0);
+    *out_sequence = duckdb_value_uint64 (&result, 1, 0);
+    return TRUE;
+}
+
+static gboolean
+write_refresh_state (WyreboxDaemonWirelogViews *self, const char *account_id,
+    const char *config_hash, guint64 sequence, GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    g_auto (duckdb_result) result = { 0 };
+
+    return views_prepare (self,
+               "INSERT OR REPLACE INTO derived_view_refresh_state ("
+               "account_id, refresh_config_hash, refreshed_journal_sequence"
+               ") VALUES (?, ?, ?);", &statement, error)
+           && bind_varchar (statement, 1, account_id, error)
+           && bind_varchar (statement, 2, config_hash, error)
+           && bind_uint64 (statement, 3, sequence, error)
+           && views_execute (statement, &result, error);
+}
+
+/*
+ * The newest journal sequence of the account's materialized messages and
+ * facts; a fact insert or retract stores its own sequence on the fact row.
+ */
+static gboolean
+read_account_sequence (WyreboxDaemonWirelogViews *self,
+    const char *account_id, guint64 *out_sequence, GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    g_auto (duckdb_result) result = { 0 };
+
+    if (!views_prepare (self,
+        "SELECT GREATEST("
+        "(SELECT COALESCE(MAX(journal_sequence), 0) FROM messages "
+        "WHERE account_id = $1), "
+        "(SELECT COALESCE(MAX(journal_sequence), 0) FROM message_facts "
+        "WHERE account_id = $1));", &statement, error) ||
+        !bind_varchar (statement, 1, account_id, error) ||
+        !views_execute (statement, &result, error))
+        return FALSE;
+
+    *out_sequence = duckdb_value_uint64 (&result, 0, 0);
+    return TRUE;
+}
+
+/*
+ * Messages delivered, or whose facts were inserted or retracted, after
+ * journal sequence $2.
+ */
+#define REFRESH_CHANGED_MESSAGES \
+        "SELECT message_id FROM messages " \
+        "WHERE account_id = $1 AND journal_sequence > $2 " \
+        "UNION SELECT message_id FROM message_facts " \
+        "WHERE account_id = $1 AND journal_sequence > $2"
+
+#define REFRESH_EXISTING_MESSAGE \
+        "message_id IN (SELECT message_id FROM messages WHERE account_id = $1)"
+
+/*
+ * Fills wirelog_refresh_scope with (component, message_id) rows, where a
+ * component is the unit a batch never splits.
+ */
+static const char message_scope_sql[] =
+    "CREATE OR REPLACE TEMP TABLE wirelog_refresh_scope AS "
+    "SELECT message_id AS component, message_id FROM ("
+    REFRESH_CHANGED_MESSAGES ") WHERE " REFRESH_EXISTING_MESSAGE ";";
+
+/*
+ * Messages sharing a message_id, replies_to, or references value are
+ * connected. Links whose fact was retracted after $3 still connect, so the
+ * messages a retraction disconnects are evaluated again. Each message's
+ * component is the smallest changed message it is connected to.
+ */
+static const char thread_scope_sql[] =
+    "CREATE OR REPLACE TEMP TABLE wirelog_refresh_scope AS "
+    "WITH RECURSIVE link_keys AS ("
+    "SELECT DISTINCT message_id, "
+    "json_extract_string(args_json, '$[1]') AS link_key "
+    "FROM message_facts WHERE account_id = $1 "
+    "AND predicate IN ('message_id', 'replies_to', 'references') "
+    "AND (retracted_at_unix_us = 0 OR journal_sequence > $3)), "
+    "links AS (SELECT a.message_id AS source, b.message_id AS target "
+    "FROM link_keys a JOIN link_keys b ON a.link_key = b.link_key "
+    "AND a.message_id <> b.message_id), "
+    "reach (seed, message_id) AS ("
+    "SELECT message_id, message_id FROM (" REFRESH_CHANGED_MESSAGES ") "
+    "UNION SELECT reach.seed, links.target FROM reach "
+    "JOIN links ON links.source = reach.message_id) "
+    "SELECT MIN(seed) AS component, message_id FROM reach "
+    "WHERE " REFRESH_EXISTING_MESSAGE " GROUP BY message_id;";
+
+static gboolean
+fill_refresh_scope (WyreboxDaemonWirelogViews *self, const char *account_id,
+    WyreboxDaemonViewScope scope, gboolean full, guint64 since,
+    GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    g_auto (duckdb_result) result = { 0 };
+    gboolean thread = scope == WYREBOX_DAEMON_VIEW_SCOPE_THREAD;
+
+    return views_prepare (self, thread ? thread_scope_sql : message_scope_sql,
+               &statement, error)
+           && bind_varchar (statement, 1, account_id, error)
+           && bind_uint64 (statement, 2, full ? 0 : since, error)
+           && (!thread || bind_uint64 (statement, 3,
+           full ? G_MAXUINT64 : since, error))
+           && views_execute (statement, &result, error);
+}
+
+/*
+ * Stores in @batch the messages of the components after @cursor, up to the
+ * batch size plus the rest of the last component, and advances @cursor.
+ */
+static gboolean
+next_refresh_batch (WyreboxDaemonWirelogViews *self, char **cursor,
+    GPtrArray *batch, GError **error)
+{
+    g_auto (duckdb_prepared_statement) page = NULL;
+    g_auto (duckdb_prepared_statement) rest = NULL;
+    g_auto (duckdb_result) page_result = { 0 };
+    g_auto (duckdb_result) rest_result = { 0 };
+    idx_t rows = 0;
+
+    if (!views_prepare (self,
+        "SELECT component, message_id FROM wirelog_refresh_scope "
+        "WHERE component > ? ORDER BY component, message_id LIMIT ?;",
+        &page, error) ||
+        !bind_varchar (page, 1, *cursor, error) ||
+        !bind_uint64 (page, 2, self->batch_size, error) ||
+        !views_execute (page, &page_result, error))
+        return FALSE;
+
+    rows = duckdb_row_count (&page_result);
+    if (rows == 0)
+        return TRUE;
+
+    for (idx_t row = 0; row < rows; row++)
+        g_ptr_array_add (batch, result_string (&page_result, 1, row));
+
+    g_free (*cursor);
+    *cursor = result_string (&page_result, 0, rows - 1);
+    if (!views_prepare (self,
+        "SELECT message_id FROM wirelog_refresh_scope "
+        "WHERE component = ? AND message_id > ? ORDER BY message_id;",
+        &rest, error) ||
+        !bind_varchar (rest, 1, *cursor, error) ||
+        !bind_varchar (rest, 2, g_ptr_array_index (batch, batch->len - 1),
+        error) ||
+        !views_execute (rest, &rest_result, error))
+        return FALSE;
+
+    for (idx_t row = 0; row < duckdb_row_count (&rest_result); row++)
+        g_ptr_array_add (batch, result_string (&rest_result, 0, row));
+    return TRUE;
+}
+
+static GPtrArray *
+load_batch_facts (WyreboxDaemonWirelogViews *self, const char *account_id,
+    GPtrArray *batch, GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    g_autoptr (GPtrArray) facts =
+        g_ptr_array_new_with_free_func (fact_record_ptr_free);
+
+    if (!views_prepare (self,
+        "SELECT predicate, args_json, source, confidence_ppm, "
+        "created_at_unix_us FROM message_facts "
+        "WHERE account_id = ? AND message_id = ? "
+        "AND retracted_at_unix_us = 0 ORDER BY fact_id;", &statement, error))
+        return NULL;
+
+    for (guint i = 0; i < batch->len; i++) {
+        g_auto (duckdb_result) result = { 0 };
+
+        if (!bind_varchar (statement, 1, account_id, error) ||
+            !bind_varchar (statement, 2, g_ptr_array_index (batch, i), error) ||
+            !views_execute (statement, &result, error) ||
+            !append_fact_rows (self, &result, facts, error))
+            return NULL;
+    }
+
+    self->loaded_fact_count += facts->len;
+    return g_steal_pointer (&facts);
+}
+
+/*
+ * Evaluates the rules over the facts of @batch and refreshes the membership
+ * of those messages in each of @views.
+ */
+static gboolean
+refresh_batch (WyreboxDaemonWirelogViews *self, const char *account_id,
+    GPtrArray *views, GPtrArray *batch, guint64 now, GError **error)
+{
+    g_autoptr (GPtrArray) facts = NULL;
+    g_autoptr (GPtrArray) memberships = NULL;
+    g_autoptr (GHashTable) listed = g_hash_table_new (g_str_hash, g_str_equal);
+
+    facts = load_batch_facts (self, account_id, batch, error);
+    if (facts == NULL)
+        return FALSE;
+
+    memberships =
+        wyrebox_wirelog_derived_membership_snapshot_from_rules_facts_and_symbols
+            (self->rules_source, facts,
+            (const char *const *)self->known_symbols->pdata,
             WYREBOX_DAEMON_WIRELOG_VIEWS_MEMBERSHIP_RELATION, error);
     if (memberships == NULL)
         return FALSE;
+
+    for (guint i = 0; i < batch->len; i++)
+        g_hash_table_add (listed, g_ptr_array_index (batch, i));
+    g_ptr_array_add (batch, NULL);
+
+    for (guint i = 0; i < views->len; i++) {
+        const WirelogView *view = g_ptr_array_index (views, i);
+        g_autoptr (GPtrArray) view_memberships = g_ptr_array_new ();
+        g_autoptr (GPtrArray) changes = NULL;
+
+        for (guint j = 0; j < memberships->len; j++) {
+            WyreboxWirelogDerivedMembership *membership =
+                g_ptr_array_index (memberships, j);
+
+            if (g_strcmp0 (membership->view_id, view->view_id) == 0 &&
+                g_hash_table_contains (listed, membership->message_id))
+                g_ptr_array_add (view_memberships, membership);
+        }
+
+        if (!
+            wyrebox_derived_view_materializer_refresh_message_memberships_with_changes
+                (self->materializer, account_id, view->view_id, view->imap_name,
+            view->definition_ref, self->rule_version_hash, now,
+            (const char *const *)batch->pdata, view_memberships, &changes,
+            error) ||
+            !wyrebox_derived_view_membership_changes_append_journal (changes,
+            self->journal_writer, error))
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+static gboolean
+refresh_scoped_views (WyreboxDaemonWirelogViews *self, const char *account_id,
+    WyreboxDaemonViewScope scope, gboolean full, guint64 since, guint64 now,
+    GError **error)
+{
+    g_autoptr (GPtrArray) views = g_ptr_array_new ();
+    g_autofree char *cursor = g_strdup ("");
+    g_autoptr (GPtrArray) none = g_ptr_array_new ();
+    g_auto (duckdb_result) result = { 0 };
+
+    for (guint i = 0; i < self->views->len; i++) {
+        WirelogView *view = g_ptr_array_index (self->views, i);
+
+        if (view->scope == scope)
+            g_ptr_array_add (views, view);
+    }
+    if (views->len == 0)
+        return TRUE;
+
+    if (full && !refresh_batch (self, account_id, views, none, now, error))
+        return FALSE;
+
+    if (!fill_refresh_scope (self, account_id, scope, full, since, error))
+        return FALSE;
+
+    while (TRUE) {
+        g_autoptr (GPtrArray) batch = g_ptr_array_new_with_free_func (g_free);
+
+        if (!next_refresh_batch (self, &cursor, batch, error))
+            return FALSE;
+        if (batch->len == 0)
+            break;
+        if (!refresh_batch (self, account_id, views, batch, now, error))
+            return FALSE;
+    }
+
+    if (duckdb_query (self->connection,
+        "DROP TABLE IF EXISTS wirelog_refresh_scope;", &result) !=
+        DuckDBSuccess) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_FAILED,
+            "failed to drop Wirelog views refresh scope: %s",
+            duckdb_result_error (&result));
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static gboolean
+refresh_account_views (WyreboxDaemonWirelogViews *self,
+    const char *account_id, guint64 now, GError **error)
+{
+    g_autoptr (GPtrArray) facts = NULL;
+    g_autoptr (GPtrArray) memberships = NULL;
 
     for (guint i = 0; i < self->views->len; i++) {
         const WirelogView *view = g_ptr_array_index (self->views, i);
         g_autoptr (GPtrArray) view_memberships = NULL;
         g_autoptr (GPtrArray) changes = NULL;
+
+        if (view->scope != WYREBOX_DAEMON_VIEW_SCOPE_ACCOUNT)
+            continue;
+
+        if (memberships == NULL) {
+            facts = load_account_facts (self, account_id, error);
+            if (facts == NULL)
+                return FALSE;
+            self->loaded_fact_count += facts->len;
+            memberships =
+                wyrebox_wirelog_derived_membership_snapshot_from_rules_facts_and_symbols
+                    (self->rules_source, facts,
+                    (const char *const *)self->known_symbols->pdata,
+                    WYREBOX_DAEMON_WIRELOG_VIEWS_MEMBERSHIP_RELATION, error);
+            g_clear_pointer (&facts, g_ptr_array_unref);
+            if (memberships == NULL)
+                return FALSE;
+        }
 
         view_memberships = memberships_of_existing_messages (self, account_id,
                 view->view_id, memberships, error);
@@ -610,6 +1014,64 @@ wyrebox_daemon_wirelog_views_refresh_account (WyreboxDaemonWirelogViews *self,
     }
 
     return TRUE;
+}
+
+gboolean
+wyrebox_daemon_wirelog_views_refresh_account (WyreboxDaemonWirelogViews *self,
+    const char *account_id, GError **error)
+{
+    g_autofree char *config_hash = NULL;
+    g_autofree char *refreshed_config_hash = NULL;
+    guint64 refreshed_sequence = 0;
+    guint64 latest_sequence = 0;
+    guint64 now = (guint64)g_get_real_time ();
+    gboolean full = FALSE;
+
+    g_return_val_if_fail (WYREBOX_IS_DAEMON_WIRELOG_VIEWS (self), FALSE);
+    g_return_val_if_fail (account_id != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (self->views->len == 0)
+        return TRUE;
+
+    config_hash = refresh_config_hash (self);
+    if (!read_refresh_state (self, account_id, &refreshed_config_hash,
+        &refreshed_sequence, error) ||
+        !read_account_sequence (self, account_id, &latest_sequence, error))
+        return FALSE;
+
+    full = g_strcmp0 (refreshed_config_hash, config_hash) != 0;
+    if (!full && latest_sequence <= refreshed_sequence)
+        return TRUE;
+
+    return refresh_scoped_views (self, account_id,
+               WYREBOX_DAEMON_VIEW_SCOPE_MESSAGE, full, refreshed_sequence, now,
+               error)
+           && refresh_scoped_views (self, account_id,
+               WYREBOX_DAEMON_VIEW_SCOPE_THREAD, full, refreshed_sequence, now,
+               error)
+           && refresh_account_views (self, account_id, now, error)
+           && write_refresh_state (self, account_id, config_hash,
+               latest_sequence, error);
+}
+
+void
+wyrebox_daemon_wirelog_views_set_batch_size (WyreboxDaemonWirelogViews *self,
+    guint batch_size)
+{
+    g_return_if_fail (WYREBOX_IS_DAEMON_WIRELOG_VIEWS (self));
+    g_return_if_fail (batch_size > 0);
+
+    self->batch_size = batch_size;
+}
+
+guint64
+wyrebox_daemon_wirelog_views_get_loaded_fact_count (WyreboxDaemonWirelogViews
+    *self)
+{
+    g_return_val_if_fail (WYREBOX_IS_DAEMON_WIRELOG_VIEWS (self), 0);
+
+    return self->loaded_fact_count;
 }
 
 static GPtrArray *

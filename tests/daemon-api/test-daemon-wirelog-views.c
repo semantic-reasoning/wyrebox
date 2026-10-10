@@ -20,6 +20,20 @@
         "show_in_virtual_folder(\"ops\", message_id) :- " \
         "has_keyword(message_id, \"ops\").\n"
 
+#define THREAD_RULES \
+        ".decl has_keyword(message_id: symbol, keyword: symbol)\n" \
+        ".decl message_id(message: symbol, rfc_id: symbol)\n" \
+        ".decl replies_to(message: symbol, rfc_id: symbol)\n" \
+        ".decl linked(a: symbol, b: symbol)\n" \
+        ".decl in_thread(a: symbol, b: symbol)\n" \
+        ".decl show_in_virtual_folder(view_id: symbol, message_id: symbol)\n" \
+        "linked(a, b) :- replies_to(a, id), message_id(b, id).\n" \
+        "linked(a, b) :- replies_to(b, id), message_id(a, id).\n" \
+        "in_thread(a, a) :- has_keyword(a, \"project\").\n" \
+        "in_thread(a, c) :- in_thread(a, b), linked(b, c).\n" \
+        "show_in_virtual_folder(\"projects\", m) :- in_thread(r, m).\n" \
+        "show_in_virtual_folder(\"ops\", m) :- has_keyword(m, \"ops\").\n"
+
 typedef struct
 {
     gchar *root;
@@ -111,15 +125,37 @@ write_rules (ViewsFixture *fixture, const gchar *rules)
 }
 
 static void
-insert_fact (ViewsFixture *fixture, const gchar *fact_id,
-    const gchar *message_id, const gchar *predicate, const gchar *args_json)
+insert_fact_at (ViewsFixture *fixture, const gchar *fact_id,
+    const gchar *message_id, const gchar *predicate, const gchar *args_json,
+    guint64 sequence)
 {
     g_autofree gchar *sql = g_strdup_printf ("INSERT INTO message_facts ("
             "fact_id, account_id, message_id, object_id, predicate, args_json, "
             "source, confidence_ppm, created_at_unix_us, retracted_at_unix_us, "
             "journal_offset, journal_sequence) VALUES ('%s', 'account-1', "
-            "'%s', '', '%s', '%s', 'fact-mutation:account-1', 1000000, 1, 0, "
-            "1, 1);", fact_id, message_id, predicate, args_json);
+            "'%s', '', '%s', '%s', 'fact-mutation:account-1', 1000000, %"
+            G_GUINT64_FORMAT ", 0, %" G_GUINT64_FORMAT ", %" G_GUINT64_FORMAT
+            ");", fact_id, message_id, predicate, args_json, sequence,
+            sequence, sequence);
+
+    execute_sql (fixture, sql);
+}
+
+static void
+insert_fact (ViewsFixture *fixture, const gchar *fact_id,
+    const gchar *message_id, const gchar *predicate, const gchar *args_json)
+{
+    insert_fact_at (fixture, fact_id, message_id, predicate, args_json, 1);
+}
+
+static void
+retract_fact_at (ViewsFixture *fixture, const gchar *fact_id,
+    guint64 sequence)
+{
+    g_autofree gchar *sql = g_strdup_printf ("UPDATE message_facts SET "
+            "retracted_at_unix_us = %" G_GUINT64_FORMAT ", journal_sequence = %"
+            G_GUINT64_FORMAT " WHERE fact_id = '%s';", sequence, sequence,
+            fact_id);
 
     execute_sql (fixture, sql);
 }
@@ -185,7 +221,8 @@ views_fixture_tear_down (ViewsFixture *fixture, gconstpointer user_data)
 }
 
 static WyreboxDaemonWirelogViews *
-open_views (ViewsFixture *fixture)
+open_views_with_scopes (ViewsFixture *fixture,
+    WyreboxDaemonViewScope projects_scope, WyreboxDaemonViewScope ops_scope)
 {
     g_autoptr (GError) error = NULL;
     g_autoptr (WyreboxDaemonWirelogViews) views = NULL;
@@ -193,16 +230,23 @@ open_views (ViewsFixture *fixture)
     views = wyrebox_daemon_wirelog_views_new (fixture->rules_path, &error);
     g_assert_no_error (error);
     g_assert_true (wyrebox_daemon_wirelog_views_add_view (views, "projects",
-        "Projects", &error));
+        "Projects", projects_scope, &error));
     g_assert_no_error (error);
     g_assert_true (wyrebox_daemon_wirelog_views_add_view (views, "ops", "Ops",
-        &error));
+        ops_scope, &error));
     g_assert_no_error (error);
     g_assert_true (wyrebox_daemon_wirelog_views_open_catalog (views,
         fixture->catalog_path, fixture->writer, &error));
     g_assert_no_error (error);
 
     return g_steal_pointer (&views);
+}
+
+static WyreboxDaemonWirelogViews *
+open_views (ViewsFixture *fixture)
+{
+    return open_views_with_scopes (fixture, WYREBOX_DAEMON_VIEW_SCOPE_MESSAGE,
+               WYREBOX_DAEMON_VIEW_SCOPE_MESSAGE);
 }
 
 static void
@@ -213,6 +257,19 @@ refresh (WyreboxDaemonWirelogViews *views, const gchar *account_id)
     g_assert_true (wyrebox_daemon_wirelog_views_refresh_account (views,
         account_id, &error));
     g_assert_no_error (error);
+}
+
+/*
+ * Refreshes account-1 and returns how many facts the refresh loaded.
+ */
+static guint64
+refresh_loading (WyreboxDaemonWirelogViews *views)
+{
+    guint64 before = wyrebox_daemon_wirelog_views_get_loaded_fact_count
+            (views);
+
+    refresh (views, "account-1");
+    return wyrebox_daemon_wirelog_views_get_loaded_fact_count (views) - before;
 }
 
 static void
@@ -244,19 +301,176 @@ test_refresh_derives_views_from_materialized_facts (ViewsFixture *fixture,
     g_assert_cmpstr (views_rows, ==,
         "ops,Ops,wirelog:ops; projects,Projects,wirelog:projects");
 
-    insert_fact (fixture, "f5", "msg-3", "has_keyword",
-        "[\"msg-3\",\"project\"]");
+    insert_fact_at (fixture, "f5", "msg-3", "has_keyword",
+        "[\"msg-3\",\"project\"]", 5);
     refresh (views, "account-1");
     grown = visible_memberships (fixture);
     g_assert_cmpstr (grown, ==,
         "ops,msg-2,1; projects,msg-1,1; projects,msg-3,2");
 
-    execute_sql (fixture,
-        "UPDATE message_facts SET retracted_at_unix_us = 9 "
-        "WHERE fact_id = 'f1';");
+    retract_fact_at (fixture, "f1", 9);
     refresh (views, "account-1");
     shrunk = visible_memberships (fixture);
     g_assert_cmpstr (shrunk, ==, "ops,msg-2,1; projects,msg-3,2");
+}
+
+static void
+test_message_scope_refresh_loads_changed_messages (ViewsFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonWirelogViews) views = open_views (fixture);
+    g_autofree gchar *grown = NULL;
+    g_autofree gchar *shrunk = NULL;
+
+    (void)user_data;
+
+    insert_fact_at (fixture, "f1", "msg-1", "has_keyword",
+        "[\"msg-1\",\"project\"]", 4);
+    insert_fact_at (fixture, "f2", "msg-2", "has_keyword",
+        "[\"msg-2\",\"ops\"]", 5);
+    g_assert_cmpuint (refresh_loading (views), ==, 2);
+    g_assert_cmpuint (refresh_loading (views), ==, 0);
+
+    insert_fact_at (fixture, "f3", "msg-3", "has_keyword",
+        "[\"msg-3\",\"project\"]", 6);
+    g_assert_cmpuint (refresh_loading (views), ==, 1);
+    grown = visible_memberships (fixture);
+    g_assert_cmpstr (grown, ==,
+        "ops,msg-2,1; projects,msg-1,1; projects,msg-3,2");
+
+    retract_fact_at (fixture, "f1", 7);
+    g_assert_cmpuint (refresh_loading (views), ==, 0);
+    shrunk = visible_memberships (fixture);
+    g_assert_cmpstr (shrunk, ==, "ops,msg-2,1; projects,msg-3,2");
+}
+
+static void
+test_thread_scope_refresh_loads_connected_messages (ViewsFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonWirelogViews) views = NULL;
+    g_autofree gchar *initial = NULL;
+    g_autofree gchar *grown = NULL;
+    g_autofree gchar *split = NULL;
+
+    (void)user_data;
+
+    write_rules (fixture, THREAD_RULES);
+    views = open_views_with_scopes (fixture, WYREBOX_DAEMON_VIEW_SCOPE_THREAD,
+            WYREBOX_DAEMON_VIEW_SCOPE_THREAD);
+    wyrebox_daemon_wirelog_views_set_batch_size (views, 1);
+    execute_sql (fixture,
+        "INSERT INTO messages ("
+        "message_id, account_id, object_id, journal_offset, journal_sequence"
+        ") VALUES ('msg-4', 'account-1', 'object-4', 4, 4);");
+    insert_fact_at (fixture, "a1", "msg-1", "message_id",
+        "[\"msg-1\",\"<a>\"]", 5);
+    insert_fact_at (fixture, "a2", "msg-1", "has_keyword",
+        "[\"msg-1\",\"project\"]", 5);
+    insert_fact_at (fixture, "b1", "msg-2", "message_id",
+        "[\"msg-2\",\"<b>\"]", 6);
+    insert_fact_at (fixture, "b2", "msg-2", "replies_to",
+        "[\"msg-2\",\"<a>\"]", 6);
+    insert_fact_at (fixture, "c1", "msg-3", "message_id",
+        "[\"msg-3\",\"<c>\"]", 7);
+    insert_fact_at (fixture, "c2", "msg-3", "has_keyword",
+        "[\"msg-3\",\"ops\"]", 7);
+    g_assert_cmpuint (refresh_loading (views), ==, 6);
+    initial = visible_memberships (fixture);
+    g_assert_cmpstr (initial, ==,
+        "ops,msg-3,1; projects,msg-1,1; projects,msg-2,2");
+
+    insert_fact_at (fixture, "d1", "msg-4", "message_id",
+        "[\"msg-4\",\"<d>\"]", 8);
+    insert_fact_at (fixture, "d2", "msg-4", "replies_to",
+        "[\"msg-4\",\"<b>\"]", 8);
+    g_assert_cmpuint (refresh_loading (views), ==, 6);
+    grown = visible_memberships (fixture);
+    g_assert_cmpstr (grown, ==,
+        "ops,msg-3,1; projects,msg-1,1; projects,msg-2,2; projects,msg-4,3");
+
+    retract_fact_at (fixture, "b2", 9);
+    g_assert_cmpuint (refresh_loading (views), ==, 5);
+    split = visible_memberships (fixture);
+    g_assert_cmpstr (split, ==, "ops,msg-3,1; projects,msg-1,1");
+}
+
+static void
+test_account_scope_refresh_loads_all_facts (ViewsFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonWirelogViews) views = NULL;
+
+    (void)user_data;
+
+    views = open_views_with_scopes (fixture, WYREBOX_DAEMON_VIEW_SCOPE_ACCOUNT,
+            WYREBOX_DAEMON_VIEW_SCOPE_ACCOUNT);
+    insert_fact_at (fixture, "f1", "msg-1", "has_keyword",
+        "[\"msg-1\",\"project\"]", 4);
+    insert_fact_at (fixture, "f2", "msg-2", "has_keyword",
+        "[\"msg-2\",\"ops\"]", 5);
+    g_assert_cmpuint (refresh_loading (views), ==, 2);
+    g_assert_cmpuint (refresh_loading (views), ==, 0);
+
+    insert_fact_at (fixture, "f3", "msg-3", "has_keyword",
+        "[\"msg-3\",\"project\"]", 6);
+    g_assert_cmpuint (refresh_loading (views), ==, 3);
+}
+
+static void
+test_refresh_state_survives_restart_and_tracks_config (ViewsFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonWirelogViews) views = open_views (fixture);
+    g_autofree gchar *state = NULL;
+
+    (void)user_data;
+
+    insert_fact_at (fixture, "f1", "msg-1", "has_keyword",
+        "[\"msg-1\",\"project\"]", 4);
+    insert_fact_at (fixture, "f2", "msg-2", "has_keyword",
+        "[\"msg-2\",\"ops\"]", 5);
+    g_assert_cmpuint (refresh_loading (views), ==, 2);
+    state = query_rows (fixture,
+            "SELECT account_id, refreshed_journal_sequence, "
+            "refresh_config_hash LIKE 'sha256:%' "
+            "FROM derived_view_refresh_state;");
+    g_assert_cmpstr (state, ==, "account-1,5,true");
+    g_clear_object (&views);
+
+    views = open_views (fixture);
+    g_assert_cmpuint (refresh_loading (views), ==, 0);
+    g_clear_object (&views);
+
+    views = open_views_with_scopes (fixture, WYREBOX_DAEMON_VIEW_SCOPE_THREAD,
+            WYREBOX_DAEMON_VIEW_SCOPE_THREAD);
+    g_assert_cmpuint (refresh_loading (views), ==, 2);
+    g_assert_cmpuint (refresh_loading (views), ==, 0);
+}
+
+static void
+test_rule_change_moves_memberships_to_new_rule_version (ViewsFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonWirelogViews) views = open_views (fixture);
+    g_autofree gchar *after = NULL;
+
+    (void)user_data;
+
+    insert_fact_at (fixture, "f1", "msg-1", "has_keyword",
+        "[\"msg-1\",\"project\"]", 4);
+    refresh (views, "account-1");
+    g_clear_object (&views);
+
+    write_rules (fixture, TEST_RULES
+        "show_in_virtual_folder(\"ops\", m) :- has_keyword(m, \"urgent\").\n");
+    views = open_views (fixture);
+    g_assert_cmpuint (refresh_loading (views), ==, 1);
+    after = query_rows (fixture,
+            "SELECT view_id, message_id, uid, is_visible "
+            "FROM derived_view_memberships ORDER BY view_id, uid;");
+    g_assert_cmpstr (after, ==,
+        "projects,msg-1,1,false; projects,msg-1,2,true");
 }
 
 static void
@@ -353,7 +567,7 @@ test_new_rejects_unusable_rules (ViewsFixture *fixture,
     views = wyrebox_daemon_wirelog_views_new (fixture->rules_path, &error);
     g_assert_no_error (error);
     g_assert_false (wyrebox_daemon_wirelog_views_add_view (views, "projects",
-        "Projects", &error));
+        "Projects", WYREBOX_DAEMON_VIEW_SCOPE_MESSAGE, &error));
     g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
     g_assert_nonnull (strstr (error->message, "show_in_virtual_folder"));
 }
@@ -383,7 +597,8 @@ test_example_config_loads (void)
     g_assert_no_error (error);
     g_assert_true (wyrebox_daemon_wirelog_views_add_view (views,
         wyrebox_daemon_config_get_view_id (config, 0),
-        wyrebox_daemon_config_get_view_imap_name (config, 0), &error));
+        wyrebox_daemon_config_get_view_imap_name (config, 0),
+        wyrebox_daemon_config_get_view_scope (config, 0), &error));
     g_assert_no_error (error);
 }
 
@@ -395,6 +610,25 @@ main (int argc, char **argv)
     g_test_add ("/daemon-api/wirelog-views/refresh-from-facts", ViewsFixture,
         NULL, views_fixture_set_up,
         test_refresh_derives_views_from_materialized_facts,
+        views_fixture_tear_down);
+    g_test_add ("/daemon-api/wirelog-views/message-scope-loads-changed",
+        ViewsFixture, NULL, views_fixture_set_up,
+        test_message_scope_refresh_loads_changed_messages,
+        views_fixture_tear_down);
+    g_test_add ("/daemon-api/wirelog-views/thread-scope-loads-connected",
+        ViewsFixture, NULL, views_fixture_set_up,
+        test_thread_scope_refresh_loads_connected_messages,
+        views_fixture_tear_down);
+    g_test_add ("/daemon-api/wirelog-views/account-scope-loads-all",
+        ViewsFixture, NULL, views_fixture_set_up,
+        test_account_scope_refresh_loads_all_facts, views_fixture_tear_down);
+    g_test_add ("/daemon-api/wirelog-views/refresh-state",
+        ViewsFixture, NULL, views_fixture_set_up,
+        test_refresh_state_survives_restart_and_tracks_config,
+        views_fixture_tear_down);
+    g_test_add ("/daemon-api/wirelog-views/rule-change",
+        ViewsFixture, NULL, views_fixture_set_up,
+        test_rule_change_moves_memberships_to_new_rule_version,
         views_fixture_tear_down);
     g_test_add ("/daemon-api/wirelog-views/refresh-without-facts",
         ViewsFixture, NULL, views_fixture_set_up,
