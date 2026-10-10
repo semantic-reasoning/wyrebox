@@ -34,6 +34,19 @@ GPtrArray *wyrebox_wirelog_derived_membership_snapshot_from_rules_and_facts (
     const char *relation_name,
     GError **error);
 
+/*
+ * Like wyrebox_wirelog_derived_membership_snapshot_from_rules_and_facts(),
+ * but also resolves the NULL-terminated @known_symbols, such as view
+ * identifiers written as constants in @rules_source, in derived rows.
+ */
+GPtrArray *
+wyrebox_wirelog_derived_membership_snapshot_from_rules_facts_and_symbols (
+    const char *rules_source,
+    GPtrArray *facts,
+    const char *const *known_symbols,
+    const char *relation_name,
+    GError **error);
+
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxWirelogDerivedMembership,
     wyrebox_wirelog_derived_membership_clear)
 
