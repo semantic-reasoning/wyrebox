@@ -495,7 +495,7 @@ struct _TestSchemaMetadataStoreSpy
     gboolean save_called;
     gboolean observed_checkpoint_precondition_satisfied;
     guint migration_operation_call_count;
-    WyreboxSchemaMetadataStoreMigrationOperation observed_operations[9];
+    WyreboxSchemaMetadataStoreMigrationOperation observed_operations[10];
     gboolean fail_next_migration_operation;
     WyreboxSchemaMetadataStoreMigrationOperation observed_operation;
     guint64 observed_operation_source_version;
@@ -608,7 +608,9 @@ test_schema_metadata_store_spy_apply_migration_operation
            || operation ==
            WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_PROVENANCE_SPANS
            || operation ==
-           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW;
+           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW
+           || operation ==
+           WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_FACT_EXTRACTIONS;
 }
 
 static void
@@ -840,10 +842,10 @@ test_schema_migration_run_store_to_current_transient_precondition_not_saved
     g_assert_no_error (error);
     g_assert_true (spy->save_called);
     g_assert_cmpuint (spy->save_call_count, ==, 1);
-    g_assert_cmpuint (spy->migration_operation_call_count, ==, 9);
+    g_assert_cmpuint (spy->migration_operation_call_count, ==, 10);
     g_assert_cmpint (spy->observed_operation, ==,
-        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_PROVENANCE_SPANS);
-    g_assert_cmpuint (spy->observed_operation_source_version, ==, 8);
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_FACT_EXTRACTIONS);
+    g_assert_cmpuint (spy->observed_operation_source_version, ==, 9);
     g_assert_cmpuint (spy->observed_operation_target_version, ==,
         wyrebox_schema_migration_get_current_schema_version ());
     g_assert_false (spy->observed_checkpoint_precondition_satisfied);
@@ -874,7 +876,7 @@ test_schema_migration_run_store_missing_metadata_applies_full_path (void)
     g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
         (WyreboxSchemaMetadataStore *)spy, FALSE, &error));
     g_assert_no_error (error);
-    g_assert_cmpuint (spy->migration_operation_call_count, ==, 9);
+    g_assert_cmpuint (spy->migration_operation_call_count, ==, 10);
     g_assert_cmpint (spy->observed_operations[0], ==,
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP);
     g_assert_cmpint (spy->observed_operations[1], ==,
@@ -893,6 +895,8 @@ test_schema_migration_run_store_missing_metadata_applies_full_path (void)
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW);
     g_assert_cmpint (spy->observed_operations[8], ==,
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_PROVENANCE_SPANS);
+    g_assert_cmpint (spy->observed_operations[9], ==,
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_FACT_EXTRACTIONS);
     g_assert_cmpuint (spy->save_call_count, ==, 1);
 
     g_object_unref (spy);
@@ -3058,7 +3062,7 @@ test_missing_schema_metadata_runs_legacy_bootstrap_to_first_version (void)
 
     g_assert_false (metadata.schema_version_present);
     g_assert_cmpuint (first_version, ==, 1);
-    g_assert_cmpuint (current_version, ==, 9);
+    g_assert_cmpuint (current_version, ==, 10);
     g_assert_true (wyrebox_schema_migration_evaluate_to_version (migration,
         &metadata, first_version, &error));
     g_assert_no_error (error);
@@ -3093,6 +3097,28 @@ test_current_schema_version_is_noop (void)
     g_assert_true (metadata.schema_version_present);
     g_assert_cmpuint (metadata.schema_version, ==,
         wyrebox_schema_migration_get_current_schema_version ());
+}
+
+static void
+test_fact_extractions_step_preserves_checkpoint (void)
+{
+    g_autoptr (WyreboxSchemaMigration) migration = NULL;
+    g_auto (WyreboxSchemaMigrationMetadataState) metadata = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    migration = wyrebox_schema_migration_new ();
+    metadata.schema_version_present = TRUE;
+    metadata.schema_version = 9;
+    test_schema_migration_set_materialization_checkpoint_fields (&metadata);
+
+    g_assert_true (wyrebox_schema_migration_evaluate_to_current (migration,
+        &metadata, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (metadata.schema_version, ==, 10);
+    g_assert_true (metadata.materialization_checkpoint_present);
+    g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==,
+        4096);
+    g_assert_cmpuint (metadata.materialization_checkpoint_sequence, ==, 2048);
 }
 
 static void
@@ -3196,8 +3222,8 @@ test_explicit_forward_path_succeeds_with_checkpoint_precondition (void)
     g_assert_true (wyrebox_schema_migration_evaluate_to_current (migration,
         &metadata, &error));
     g_assert_no_error (error);
-    g_assert_cmpuint (fixture_data.operation_call_count, ==, 9);
-    g_assert_cmpuint (fixture_data.validation_call_count, ==, 9);
+    g_assert_cmpuint (fixture_data.operation_call_count, ==, 10);
+    g_assert_cmpuint (fixture_data.validation_call_count, ==, 10);
     g_assert_cmpuint (metadata.schema_version, ==, current_version);
     g_assert_false (metadata.materialization_checkpoint_present);
     g_assert_cmpuint (metadata.materialization_checkpoint_journal_offset, ==,
@@ -3287,7 +3313,7 @@ test_schema_version_constants_are_testable (void)
         wyrebox_schema_migration_get_first_supported_schema_version
             (), ==, 1);
     g_assert_cmpuint (wyrebox_schema_migration_get_current_schema_version (),
-        ==, 9);
+        ==, 10);
 }
 
 int
@@ -3342,6 +3368,9 @@ main (int argc, char **argv)
     g_test_add_func
         ("/migration/schema/duckdb-run-store-missing-metadata",
         test_schema_migration_duckdb_run_store_missing_metadata_persists_current);
+    g_test_add_func (
+        "/migration/schema/fact-extractions-step-preserves-checkpoint",
+        test_fact_extractions_step_preserves_checkpoint);
     g_test_add_func
         ("/migration/schema/duckdb-run-store-current-preserves-checkpoint",
         test_schema_migration_duckdb_run_store_current_preserves_checkpoint);

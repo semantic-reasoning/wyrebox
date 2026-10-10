@@ -1441,6 +1441,24 @@ test_memory_store_accepts_add_object_reachability_view_migration_operation
 }
 
 static void
+test_memory_store_accepts_add_message_fact_extractions_migration_operation
+    (void)
+{
+    g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+    g_autoptr (GError) error = NULL;
+    guint64 target_version = 0;
+
+    store = wyrebox_schema_metadata_store_new_memory ();
+    target_version = wyrebox_schema_migration_get_current_schema_version ();
+
+    g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (
+            store,
+            WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_FACT_EXTRACTIONS,
+            target_version - 1, target_version, &error));
+    g_assert_no_error (error);
+}
+
+static void
 test_memory_store_rejects_unknown_migration_operation (void)
 {
     g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
@@ -1836,6 +1854,53 @@ test_duckdb_store_add_object_reachability_view_migration_operation (void)
 }
 
 static void
+test_duckdb_store_add_message_fact_extractions_migration_operation (void)
+{
+    g_autofree char *root = NULL;
+    g_autofree char *path = make_duckdb_path (&root);
+    g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+    g_autoptr (GError) error = NULL;
+    duckdb_database database = NULL;
+    duckdb_connection connection = NULL;
+    guint64 target_version =
+        wyrebox_schema_migration_get_current_schema_version ();
+
+    store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (
+            store,
+            WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
+            0,
+            wyrebox_schema_migration_get_first_supported_schema_version (),
+            &error));
+    g_assert_no_error (error);
+    for (guint i = 0; i < 2; i++) {
+        g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation
+                (store,
+            WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_FACT_EXTRACTIONS,
+            target_version - 1, target_version, &error));
+        g_assert_no_error (error);
+    }
+    g_clear_object (&store);
+
+    g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+    g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+    g_assert_true (duckdb_table_exists (connection,
+        "message_fact_extractions"));
+    assert_bootstrap_query_succeeds (connection,
+        "INSERT INTO message_fact_extractions (account_id, message_id, "
+        "fact_count, journal_offset, journal_sequence) "
+        "VALUES ('account-1', 'journal:0:1', 2, 0, 1);");
+    assert_bootstrap_query_fails (connection,
+        "INSERT INTO message_fact_extractions (account_id, message_id, "
+        "fact_count, journal_offset, journal_sequence) "
+        "VALUES ('account-1', 'journal:0:1', 0, 0, 2);");
+    (void)duckdb_disconnect (&connection);
+    (void)duckdb_close (&database);
+    remove_directory_tree (root);
+}
+
+static void
 test_duckdb_store_legacy_bootstrap_creates_catalog_tables (void)
 {
     g_autofree char *root = NULL;
@@ -2150,6 +2215,9 @@ main (int argc, char **argv)
         "memory-store-accepts-add-object-reachability-view-operation",
         test_memory_store_accepts_add_object_reachability_view_migration_operation);
     g_test_add_func ("/migration/schema-metadata-store/"
+        "memory-store-accepts-add-message-fact-extractions-operation",
+        test_memory_store_accepts_add_message_fact_extractions_migration_operation);
+    g_test_add_func ("/migration/schema-metadata-store/"
         "memory-store-rejects-unknown-operation",
         test_memory_store_rejects_unknown_migration_operation);
     g_test_add_func
@@ -2173,6 +2241,9 @@ main (int argc, char **argv)
     g_test_add_func ("/migration/schema-metadata-store/duckdb-store/"
         "add-object-reachability-view-operation",
         test_duckdb_store_add_object_reachability_view_migration_operation);
+    g_test_add_func ("/migration/schema-metadata-store/duckdb-store/"
+        "add-message-fact-extractions-operation",
+        test_duckdb_store_add_message_fact_extractions_migration_operation);
     g_test_add_func
         ("/migration/schema-metadata-store/duckdb-store/"
         "legacy-bootstrap-creates-catalog-tables",

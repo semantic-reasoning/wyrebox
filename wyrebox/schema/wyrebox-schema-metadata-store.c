@@ -1193,7 +1193,9 @@ wyrebox_schema_metadata_store_memory_apply_migration_operation
         || operation ==
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_PROVENANCE_SPANS
         || operation ==
-        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW)
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW
+        || operation ==
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_FACT_EXTRACTIONS)
 
 
         return TRUE;
@@ -1936,6 +1938,24 @@ duckdb_store_scope_derived_views_by_account (WyreboxSchemaMetadataStoreDuckdb
            && duckdb_store_query (self,
                "ALTER TABLE derived_view_memberships_replacement "
                "RENAME TO derived_view_memberships;", error);
+}
+
+/*
+ * One row per delivered message whose header facts were extracted, so a
+ * FactsExtracted record is appended at most once per message.
+ */
+static gboolean
+duckdb_store_create_message_fact_extractions (WyreboxSchemaMetadataStoreDuckdb
+    *self, GError **error)
+{
+    return duckdb_store_query (self,
+               "CREATE TABLE IF NOT EXISTS message_fact_extractions ("
+               "account_id VARCHAR NOT NULL,"
+               "message_id VARCHAR NOT NULL,"
+               "fact_count UBIGINT NOT NULL,"
+               "journal_offset UBIGINT NOT NULL,"
+               "journal_sequence UBIGINT NOT NULL,"
+               "PRIMARY KEY(account_id, message_id)" ");", error);
 }
 
 static gboolean
@@ -2872,6 +2892,9 @@ wyrebox_schema_metadata_store_duckdb_apply_migration_operation
     case
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW
         :
+    case
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_FACT_EXTRACTIONS
+        :
         break;
     default:
         goto unsupported;
@@ -2914,6 +2937,10 @@ wyrebox_schema_metadata_store_duckdb_apply_migration_operation
         || (operation ==
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW
         && duckdb_store_create_object_reachability_view (duckdb_store,
+        error))
+        || (operation ==
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_FACT_EXTRACTIONS
+        && duckdb_store_create_message_fact_extractions (duckdb_store,
         error))) ||
         !duckdb_store_query (duckdb_store, "COMMIT;", error)) {
         duckdb_store_rollback_quietly (duckdb_store);
