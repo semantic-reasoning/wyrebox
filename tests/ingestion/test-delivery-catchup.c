@@ -1102,6 +1102,26 @@ assert_single_hold (const WyreboxDeliveryCatchupReport *report,
     g_assert_error (hold->error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
 }
 
+static void
+assert_materialized_accounts (const WyreboxDeliveryCatchupReport *report,
+    ...)
+{
+    va_list args;
+    guint count = 0;
+
+    g_assert_nonnull (report->materialized_accounts);
+    va_start (args, report);
+    for (const gchar *account = va_arg (args, const gchar *); account != NULL;
+        account = va_arg (args, const gchar *)) {
+        g_assert_cmpuint (count, <, report->materialized_accounts->len);
+        g_assert_cmpstr (g_ptr_array_index (report->materialized_accounts,
+            count), ==, account);
+        count++;
+    }
+    va_end (args);
+    g_assert_cmpuint (report->materialized_accounts->len, ==, count);
+}
+
 typedef struct
 {
     gchar *object_root;
@@ -2235,6 +2255,7 @@ test_account_catchup_fact_mutations_follow_holds (InterleavedFixture *fixture,
     g_assert_no_error (error);
     assert_single_hold (&held, "account-b", &fixture->b1);
     g_assert_cmpuint (held.records_scanned, ==, 9);
+    assert_materialized_accounts (&held, "account-a", NULL);
     assert_catalog_checkpoint (fixture->catalog_path, &fixture->a1);
 
     a_projects = expected_fact_row ("account-a", &fixture->a1,
@@ -2252,6 +2273,7 @@ test_account_catchup_fact_mutations_follow_holds (InterleavedFixture *fixture,
         fixture->object_root, fixture->journal_root, &recovered, &error));
     g_assert_no_error (error);
     g_assert_cmpuint (recovered.holds->len, ==, 0);
+    assert_materialized_accounts (&recovered, "account-a", "account-b", NULL);
     assert_catalog_checkpoint_at (fixture->catalog_path, a_retract);
     b_projects = expected_fact_row ("account-b", &fixture->b1,
             "view-projects", 0, b_insert);

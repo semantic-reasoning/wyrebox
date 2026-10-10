@@ -79,12 +79,15 @@ typedef struct
  * @scanned_through: the last record replayed by the pass, or the
  *   position the pass resumed after when it replayed none; not present when a
  *   pass from the checkpoint replayed nothing.
+ * @materialized_accounts: (owned) (element-type utf8): distinct accounts, in
+ *   ascending order, with at least one record applied by the pass.
  */
 typedef struct
 {
   GPtrArray *holds;
   guint records_scanned;
   WyreboxDeliveryCatchupCursor scanned_through;
+  GPtrArray *materialized_accounts;
 } WyreboxDeliveryCatchupReport;
 
 void wyrebox_delivery_catchup_report_clear (
