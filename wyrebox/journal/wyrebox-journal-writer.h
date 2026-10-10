@@ -15,6 +15,7 @@ typedef enum
     WYREBOX_JOURNAL_EVENT_FACT_RETRACTED,
     WYREBOX_JOURNAL_EVENT_DERIVED_VIEW_MEMBERSHIP_CHANGED,
     WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED,
+    WYREBOX_JOURNAL_EVENT_FACTS_EXTRACTED,
 } WyreboxJournalEventType;
 
 const char *wyrebox_journal_event_type_to_string (WyreboxJournalEventType

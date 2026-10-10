@@ -45,6 +45,12 @@ static const WyreboxJournalEventTypeDescriptor catalog[] = {
         "journal.payload.daemon-audit-recorded.v1",
         "Administrative repair or policy action",
     },
+    {
+        WYREBOX_JOURNAL_EVENT_FACTS_EXTRACTED,
+        "FactsExtracted",
+        "journal.payload.facts-extracted.v1",
+        "Header facts extracted from one delivered message",
+    },
 };
 
 void
