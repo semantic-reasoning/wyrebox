@@ -174,19 +174,62 @@ jobs:
 
   ubuntu-26-04-dovecot:
     name: Ubuntu 26.04 Dovecot 2.4.2
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: formatting
 
     steps:
       - name: Check out sources
         uses: actions/checkout@v6
 
-      - name: Build the Ubuntu 26.04 image
+      - name: Install build dependencies
         run: |
-          docker build -t wyrebox-ubuntu-26.04 \
-            -f ci/ubuntu-26.04/Containerfile ci/ubuntu-26.04
+          echo "postfix postfix/main_mailer_type select No configuration" \
+            | sudo debconf-set-selections
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            capnproto \
+            dovecot-dev \
+            dovecot-imapd \
+            libcapnp-dev \
+            libglib2.0-dev \
+            meson \
+            ninja-build \
+            pkg-config \
+            postfix \
+            unzip
 
-      - name: Build and test in system and fixture Dovecot modes
+      - name: Configure (system Dovecot)
         run: |
-          docker run --rm -v "$PWD:/src" -w /src wyrebox-ubuntu-26.04 \
-            ./tools/ci/run-ubuntu-26.04.sh
+          meson setup _build-system \
+            -Dcapnp=enabled \
+            -Dcapnp_serialization=enabled \
+            -Ddovecot_backend=enabled \
+            -Ddovecot_config=/usr/lib/dovecot/dovecot-config
+
+      - name: Build (system Dovecot)
+        run: |
+          meson compile -C _build-system
+
+      - name: Test (system Dovecot)
+        run: |
+          meson test -C _build-system --print-errorlogs
+
+      - name: Configure (fixture Dovecot)
+        run: |
+          meson setup _build-fixture \
+            -Dcapnp=enabled \
+            -Dcapnp_serialization=enabled \
+            -Ddovecot_backend=enabled \
+            -Ddovecot_source_dir=tests/dovecot/fixtures/valid-2.4.2 \
+            -Ddovecot_build_dir=tests/dovecot/fixtures/valid-2.4.2/build-config-valid
+
+      - name: Build (fixture Dovecot)
+        run: |
+          meson compile -C _build-fixture
+
+      - name: Test (fixture Dovecot)
+        run: |
+          meson test -C _build-fixture --print-errorlogs
