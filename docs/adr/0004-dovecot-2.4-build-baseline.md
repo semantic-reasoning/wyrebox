@@ -41,20 +41,23 @@ packaged there.
     declares each type the plugin uses, so code that compiles in fixture mode
     also compiles in system mode. It stays until the fixture-based mailbox
     smoke test is migrated or retired.
-- A checked-in container definition based on `ubuntu:26.04` installs the full
-  toolchain, including Cap'n Proto, `dovecot-dev`, `dovecot-imapd`, and
-  `postfix`. A CI job builds that image and runs the full test suite in it in
-  both Dovecot modes. That job is the Dovecot baseline gate.
+- A CI job runs on the GitHub-hosted `ubuntu-26.04` runner, installs only the
+  packages WyreBox needs on top of that image (the build toolchain, Cap'n
+  Proto, `dovecot-dev`, `dovecot-imapd`, and `postfix`) with `apt-get`, and
+  runs the full test suite in both Dovecot modes. That job is the Dovecot
+  baseline gate.
 
 ## Alternatives Considered
 
-- Keep Dovecot `2.3.21.1` and build it from source inside the Ubuntu 26.04
-  image. Rejected: it pins WyreBox to a release line that the target
+- Keep Dovecot `2.3.21.1` and build it from source on Ubuntu 26.04.
+  Rejected: it pins WyreBox to a release line that the target
   distribution no longer ships, and a source build would be a project-owned
   Dovecot that operators do not run.
-- Use a container job (`container:` in GitHub Actions) with a prebuilt
-  registry image. Deferred: building the image inside the job needs no
-  registry or publishing credentials.
+- Build and run a project-owned `ubuntu:26.04` container image in CI, or use a
+  `container:` job with a prebuilt registry image. Rejected: the GitHub-hosted
+  `ubuntu-26.04` runner already provides the baseline distribution, so a
+  project image only adds a build step and a second definition of the
+  environment to maintain.
 
 ## Consequences And Known Gaps
 
@@ -68,5 +71,5 @@ packaged there.
   issue #355.
 - The existing `ubuntu-24.04` CI jobs never enabled the Dovecot backend, so
   they are not Dovecot baselines. They stay for the clang matrix and the arm64
-  sanitizer until equivalent coverage exists in the Ubuntu 26.04 image.
+  sanitizer until equivalent coverage exists on the `ubuntu-26.04` runner.
   Retiring them is a follow-up.

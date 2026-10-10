@@ -62,8 +62,14 @@ def main() -> None:
         sections, "## Decision", r"/usr/lib/dovecot/dovecot-config"
     )
     assert_section_matches(sections, "## Decision", r"Fixture mode")
-    assert_section_matches(sections, "## Decision", r"`ubuntu:26\.04`")
+    assert_section_matches(sections, "## Decision", r"GitHub-hosted")
+    assert_section_matches(sections, "## Decision", r"`ubuntu-26\.04` runner")
     assert_section_matches(sections, "## Decision", r"CI job")
+    assert not re.search(
+        r"Containerfile|container definition|builds that image",
+        sections["## Decision"],
+        re.IGNORECASE,
+    ), "ADR Decision must not require a project-built container image"
     assert_section_matches(
         sections, "## Consequences And Known Gaps", r"#355"
     )
