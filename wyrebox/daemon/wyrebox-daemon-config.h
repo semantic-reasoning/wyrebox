@@ -49,6 +49,31 @@ const char *wyrebox_daemon_config_get_object_root_dir (WyreboxDaemonConfig *self
 const char *wyrebox_daemon_config_get_catalog_path (WyreboxDaemonConfig *self);
 
 /*
+ * Returns: (transfer none) (nullable): the absolute Wirelog rules file path
+ * from the [wirelog] section, or NULL when Wirelog views are not configured.
+ * The file itself is read and compiled at daemon startup.
+ */
+const char *wyrebox_daemon_config_get_wirelog_rules_path (
+    WyreboxDaemonConfig *self);
+
+/*
+ * Returns: the number of [view:<view_id>] sections, in file order.
+ */
+guint wyrebox_daemon_config_get_n_views (WyreboxDaemonConfig *self);
+
+/*
+ * Returns: (transfer none): the view id of the view section at @index.
+ */
+const char *wyrebox_daemon_config_get_view_id (WyreboxDaemonConfig *self,
+    guint index);
+
+/*
+ * Returns: (transfer none): the IMAP mailbox name of the view at @index.
+ */
+const char *wyrebox_daemon_config_get_view_imap_name (
+    WyreboxDaemonConfig *self, guint index);
+
+/*
  * Returns: (transfer none): the validated config file path.
  */
 const char *wyrebox_daemon_config_get_config_path (WyreboxDaemonConfig *self);

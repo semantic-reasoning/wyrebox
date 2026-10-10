@@ -226,6 +226,97 @@ test_daemon_config_rejects_malformed_assignment (void)
     g_assert_nonnull (strstr (error->message, "malformed assignment"));
 }
 
+static void
+test_daemon_config_loads_wirelog_views (void)
+{
+    g_autofree char *dir = create_config_fixture_dir ();
+    g_autofree char *config_path = write_config_fixture (dir,
+            "[daemon]\n"
+            "socket_path=/run/wyrebox/wyrebox.sock\n"
+            "\n"
+            "[wirelog]\n"
+            "rules_path=/etc/wyrebox/views.dl\n"
+            "\n"
+            "[view:projects]\n"
+            "imap_name=Projects\n"
+            "\n"
+            "[view:ops.alerts]\n"
+            "imap_name=Ops/Alerts\n",
+            0600);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDaemonConfig) config = NULL;
+
+    config = wyrebox_daemon_config_new_from_file (config_path, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (config);
+    g_assert_cmpstr (wyrebox_daemon_config_get_wirelog_rules_path (config), ==,
+        "/etc/wyrebox/views.dl");
+    g_assert_cmpuint (wyrebox_daemon_config_get_n_views (config), ==, 2);
+    g_assert_cmpstr (wyrebox_daemon_config_get_view_id (config, 0), ==,
+        "projects");
+    g_assert_cmpstr (wyrebox_daemon_config_get_view_imap_name (config, 0), ==,
+        "Projects");
+    g_assert_cmpstr (wyrebox_daemon_config_get_view_id (config, 1), ==,
+        "ops.alerts");
+    g_assert_cmpstr (wyrebox_daemon_config_get_view_imap_name (config, 1), ==,
+        "Ops/Alerts");
+}
+
+static void
+test_daemon_config_without_wirelog_has_no_views (void)
+{
+    g_autofree char *dir = create_config_fixture_dir ();
+    g_autofree char *config_path = write_config_fixture (dir,
+            "[daemon]\n" "socket_path=/run/wyrebox/wyrebox.sock\n", 0600);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDaemonConfig) config = NULL;
+
+    config = wyrebox_daemon_config_new_from_file (config_path, &error);
+    g_assert_no_error (error);
+    g_assert_null (wyrebox_daemon_config_get_wirelog_rules_path (config));
+    g_assert_cmpuint (wyrebox_daemon_config_get_n_views (config), ==, 0);
+}
+
+static void
+assert_wirelog_config_rejected (const char *wirelog_sections,
+    const char *expected_message)
+{
+    g_autofree char *dir = create_config_fixture_dir ();
+    g_autofree char *contents = g_strconcat ("[daemon]\n"
+            "socket_path=/run/wyrebox/wyrebox.sock\n", wirelog_sections, NULL);
+    g_autofree char *config_path = write_config_fixture (dir, contents, 0600);
+    g_autoptr (GError) error = NULL;
+
+    g_assert_null (wyrebox_daemon_config_new_from_file (config_path, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    if (strstr (error->message, expected_message) == NULL)
+        g_error ("expected '%s' in '%s'", expected_message, error->message);
+}
+
+static void
+test_daemon_config_rejects_invalid_wirelog_views (void)
+{
+    assert_wirelog_config_rejected ("[wirelog]\nrules_path=views.dl\n",
+        "[wirelog] rules_path must be absolute");
+    assert_wirelog_config_rejected ("[view:projects]\nimap_name=Projects\n",
+        "view sections require [wirelog] rules_path");
+    assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
+        "[view:projects]\n", "view 'projects' is missing imap_name");
+    assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
+        "[view:bad id]\nimap_name=Projects\n", "invalid view id 'bad id'");
+    assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
+        "[view:projects]\nimap_name=Projects\n"
+        "[view:projects]\nimap_name=Other\n",
+        "defines view 'projects' more than once");
+    assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
+        "[view:a]\nimap_name=Projects\n[view:b]\nimap_name=Projects\n",
+        "share imap_name 'Projects'");
+    assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
+        "[view:a]\nimap_name=INBOX\n", "view 'a' has invalid imap_name");
+    assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
+        "relation=show\n", "unknown key 'relation'");
+}
+
 int
 main (int argc, char **argv)
 {
@@ -254,6 +345,12 @@ main (int argc, char **argv)
         test_daemon_config_rejects_relative_catalog_path);
     g_test_add_func ("/daemon-api/config/rejects-insecure-permissions",
         test_daemon_config_rejects_insecure_permissions);
+    g_test_add_func ("/daemon-api/config/loads-wirelog-views",
+        test_daemon_config_loads_wirelog_views);
+    g_test_add_func ("/daemon-api/config/without-wirelog-has-no-views",
+        test_daemon_config_without_wirelog_has_no_views);
+    g_test_add_func ("/daemon-api/config/rejects-invalid-wirelog-views",
+        test_daemon_config_rejects_invalid_wirelog_views);
     g_test_add_func ("/daemon-api/config/rejects-malformed-assignment",
         test_daemon_config_rejects_malformed_assignment);
 
