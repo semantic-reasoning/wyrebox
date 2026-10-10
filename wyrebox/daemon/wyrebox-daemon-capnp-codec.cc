@@ -1857,6 +1857,147 @@ encode_mail_event_stream_request (const WyreboxDaemonRequestIdentity *identity,
 }
 
 static gboolean
+validate_encode_identity (const WyreboxDaemonRequestIdentity *identity,
+    GError **error)
+{
+    g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
+
+    if (identity == NULL)
+        return set_invalid_argument (error, "request identity is null");
+
+    return wyrebox_daemon_request_identity_init (&validated_identity,
+               identity->request_id, identity->caller_identity,
+               identity->account_identity, identity->tool_identity,
+               identity->correlation_id, error);
+}
+
+static void
+encode_request_identity (RequestFrame::Builder request_frame,
+    const WyreboxDaemonRequestIdentity *identity)
+{
+    auto request_identity = request_frame.initIdentity ();
+
+    request_identity.setRequestId (identity->request_id);
+    request_identity.setCallerIdentity (identity->caller_identity != NULL
+        ? identity->caller_identity : "");
+    request_identity.setAccountIdentity (identity->account_identity != NULL
+        ? identity->account_identity : "");
+    request_identity.setToolIdentity (identity->tool_identity != NULL
+        ? identity->tool_identity : "");
+    request_identity.setCorrelationId (identity->correlation_id != NULL
+        ? identity->correlation_id : "");
+}
+
+static GBytes *
+request_builder_to_bytes (capnp::MallocMessageBuilder & request_builder)
+{
+    auto words = capnp::messageToFlatArray (request_builder);
+    auto bytes = words.asBytes ();
+
+    return g_bytes_new (bytes.begin (), bytes.size ());
+}
+
+static gboolean
+encode_fact_mutation_request (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonFactMutationRequest *request, GBytes **out_bytes,
+    GError **error)
+{
+    try {
+        g_auto (WyreboxDaemonFactMutationRequest) validated_request = { };
+        guint n_arguments = 0;
+
+        if (!validate_encode_identity (identity, error))
+            return FALSE;
+
+        if (request == NULL)
+            return set_invalid_argument (error, "fact mutation request is null");
+
+        if (!wyrebox_daemon_fact_mutation_request_init (&validated_request,
+            request->mutation, request->predicate_id, request->scope_id,
+            (const char *const *)request->arguments, error))
+            return FALSE;
+
+        capnp::MallocMessageBuilder request_builder;
+        auto request_frame = request_builder.initRoot < RequestFrame > ();
+
+        encode_request_identity (request_frame, identity);
+        auto fact_mutation = request_frame.initFactMutation ();
+        fact_mutation.setMutation (request->mutation ==
+            WYREBOX_DAEMON_FACT_MUTATION_RETRACT ? FactMutationKind::RETRACT :
+            FactMutationKind::INSERT);
+        fact_mutation.setPredicateId (request->predicate_id);
+        fact_mutation.setScopeId (request->scope_id);
+        n_arguments = request->arguments != NULL ?
+            g_strv_length (request->arguments) : 0;
+        auto arguments = fact_mutation.initArguments (n_arguments);
+        for (guint i = 0; i < n_arguments; i++)
+            arguments.set (i, request->arguments[i]);
+
+        *out_bytes = request_builder_to_bytes (request_builder);
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "fact mutation request encode failed: %s", e.what ());
+    }
+
+    return FALSE;
+}
+
+static gboolean
+encode_wirelog_predicate_query_request (const WyreboxDaemonRequestIdentity
+    *identity, const WyreboxDaemonWirelogPredicateQueryRequest *request,
+    GBytes **out_bytes, GError **error)
+{
+    try {
+        g_auto (WyreboxDaemonWirelogPredicateQueryRequest) validated_request =
+        { 0 };
+        guint n_bindings = 0;
+
+        if (!validate_encode_identity (identity, error))
+            return FALSE;
+
+        if (request == NULL)
+            return set_invalid_argument (error,
+                       "wirelog predicate query request is null");
+
+        if (!wyrebox_daemon_wirelog_predicate_query_request_init
+                (&validated_request, request->query_id, request->predicate_id,
+            request->scope_id, (const char *const *)request->bindings, error))
+            return FALSE;
+
+        capnp::MallocMessageBuilder request_builder;
+        auto request_frame = request_builder.initRoot < RequestFrame > ();
+
+        encode_request_identity (request_frame, identity);
+        auto query = request_frame.initWirelogPredicateQuery ();
+        query.setQueryId (request->query_id);
+        query.setPredicateId (request->predicate_id);
+        query.setScopeId (request->scope_id);
+        n_bindings = request->bindings != NULL ?
+            g_strv_length (request->bindings) : 0;
+        auto bindings = query.initBindings (n_bindings);
+        for (guint i = 0; i < n_bindings; i++)
+            bindings.set (i, request->bindings[i]);
+
+        *out_bytes = request_builder_to_bytes (request_builder);
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "wirelog predicate query request encode failed: %s", e.what ());
+    }
+
+    return FALSE;
+}
+
+static gboolean
 validate_duckdb_query_template_encode_input (const WyreboxDaemonRequestIdentity
     *identity, const WyreboxDaemonDuckDBQueryTemplateRequest *request,
     GError **error)
@@ -2623,6 +2764,43 @@ wyrebox_daemon_capnp_codec_encode_mail_event_stream_request (const
     g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
     if (!encode_mail_event_stream_request (identity, request, &out_bytes,
+        error))
+        return NULL;
+
+    return g_steal_pointer (&out_bytes);
+}
+
+GBytes *
+wyrebox_daemon_capnp_codec_encode_fact_mutation_request (const
+    WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonFactMutationRequest *request, gpointer user_data,
+    GError **error)
+{
+    g_autoptr (GBytes) out_bytes = NULL;
+
+    (void)user_data;
+
+    g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+    if (!encode_fact_mutation_request (identity, request, &out_bytes, error))
+        return NULL;
+
+    return g_steal_pointer (&out_bytes);
+}
+
+GBytes *
+wyrebox_daemon_capnp_codec_encode_wirelog_predicate_query_request (const
+    WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonWirelogPredicateQueryRequest *request,
+    gpointer user_data, GError **error)
+{
+    g_autoptr (GBytes) out_bytes = NULL;
+
+    (void)user_data;
+
+    g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+    if (!encode_wirelog_predicate_query_request (identity, request, &out_bytes,
         error))
         return NULL;
 
