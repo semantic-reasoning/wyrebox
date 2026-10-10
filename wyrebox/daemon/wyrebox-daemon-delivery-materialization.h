@@ -221,6 +221,37 @@ void wyrebox_daemon_delivery_materialization_set_refresh_func (
     GDestroyNotify user_data_destroy);
 
 /*
+ * Journals the derived facts of @account_id's materialized messages that have
+ * not been extracted yet and stores in @out_appended how many records it
+ * appended, also when it fails. Called with the internal lock held, so it must not call back into
+ * the materialization service.
+ */
+typedef gboolean (*WyreboxDaemonDeliveryMaterializationExtractFunc) (
+    const char *account_id,
+    guint *out_appended,
+    gpointer user_data,
+    GError **error);
+
+/*
+ * Installs @extract, which every pass that does not abort runs before the
+ * refresh function for the same accounts. When it appends records, the pass
+ * runs once more, the same way, so the appended records are materialized
+ * before any account is refreshed.
+ *
+ * A failed extraction holds the account like a failed refresh, with an error
+ * prefixed by "fact extraction failed: ", and the account is not refreshed
+ * by that pass. It stays queued, so the next pass extracts it again.
+ *
+ * Takes ownership of @user_data and releases it with @user_data_destroy when
+ * replaced or when @self is disposed.
+ */
+void wyrebox_daemon_delivery_materialization_set_extract_func (
+    WyreboxDaemonDeliveryMaterialization *self,
+    WyreboxDaemonDeliveryMaterializationExtractFunc extract,
+    gpointer user_data,
+    GDestroyNotify user_data_destroy);
+
+/*
  * Queues @account_id for refresh by the next pass, for example after a rule
  * change at startup. Safe to call from any thread.
  */

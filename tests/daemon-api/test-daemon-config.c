@@ -236,6 +236,7 @@ test_daemon_config_loads_wirelog_views (void)
             "\n"
             "[wirelog]\n"
             "rules_path=/etc/wyrebox/views.dl\n"
+            "extraction_rules_path=/etc/wyrebox/extraction.rules\n"
             "\n"
             "[view:projects]\n"
             "imap_name=Projects\n"
@@ -251,6 +252,8 @@ test_daemon_config_loads_wirelog_views (void)
     g_assert_nonnull (config);
     g_assert_cmpstr (wyrebox_daemon_config_get_wirelog_rules_path (config), ==,
         "/etc/wyrebox/views.dl");
+    g_assert_cmpstr (wyrebox_daemon_config_get_extraction_rules_path (config),
+        ==, "/etc/wyrebox/extraction.rules");
     g_assert_cmpuint (wyrebox_daemon_config_get_n_views (config), ==, 2);
     g_assert_cmpstr (wyrebox_daemon_config_get_view_id (config, 0), ==,
         "projects");
@@ -274,6 +277,7 @@ test_daemon_config_without_wirelog_has_no_views (void)
     config = wyrebox_daemon_config_new_from_file (config_path, &error);
     g_assert_no_error (error);
     g_assert_null (wyrebox_daemon_config_get_wirelog_rules_path (config));
+    g_assert_null (wyrebox_daemon_config_get_extraction_rules_path (config));
     g_assert_cmpuint (wyrebox_daemon_config_get_n_views (config), ==, 0);
 }
 
@@ -315,6 +319,12 @@ test_daemon_config_rejects_invalid_wirelog_views (void)
         "[view:a]\nimap_name=INBOX\n", "view 'a' has invalid imap_name");
     assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
         "relation=show\n", "unknown key 'relation'");
+    assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
+        "extraction_rules_path=extraction.rules\n",
+        "[wirelog] extraction_rules_path must be absolute");
+    assert_wirelog_config_rejected ("[wirelog]\n"
+        "extraction_rules_path=/etc/extraction.rules\n",
+        "[wirelog] extraction_rules_path requires rules_path");
 }
 
 int

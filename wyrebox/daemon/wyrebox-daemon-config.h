@@ -57,6 +57,15 @@ const char *wyrebox_daemon_config_get_wirelog_rules_path (
     WyreboxDaemonConfig *self);
 
 /*
+ * Returns: (transfer none) (nullable): the absolute dictionary and regex
+ * extraction rules file path from the [wirelog] section, or NULL when only
+ * header facts are extracted. It requires rules_path; the file itself is
+ * loaded and validated at daemon startup.
+ */
+const char *wyrebox_daemon_config_get_extraction_rules_path (
+    WyreboxDaemonConfig *self);
+
+/*
  * Returns: the number of [view:<view_id>] sections, in file order.
  */
 guint wyrebox_daemon_config_get_n_views (WyreboxDaemonConfig *self);

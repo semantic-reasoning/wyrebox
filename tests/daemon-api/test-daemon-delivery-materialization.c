@@ -3,6 +3,7 @@
 #include "wyrebox-daemon-runtime.h"
 #include "wyrebox-duckdb-shared.h"
 #include "wyrebox-eml-ingestor.h"
+#include "wyrebox-facts-extracted-payload.h"
 #include "wyrebox-journal-writer.h"
 #include "wyrebox-local-object-store.h"
 #include "wyrebox-schema-metadata-store.h"
@@ -938,6 +939,177 @@ test_refresh_failure_holds_account_until_retry (Fixture *fixture,
     wyrebox_daemon_delivery_materialization_stop (materialization);
 }
 
+typedef struct
+{
+    Fixture *fixture;
+    GPtrArray *calls;
+    GPtrArray *refresh_calls;
+    const WyreboxEmlIngestResult *message;
+    guint failures_left;
+} ExtractRecorder;
+
+/*
+ * Journals one FactsExtracted record for the recorder's message the first
+ * time account-a is extracted, as the daemon extraction service would.
+ */
+static gboolean
+record_extract (const char *account_id, guint *out_appended,
+    gpointer user_data, GError **error)
+{
+    ExtractRecorder *recorder = user_data;
+    g_auto (WyreboxFactsExtractedPayload) payload = { 0 };
+    g_autoptr (GBytes) bytes = NULL;
+    guint64 offset = 0;
+    guint64 sequence = 0;
+
+    g_ptr_array_add (recorder->calls, g_strdup (account_id));
+    *out_appended = 0;
+    if (recorder->failures_left > 0) {
+        recorder->failures_left--;
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+            "extraction failed for %s", account_id);
+        return FALSE;
+    }
+
+    if (g_strcmp0 (account_id, "account-a") != 0 ||
+        query_catalog_uint64 (recorder->fixture->catalog_path,
+        "SELECT COUNT(*) FROM message_fact_extractions;") > 0)
+        return TRUE;
+
+    payload.account_id = g_strdup (account_id);
+    payload.message_id = g_strdup_printf ("journal:%" G_GUINT64_FORMAT ":%"
+            G_GUINT64_FORMAT, recorder->message->journal_offset,
+            recorder->message->journal_sequence);
+    payload.extracted_at_unix_us = 1;
+    bytes = wyrebox_facts_extracted_payload_encode (&payload, error);
+    if (bytes == NULL ||
+        !wyrebox_journal_writer_append (recorder->fixture->writer,
+        WYREBOX_JOURNAL_EVENT_FACTS_EXTRACTED, bytes, &offset, &sequence,
+        error))
+        return FALSE;
+
+    *out_appended = 1;
+    return TRUE;
+}
+
+static gboolean
+record_refresh_after_extract (const char *account_id, gpointer user_data,
+    GError **error)
+{
+    ExtractRecorder *recorder = user_data;
+    g_autofree gchar *call = g_strdup_printf ("%s:%" G_GUINT64_FORMAT,
+            account_id, query_catalog_uint64 (recorder->fixture->catalog_path,
+            "SELECT COUNT(*) FROM message_fact_extractions;"));
+
+    g_ptr_array_add (recorder->refresh_calls, g_steal_pointer (&call));
+    return TRUE;
+}
+
+static gchar *
+take_calls (GPtrArray *calls)
+{
+    gchar *joined = NULL;
+
+    g_ptr_array_add (calls, NULL);
+    joined = g_strjoinv (",", (gchar **)calls->pdata);
+    g_ptr_array_set_size (calls, 0);
+
+    return joined;
+}
+
+static void
+test_extraction_is_materialized_before_refresh (Fixture *fixture,
+    gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonDeliveryMaterialization) materialization = NULL;
+    g_autoptr (GPtrArray) calls = g_ptr_array_new_with_free_func (g_free);
+    g_autoptr (GPtrArray) refresh_calls =
+        g_ptr_array_new_with_free_func (g_free);
+    g_auto (WyreboxEmlIngestResult) a1 = { 0 };
+    ExtractRecorder recorder = { fixture, calls, refresh_calls, &a1, 0 };
+    g_autofree gchar *extracted = NULL;
+    g_autofree gchar *refreshed = NULL;
+    g_autoptr (GError) error = NULL;
+
+    materialization = new_materialization (fixture, fixture->catalog_path);
+    wyrebox_daemon_delivery_materialization_set_extract_func (materialization,
+        record_extract, &recorder, NULL);
+    wyrebox_daemon_delivery_materialization_set_refresh_func (materialization,
+        record_refresh_after_extract, &recorder, NULL);
+    ingest (fixture, "simple-crlf.eml", "delivery-a1", "account-a", &a1);
+    wyrebox_daemon_delivery_materialization_queue_refresh (materialization,
+        "account-q");
+
+    g_assert_true (wyrebox_daemon_delivery_materialization_catch_up (
+            materialization, &error));
+    g_assert_no_error (error);
+    extracted = take_calls (calls);
+    refreshed = take_calls (refresh_calls);
+    g_assert_cmpstr (extracted, ==, "account-a,account-q");
+    g_assert_cmpstr (refreshed, ==, "account-a:1,account-q:1");
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_OK, 0, 5000, NULL);
+
+    g_clear_pointer (&extracted, g_free);
+    g_clear_pointer (&refreshed, g_free);
+    g_assert_true (wyrebox_daemon_delivery_materialization_catch_up (
+            materialization, &error));
+    g_assert_no_error (error);
+    extracted = take_calls (calls);
+    refreshed = take_calls (refresh_calls);
+    g_assert_cmpstr (extracted, ==, "");
+    g_assert_cmpstr (refreshed, ==, "");
+
+    wyrebox_daemon_delivery_materialization_stop (materialization);
+}
+
+static void
+test_extraction_failure_holds_account_until_retry (Fixture *fixture,
+    gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonDeliveryMaterialization) materialization = NULL;
+    g_autoptr (GPtrArray) calls = g_ptr_array_new_with_free_func (g_free);
+    g_autoptr (GPtrArray) refresh_calls =
+        g_ptr_array_new_with_free_func (g_free);
+    g_auto (WyreboxEmlIngestResult) a1 = { 0 };
+    ExtractRecorder recorder = { fixture, calls, refresh_calls, &a1, 1 };
+    g_autofree gchar *refreshed = NULL;
+    gint64 now = 0;
+
+    materialization = new_materialization (fixture, fixture->catalog_path);
+    use_fast_retries (materialization, &now);
+    wyrebox_daemon_delivery_materialization_set_extract_func (materialization,
+        record_extract, &recorder, NULL);
+    wyrebox_daemon_delivery_materialization_set_refresh_func (materialization,
+        record_refresh_after_extract, &recorder, NULL);
+    ingest (fixture, "simple-crlf.eml", "delivery-a1", "account-a", &a1);
+
+    g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
+        "*held account account-a at virtual mailbox refresh: "
+        "fact extraction failed: extraction failed for account-a*");
+    wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
+        materialization);
+    g_test_assert_expected_messages ();
+    refreshed = take_calls (refresh_calls);
+    g_assert_cmpstr (refreshed, ==, "");
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_HELD, 1, 10,
+        "account-a");
+    g_assert_cmpuint (inbox_uid (fixture->catalog_path, "account-a", &a1), ==,
+        1);
+
+    while (wyrebox_daemon_delivery_materialization_is_retry_pending (
+            materialization))
+        g_main_context_iteration (NULL, TRUE);
+    g_clear_pointer (&refreshed, g_free);
+    refreshed = take_calls (refresh_calls);
+    g_assert_cmpstr (refreshed, ==, "account-a:1");
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_OK, 0, 10, NULL);
+
+    wyrebox_daemon_delivery_materialization_stop (materialization);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -954,6 +1126,16 @@ main (int argc, char **argv)
         test_refresh_failure_holds_account_until_retry,
         (void (*)(Fixture *, gconstpointer)) fixture_tear_down);
 
+    g_test_add ("/daemon/delivery-materialization/"
+        "extraction-materialized-before-refresh",
+        Fixture, NULL, (void (*)(Fixture *, gconstpointer)) fixture_set_up,
+        test_extraction_is_materialized_before_refresh,
+        (void (*)(Fixture *, gconstpointer)) fixture_tear_down);
+    g_test_add ("/daemon/delivery-materialization/"
+        "extraction-failure-holds-account-until-retry",
+        Fixture, NULL, (void (*)(Fixture *, gconstpointer)) fixture_set_up,
+        test_extraction_failure_holds_account_until_retry,
+        (void (*)(Fixture *, gconstpointer)) fixture_tear_down);
     g_test_add ("/daemon/delivery-materialization/catch-up-into-account-inbox",
         Fixture, NULL, (void (*)(Fixture *, gconstpointer)) fixture_set_up,
         test_catch_up_materializes_into_account_inbox,

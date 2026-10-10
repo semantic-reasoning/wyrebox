@@ -25,6 +25,7 @@ struct _WyreboxDaemonConfig
     char *object_root_dir;
     char *catalog_path;
     char *wirelog_rules_path;
+    char *extraction_rules_path;
     GPtrArray *views;
 };
 
@@ -208,6 +209,9 @@ assign_key (WyreboxDaemonConfig *self, const char *config_path,
         if (g_strcmp0 (key, "rules_path") == 0)
             return assign_once (config_path, "[wirelog]", key, value,
                        &self->wirelog_rules_path, error);
+        if (g_strcmp0 (key, "extraction_rules_path") == 0)
+            return assign_once (config_path, "[wirelog]", key, value,
+                       &self->extraction_rules_path, error);
         break;
     case CONFIG_SECTION_VIEW:
         if (g_strcmp0 (key, "imap_name") == 0)
@@ -326,6 +330,26 @@ validate_wirelog_views (const WyreboxDaemonConfig *self, GError **error)
         return FALSE;
     }
 
+    if (self->extraction_rules_path != NULL &&
+        !g_path_is_absolute (self->extraction_rules_path)) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config [wirelog] extraction_rules_path must be absolute: "
+            "%s", self->extraction_rules_path);
+        return FALSE;
+    }
+
+    if (self->extraction_rules_path != NULL &&
+        self->wirelog_rules_path == NULL) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config [wirelog] extraction_rules_path requires "
+            "rules_path");
+        return FALSE;
+    }
+
     if (self->views->len > 0 && self->wirelog_rules_path == NULL) {
         g_set_error (error,
             G_IO_ERROR,
@@ -393,6 +417,7 @@ wyrebox_daemon_config_finalize (GObject *object)
     g_clear_pointer (&self->object_root_dir, g_free);
     g_clear_pointer (&self->catalog_path, g_free);
     g_clear_pointer (&self->wirelog_rules_path, g_free);
+    g_clear_pointer (&self->extraction_rules_path, g_free);
     g_clear_pointer (&self->views, g_ptr_array_unref);
 
     G_OBJECT_CLASS (wyrebox_daemon_config_parent_class)->finalize (object);
@@ -591,6 +616,14 @@ wyrebox_daemon_config_get_wirelog_rules_path (WyreboxDaemonConfig *self)
     g_return_val_if_fail (WYREBOX_IS_DAEMON_CONFIG (self), NULL);
 
     return self->wirelog_rules_path;
+}
+
+const char *
+wyrebox_daemon_config_get_extraction_rules_path (WyreboxDaemonConfig *self)
+{
+    g_return_val_if_fail (WYREBOX_IS_DAEMON_CONFIG (self), NULL);
+
+    return self->extraction_rules_path;
 }
 
 guint
