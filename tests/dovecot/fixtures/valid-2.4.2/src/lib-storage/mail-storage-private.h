@@ -7,6 +7,8 @@
 #include "mail-storage.h"
 #include "mail-storage-hooks.h"
 #include "mail-namespace.h"
+#include "istream.h"
+#include "message-size.h"
 
 struct file_lock;
 
@@ -22,13 +24,6 @@ struct mail_search_args;
 struct mailbox_header_lookup_ctx;
 struct message_part;
 struct mail_keywords;
-struct message_size
-{
-  uoff_t physical_size;
-  uoff_t virtual_size;
-  unsigned int lines;
-};
-struct istream;
 struct mail_save_context;
 struct mail_index_transaction_commit_result;
 struct mailbox_update;
@@ -213,13 +208,6 @@ struct mailbox
   pool_t pool;
 };
 
-struct istream
-{
-  void *data;
-  unsigned int size;
-  bool owns_data;
-};
-
 struct mail_private
 {
   struct mail mail;
@@ -232,6 +220,5 @@ int mail_get_stream (struct mail *mail, bool get_body,
 bool mail_set_uid (struct mail *mail, unsigned int uid);
 void mail_set_seq (struct mail *mail, unsigned int seq);
 void mail_free (struct mail **mail);
-void i_stream_unref (struct istream **stream);
 
 #endif

@@ -47,7 +47,7 @@ extern unsigned int istream_stub_get_live_count (void);
 
 typedef gboolean (*WyreboxDovecotMailboxListPublishFunc) (struct mailbox_list
     *list, const char *name, char hierarchy_delimiter, gboolean selectable,
-    enum mailbox_list_child_state child_state, const char *special_use,
+    WyreboxDaemonMailboxListChildState child_state, const char *special_use,
     gpointer user_data);
 
 extern gboolean wyrebox_dovecot_publish_mailbox_list_result (struct mailbox_list
@@ -554,12 +554,27 @@ main_context_pump_stop (MainContextPump *pump)
 static gboolean
 publish_mailbox_list_entry_to_sink (struct mailbox_list *list,
     const char *name, char hierarchy_delimiter, gboolean selectable,
-    enum mailbox_list_child_state child_state, const char *special_use,
+    WyreboxDaemonMailboxListChildState child_state, const char *special_use,
     gpointer user_data)
 {
+    enum mailbox_list_child_state sink_child_state;
+
     g_assert_null (user_data);
+    switch (child_state) {
+    case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN:
+        sink_child_state = MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN;
+        break;
+    case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN:
+        sink_child_state = MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN;
+        break;
+    case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN:
+    default:
+        sink_child_state = MAILBOX_LIST_CHILD_STATE_UNKNOWN;
+        break;
+    }
+
     return mailbox_list_sink_publish_entry (list, name, hierarchy_delimiter,
-               selectable, child_state, special_use);
+               selectable, sink_child_state, special_use);
 }
 
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \
