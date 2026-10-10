@@ -16,6 +16,9 @@ struct _WyreboxDaemonFactMutationService
     char *derived_view_journal_root_dir;
     char *derived_view_catalog_path;
     WyreboxDaemonDerivedViewCatalog *derived_view_catalog;
+    WyreboxDaemonFactMutationCommitFunc commit_hook;
+    gpointer commit_hook_data;
+    GDestroyNotify commit_hook_data_destroy;
 };
 
 static const char *configured_derived_view_id = "view-projects";
@@ -113,6 +116,8 @@ wyrebox_daemon_fact_mutation_service_finalize (GObject *object)
     g_clear_pointer (&self->derived_view_catalog_path, g_free);
     g_clear_object (&self->derived_view_catalog);
     g_clear_object (&self->journal_writer);
+    if (self->commit_hook_data_destroy != NULL)
+        self->commit_hook_data_destroy (self->commit_hook_data);
 
     G_OBJECT_CLASS (wyrebox_daemon_fact_mutation_service_parent_class)->finalize
         (object);
@@ -495,6 +500,8 @@ handle_authorized_fact_mutation (WyreboxDaemonFactMutationService
 
     log_materialization_failure_if_needed (self, request->scope_id,
         "fact mutation");
+    if (self->commit_hook != NULL)
+        self->commit_hook (request->scope_id, self->commit_hook_data);
 
     return wyrebox_daemon_response_frame_init_fact_mutation_success (out_frame,
                identity->request_id, identity->correlation_id, request,
@@ -545,11 +552,30 @@ handle_authorized_fact_batch_import (WyreboxDaemonFactMutationService
     log_materialization_failure_if_needed (self,
         wyrebox_daemon_fact_batch_import_request_get_scope_id (request),
         "fact batch import");
+    if (self->commit_hook != NULL) {
+        self->commit_hook (wyrebox_daemon_fact_batch_import_request_get_scope_id
+                (request), self->commit_hook_data);
+    }
 
     return wyrebox_daemon_response_frame_init_fact_batch_import_success
                (out_frame, identity->request_id, identity->correlation_id,
                request,
                journal_offset, journal_sequence, error);
+}
+
+void
+wyrebox_daemon_fact_mutation_service_set_commit_hook
+    (WyreboxDaemonFactMutationService *self,
+    WyreboxDaemonFactMutationCommitFunc hook, gpointer user_data,
+    GDestroyNotify user_data_destroy)
+{
+    g_return_if_fail (WYREBOX_IS_DAEMON_FACT_MUTATION_SERVICE (self));
+
+    if (self->commit_hook_data_destroy != NULL)
+        self->commit_hook_data_destroy (self->commit_hook_data);
+    self->commit_hook = hook;
+    self->commit_hook_data = user_data;
+    self->commit_hook_data_destroy = user_data_destroy;
 }
 
 gboolean

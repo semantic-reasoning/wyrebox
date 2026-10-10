@@ -759,6 +759,64 @@ test_fact_mutation_service_handles_identity (void)
 }
 
 static void
+record_commit (const char *scope_id, gpointer user_data)
+{
+    g_ptr_array_add (user_data, g_strdup (scope_id));
+}
+
+static void
+test_fact_mutation_service_runs_commit_hook (void)
+{
+    const char *args[] = { "mail-1", NULL };
+    g_autofree char *root =
+        g_dir_make_tmp ("wyrebox-fact-mutation-service-XXXXXX", NULL);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxJournalWriter) writer = NULL;
+    g_autoptr (WyreboxDaemonFactMutationService) service = NULL;
+    g_autoptr (GPtrArray) commits = g_ptr_array_new_with_free_func (g_free);
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonRequestIdentity) denied = { 0 };
+    g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+    g_auto (WyreboxDaemonResponseFrame) denied_frame = { 0 };
+
+    g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+        "request-1", "trusted-tool", "account-1", "fact-importer",
+        "correlation-1", &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_request_identity_init (&denied,
+        "request-2", "trusted-tool", "account-2", "fact-importer",
+        "correlation-2", &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_fact_mutation_request_init (&request,
+        WYREBOX_DAEMON_FACT_MUTATION_INSERT, "project_mention", "account-1",
+        args, &error));
+    g_assert_no_error (error);
+
+    writer = wyrebox_journal_writer_new (root, &error);
+    g_assert_no_error (error);
+    service = wyrebox_daemon_fact_mutation_service_new (writer);
+    wyrebox_daemon_fact_mutation_service_set_commit_hook (service,
+        record_commit, g_ptr_array_ref (commits),
+        (GDestroyNotify)g_ptr_array_unref);
+
+    g_assert_false (wyrebox_daemon_fact_mutation_service_handle_identity (
+            service, &denied, &request, &denied_frame, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
+    g_clear_error (&error);
+    g_assert_cmpuint (commits->len, ==, 0);
+
+    g_assert_true (wyrebox_daemon_fact_mutation_service_handle_identity (
+            service, &identity, &request, &frame, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (commits->len, ==, 1);
+    g_assert_cmpstr (g_ptr_array_index (commits, 0), ==, "account-1");
+
+    g_clear_object (&service);
+    remove_tree (root);
+}
+
+static void
 test_fact_mutation_service_catches_up_configured_wirelog_view (void)
 {
     const WyreboxJournalEventType expected[] = {
@@ -1553,6 +1611,8 @@ main (int argc, char **argv)
     g_test_add_func ("/daemon-api/fact-mutation-service/"
         "rejects-null-identity-request",
         test_fact_mutation_service_rejects_null_identity_request);
+    g_test_add_func ("/daemon-api/fact-mutation-service/runs-commit-hook",
+        test_fact_mutation_service_runs_commit_hook);
     g_test_add_func ("/daemon-api/fact-mutation-service/handles-identity",
         test_fact_mutation_service_handles_identity);
     g_test_add_func ("/daemon-api/fact-mutation-service/"
