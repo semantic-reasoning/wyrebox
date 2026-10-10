@@ -11,6 +11,22 @@ G_BEGIN_DECLS
 #define WYREBOX_DAEMON_DEFAULT_OBJECT_ROOT_DIR "/var/lib/wyrebox/object-store"
 #define WYREBOX_DAEMON_DEFAULT_CATALOG_PATH "/var/lib/wyrebox/catalog.duckdb"
 
+/*
+ * Which facts a view's rules read to decide whether a message is a member.
+ * A refresh after a change evaluates only those facts:
+ *
+ * - MESSAGE: the facts of the message itself.
+ * - THREAD: the facts of the messages connected to it through message_id,
+ *   replies_to, and references facts.
+ * - ACCOUNT: all facts of the account.
+ */
+typedef enum
+{
+  WYREBOX_DAEMON_VIEW_SCOPE_MESSAGE,
+  WYREBOX_DAEMON_VIEW_SCOPE_THREAD,
+  WYREBOX_DAEMON_VIEW_SCOPE_ACCOUNT,
+} WyreboxDaemonViewScope;
+
 #define WYREBOX_TYPE_DAEMON_CONFIG (wyrebox_daemon_config_get_type())
 G_DECLARE_FINAL_TYPE (WyreboxDaemonConfig, wyrebox_daemon_config, WYREBOX,
     DAEMON_CONFIG, GObject)
@@ -80,6 +96,13 @@ const char *wyrebox_daemon_config_get_view_id (WyreboxDaemonConfig *self,
  * Returns: (transfer none): the IMAP mailbox name of the view at @index.
  */
 const char *wyrebox_daemon_config_get_view_imap_name (
+    WyreboxDaemonConfig *self, guint index);
+
+/*
+ * Returns: the evaluation scope of the view at @index, from its required
+ * scope key.
+ */
+WyreboxDaemonViewScope wyrebox_daemon_config_get_view_scope (
     WyreboxDaemonConfig *self, guint index);
 
 /*
