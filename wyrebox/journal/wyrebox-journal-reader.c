@@ -95,7 +95,7 @@ parse_event_type (const guint8 *event_type_data,
     gsize event_type_len, WyreboxJournalEventType *out_event_type)
 {
     for (guint index = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
-        index <= WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED; index++) {
+        index <= WYREBOX_JOURNAL_EVENT_FACTS_EXTRACTED; index++) {
         const gchar *canonical = wyrebox_journal_event_type_to_string (index);
         gsize canonical_len = 0;
 
@@ -120,7 +120,7 @@ max_event_type_len (void)
     gsize max_len = 0;
 
     for (guint index = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
-        index <= WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED; index++) {
+        index <= WYREBOX_JOURNAL_EVENT_FACTS_EXTRACTED; index++) {
         const gchar *canonical = wyrebox_journal_event_type_to_string (index);
 
         if (canonical != NULL)
@@ -134,7 +134,7 @@ static gboolean
 event_type_length_is_canonical (guint64 declared_len)
 {
     for (guint index = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
-        index <= WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED; index++) {
+        index <= WYREBOX_JOURNAL_EVENT_FACTS_EXTRACTED; index++) {
         const gchar *canonical = wyrebox_journal_event_type_to_string (index);
 
         if (canonical != NULL && strlen (canonical) == declared_len)
@@ -151,7 +151,7 @@ event_type_length_prefix_is_canonical (const guint8 *length_prefix,
     g_return_val_if_fail (available_len <= 4, FALSE);
 
     for (guint index = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
-        index <= WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED; index++) {
+        index <= WYREBOX_JOURNAL_EVENT_FACTS_EXTRACTED; index++) {
         const gchar *canonical = wyrebox_journal_event_type_to_string (index);
         gsize canonical_len = 0;
         gboolean matches = TRUE;
@@ -185,7 +185,7 @@ event_type_prefix_is_plausible (const guint8 *event_type_data,
         return FALSE;
 
     for (guint index = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
-        index <= WYREBOX_JOURNAL_EVENT_DAEMON_AUDIT_RECORDED; index++) {
+        index <= WYREBOX_JOURNAL_EVENT_FACTS_EXTRACTED; index++) {
         const gchar *canonical = wyrebox_journal_event_type_to_string (index);
         gsize canonical_len = 0;
 
