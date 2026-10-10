@@ -52,6 +52,14 @@ compatibility headers. A raw Dovecot source checkout is not enough, because the
 plugin compile surface depends on the generated `config.h` from the matching
 configured build.
 
+## Installed Header Mode
+
+Issue #354 adds `--include-dir <dir>` for the installed `dovecot-dev` layout,
+where `config.h` and every Dovecot header live in one flat directory such as
+`/usr/include/dovecot`. It cannot be combined with source/build directories.
+The same `config.h` macro checks apply to `<dir>/config.h`, and the mailbox
+vfunc probe compiles with `-I<dir>` as its only Dovecot include path.
+
 ## Verification
 
 WyreBox checks this contract in two phases when the backend is enabled:

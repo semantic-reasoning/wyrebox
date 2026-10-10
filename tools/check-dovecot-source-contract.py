@@ -15,9 +15,12 @@ import sys
 PINNED_DOVECOT_VERSION = "2.4.2"
 PINNED_DOVECOT_ABI_TEMPLATE = "2.4.ABIv2"
 
-REQUIRED_FILES = [
+REQUIRED_SOURCE_METADATA_FILES = [
     Path("configure.ac"),
     Path("config.h.in"),
+]
+
+REQUIRED_HEADER_FILES = [
     Path("src/lib-storage/mail-storage.h"),
     Path("src/lib-storage/mail-storage-private.h"),
     Path("src/lib-storage/mail-storage-hooks.h"),
@@ -28,6 +31,8 @@ REQUIRED_FILES = [
     Path("src/lib-storage/mail-user.h"),
     Path("src/lib/module-dir.h"),
 ]
+
+REQUIRED_FILES = REQUIRED_SOURCE_METADATA_FILES + REQUIRED_HEADER_FILES
 
 REQUIRED_TYPES = {
     "struct mail_storage": [r"\bstruct\s+mail_storage\b"],
@@ -141,6 +146,9 @@ REQUIRED_LIST_CONTRACT_SYMBOLS = [
         r"struct\s+mail_storage\s*\*\s*\w*\s*,\s*"
         r"struct\s+mailbox_list\s*\*\s*\w*\s*\)\s*;",
     ),
+]
+
+REQUIRED_MAILBOX_LIST_SYMBOLS = [
     (
         "mailbox_list_get_storage_name signature",
         r"\bconst\s+char\s*\*\s*mailbox_list_get_storage_name\s*\(\s*"
@@ -214,6 +222,13 @@ def parse_args() -> argparse.Namespace:
         help=(
             "path to Dovecot source directory; if omitted, "
             "uses WYREBOX_DOVECOT_SOURCE_DIR"
+        ),
+    )
+    parser.add_argument(
+        "--include-dir",
+        help=(
+            "validate an installed, flat Dovecot include directory such as "
+            "/usr/include/dovecot instead of a source directory"
         ),
     )
     return parser.parse_args()
@@ -352,6 +367,17 @@ def find_issues_for_list_contract(path: Path) -> list[ContractIssue]:
     return issues
 
 
+def find_issues_for_mailbox_list_symbols(path: Path) -> list[ContractIssue]:
+    text = read_text(path)
+    issues: list[ContractIssue] = []
+
+    for label, expression in REQUIRED_MAILBOX_LIST_SYMBOLS:
+        if re.search(expression, text, re.MULTILINE) is None:
+            issues.append(ContractIssue(f"{path}: missing {label}: {expression}"))
+
+    return issues
+
+
 def find_issues_for_list_iterator_vfuncs(path: Path) -> list[ContractIssue]:
     text = read_text(path)
     struct_block = find_struct_block(text, "mailbox_list_vfuncs")
@@ -389,6 +415,27 @@ def check_version(path: Path) -> list[ContractIssue]:
     return []
 
 
+def check_installed_config_h(path: Path) -> list[ContractIssue]:
+    text = read_text(path)
+    issues: list[ContractIssue] = []
+
+    for macro, expected in (
+        ("DOVECOT_VERSION", PINNED_DOVECOT_VERSION),
+        ("DOVECOT_ABI_VERSION", PINNED_DOVECOT_ABI_TEMPLATE),
+    ):
+        match = re.search(
+            rf'^\s*#\s*define\s+{macro}\s+"([^"]+)"',
+            text,
+            re.MULTILINE,
+        )
+        if match is None or match.group(1) != expected:
+            issues.append(
+                ContractIssue(f'{path}: config.h {macro} must equal "{expected}"')
+            )
+
+    return issues
+
+
 def validate_source(source_dir: Path) -> list[ContractIssue]:
     issues: list[ContractIssue] = []
 
@@ -405,15 +452,6 @@ def validate_source(source_dir: Path) -> list[ContractIssue]:
 
     configure = source_dir / "configure.ac"
     config_h_in = source_dir / "config.h.in"
-    storage = source_dir / "src/lib-storage/mail-storage.h"
-    storage_private = source_dir / "src/lib-storage/mail-storage-private.h"
-    hooks = source_dir / "src/lib-storage/mail-storage-hooks.h"
-    mailbox_list = source_dir / "src/lib-storage/mailbox-list.h"
-    mailbox_list_iter = source_dir / "src/lib-storage/mailbox-list-iter.h"
-    mailbox_list_private = source_dir / "src/lib-storage/mailbox-list-private.h"
-    mail_namespace = source_dir / "src/lib-storage/mail-namespace.h"
-    mail_user = source_dir / "src/lib-storage/mail-user.h"
-    module_dir = source_dir / "src/lib/module-dir.h"
 
     issues.extend(
         find_issues_for_patterns(configure, [r"\bDOVECOT_ABI_VERSION\b"], "DOVECOT_ABI_VERSION define")
@@ -421,6 +459,43 @@ def validate_source(source_dir: Path) -> list[ContractIssue]:
     issues.extend(check_version(configure))
     issues.extend(check_configure_abi_template(configure))
     issues.extend(check_config_h_template(config_h_in))
+    issues.extend(
+        validate_headers(
+            {path.name: source_dir / path for path in REQUIRED_HEADER_FILES}
+        )
+    )
+    return issues
+
+
+def validate_include_dir(include_dir: Path) -> list[ContractIssue]:
+    issues: list[ContractIssue] = []
+    headers = {path.name: include_dir / path.name for path in REQUIRED_HEADER_FILES}
+
+    for name in ["config.h", *headers]:
+        if not (include_dir / name).is_file():
+            issues.append(
+                ContractIssue(f"missing required Dovecot header: {name}")
+            )
+
+    if issues:
+        return issues
+
+    issues.extend(check_installed_config_h(include_dir / "config.h"))
+    issues.extend(validate_headers(headers))
+    return issues
+
+
+def validate_headers(headers: dict[str, Path]) -> list[ContractIssue]:
+    issues: list[ContractIssue] = []
+    storage = headers["mail-storage.h"]
+    storage_private = headers["mail-storage-private.h"]
+    hooks = headers["mail-storage-hooks.h"]
+    mailbox_list = headers["mailbox-list.h"]
+    mailbox_list_iter = headers["mailbox-list-iter.h"]
+    mailbox_list_private = headers["mailbox-list-private.h"]
+    mail_namespace = headers["mail-namespace.h"]
+    mail_user = headers["mail-user.h"]
+    module_dir = headers["module-dir.h"]
 
     issues.extend(
         find_issues_for_patterns(
@@ -481,6 +556,7 @@ def validate_source(source_dir: Path) -> list[ContractIssue]:
         find_issues_for_vfuncs(storage_private, "mail_storage_vfuncs", REQUIRED_VFUNC_SYMBOLS["mail_storage_vfuncs"])
     )
     issues.extend(find_issues_for_list_contract(storage_private))
+    issues.extend(find_issues_for_mailbox_list_symbols(mailbox_list))
     issues.extend(find_issues_for_list_iterator_vfuncs(mailbox_list_private))
     for struct_name, fields in REQUIRED_LIST_PRIVATE_STRUCT_FIELDS.items():
         issues.extend(
@@ -524,15 +600,31 @@ def validate_source(source_dir: Path) -> list[ContractIssue]:
     return issues
 
 
+def resolve_include_dir(raw_include_dir: str) -> Path:
+    include_dir = Path(raw_include_dir)
+    if not include_dir.is_dir():
+        raise NotADirectoryError(
+            f"dovecot include directory missing: {include_dir}"
+        )
+    return include_dir
+
+
 def main() -> int:
     args = parse_args()
     try:
-        source_dir = resolve_source_dir(args.source_dir)
+        if args.include_dir is not None:
+            if args.source_dir is not None:
+                raise ValueError(
+                    "--include-dir cannot be combined with a source directory"
+                )
+            checked_dir = resolve_include_dir(args.include_dir)
+            issues = validate_include_dir(checked_dir)
+        else:
+            checked_dir = resolve_source_dir(args.source_dir)
+            issues = validate_source(checked_dir)
     except (OSError, ValueError) as error:
         print(f"dovecot source contract check failed: {error}", file=sys.stderr)
         return 1
-
-    issues = validate_source(source_dir)
 
     if issues:
         print("dovecot source contract check failed", file=sys.stderr)
@@ -540,7 +632,7 @@ def main() -> int:
             print(f" - {issue.message}", file=sys.stderr)
         return 1
 
-    print(f"dovecot source contract check passed: {source_dir}")
+    print(f"dovecot source contract check passed: {checked_dir}")
     return 0
 
 

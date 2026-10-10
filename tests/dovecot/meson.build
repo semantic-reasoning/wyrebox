@@ -16,6 +16,12 @@ test(
   args: files('test-dovecot-build-contract.py'),
 )
 
+test(
+  'dovecot installed headers contract',
+  python,
+  args: files('test-dovecot-installed-headers-contract.py'),
+)
+
 dovecot_daemon_client_test = executable(
   'test-dovecot-daemon-client',
   'test-dovecot-daemon-client.c',

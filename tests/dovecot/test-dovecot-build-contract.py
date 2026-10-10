@@ -265,6 +265,93 @@ def test_dovecot_build_contract_cc_wrapper_and_args() -> None:
         )
 
 
+def make_flat_include_dir(include_dir: Path, *, abi_version: str = "2.4.ABIv2") -> Path:
+    include_dir.mkdir(parents=True)
+    for header in (VALID_SOURCE_FIXTURE / "src").rglob("*.h"):
+        shutil.copy(header, include_dir / header.name)
+    config_h = (VALID_SOURCE_FIXTURE / "build-config-valid" / "config.h").read_text(
+        encoding="utf-8",
+    )
+    config_h = config_h.replace('"2.4.ABIv2"', f'"{abi_version}"')
+    (include_dir / "config.h").write_text(config_h, encoding="utf-8")
+    return include_dir
+
+
+def run_include_dir_checker(args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(BUILD_CHECKER_PATH), *args],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+def test_dovecot_build_contract_include_dir_happy_path() -> None:
+    with tempfile.TemporaryDirectory() as tempdir:
+        include_dir = make_flat_include_dir(Path(tempdir) / "dovecot")
+        result = run_include_dir_checker(["--include-dir", str(include_dir)])
+        assert result.returncode == 0, (
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+
+def test_dovecot_build_contract_include_dir_wrong_abi() -> None:
+    with tempfile.TemporaryDirectory() as tempdir:
+        include_dir = make_flat_include_dir(
+            Path(tempdir) / "dovecot", abi_version="2.4.ABIv1"
+        )
+        result = run_include_dir_checker(["--include-dir", str(include_dir)])
+        assert result.returncode != 0
+        assert 'config.h DOVECOT_ABI_VERSION must equal "2.4.ABIv2"' in (
+            result.stdout + result.stderr
+        )
+
+
+def test_dovecot_build_contract_include_dir_probe_uses_only_include_dir() -> None:
+    with tempfile.TemporaryDirectory() as shim_directory:
+        shim_dir = Path(shim_directory)
+        include_dir = make_flat_include_dir(shim_dir / "dovecot")
+        shim_path = _build_cc_shim(shim_dir)
+        log_path = shim_dir / "wyrebox-cc-shim.log"
+        env = dict(os.environ)
+        env.update({"CC": str(shim_path), CC_SHIM_LOG_ENV: str(log_path)})
+        result = subprocess.run(
+            [sys.executable, str(BUILD_CHECKER_PATH), "--include-dir", str(include_dir)],
+            env=env,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 0, (
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        actual_args = log_path.read_text(encoding="utf-8").splitlines()
+        assert actual_args[:4] == [
+            "-std=gnu11",
+            "-fsyntax-only",
+            "-Werror=incompatible-pointer-types",
+            f"-I{include_dir}",
+        ], f"unexpected probe args: {actual_args}"
+        assert not any(
+            arg.startswith("-I") for arg in actual_args[4:]
+        ), f"unexpected extra include dirs: {actual_args}"
+
+
+def test_dovecot_build_contract_include_dir_rejects_source_dirs() -> None:
+    with tempfile.TemporaryDirectory() as tempdir:
+        include_dir = make_flat_include_dir(Path(tempdir) / "dovecot")
+        result = run_include_dir_checker([
+            str(VALID_SOURCE_FIXTURE),
+            str(VALID_SOURCE_FIXTURE / "build-config-valid"),
+            "--include-dir",
+            str(include_dir),
+        ])
+        assert result.returncode != 0
+        assert "--include-dir cannot be combined with source/build directories" in (
+            result.stdout + result.stderr
+        )
+
+
 def main() -> None:
     test_functions = [
         test_dovecot_build_contract_happy_path,
@@ -279,6 +366,10 @@ def main() -> None:
         test_dovecot_build_contract_list_iterator_iter_deinit_signature,
         test_dovecot_build_contract_missing_source_directory,
         test_dovecot_build_contract_cc_wrapper_and_args,
+        test_dovecot_build_contract_include_dir_happy_path,
+        test_dovecot_build_contract_include_dir_wrong_abi,
+        test_dovecot_build_contract_include_dir_probe_uses_only_include_dir,
+        test_dovecot_build_contract_include_dir_rejects_source_dirs,
     ]
     failures: list[tuple[str, Exception]] = []
     for test in test_functions:

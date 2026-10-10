@@ -472,8 +472,15 @@ def parse_args() -> argparse.Namespace:
             "the headers and macros WyreBox's Dovecot module compile checks need"
         ),
     )
-    parser.add_argument("source_dir")
-    parser.add_argument("build_dir")
+    parser.add_argument("source_dir", nargs="?")
+    parser.add_argument("build_dir", nargs="?")
+    parser.add_argument(
+        "--include-dir",
+        help=(
+            "validate an installed, flat Dovecot include directory such as "
+            "/usr/include/dovecot instead of source/build directories"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -528,10 +535,7 @@ def find_issues_for_abi_version(config_h: str) -> list[ContractIssue]:
     ]
 
 
-def validate_mailbox_vfunc_probe(
-    source_dir: Path,
-    build_dir: Path,
-) -> list[ContractIssue]:
+def validate_mailbox_vfunc_probe(include_args: list[str]) -> list[ContractIssue]:
     cc_spec = os.environ.get("CC", "cc")
     try:
         cc_argv = shlex.split(cc_spec)
@@ -558,11 +562,7 @@ def validate_mailbox_vfunc_probe(
             "-std=gnu11",
             "-fsyntax-only",
             "-Werror=incompatible-pointer-types",
-            f"-I{build_dir}",
-            f"-I{source_dir / 'src' / 'lib-index'}",
-            f"-I{source_dir / 'src' / 'lib'}",
-            f"-I{source_dir / 'src' / 'lib-mail'}",
-            f"-I{source_dir / 'src' / 'lib-storage'}",
+            *include_args,
         ]
         source = str(probe_path)
         process = subprocess.run(
@@ -601,16 +601,57 @@ def validate_build_config(source_dir: Path, build_dir: Path) -> list[ContractIss
     issues.extend(find_issues_for_required_macros(config_h_text, REQUIRED_CONFIG_MACROS))
     issues.extend(find_issues_for_abi_version(config_h_text))
     issues.extend(find_issues_for_uoff_t_selector(config_h_text))
-    issues.extend(validate_mailbox_vfunc_probe(source_dir, build_dir))
+    issues.extend(validate_mailbox_vfunc_probe([
+        f"-I{build_dir}",
+        f"-I{source_dir / 'src' / 'lib-index'}",
+        f"-I{source_dir / 'src' / 'lib'}",
+        f"-I{source_dir / 'src' / 'lib-mail'}",
+        f"-I{source_dir / 'src' / 'lib-storage'}",
+    ]))
+    return issues
+
+
+def validate_include_dir(include_dir: Path) -> list[ContractIssue]:
+    issues: list[ContractIssue] = []
+    for name in ("module-dir.h", "lib.h"):
+        if not (include_dir / name).is_file():
+            issues.append(ContractIssue(f"include directory is missing {name}"))
+
+    config_h_path = include_dir / "config.h"
+    if not config_h_path.is_file():
+        issues.append(ContractIssue(
+            f"include directory is missing required config.h: {config_h_path}",
+        ))
+        return issues
+
+    config_h_text = read_text(config_h_path)
+    issues.extend(find_issues_for_required_macros(config_h_text, REQUIRED_CONFIG_MACROS))
+    issues.extend(find_issues_for_abi_version(config_h_text))
+    issues.extend(find_issues_for_uoff_t_selector(config_h_text))
+    issues.extend(validate_mailbox_vfunc_probe([f"-I{include_dir}"]))
     return issues
 
 
 def main() -> int:
     args = parse_args()
     try:
-        source_dir = resolve_dir(args.source_dir, "source")
-        build_dir = resolve_dir(args.build_dir, "build")
-        issues = validate_build_config(source_dir, build_dir)
+        if args.include_dir is not None:
+            if args.source_dir is not None or args.build_dir is not None:
+                raise ValueError(
+                    "--include-dir cannot be combined with source/build directories"
+                )
+            include_dir = resolve_dir(args.include_dir, "include")
+            issues = validate_include_dir(include_dir)
+            checked = f"include={include_dir}"
+        else:
+            if args.source_dir is None or args.build_dir is None:
+                raise ValueError(
+                    "source and build directories are required without --include-dir"
+                )
+            source_dir = resolve_dir(args.source_dir, "source")
+            build_dir = resolve_dir(args.build_dir, "build")
+            issues = validate_build_config(source_dir, build_dir)
+            checked = f"source={source_dir}, build={build_dir}"
     except (OSError, ValueError) as error:
         print(f"dovecot build contract check failed: {error}", file=sys.stderr)
         return 1
@@ -621,9 +662,7 @@ def main() -> int:
             print(f" - {issue.message}", file=sys.stderr)
         return 1
 
-    print(
-        f"dovecot build contract check passed: source={source_dir}, build={build_dir}",
-    )
+    print(f"dovecot build contract check passed: {checked}")
     return 0
 
 

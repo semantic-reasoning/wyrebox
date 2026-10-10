@@ -54,7 +54,7 @@ enum mailbox_list_file_type
   MAILBOX_LIST_FILE_TYPE_OTHER,
 };
 
-const char *mailbox_list_get_storage_name (struct mailbox_list *list,
+char *mailbox_list_get_storage_name (struct mailbox_list *list,
     const char *vname);
 
 #endif

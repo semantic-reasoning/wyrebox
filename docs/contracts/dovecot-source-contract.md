@@ -41,6 +41,22 @@ For module compilation the source tree is not enough; when backend code
 generation is enabled, WyreBox additionally validates a configured build
 directory via the `dovecot_build_contract` checks.
 
+## Installed Header Mode
+
+Issue #354 adds `--include-dir <dir>` for validating an installed, flat Dovecot
+include directory such as `/usr/include/dovecot` from the `dovecot-dev`
+package. It cannot be combined with a source directory. In this mode:
+
+- every required header is looked up by basename in the flat directory, and a
+  missing one is reported as `missing required Dovecot header: <name>`;
+- `configure.ac` and `config.h.in` are not inspected; instead the installed
+  `config.h` must define `DOVECOT_VERSION "2.4.2"` and
+  `DOVECOT_ABI_VERSION "2.4.ABIv2"`;
+- all type, symbol, and vfunc checks below apply unchanged.
+
+The `mailbox_list_get_storage_name` signature is checked in `mailbox-list.h`,
+where Dovecot 2.4.2 declares it, in both modes.
+
 ## Required Types And Symbols
 
 Checker validation requires these ABI/storage names to be present:
@@ -112,3 +128,7 @@ Backend registration is pinned to these Dovecot storage APIs in
 The contract is exercised by a focused Meson test named
 `dovecot source contract` with synthetic fixtures for pass/fail behavior.
 No Dovecot binary/package dependency is required by the test suite.
+
+The Meson test `dovecot installed headers contract` runs both the source and
+build checkers in `--include-dir` mode against `/usr/include/dovecot` (or
+`WYREBOX_DOVECOT_INCLUDE_DIR`) and is skipped when those headers are absent.
