@@ -22,6 +22,26 @@ can be included with the source-tree headers.
 - `-Ddovecot_build_dir=/path/to/dovecot/build` points at the corresponding
   configured build directory.
 
+System mode (issue #354) builds against an installed `dovecot-dev` instead:
+
+- `-Ddovecot_backend=enabled -Ddovecot_config=/usr/lib/dovecot/dovecot-config`
+  reads the single `-I` directory from `LIBDOVECOT_INCLUDE` via
+  `tools/dovecot-config-include-dir.py` and runs both contract checkers in
+  `--include-dir` mode against it.
+- `-Ddovecot_config` cannot be combined with `-Ddovecot_source_dir` or
+  `-Ddovecot_build_dir`.
+- `-Ddovecot_loader_smoke=enabled` is rejected in system mode because the
+  loader smoke needs `liblib.a` from a Dovecot source build.
+- The `dovecot plugin mailbox smoke` test is built only in fixture mode,
+  because it relies on test seams that exist only in the fixture headers.
+
+In both modes Meson additionally requires `cc.get_define('DOVECOT_ABI_VERSION')`
+to equal `"2.4.ABIv2"`. The `dovecot system setup` test configures system mode
+in a scratch build directory, builds the plugin, loads it next to the installed
+`libdovecot` and `libdovecot-storage`, and asserts the exported
+`wyrebox_plugin_version`; it is skipped when `/usr/lib/dovecot/dovecot-config`
+is absent.
+
 ## Required Build Config Header Items
 
 `dovecot_build_dir/config.h` must define

@@ -22,6 +22,20 @@ test(
   args: files('test-dovecot-installed-headers-contract.py'),
 )
 
+test(
+  'dovecot config include dir',
+  python,
+  args: files('test-dovecot-config-include-dir.py'),
+)
+
+test(
+  'dovecot system setup',
+  python,
+  args: files('test-dovecot-system-setup.py'),
+  is_parallel: false,
+  timeout: 900,
+)
+
 dovecot_daemon_client_test = executable(
   'test-dovecot-daemon-client',
   'test-dovecot-daemon-client.c',
@@ -41,25 +55,27 @@ if have_dovecot_backend
     depends: wyrebox_dovecot_plugin_module,
   )
 
-  dovecot_plugin_mailbox_smoke = executable(
-    'test-dovecot-plugin-mailbox-smoke',
-    [
-      'test-dovecot-plugin-mailbox-smoke.c',
-      'test-dovecot-plugin-mailbox-smoke-stub-registration.c',
-      meson.project_source_root() / 'wyrebox' / 'dovecot' / 'wyrebox-dovecot-plugin.c',
-    ],
-    c_args: dovecot_backend_c_args + ['-fvisibility=hidden'],
-    dependencies: [wyrebox_dep],
-  )
+  if not dovecot_uses_system_headers
+    dovecot_plugin_mailbox_smoke = executable(
+      'test-dovecot-plugin-mailbox-smoke',
+      [
+        'test-dovecot-plugin-mailbox-smoke.c',
+        'test-dovecot-plugin-mailbox-smoke-stub-registration.c',
+        meson.project_source_root() / 'wyrebox' / 'dovecot' / 'wyrebox-dovecot-plugin.c',
+      ],
+      c_args: dovecot_backend_c_args + ['-fvisibility=hidden'],
+      dependencies: [wyrebox_dep],
+    )
 
-  test(
-    'dovecot plugin mailbox smoke',
-    dovecot_plugin_mailbox_smoke,
-    env: {
-      'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() /
-        'tests' / 'object-store' / 'fixtures',
-    },
-  )
+    test(
+      'dovecot plugin mailbox smoke',
+      dovecot_plugin_mailbox_smoke,
+      env: {
+        'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() /
+          'tests' / 'object-store' / 'fixtures',
+      },
+    )
+  endif
 endif
 
 if have_dovecot_loader_smoke

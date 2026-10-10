@@ -1,10 +1,11 @@
+#include "config.h"
+
+#include "lib.h"
+
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "config.h"
-
-#include "lib.h"
 #include "istream.h"
 #include "mail-namespace.h"
 #include "mail-storage.h"
