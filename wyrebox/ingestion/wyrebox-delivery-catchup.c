@@ -254,6 +254,7 @@ wyrebox_delivery_catchup_report_clear (WyreboxDeliveryCatchupReport *report)
         return;
 
     g_clear_pointer (&report->holds, g_ptr_array_unref);
+    g_clear_pointer (&report->materialized_accounts, g_ptr_array_unref);
 }
 
 static gboolean
@@ -267,6 +268,24 @@ is_account_held (const GPtrArray *holds, const gchar *account_id)
     }
 
     return FALSE;
+}
+
+static void
+add_materialized_account (GPtrArray *accounts, const gchar *account_id)
+{
+    guint index = 0;
+
+    if (g_ptr_array_find_with_equal_func (accounts, account_id, g_str_equal,
+        &index))
+        return;
+
+    g_ptr_array_add (accounts, g_strdup (account_id));
+}
+
+static gint
+compare_account_ids (gconstpointer a, gconstpointer b)
+{
+    return g_strcmp0 (*(const gchar * const *)a, *(const gchar * const *)b);
 }
 
 static void
@@ -294,6 +313,8 @@ wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
 {
     g_auto (WyreboxDeliveryProjectionList) list = { 0 };
     g_autoptr (GPtrArray) holds = NULL;
+    g_autoptr (GPtrArray) materialized_accounts =
+        g_ptr_array_new_with_free_func (g_free);
     WyreboxDeliveryCatchupCursor scanned_through = { 0 };
     gboolean from_checkpoint = FALSE;
     guint run_start = 0;
@@ -384,8 +405,11 @@ wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
                     from_checkpoint && holds->len == 0, &run_error);
         }
 
-        if (applied)
+        if (applied) {
+            add_materialized_account (materialized_accounts,
+                first->account_identity);
             continue;
+        }
 
         if (!g_error_matches (run_error, G_IO_ERROR,
             G_IO_ERROR_INVALID_DATA)) {
@@ -396,7 +420,10 @@ wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
         add_hold (holds, first, g_steal_pointer (&run_error));
     }
 
+    g_ptr_array_sort (materialized_accounts, compare_account_ids);
     out_report->holds = g_steal_pointer (&holds);
+    out_report->materialized_accounts =
+        g_steal_pointer (&materialized_accounts);
     out_report->records_scanned = list.records->len;
     out_report->scanned_through = scanned_through;
     return TRUE;
