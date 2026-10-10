@@ -1663,6 +1663,202 @@ test_append_journal_invalid_arguments (void)
     remove_tree (journal_root);
 }
 
+#define RULE_HASH_A \
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+#define RULE_HASH_B \
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+static gboolean
+refresh_message_memberships (const gchar *path, const gchar *rule_version_hash,
+    guint64 materialized_at, const gchar *const *message_ids,
+    GPtrArray *memberships, GPtrArray **out_changes, GError **error)
+{
+    g_autoptr (WyreboxDerivedViewMaterializer) materializer = NULL;
+
+    materializer = wyrebox_derived_view_materializer_new_duckdb (path, error);
+    if (materializer == NULL)
+        return FALSE;
+
+    return
+        wyrebox_derived_view_materializer_refresh_message_memberships_with_changes
+            (materializer, "account-1", "view-project-alpha", "Project Alpha",
+            "wirelog:project-alpha", rule_version_hash, materialized_at,
+            message_ids, memberships, out_changes, error);
+}
+
+static gchar *
+membership_rows (const gchar *path)
+{
+    TestDuckdbFixture fixture = { 0 };
+    g_auto (duckdb_result) result = { 0 };
+    g_autoptr (GString) rows = g_string_new (NULL);
+
+    open_duckdb_fixture (path, &fixture);
+    g_assert_cmpint (duckdb_query (fixture.connection,
+        "SELECT message_id, uid, is_visible, materialized_at_unix_us, "
+        "substr(rule_version_hash, 8, 1) FROM derived_view_memberships "
+        "ORDER BY uid;", &result), ==, DuckDBSuccess);
+    for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+        g_auto (TestDuckdbOwnedString) message_id =
+            duckdb_value_varchar (&result, 0, row);
+        g_auto (TestDuckdbOwnedString) rule =
+            duckdb_value_varchar (&result, 4, row);
+
+        g_string_append_printf (rows, "%s%s %" G_GUINT64_FORMAT " %s %"
+            G_GUINT64_FORMAT " %s", row > 0 ? "; " : "", message_id,
+            (guint64)duckdb_value_uint64 (&result, 1, row),
+            duckdb_value_boolean (&result, 2, row) ? "visible" : "hidden",
+            (guint64)duckdb_value_uint64 (&result, 3, row), rule);
+    }
+    close_duckdb_fixture (&fixture);
+
+    return g_string_free (g_steal_pointer (&rows), FALSE);
+}
+
+static void
+test_message_refresh_changes_only_listed_messages (void)
+{
+    g_autofree gchar *path = create_catalog ();
+    g_autoptr (GPtrArray) initial = new_memberships ();
+    g_autoptr (GPtrArray) scoped = new_memberships ();
+    g_autoptr (GPtrArray) restored = new_memberships ();
+    g_autoptr (GPtrArray) changes = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autofree gchar *after_scoped = NULL;
+    g_autofree gchar *after_restore = NULL;
+    const gchar *const all[] = { "msg-1", "msg-2", "msg-3", NULL };
+    const gchar *const two_and_three[] = { "msg-2", "msg-3", NULL };
+    const gchar *const two[] = { "msg-2", NULL };
+    guint64 uidvalidity = 0;
+
+    seed_messages (path);
+    add_membership (initial, "view-project-alpha", "msg-1");
+    add_membership (initial, "view-project-alpha", "msg-2");
+    g_assert_true (refresh_message_memberships (path, RULE_HASH_A, 1000, all,
+        initial, &changes, &error));
+    g_assert_no_error (error);
+    uidvalidity = query_uidvalidity (path);
+    g_assert_cmpuint (changes->len, ==, 2);
+    assert_change (change_at (changes, 0), "msg-1", 1, uidvalidity, TRUE);
+    assert_change (change_at (changes, 1), "msg-2", 2, uidvalidity, TRUE);
+
+    add_membership (scoped, "view-project-alpha", "msg-3");
+    g_assert_true (refresh_message_memberships (path, RULE_HASH_A, 2000,
+        two_and_three, scoped, &changes, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (changes->len, ==, 2);
+    g_assert_cmpstr (change_at (changes, 0)->message_id, ==, "msg-2");
+    g_assert_false (change_at (changes, 0)->is_visible);
+    g_assert_cmpuint (change_at (changes, 0)->uid, ==, 2);
+    g_assert_cmpstr (change_at (changes, 1)->message_id, ==, "msg-3");
+    g_assert_true (change_at (changes, 1)->is_visible);
+    g_assert_cmpuint (change_at (changes, 1)->uid, ==, 3);
+    after_scoped = membership_rows (path);
+    g_assert_cmpstr (after_scoped, ==,
+        "msg-1 1 visible 1000 a; msg-2 2 hidden 2000 a; "
+        "msg-3 3 visible 2000 a");
+
+    add_membership (restored, "view-project-alpha", "msg-2");
+    g_assert_true (refresh_message_memberships (path, RULE_HASH_A, 3000, two,
+        restored, &changes, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (changes->len, ==, 1);
+    g_assert_true (change_at (changes, 0)->is_visible);
+    g_assert_cmpuint (change_at (changes, 0)->uid, ==, 2);
+
+    g_assert_true (refresh_message_memberships (path, RULE_HASH_A, 4000, two,
+        restored, &changes, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (changes->len, ==, 0);
+    after_restore = membership_rows (path);
+    g_assert_cmpstr (after_restore, ==,
+        "msg-1 1 visible 1000 a; msg-2 2 visible 3000 a; "
+        "msg-3 3 visible 2000 a");
+    g_assert_cmpuint (query_uidnext (path), ==, 4);
+
+    remove_catalog (path);
+}
+
+static void
+test_message_refresh_hides_other_rule_versions_of_listed_messages (void)
+{
+    g_autofree gchar *path = create_catalog ();
+    g_autoptr (GPtrArray) initial = new_memberships ();
+    g_autoptr (GPtrArray) changed = new_memberships ();
+    g_autoptr (GPtrArray) changes = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autofree gchar *rows = NULL;
+    const gchar *const all[] = { "msg-1", "msg-2", NULL };
+    const gchar *const one[] = { "msg-1", NULL };
+
+    seed_messages (path);
+    add_membership (initial, "view-project-alpha", "msg-1");
+    add_membership (initial, "view-project-alpha", "msg-2");
+    g_assert_true (refresh_message_memberships (path, RULE_HASH_A, 1000, all,
+        initial, &changes, &error));
+    g_assert_no_error (error);
+
+    add_membership (changed, "view-project-alpha", "msg-1");
+    g_assert_true (refresh_message_memberships (path, RULE_HASH_B, 2000, one,
+        changed, &changes, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (changes->len, ==, 2);
+    g_assert_cmpuint (change_at (changes, 0)->uid, ==, 1);
+    g_assert_false (change_at (changes, 0)->is_visible);
+    g_assert_cmpstr (change_at (changes, 0)->rule_version_hash, ==,
+        RULE_HASH_A);
+    g_assert_cmpuint (change_at (changes, 1)->uid, ==, 3);
+    g_assert_true (change_at (changes, 1)->is_visible);
+    g_assert_cmpstr (change_at (changes, 1)->rule_version_hash, ==,
+        RULE_HASH_B);
+    rows = membership_rows (path);
+    g_assert_cmpstr (rows, ==,
+        "msg-1 1 hidden 2000 a; msg-2 2 visible 1000 a; "
+        "msg-1 3 visible 2000 b");
+
+    remove_catalog (path);
+}
+
+static void
+test_message_refresh_rejects_unlisted_membership (void)
+{
+    g_autofree gchar *path = create_catalog ();
+    g_autoptr (GPtrArray) memberships = new_memberships ();
+    g_autoptr (GPtrArray) changes = NULL;
+    g_autoptr (GError) error = NULL;
+    const gchar *const one[] = { "msg-1", NULL };
+
+    seed_messages (path);
+    add_membership (memberships, "view-project-alpha", "msg-1");
+    add_membership (memberships, "view-project-alpha", "msg-2");
+    g_assert_false (refresh_message_memberships (path, RULE_HASH_A, 1000, one,
+        memberships, &changes, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_assert_null (changes);
+    g_assert_cmpuint (query_count (path, "derived_view_memberships"), ==, 0);
+
+    remove_catalog (path);
+}
+
+static void
+test_message_refresh_without_messages_creates_view (void)
+{
+    g_autofree gchar *path = create_catalog ();
+    g_autoptr (GPtrArray) memberships = new_memberships ();
+    g_autoptr (GPtrArray) changes = NULL;
+    g_autoptr (GError) error = NULL;
+    const gchar *const none[] = { NULL };
+
+    seed_messages (path);
+    g_assert_true (refresh_message_memberships (path, RULE_HASH_A, 1000, none,
+        memberships, &changes, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (changes->len, ==, 0);
+    assert_materialized_state (path, 0, 1);
+
+    remove_catalog (path);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1739,6 +1935,17 @@ main (int argc, char **argv)
         test_empty_changes_append_journal_writes_no_records);
     g_test_add_func ("/wirelog/derived-view-materializer/invalid-journal-args",
         test_append_journal_invalid_arguments);
+
+    g_test_add_func ("/wirelog/derived-view-materializer/message-refresh",
+        test_message_refresh_changes_only_listed_messages);
+    g_test_add_func
+        ("/wirelog/derived-view-materializer/message-refresh-rule-versions",
+        test_message_refresh_hides_other_rule_versions_of_listed_messages);
+    g_test_add_func
+        ("/wirelog/derived-view-materializer/message-refresh-unlisted",
+        test_message_refresh_rejects_unlisted_membership);
+    g_test_add_func ("/wirelog/derived-view-materializer/message-refresh-empty",
+        test_message_refresh_without_messages_creates_view);
 
     return g_test_run ();
 }
