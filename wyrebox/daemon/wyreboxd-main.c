@@ -9,6 +9,7 @@
 #include "wyrebox-daemon-delivery-materialization.h"
 #include "wyrebox-daemon-duckdb-query-template-service.h"
 #include "wyrebox-daemon-exit-code.h"
+#include "wyrebox-daemon-fact-mutation-service.h"
 #include "wyrebox-daemon-flag-keyword-update-journal.h"
 #include "wyrebox-daemon-mail-event-stream-service.h"
 #include "wyrebox-daemon-mailbox-catalog-duckdb.h"
@@ -17,6 +18,7 @@
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-runtime.h"
 #include "wyrebox-daemon-storage.h"
+#include "wyrebox-daemon-wirelog-views.h"
 #include "wyrebox-eml-ingestor.h"
 #include "wyrebox-journal-writer.h"
 #include "wyrebox-local-object-store.h"
@@ -156,6 +158,84 @@ materialize_after_ingest (const WyreboxEmlIngestResult *result,
         (user_data);
 }
 
+static void
+materialize_after_fact_commit (const char *scope_id, gpointer user_data)
+{
+    (void)scope_id;
+
+    wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry
+        (user_data);
+}
+
+static gboolean
+refresh_wirelog_views (const char *account_id, gpointer user_data,
+    GError **error)
+{
+    return wyrebox_daemon_wirelog_views_refresh_account (user_data,
+               account_id, error);
+}
+
+/*
+ * Loads the configured rules and views, or leaves @out_views NULL when the
+ * config has no [wirelog] section.
+ */
+static gboolean
+load_wirelog_views (WyreboxDaemonConfig *config,
+    WyreboxDaemonWirelogViews **out_views, GError **error)
+{
+    const char *rules_path = wyrebox_daemon_config_get_wirelog_rules_path
+            (config);
+    g_autoptr (WyreboxDaemonWirelogViews) views = NULL;
+
+    *out_views = NULL;
+    if (rules_path == NULL)
+        return TRUE;
+
+    views = wyrebox_daemon_wirelog_views_new (rules_path, error);
+    if (views == NULL)
+        return FALSE;
+
+    for (guint i = 0; i < wyrebox_daemon_config_get_n_views (config); i++) {
+        if (!wyrebox_daemon_wirelog_views_add_view (views,
+            wyrebox_daemon_config_get_view_id (config, i),
+            wyrebox_daemon_config_get_view_imap_name (config, i), error))
+            return FALSE;
+    }
+
+    *out_views = g_steal_pointer (&views);
+    return TRUE;
+}
+
+/*
+ * Every account is refreshed by the first pass, which also covers rule
+ * changes and refreshes interrupted by a restart.
+ */
+static gboolean
+attach_wirelog_views (WyreboxDaemonWirelogViews *views,
+    WyreboxDaemonDeliveryMaterialization *materialization,
+    const char *catalog_path, WyreboxJournalWriter *journal_writer,
+    GError **error)
+{
+    g_auto (GStrv) accounts = NULL;
+
+    if (!wyrebox_daemon_wirelog_views_open_catalog (views, catalog_path,
+        journal_writer, error))
+        return FALSE;
+
+    accounts = wyrebox_daemon_wirelog_views_list_accounts (views, error);
+    if (accounts == NULL)
+        return FALSE;
+
+    wyrebox_daemon_delivery_materialization_set_refresh_func (materialization,
+        refresh_wirelog_views, g_object_ref (views), g_object_unref);
+    for (guint i = 0; accounts[i] != NULL; i++) {
+        wyrebox_daemon_delivery_materialization_queue_refresh (materialization,
+            accounts[i]);
+    }
+
+    return TRUE;
+}
+
 static int
 initialize_storage (const char *journal_root_dir, const char *object_root_dir)
 {
@@ -208,6 +288,10 @@ run_daemon (int argc, char **argv)
         = NULL;
     g_autoptr (WyreboxDaemonMailEventStreamService) mail_event_stream_service =
         NULL;
+    g_autoptr (WyreboxDaemonWirelogViews) wirelog_views = NULL;
+    g_autoptr (WyreboxDaemonFactMutationService) fact_mutation_service = NULL;
+    g_autoptr (WyreboxDaemonWirelogPredicateQueryService)
+    wirelog_predicate_query_service = NULL;
     g_autoptr (WyreboxDaemonRequestAdapter) request_adapter = NULL;
     g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
     g_autoptr (GMainLoop) loop = NULL;
@@ -230,6 +314,11 @@ run_daemon (int argc, char **argv)
     }
 
     if (!wyrebox_daemon_config_validate_for_startup (config, &error)) {
+        g_printerr ("wyreboxd: %s\n", error->message);
+        return EX_CONFIG;
+    }
+
+    if (!load_wirelog_views (config, &wirelog_views, &error)) {
         g_printerr ("wyreboxd: %s\n", error->message);
         return EX_CONFIG;
     }
@@ -333,6 +422,12 @@ run_daemon (int argc, char **argv)
         return EX_OSERR;
     }
 
+    if (wirelog_views != NULL && !attach_wirelog_views (wirelog_views,
+        materialization, catalog_path, journal_writer, &error)) {
+        g_printerr ("wyreboxd: %s\n", error->message);
+        return EX_OSERR;
+    }
+
     if (!wyrebox_daemon_delivery_materialization_catch_up (materialization,
         &error)) {
         g_printerr ("wyreboxd: delivery materialization failed: %s\n",
@@ -373,10 +468,23 @@ run_daemon (int argc, char **argv)
     wyrebox_daemon_delivery_ingestion_service_set_post_ingest_hook
         (delivery_service, materialize_after_ingest,
         g_object_ref (materialization), g_object_unref);
+    fact_mutation_service =
+        wyrebox_daemon_fact_mutation_service_new (journal_writer);
+    wyrebox_daemon_fact_mutation_service_set_commit_hook
+        (fact_mutation_service, materialize_after_fact_commit,
+        g_object_ref (materialization), g_object_unref);
+    if (wirelog_views != NULL) {
+        wirelog_predicate_query_service =
+            wyrebox_daemon_wirelog_views_new_predicate_query_service
+                (wirelog_views);
+        wyrebox_daemon_wirelog_predicate_query_service_set_audit_writer
+            (wirelog_predicate_query_service, journal_writer);
+    }
     request_adapter = wyrebox_daemon_request_adapter_new (delivery_service,
-            NULL,
+            fact_mutation_service,
             mailbox_list_service, mailbox_select_service,
-            message_fetch_service, message_search_service, NULL,
+            message_fetch_service, message_search_service,
+            wirelog_predicate_query_service,
             flag_keyword_update_service, decode_request_frame, NULL, NULL,
             encode_response_frame, NULL, NULL);
     wyrebox_daemon_request_adapter_set_duckdb_query_template_service

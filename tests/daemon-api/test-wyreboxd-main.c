@@ -198,6 +198,40 @@ daemon_root_init (DaemonRoot *daemon_root)
     initialize_storage (daemon_root);
 }
 
+#define PROJECTS_RULES \
+        ".decl has_keyword(message_id: symbol, keyword: symbol)\n" \
+        ".decl show_in_virtual_folder(view_id: symbol, message_id: symbol)\n" \
+        "show_in_virtual_folder(\"projects\", message_id) :- " \
+        "has_keyword(message_id, \"project\").\n"
+
+/*
+ * Configures the Projects virtual mailbox with @rules written to the rules
+ * file, or with a rules_path that does not exist when @rules is NULL.
+ */
+static void
+configure_projects_view (const DaemonRoot *daemon_root, const char *rules)
+{
+    g_autofree char *rules_path = g_build_filename (daemon_root->root,
+            "views.dl", NULL);
+    g_autofree char *config = NULL;
+    g_autofree char *extended = NULL;
+    g_autoptr (GError) error = NULL;
+
+    if (rules != NULL) {
+        g_assert_true (g_file_set_contents (rules_path, rules, -1, &error));
+        g_assert_no_error (error);
+    }
+
+    g_assert_true (g_file_get_contents (daemon_root->config_path, &config,
+        NULL, &error));
+    g_assert_no_error (error);
+    extended = g_strdup_printf ("%s\n[wirelog]\nrules_path=%s\n\n"
+            "[view:projects]\nimap_name=Projects\n", config, rules_path);
+    g_assert_true (g_file_set_contents (daemon_root->config_path, extended, -1,
+        &error));
+    g_assert_no_error (error);
+}
+
 static char *
 storage_marker_path (const DaemonRoot *daemon_root, gboolean journal)
 {
@@ -884,6 +918,127 @@ assert_mail_events_end (const DaemonRoot *daemon_root, const char *account_id,
         WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
     g_assert_true (frame.stream_chunk.end_of_stream);
     g_assert_cmpuint (g_bytes_get_size (frame.stream_chunk.bytes), ==, 0);
+}
+
+/*
+ * Delivers a message to account-1 and returns its message id.
+ */
+static char *
+deliver_message (const DaemonRoot *daemon_root, const char *delivery_id)
+{
+    g_autoptr (GBytes) request = build_delivery_request (delivery_id);
+    g_autoptr (GBytes) response = roundtrip_request (daemon_root->socket_path,
+            request);
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (response,
+        &frame, &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+
+    return g_strdup_printf ("journal:%" G_GUINT64_FORMAT ":%" G_GUINT64_FORMAT,
+               frame.success.journal_offset, frame.success.journal_sequence);
+}
+
+/*
+ * Inserts or retracts has_keyword(@message_id, @keyword) for account-1 over
+ * the socket as a trusted tool.
+ */
+static void
+mutate_keyword_fact (const DaemonRoot *daemon_root,
+    WyreboxDaemonFactMutationKind kind, const char *message_id,
+    const char *keyword)
+{
+    const char *arguments[] = { message_id, keyword, NULL };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) encoded = NULL;
+    g_autoptr (GBytes) response = NULL;
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonFactMutationRequest) request = { 0 };
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+
+    g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+        "request-fact-1", "trusted-tool", "account-1", "fact-importer",
+        "corr-fact-1", &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_fact_mutation_request_init (&request, kind,
+        "has_keyword", "account-1", arguments, &error));
+    g_assert_no_error (error);
+
+    encoded = wyrebox_daemon_capnp_codec_encode_fact_mutation_request
+            (&identity, &request, NULL, &error);
+    g_assert_no_error (error);
+    response = roundtrip_request (daemon_root->socket_path, encoded);
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (response,
+        &frame, &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+}
+
+static void
+query_predicate (const DaemonRoot *daemon_root, const char *predicate_id,
+    WyreboxDaemonResponseFrame *out_frame)
+{
+    const char *bindings[] = { NULL };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) encoded = NULL;
+    g_autoptr (GBytes) response = NULL;
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonWirelogPredicateQueryRequest) request = { 0 };
+
+    g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+        "request-predicate-1", "admin-cli", "account-1", "wyrebox-admin",
+        "corr-predicate-1", &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_wirelog_predicate_query_request_init
+            (&request, "query-1", predicate_id, "account-1", bindings,
+        &error));
+    g_assert_no_error (error);
+
+    encoded =
+        wyrebox_daemon_capnp_codec_encode_wirelog_predicate_query_request
+            (&identity, &request, NULL, &error);
+    g_assert_no_error (error);
+    response = roundtrip_request (daemon_root->socket_path, encoded);
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (response,
+        out_frame, &error));
+    g_assert_no_error (error);
+}
+
+static void
+assert_projects_state (const DaemonRoot *daemon_root, guint32 uid_validity,
+    guint32 uid_next, guint32 message_count)
+{
+    g_auto (WyreboxDaemonMailboxSelectResult) result = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (daemon_root->socket_path, "account-1", "Projects", &result,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (result.kind, ==,
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_VIRTUAL);
+    g_assert_cmpstr (result.mailbox_id, ==, "projects");
+    if (uid_validity != 0)
+        g_assert_cmpuint (result.uid_validity, ==, uid_validity);
+    g_assert_cmpuint (result.uid_next, ==, uid_next);
+    g_assert_cmpuint (result.message_count, ==, message_count);
+}
+
+static guint32
+projects_uid_validity (const DaemonRoot *daemon_root)
+{
+    g_auto (WyreboxDaemonMailboxSelectResult) result = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (daemon_root->socket_path, "account-1", "Projects", &result,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (result.uid_validity, !=, 0);
+
+    return result.uid_validity;
 }
 
 static void
@@ -1819,7 +1974,124 @@ test_wyreboxd_recovers_torn_journal_suffix (void)
     assert_inbox_state (&daemon_root, 3, 2);
     stop_daemon (recovered);
 }
+
+static void
+test_wyreboxd_derives_virtual_mailboxes_from_facts (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) subprocess = NULL;
+    g_autofree char *first = NULL;
+    g_autofree char *second = NULL;
+    g_autofree char *third = NULL;
+    g_autofree char *before_restart = NULL;
+    g_autofree char *after_restart = NULL;
+    g_autofree char *expected_members = NULL;
+    const char *members_sql =
+        "SELECT string_agg(message_id || '=' || uid || ':' || is_visible, "
+        "', ' ORDER BY uid) FROM derived_view_memberships "
+        "WHERE account_id = 'account-1' AND view_id = 'projects';";
+    guint32 uid_validity = 0;
+
+    daemon_root_init (&daemon_root);
+    configure_projects_view (&daemon_root, PROJECTS_RULES);
+    subprocess = start_daemon (&daemon_root);
+
+    first = deliver_message (&daemon_root, "delivery-1");
+    second = deliver_message (&daemon_root, "delivery-2");
+    third = deliver_message (&daemon_root, "delivery-3");
+    assert_projects_state (&daemon_root, 0, 1, 0);
+    uid_validity = projects_uid_validity (&daemon_root);
+
+    mutate_keyword_fact (&daemon_root, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+        third, "project");
+    mutate_keyword_fact (&daemon_root, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+        second, "other");
+    mutate_keyword_fact (&daemon_root, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+        first, "project");
+    assert_projects_state (&daemon_root, uid_validity, 3, 2);
+
+    mutate_keyword_fact (&daemon_root, WYREBOX_DAEMON_FACT_MUTATION_RETRACT,
+        third, "project");
+    assert_projects_state (&daemon_root, uid_validity, 3, 1);
+    mutate_keyword_fact (&daemon_root, WYREBOX_DAEMON_FACT_MUTATION_INSERT,
+        third, "project");
+    assert_projects_state (&daemon_root, uid_validity, 3, 2);
+
+    {
+        g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+        gboolean first_sorts_first = g_strcmp0 (first, third) < 0;
+        g_autofree char *expected = g_strdup_printf
+                ("account_id,view_id,message_id\n"
+                "account-1,projects,%s\naccount-1,projects,%s\n",
+                first_sorts_first ? first : third,
+                first_sorts_first ? third : first);
+        g_autofree char *data = NULL;
+        gsize size = 0;
+
+        query_predicate (&daemon_root, "show_in_virtual_folder.v1", &frame);
+        g_assert_cmpint (frame.kind, ==,
+            WYREBOX_DAEMON_RESPONSE_FRAME_STREAM_CHUNK);
+        data = g_strndup (g_bytes_get_data (frame.stream_chunk.bytes, &size),
+                g_bytes_get_size (frame.stream_chunk.bytes));
+        g_assert_cmpstr (data, ==, expected);
+    }
+    {
+        const char *bindings[] = { NULL };
+        g_auto (WyreboxDaemonWirelogPredicateQueryRequest) request = { 0 };
+        g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+        g_autoptr (GError) error = NULL;
+
+        g_assert_false (wyrebox_daemon_wirelog_predicate_query_request_init
+                (&request, "query-1",
+            "show_in_virtual_folder(\"x\", m) :- has_keyword(m, \"other\").",
+            "account-1", bindings, &error));
+        g_assert_nonnull (error);
+
+        query_predicate (&daemon_root, "has_keyword.v1", &frame);
+        g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_ERROR);
+        g_assert_cmpint (frame.error.error_class, ==,
+            WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
+    }
+    stop_daemon (subprocess);
+    g_clear_object (&subprocess);
+
+    before_restart = query_catalog_string (daemon_root.catalog_path,
+            members_sql);
+    expected_members = g_strdup_printf ("%s=1:true, %s=2:true", third, first);
+    g_assert_cmpstr (before_restart, ==, expected_members);
+
+    subprocess = start_daemon (&daemon_root);
+    assert_projects_state (&daemon_root, uid_validity, 3, 2);
+    stop_daemon (subprocess);
+    after_restart = query_catalog_string (daemon_root.catalog_path,
+            members_sql);
+    g_assert_cmpstr (after_restart, ==, before_restart);
+}
 #endif
+
+static void
+test_wyreboxd_rejects_invalid_wirelog_config (void)
+{
+    g_auto (DaemonRoot) missing_rules = { 0 };
+    g_auto (DaemonRoot) broken_rules = { 0 };
+    g_auto (DaemonRoot) undeclared_relation = { 0 };
+
+    daemon_root_init (&missing_rules);
+    configure_projects_view (&missing_rules, NULL);
+    assert_daemon_startup_fails (&missing_rules, EX_CONFIG,
+        "Wirelog rules file");
+    assert_daemon_startup_fails (&missing_rules, EX_CONFIG, "cannot be read");
+
+    daemon_root_init (&broken_rules);
+    configure_projects_view (&broken_rules, "show_in_virtual_folder(");
+    assert_daemon_startup_fails (&broken_rules, EX_CONFIG, "does not compile");
+
+    daemon_root_init (&undeclared_relation);
+    configure_projects_view (&undeclared_relation,
+        ".decl has_keyword(message_id: symbol, keyword: symbol)\n");
+    assert_daemon_startup_fails (&undeclared_relation, EX_CONFIG,
+        "must declare show_in_virtual_folder");
+}
 
 int
 main (int argc, char **argv)
@@ -1918,7 +2190,12 @@ main (int argc, char **argv)
     g_test_add_func
         ("/daemon-api/wyreboxd/acknowledges-delivery-when-materialization-fails",
         test_wyreboxd_acknowledges_delivery_when_materialization_fails);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/derives-virtual-mailboxes-from-facts",
+        test_wyreboxd_derives_virtual_mailboxes_from_facts);
 #endif
+    g_test_add_func ("/daemon-api/wyreboxd/rejects-invalid-wirelog-config",
+        test_wyreboxd_rejects_invalid_wirelog_config);
 
     return g_test_run ();
 }
