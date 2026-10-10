@@ -91,11 +91,22 @@ def main() -> None:
         text,
         "Dovecot daemon client include",
     )
-    require(
-        r"struct\s+istream\s+\*i_stream_create_copy_from_data\s*"
-        r"\(\s*const\s+void\s+\*data,\s*size_t\s+size\s*\);",
+    require(r"^#include\s+\"istream.h\"$", text, "istream include")
+    require(r"^#include\s+\"message-size.h\"$", text, "message-size include")
+    forbid(
+        r"^\s*(?:struct\s+istream\s+\*|void\s+)i_stream_\w+\s*\([^)]*\);",
         text,
-        "owned-copy istream constructor declaration",
+        "local istream prototype instead of Dovecot istream.h",
+    )
+    forbid(
+        r"\benum\s+mailbox_list_child_state\b",
+        text,
+        "fixture-only mailbox LIST child state enum",
+    )
+    forbid(
+        r"(?<!WYREBOX_DAEMON_)\bMAILBOX_LIST_CHILD_STATE_\w+",
+        text,
+        "fixture-only mailbox LIST child state values",
     )
     require(
         r"wyrebox_dovecot_mail_get_stream\s*\(\s*struct\s+mail\s+\*mail,\s*"
@@ -221,7 +232,7 @@ def main() -> None:
         r"\s*\(\s*struct\s+mailbox_list\s+\*\s*list,\s*"
         r"const\s+char\s+\*name,\s*char\s+hierarchy_delimiter,\s*"
         r"gboolean\s+selectable,\s*"
-        r"enum\s+mailbox_list_child_state\s+child_state,\s*"
+        r"WyreboxDaemonMailboxListChildState\s+child_state,\s*"
         r"const\s+char\s+\*special_use,\s*gpointer\s+user_data\s*\)",
         text,
         "mailbox LIST publisher callback seam",
@@ -254,15 +265,13 @@ def main() -> None:
                 f"publication fragment: {required_fragment}"
             )
     require(
-        r"wyrebox_dovecot_map_mailbox_list_child_state\s*\([^)]*\)\s*\{"
+        r"wyrebox_dovecot_validate_mailbox_list_child_state\s*\([^)]*\)\s*\{"
         r"[\s\S]*?WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN"
-        r"[\s\S]*?MAILBOX_LIST_CHILD_STATE_UNKNOWN"
         r"[\s\S]*?WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN"
-        r"[\s\S]*?MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN"
         r"[\s\S]*?WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN"
-        r"[\s\S]*?MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN",
+        r"[\s\S]*?G_IO_ERROR_INVALID_DATA",
         text,
-        "mailbox LIST adapter maps child state enum values",
+        "mailbox LIST adapter validates child state enum values",
     )
     for required_fragment in [
         "list == NULL",
@@ -726,7 +735,7 @@ def main() -> None:
             )
     for required_fragment in [
         "wyrebox_dovecot_mailbox_list_pattern_matches",
-        "wyrebox_dovecot_map_mailbox_list_child_state (entry->child_state",
+        "wyrebox_dovecot_validate_mailbox_list_child_state",
         "g_steal_pointer (&entries)",
         "context->entries = g_steal_pointer (&entries);",
         "context->n_entries = n_published_entries;",
@@ -737,7 +746,7 @@ def main() -> None:
                 f"validation/filter publication fragment: {required_fragment}"
             )
     for required_fragment in [
-        "wyrebox_dovecot_map_mailbox_list_child_state (entry->child_state",
+        "wyrebox_dovecot_validate_mailbox_list_child_state",
         "MAILBOX_LIST_ITER_RETURN_NO_FLAGS",
         "MAILBOX_LIST_ITER_RETURN_SPECIALUSE",
     ]:

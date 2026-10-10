@@ -5,11 +5,13 @@
 #include "config.h"
 
 #include "lib.h"
+#include "istream.h"
 #include "mail-namespace.h"
 #include "mail-storage.h"
 #include "mail-storage-private.h"
 #include "mail-user.h"
 #include "mailbox-list-private.h"
+#include "message-size.h"
 #include "module-dir.h"
 #include "wyrebox-daemon-mailbox-list-result.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
@@ -56,7 +58,7 @@ typedef struct
 
 typedef gboolean (*WyreboxDovecotMailboxListPublishFunc) (struct mailbox_list
     *list, const char *name, char hierarchy_delimiter, gboolean selectable,
-    enum mailbox_list_child_state child_state, const char *special_use,
+    WyreboxDaemonMailboxListChildState child_state, const char *special_use,
     gpointer user_data);
 
 typedef struct
@@ -64,7 +66,7 @@ typedef struct
     const char *name;
     char hierarchy_delimiter;
     gboolean selectable;
-    enum mailbox_list_child_state child_state;
+    WyreboxDaemonMailboxListChildState child_state;
     const char *special_use;
 } WyreboxDovecotMailboxListMappedEntry;
 
@@ -75,12 +77,9 @@ static GHashTable *wyrebox_dovecot_mailbox_list_hook_contexts;
 extern const char *wyrebox_dovecot_test_daemon_socket_path
 __attribute__((weak));
 
-struct istream *i_stream_create_copy_from_data (const void *data, size_t size);
-void i_stream_unref (struct istream **stream);
-
 static gboolean
-wyrebox_dovecot_map_mailbox_list_child_state (WyreboxDaemonMailboxListChildState
-    in, enum mailbox_list_child_state *out, GError **error);
+wyrebox_dovecot_validate_mailbox_list_child_state
+    (WyreboxDaemonMailboxListChildState state, GError **error);
 
 static const char *
 wyrebox_dovecot_socket_path (void)
@@ -316,7 +315,6 @@ wyrebox_dovecot_mailbox_list_iter_append_entry (struct mailbox_info *entries,
     enum mailbox_list_iter_flags iter_flags, GError **error)
 {
     struct mailbox_info *info;
-    enum mailbox_list_child_state child_state;
 
     if (entry == NULL || entry->mailbox_name == NULL
         || entry->mailbox_name[0] == '\0') {
@@ -327,8 +325,8 @@ wyrebox_dovecot_mailbox_list_iter_append_entry (struct mailbox_info *entries,
         return FALSE;
     }
 
-    if (!wyrebox_dovecot_map_mailbox_list_child_state (entry->child_state,
-        &child_state, error)) {
+    if (!wyrebox_dovecot_validate_mailbox_list_child_state (entry->child_state,
+        error)) {
         return FALSE;
     }
 
@@ -416,7 +414,6 @@ wyrebox_dovecot_mailbox_list_iter_init (struct mailbox_list *list,
     for (guint i = 0; i < n_entries; i++) {
         const WyreboxDaemonMailboxListEntry *entry =
             wyrebox_daemon_mailbox_list_result_get_entry (&result, i);
-        enum mailbox_list_child_state child_state;
 
         if (entry == NULL || entry->mailbox_name == NULL
             || entry->mailbox_name[0] == '\0') {
@@ -428,8 +425,8 @@ wyrebox_dovecot_mailbox_list_iter_init (struct mailbox_list *list,
             break;
         }
 
-        if (!wyrebox_dovecot_map_mailbox_list_child_state (entry->child_state,
-            &child_state, &error)) {
+        if (!wyrebox_dovecot_validate_mailbox_list_child_state
+                (entry->child_state, &error)) {
             context->ctx.failed = TRUE;
             break;
         }
@@ -507,18 +504,13 @@ wyrebox_dovecot_mailbox_list_deinit (struct mailbox_list *list)
 }
 
 static gboolean
-wyrebox_dovecot_map_mailbox_list_child_state (WyreboxDaemonMailboxListChildState
-    in, enum mailbox_list_child_state *out, GError **error)
+wyrebox_dovecot_validate_mailbox_list_child_state
+    (WyreboxDaemonMailboxListChildState state, GError **error)
 {
-    switch (in) {
+    switch (state) {
     case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_UNKNOWN:
-        *out = MAILBOX_LIST_CHILD_STATE_UNKNOWN;
-        return TRUE;
     case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN:
-        *out = MAILBOX_LIST_CHILD_STATE_HAS_CHILDREN;
-        return TRUE;
     case WYREBOX_DAEMON_MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN:
-        *out = MAILBOX_LIST_CHILD_STATE_HAS_NO_CHILDREN;
         return TRUE;
     default:
         g_set_error (error,
@@ -599,14 +591,15 @@ wyrebox_dovecot_publish_mailbox_list_result (struct mailbox_list *list,
             return FALSE;
         }
 
-        if (!wyrebox_dovecot_map_mailbox_list_child_state (entry->child_state,
-            &mapped_entry->child_state, error))
+        if (!wyrebox_dovecot_validate_mailbox_list_child_state
+                (entry->child_state, error))
             return FALSE;
 
         mapped_entry->name = entry->mailbox_name;
         mapped_entry->hierarchy_delimiter = entry->hierarchy_delimiter[0];
         mapped_entry->selectable = entry->is_selectable;
         mapped_entry->special_use = entry->special_use;
+        mapped_entry->child_state = entry->child_state;
     }
 
     for (guint i = 0; i < n_entries; i++) {
