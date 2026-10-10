@@ -83,6 +83,19 @@ GPtrArray *wyrebox_deterministic_fact_extract_from_metadata_with_regex (
     GError **error);
 
 /*
+ * Checks @dictionary_rules and @regex_rules as
+ * wyrebox_deterministic_fact_extract_from_metadata_with_rules() would before
+ * extracting, including that every regex pattern compiles and every capture
+ * group exists. Invalid rules fail with G_IO_ERROR_INVALID_ARGUMENT.
+ */
+gboolean wyrebox_deterministic_fact_rules_validate (
+    const WyreboxDeterministicFactDictionaryRule *dictionary_rules,
+    gsize n_dictionary_rules,
+    const WyreboxDeterministicFactRegexRule *regex_rules,
+    gsize n_regex_rules,
+    GError **error);
+
+/*
  * Extracts deterministic header-derived facts, dictionary project keywords,
  * and regex candidate facts in that order.
  *
