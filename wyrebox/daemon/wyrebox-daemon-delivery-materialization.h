@@ -192,5 +192,41 @@ void wyrebox_daemon_delivery_materialization_set_clock (
     WyreboxDaemonDeliveryMaterializationClockFunc clock,
     gpointer user_data);
 
+/*
+ * Recomputes state derived from the materialized catalog for @account_id,
+ * such as virtual mailbox membership. Called with the internal lock held, so
+ * it must not call back into the materialization service.
+ */
+typedef gboolean (*WyreboxDaemonDeliveryMaterializationRefreshFunc) (
+    const char *account_id,
+    gpointer user_data,
+    GError **error);
+
+/*
+ * Installs @refresh, which every pass that does not abort runs for each
+ * account it materialized a record for and each account still queued, except
+ * accounts the pass holds. A failed refresh holds the account like a failed
+ * run: the pass reports it in the status and failure log, a retry is scheduled,
+ * and the account stays queued until a refresh succeeds. A refresh hold does
+ * not stop the account's records from materializing.
+ *
+ * Without a refresh function, queued accounts are dropped after each pass.
+ * Takes ownership of @user_data and releases it with @user_data_destroy when
+ * replaced or when @self is disposed.
+ */
+void wyrebox_daemon_delivery_materialization_set_refresh_func (
+    WyreboxDaemonDeliveryMaterialization *self,
+    WyreboxDaemonDeliveryMaterializationRefreshFunc refresh,
+    gpointer user_data,
+    GDestroyNotify user_data_destroy);
+
+/*
+ * Queues @account_id for refresh by the next pass, for example after a rule
+ * change at startup. Safe to call from any thread.
+ */
+void wyrebox_daemon_delivery_materialization_queue_refresh (
+    WyreboxDaemonDeliveryMaterialization *self,
+    const char *account_id);
+
 G_END_DECLS
 /* *INDENT-ON* */

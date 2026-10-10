@@ -43,6 +43,11 @@ struct _WyreboxDaemonDeliveryMaterialization
     gboolean stopped;
     GPtrArray *holds;
     WyreboxDeliveryCatchupCursor cursor;
+    WyreboxDaemonDeliveryMaterializationRefreshFunc refresh;
+    gpointer refresh_data;
+    GDestroyNotify refresh_data_destroy;
+    GHashTable *pending_refresh;
+    GPtrArray *refresh_holds;
     gchar *last_error;
     gchar *warned_signature;
     gint64 warned_at;
@@ -117,6 +122,11 @@ wyrebox_daemon_delivery_materialization_dispose (GObject *object)
     g_clear_object (&self->object_store);
     g_clear_object (&self->journal_writer);
     g_clear_pointer (&self->context, g_main_context_unref);
+    if (self->refresh_data_destroy != NULL)
+        self->refresh_data_destroy (self->refresh_data);
+    self->refresh = NULL;
+    self->refresh_data = NULL;
+    self->refresh_data_destroy = NULL;
 
     G_OBJECT_CLASS (wyrebox_daemon_delivery_materialization_parent_class)->
     dispose (object);
@@ -130,6 +140,8 @@ wyrebox_daemon_delivery_materialization_finalize (GObject *object)
 
     g_clear_pointer (&self->journal_root_dir, g_free);
     g_clear_pointer (&self->holds, g_ptr_array_unref);
+    g_clear_pointer (&self->pending_refresh, g_hash_table_unref);
+    g_clear_pointer (&self->refresh_holds, g_ptr_array_unref);
     g_clear_pointer (&self->last_error, g_free);
     g_clear_pointer (&self->warned_signature, g_free);
     g_mutex_clear (&self->lock);
@@ -158,6 +170,9 @@ wyrebox_daemon_delivery_materialization_init (
     self->retry_max_ms = DEFAULT_RETRY_MAX_MS;
     self->retry_interval_ms = DEFAULT_RETRY_INITIAL_MS;
     self->holds = new_hold_array ();
+    self->pending_refresh = g_hash_table_new_full (g_str_hash, g_str_equal,
+            g_free, NULL);
+    self->refresh_holds = new_hold_array ();
 }
 
 WyreboxDaemonDeliveryMaterialization *
@@ -249,7 +264,7 @@ compare_strings (gconstpointer a, gconstpointer b)
  */
 static gchar *
 failure_signature (const WyreboxDeliveryCatchupReport *report,
-    const GError *abort_error)
+    const GPtrArray *refresh_holds, const GError *abort_error)
 {
     g_autoptr (GPtrArray) parts = NULL;
 
@@ -267,6 +282,13 @@ failure_signature (const WyreboxDeliveryCatchupReport *report,
         g_ptr_array_add (parts, g_strdup_printf ("%s\x1f%s", hold->account_id,
             hold->error->message));
     }
+    for (guint i = 0; i < refresh_holds->len; i++) {
+        const WyreboxDeliveryCatchupHold *hold =
+            g_ptr_array_index (refresh_holds, i);
+
+        g_ptr_array_add (parts, g_strdup_printf ("refresh\x1f%s\x1f%s",
+            hold->account_id, hold->error->message));
+    }
     g_ptr_array_sort (parts, compare_strings);
     g_ptr_array_add (parts, NULL);
 
@@ -275,7 +297,7 @@ failure_signature (const WyreboxDeliveryCatchupReport *report,
 
 static gchar *
 describe_failure (const WyreboxDeliveryCatchupReport *report,
-    const GError *abort_error)
+    const GPtrArray *refresh_holds, const GError *abort_error)
 {
     g_autoptr (GString) text = g_string_new ("delivery materialization ");
 
@@ -296,21 +318,109 @@ describe_failure (const WyreboxDeliveryCatchupReport *report,
             hold->error->message);
     }
 
+    for (guint i = 0; i < refresh_holds->len; i++) {
+        const WyreboxDeliveryCatchupHold *hold =
+            g_ptr_array_index (refresh_holds, i);
+
+        if (i > 0 || report->holds->len > 0)
+            g_string_append (text, "; ");
+        g_string_append_printf (text, "held account %s at virtual mailbox "
+            "refresh: %s", hold->account_id, hold->error->message);
+    }
+
     return g_string_free (g_steal_pointer (&text), FALSE);
 }
 
 static GStrv
-held_account_list (const GPtrArray *holds)
+held_account_list (const GPtrArray *holds, const GPtrArray *refresh_holds)
 {
-    GStrv accounts = g_new0 (gchar *, holds->len + 1);
+    g_autoptr (GStrvBuilder) builder = g_strv_builder_new ();
 
     for (guint i = 0; i < holds->len; i++) {
         const WyreboxDeliveryCatchupHold *hold = g_ptr_array_index (holds, i);
 
-        accounts[i] = g_strdup (hold->account_id);
+        g_strv_builder_add (builder, hold->account_id);
     }
 
-    return accounts;
+    for (guint i = 0; i < refresh_holds->len; i++) {
+        const WyreboxDeliveryCatchupHold *hold =
+            g_ptr_array_index (refresh_holds, i);
+        gboolean listed = FALSE;
+
+        for (guint j = 0; j < holds->len && !listed; j++) {
+            const WyreboxDeliveryCatchupHold *other =
+                g_ptr_array_index (holds, j);
+
+            listed = g_strcmp0 (other->account_id, hold->account_id) == 0;
+        }
+        if (!listed)
+            g_strv_builder_add (builder, hold->account_id);
+    }
+
+    return g_strv_builder_end (builder);
+}
+
+static gboolean
+holds_account (const GPtrArray *holds, const gchar *account_id)
+{
+    for (guint i = 0; i < holds->len; i++) {
+        const WyreboxDeliveryCatchupHold *hold = g_ptr_array_index (holds, i);
+
+        if (g_strcmp0 (hold->account_id, account_id) == 0)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+/*
+ * Refreshes the virtual mailboxes of every account the pass materialized or
+ * that is still pending from earlier passes, except accounts the pass held.
+ * A failed refresh holds the account and keeps it pending, so the next pass
+ * retries it even when no new journal record touches the account.
+ */
+static void
+refresh_pending_locked (WyreboxDaemonDeliveryMaterialization *self,
+    const WyreboxDeliveryCatchupReport *report)
+{
+    g_autoptr (GPtrArray) accounts = g_ptr_array_new_with_free_func (g_free);
+    GHashTableIter iter;
+    gpointer key = NULL;
+
+    for (guint i = 0; i < report->materialized_accounts->len; i++) {
+        g_hash_table_add (self->pending_refresh,
+            g_strdup (g_ptr_array_index (report->materialized_accounts, i)));
+    }
+
+    g_ptr_array_set_size (self->refresh_holds, 0);
+    if (self->refresh == NULL) {
+        g_hash_table_remove_all (self->pending_refresh);
+        return;
+    }
+
+    g_hash_table_iter_init (&iter, self->pending_refresh);
+    while (g_hash_table_iter_next (&iter, &key, NULL))
+        g_ptr_array_add (accounts, g_strdup (key));
+    g_ptr_array_sort (accounts, compare_strings);
+
+    for (guint i = 0; i < accounts->len; i++) {
+        const gchar *account_id = g_ptr_array_index (accounts, i);
+        GError *refresh_error = NULL;
+        WyreboxDeliveryCatchupHold *hold = NULL;
+
+        if (holds_account (report->holds, account_id))
+            continue;
+
+        if (self->refresh (account_id, self->refresh_data, &refresh_error)) {
+            g_hash_table_remove (self->pending_refresh, account_id);
+            continue;
+        }
+
+        hold = g_new0 (WyreboxDeliveryCatchupHold, 1);
+        hold->account_id = g_strdup (account_id);
+        hold->error = refresh_error;
+        g_ptr_array_add (self->refresh_holds, hold);
+    }
 }
 
 static void
@@ -343,17 +453,20 @@ finish_failed_pass_locked (WyreboxDaemonDeliveryMaterialization *self,
     PassKind kind, WyreboxDeliveryCatchupReport *report,
     const GError *abort_error, PassOutcome *outcome)
 {
-    g_autofree gchar *signature = failure_signature (report, abort_error);
+    g_autofree gchar *signature = failure_signature (report,
+            self->refresh_holds, abort_error);
     gint64 now = self->clock (self->clock_data);
     gboolean warn = FALSE;
 
     self->aborted = abort_error != NULL;
     g_free (self->last_error);
-    self->last_error = describe_failure (report, abort_error);
+    self->last_error = describe_failure (report, self->refresh_holds,
+            abort_error);
     if (report != NULL) {
         g_ptr_array_unref (self->holds);
         self->holds = g_steal_pointer (&report->holds);
-        self->cursor = report->scanned_through;
+        self->cursor = self->holds->len > 0 ? report->scanned_through :
+            no_cursor;
     } else {
         self->cursor = no_cursor;
     }
@@ -395,7 +508,8 @@ finish_pass_locked (WyreboxDaemonDeliveryMaterialization *self,
     PassKind kind, WyreboxDeliveryCatchupReport *report,
     const GError *abort_error, PassOutcome *outcome)
 {
-    if (abort_error == NULL && report->holds->len == 0)
+    if (abort_error == NULL && report->holds->len == 0 &&
+        self->refresh_holds->len == 0)
         finish_clean_pass_locked (self, outcome);
     else
         finish_failed_pass_locked (self, kind, report, abort_error, outcome);
@@ -429,9 +543,10 @@ run_and_finish_pass_locked (WyreboxDaemonDeliveryMaterialization *self,
     g_auto (WyreboxDeliveryCatchupReport) report = { 0 };
     g_autoptr (GError) error = NULL;
 
-    if (run_pass_locked (self, kind, &report, &error))
+    if (run_pass_locked (self, kind, &report, &error)) {
+        refresh_pending_locked (self, &report);
         finish_pass_locked (self, kind, &report, NULL, outcome);
-    else
+    } else
         finish_pass_locked (self, kind, NULL, error, outcome);
 }
 
@@ -452,6 +567,7 @@ wyrebox_daemon_delivery_materialization_catch_up (
         g_mutex_unlock (&self->lock);
         return FALSE;
     }
+    refresh_pending_locked (self, &report);
     finish_pass_locked (self, PASS_CATCH_UP, &report, NULL, &outcome);
     g_mutex_unlock (&self->lock);
 
@@ -547,7 +663,8 @@ wyrebox_daemon_delivery_materialization_get_status (
         out_status->state = WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_HELD;
     out_status->consecutive_failures = self->consecutive_failures;
     out_status->next_retry_interval_ms = self->retry_interval_ms;
-    out_status->held_accounts = held_account_list (self->holds);
+    out_status->held_accounts = held_account_list (self->holds,
+            self->refresh_holds);
     out_status->last_error = g_strdup (self->last_error);
     g_mutex_unlock (&self->lock);
 }
@@ -578,5 +695,40 @@ wyrebox_daemon_delivery_materialization_set_clock (
     g_mutex_lock (&self->lock);
     self->clock = clock;
     self->clock_data = user_data;
+    g_mutex_unlock (&self->lock);
+}
+
+void
+wyrebox_daemon_delivery_materialization_set_refresh_func (
+    WyreboxDaemonDeliveryMaterialization *self,
+    WyreboxDaemonDeliveryMaterializationRefreshFunc refresh,
+    gpointer user_data, GDestroyNotify user_data_destroy)
+{
+    gpointer old_data = NULL;
+    GDestroyNotify old_destroy = NULL;
+
+    g_return_if_fail (WYREBOX_IS_DAEMON_DELIVERY_MATERIALIZATION (self));
+
+    g_mutex_lock (&self->lock);
+    old_data = self->refresh_data;
+    old_destroy = self->refresh_data_destroy;
+    self->refresh = refresh;
+    self->refresh_data = user_data;
+    self->refresh_data_destroy = user_data_destroy;
+    g_mutex_unlock (&self->lock);
+
+    if (old_destroy != NULL)
+        old_destroy (old_data);
+}
+
+void
+wyrebox_daemon_delivery_materialization_queue_refresh (
+    WyreboxDaemonDeliveryMaterialization *self, const char *account_id)
+{
+    g_return_if_fail (WYREBOX_IS_DAEMON_DELIVERY_MATERIALIZATION (self));
+    g_return_if_fail (account_id != NULL && *account_id != '\0');
+
+    g_mutex_lock (&self->lock);
+    g_hash_table_add (self->pending_refresh, g_strdup (account_id));
     g_mutex_unlock (&self->lock);
 }
