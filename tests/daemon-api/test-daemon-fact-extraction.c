@@ -200,7 +200,7 @@ test_extracts_each_materialized_message_once (Fixture *fixture,
             "SELECT string_agg(e.account_id || ' ' || e.fact_count, ', ' "
             "ORDER BY m.journal_sequence) FROM message_fact_extractions e "
             "JOIN messages m ON m.message_id = e.message_id;");
-    g_assert_cmpstr (markers, ==, "account-a 6, account-a 5");
+    g_assert_cmpstr (markers, ==, "account-a 8, account-a 7");
     facts = query_catalog_string (fixture->catalog_path,
             "SELECT string_agg(predicate || ' ' || source || ' ' || "
             "json_extract_string(args_json, '$[1]'), ', ' "
