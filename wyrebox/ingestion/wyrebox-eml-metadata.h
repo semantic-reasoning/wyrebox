@@ -45,6 +45,10 @@ typedef struct
   char *date;
   char *in_reply_to;
   char *references;
+  /* Raw unfolded List-Id, Delivered-To, and X-Original-To values. */
+  char *list_id;
+  char *delivered_to;
+  char *x_original_to;
 
   /*
    * Raw byte span for the first canonical Subject header within the RFC 5322

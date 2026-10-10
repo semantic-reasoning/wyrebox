@@ -22,6 +22,9 @@ wyrebox_eml_metadata_clear (WyreboxEmlMetadata *metadata)
     g_clear_pointer (&metadata->date, g_free);
     g_clear_pointer (&metadata->in_reply_to, g_free);
     g_clear_pointer (&metadata->references, g_free);
+    g_clear_pointer (&metadata->list_id, g_free);
+    g_clear_pointer (&metadata->delivered_to, g_free);
+    g_clear_pointer (&metadata->x_original_to, g_free);
     metadata->subject_span_valid = FALSE;
     metadata->subject_span_start = 0;
     metadata->subject_span_end = 0;
@@ -100,6 +103,12 @@ commit_header (WyreboxEmlMetadata *metadata, const char *name, GString *value,
         set_first_value (&metadata->in_reply_to, value);
     } else if (g_ascii_strcasecmp (name, "References") == 0) {
         set_first_value (&metadata->references, value);
+    } else if (g_ascii_strcasecmp (name, "List-Id") == 0) {
+        set_first_value (&metadata->list_id, value);
+    } else if (g_ascii_strcasecmp (name, "Delivered-To") == 0) {
+        set_first_value (&metadata->delivered_to, value);
+    } else if (g_ascii_strcasecmp (name, "X-Original-To") == 0) {
+        set_first_value (&metadata->x_original_to, value);
     }
 }
 
@@ -239,6 +248,9 @@ wyrebox_eml_metadata_parse_bytes (GBytes *bytes,
     metadata.date = NULL;
     metadata.in_reply_to = NULL;
     metadata.references = NULL;
+    metadata.list_id = NULL;
+    metadata.delivered_to = NULL;
+    metadata.x_original_to = NULL;
     metadata.subject_span_valid = FALSE;
     metadata.subject_span_start = 0;
     metadata.subject_span_end = 0;

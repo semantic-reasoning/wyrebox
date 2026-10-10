@@ -29,7 +29,14 @@ fact_journal_snapshot_test = executable(
 )
 
 test('fact record', fact_record_test)
-test('deterministic fact extractor', deterministic_fact_extractor_test)
+test(
+ 'deterministic fact extractor',
+ deterministic_fact_extractor_test,
+ env: {
+   'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() /
+     'tests' / 'object-store' / 'fixtures',
+ },
+)
 test('fact extraction rules', fact_extraction_rules_test)
 test('fact reconciliation', fact_reconciliation_test)
 test('fact journal snapshot', fact_journal_snapshot_test)

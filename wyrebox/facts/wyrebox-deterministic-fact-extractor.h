@@ -27,6 +27,9 @@ typedef struct
 
 /*
  * Extracts deterministic header-derived facts from parsed EML metadata.
+ * RFC 2047 encoded words are decoded for Subject, From, To, Cc, and Bcc
+ * extraction and rule matching. Address fields emit one normalized
+ * participant fact per valid address; display names are emitted separately.
  *
  * Returns: (transfer full) (element-type WyreboxFactRecord): fact records owned
  *   by the returned array.
@@ -46,7 +49,8 @@ GPtrArray *wyrebox_deterministic_fact_extract_from_metadata (
  *   dictionary rules.
  *
  * Supported rule fields are subject, from, to, cc, and bcc. Matching is a
- * case-insensitive substring check over the selected parsed metadata field.
+ * case-insensitive substring check over the decoded working value; parsed
+ * metadata remains unchanged.
  *
  * Returns: (transfer full) (element-type WyreboxFactRecord): fact records owned
  *   by the returned array.
