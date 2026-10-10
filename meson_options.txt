@@ -49,6 +49,14 @@ option(
 )
 
 option(
+  'dovecot_config',
+  type: 'string',
+  value: '',
+  description: 'Path to an installed dovecot-config (e.g. ' +
+    '/usr/lib/dovecot/dovecot-config) for building against system headers',
+)
+
+option(
   'dovecot_loader_smoke',
   type: 'feature',
   value: 'disabled',

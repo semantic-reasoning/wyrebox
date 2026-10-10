@@ -270,39 +270,80 @@ dovecot_backend_option = get_option('dovecot_backend')
 dovecot_loader_smoke_option = get_option('dovecot_loader_smoke')
 dovecot_source_dir_option = get_option('dovecot_source_dir')
 dovecot_build_dir_option = get_option('dovecot_build_dir')
+dovecot_config_option = get_option('dovecot_config')
 dovecot_loader_archive_option = get_option('dovecot_loader_archive')
 dovecot_loader_extra_link_args = get_option('dovecot_loader_extra_link_args')
 have_dovecot_backend = false
+dovecot_uses_system_headers = false
 have_dovecot_loader_smoke = false
 dovecot_loader_has_real_storage_registration = false
 dovecot_backend_c_args = []
 dovecot_loader_dep = disabler()
 if dovecot_backend_option.enabled()
-  if dovecot_build_dir_option == ''
-    error(
-      'Dovecot backend is enabled but no configured build directory was ' +
-      'provided; set -Ddovecot_build_dir=/path/to/dovecot/build',
+  if dovecot_config_option != ''
+    if dovecot_source_dir_option != '' or dovecot_build_dir_option != ''
+      error(
+        '-Ddovecot_config cannot be combined with -Ddovecot_source_dir or ' +
+        '-Ddovecot_build_dir',
+      )
+    endif
+    if dovecot_loader_smoke_option.enabled()
+      error(
+        'Dovecot loader smoke is not supported with -Ddovecot_config; it ' +
+        'needs liblib.a from a Dovecot source build',
+      )
+    endif
+    dovecot_config = meson.current_source_dir() / dovecot_config_option
+    dovecot_include_lookup = run_command(
+      python,
+      meson.current_source_dir() / 'tools' / 'dovecot-config-include-dir.py',
+      dovecot_config,
+      check: false,
     )
+    if dovecot_include_lookup.returncode() != 0
+      error(
+        'Dovecot backend is enabled but dovecot-config could not be used:\n' +
+        dovecot_include_lookup.stderr().strip(),
+      )
+    endif
+    dovecot_include_dir = dovecot_include_lookup.stdout().strip()
+    dovecot_uses_system_headers = true
+    dovecot_source_contract_args = ['--include-dir', dovecot_include_dir]
+    dovecot_build_contract_args = ['--include-dir', dovecot_include_dir]
+    dovecot_backend_c_args = [
+      '-std=gnu11',
+      '-I' + dovecot_include_dir,
+    ]
+  else
+    if dovecot_build_dir_option == ''
+      error(
+        'Dovecot backend is enabled but no configured build directory was ' +
+        'provided; set -Ddovecot_build_dir=/path/to/dovecot/build or ' +
+        '-Ddovecot_config=/usr/lib/dovecot/dovecot-config',
+      )
+    endif
+    if dovecot_source_dir_option == ''
+      error('Dovecot backend is enabled but no source directory was provided; set ' +
+        '-Ddovecot_source_dir=/path/to/dovecot')
+    endif
+    dovecot_source_dir = meson.current_source_dir() / dovecot_source_dir_option
+    dovecot_build_dir = meson.current_source_dir() / dovecot_build_dir_option
+    dovecot_source_contract_args = [dovecot_source_dir]
+    dovecot_build_contract_args = [dovecot_source_dir, dovecot_build_dir]
+    dovecot_backend_c_args = [
+      '-std=gnu11',
+      '-I' + (dovecot_source_dir / 'src' / 'lib-index'),
+      '-I' + (dovecot_source_dir / 'src' / 'lib'),
+      '-I' + (dovecot_source_dir / 'src' / 'lib-mail'),
+      '-I' + (dovecot_source_dir / 'src' / 'lib-storage'),
+      '-I' + dovecot_build_dir,
+    ]
   endif
-  if dovecot_source_dir_option == ''
-    error('Dovecot backend is enabled but no source directory was provided; set ' +
-      '-Ddovecot_source_dir=/path/to/dovecot')
-  endif
-  dovecot_source_dir = meson.current_source_dir() / dovecot_source_dir_option
-  dovecot_build_dir = meson.current_source_dir() / dovecot_build_dir_option
-  dovecot_backend_c_args = [
-    '-std=gnu11',
-    '-I' + (dovecot_source_dir / 'src' / 'lib-index'),
-    '-I' + (dovecot_source_dir / 'src' / 'lib'),
-    '-I' + (dovecot_source_dir / 'src' / 'lib-mail'),
-    '-I' + (dovecot_source_dir / 'src' / 'lib-storage'),
-    '-I' + dovecot_build_dir,
-  ]
 
   check_dovecot_source = run_command(
     python,
     meson.current_source_dir() / 'tools' / 'check-dovecot-source-contract.py',
-    dovecot_source_dir,
+    dovecot_source_contract_args,
     check: false,
   )
   if check_dovecot_source.returncode() != 0
@@ -319,8 +360,7 @@ if dovecot_backend_option.enabled()
   check_dovecot_build = run_command(
     python,
     meson.current_source_dir() / 'tools' / 'check-dovecot-build-contract.py',
-    dovecot_source_dir,
-    dovecot_build_dir,
+    dovecot_build_contract_args,
     check: false,
   )
   if check_dovecot_build.returncode() != 0
@@ -407,6 +447,18 @@ if dovecot_backend_option.enabled()
       'Dovecot backend is enabled but configured header contract validation failed '
       +
       'for configured build and source directories.',
+    )
+  endif
+
+  dovecot_abi_version = cc.get_define(
+    'DOVECOT_ABI_VERSION',
+    prefix: '#include "config.h"',
+    args: dovecot_backend_c_args,
+  )
+  if dovecot_abi_version != '"2.4.ABIv2"'
+    error(
+      'Dovecot backend requires DOVECOT_ABI_VERSION "2.4.ABIv2", got ' +
+      dovecot_abi_version,
     )
   endif
 
@@ -525,6 +577,11 @@ endif
 summary(
   'dovecot backend',
   have_dovecot_backend ? 'enabled' : 'disabled',
+  section: 'Features',
+)
+summary(
+  'dovecot headers',
+  dovecot_uses_system_headers ? 'system (dovecot-config)' : 'source/build tree',
   section: 'Features',
 )
 summary(
