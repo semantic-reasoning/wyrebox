@@ -219,7 +219,8 @@ load_wirelog_views (WyreboxDaemonConfig *config,
     for (guint i = 0; i < wyrebox_daemon_config_get_n_views (config); i++) {
         if (!wyrebox_daemon_wirelog_views_add_view (views,
             wyrebox_daemon_config_get_view_id (config, i),
-            wyrebox_daemon_config_get_view_imap_name (config, i), error))
+            wyrebox_daemon_config_get_view_imap_name (config, i),
+            wyrebox_daemon_config_get_view_scope (config, i), error))
             return FALSE;
     }
 

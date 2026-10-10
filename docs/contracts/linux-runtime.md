@@ -253,6 +253,7 @@ rules_path=/etc/wyrebox/views.dl
 
 [view:projects]
 imap_name=Projects
+scope=message
 ```
 
 ```
@@ -268,6 +269,18 @@ Rules and configuration:
 - `rules_path` must be absolute. Views require `rules_path`.
 - A view id uses letters, digits, `-`, `_`, and `.`. Each view needs a
   unique `imap_name`; `INBOX` is reserved.
+- Each view needs a `scope`, which names the facts its rules read to decide
+  whether a message is a member:
+  - `message`: the facts of the message itself, such as a project keyword or
+    the sender domain.
+  - `thread`: the facts of the messages connected to it. Messages are
+    connected when they share a `message_id`, `replies_to`, or `references`
+    value, directly or through other messages.
+  - `account`: any fact of the account.
+
+  `wyreboxd` does not check the scope against the rules. A rule that reads
+  facts outside its view's scope is evaluated without them, so its view can
+  miss members until the next full evaluation.
 - The rules file must declare `show_in_virtual_folder(view_id: symbol,
   message_id: symbol)`. A message belongs to a view when the rules derive
   `show_in_virtual_folder("<view id>", <message id>)`.
@@ -286,8 +299,16 @@ Refresh:
 - A fact insert or retract refreshes the views of its account before the
   response is sent. Deliveries refresh the views of their accounts in the same
   materialization pass.
-- Each startup refreshes the views of every account, so a changed rules file
-  takes effect after a restart.
+- A refresh evaluates only the messages delivered, or whose facts changed,
+  since the account's previous refresh: `message` views read those messages'
+  facts, `thread` views the facts of the messages connected to them, and
+  `account` views all facts of the account. The catalog records the journal
+  sequence each account was refreshed to.
+- When the rules file, a view, or a scope changes, the next refresh evaluates
+  every message of the account again, a batch of whole threads at a time, so
+  memory stays bounded by the batch rather than the account. A changed rules
+  file takes effect after a restart; changed rules give the members of a view
+  new UIDs.
 - Virtual UIDs and UIDVALIDITY are stable. A message that leaves a view and
   comes back keeps its UID.
 - A refresh failure holds the account, like a delivery hold. `wyreboxd` logs
@@ -337,8 +358,8 @@ Delivery-time facts:
   deliveries, while existing messages keep their facts. Each startup extracts
   facts for messages that do not have them yet.
 - Extracted facts are visible to the view rules like inserted facts, so a rule
-  can follow `replies_to` and `message_id` facts to place a whole thread in a
-  view, whatever order its messages arrive in.
+  of a `thread` view can follow `replies_to` and `message_id` facts to place a
+  whole thread in the view, whatever order its messages arrive in.
 - An extraction failure, such as an unreadable message object, holds the
   account like a refresh failure. The log line reads
   `held account <account> at virtual mailbox refresh: fact extraction failed:
@@ -351,7 +372,8 @@ Known limitations:
 
 - Changing the `imap_name` of an existing view conflicts with the stored view
   and holds the account at refresh. Use a new view id instead.
-- Startup refreshes every account, which grows with the number of accounts.
+- Startup checks every account for changes since its previous refresh,
+  which grows with the number of accounts.
 
 ## Permission Mismatch Behavior
 
