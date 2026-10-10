@@ -203,14 +203,16 @@ test_extracts_each_materialized_message_once (Fixture *fixture,
     g_assert_cmpstr (markers, ==, "account-a 8, account-a 7");
     facts = query_catalog_string (fixture->catalog_path,
             "SELECT string_agg(predicate || ' ' || source || ' ' || "
-            "json_extract_string(args_json, '$[1]'), ', ' "
-            "ORDER BY predicate, json_extract_string(args_json, '$[1]')) "
+            "args_json, ', ' ORDER BY predicate, args_json) "
             "FROM message_facts "
             "WHERE predicate IN ('message_id', 'project_keyword');");
     g_assert_cmpstr (facts, ==,
-        "message_id header:message-id <html-message@example.test>, "
-        "message_id header:message-id <simple-crlf@example.test>, "
-        "project_keyword dictionary:subject:crlf crlf-project");
+        "message_id header:message-id "
+        "[\"journal:0:1\",\"<simple-crlf@example.test>\"], "
+        "message_id header:message-id "
+        "[\"journal:446:2\",\"<html-message@example.test>\"], "
+        "project_keyword dictionary:subject:crlf "
+        "[\"journal:0:1\",\"crlf-project\"]");
 
     g_assert_true (wyrebox_daemon_fact_extraction_extract_account (extraction,
         "account-a", &appended, &error));

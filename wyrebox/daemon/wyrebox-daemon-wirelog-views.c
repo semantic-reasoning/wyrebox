@@ -18,6 +18,12 @@ typedef struct
     WyreboxDaemonViewScope scope;
 } WirelogView;
 
+typedef struct
+{
+    char *message_id;
+    char *link_key;
+} ThreadLink;
+
 struct _WyreboxDaemonWirelogViews
 {
     GObject parent_instance;
@@ -57,6 +63,23 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_prepared_statement,
     duckdb_prepared_statement_clear)
 
 static void
+duckdb_appender_cleanup (duckdb_appender *appender)
+{
+    if (*appender != NULL)
+        (void)duckdb_appender_destroy (appender);
+}
+
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_appender, duckdb_appender_cleanup)
+
+static void
+duckdb_error_data_clear (duckdb_error_data *error_data)
+{
+    duckdb_destroy_error_data (error_data);
+}
+
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (duckdb_error_data, duckdb_error_data_clear)
+
+static void
 wirelog_view_free (gpointer data)
 {
     WirelogView *view = data;
@@ -65,6 +88,16 @@ wirelog_view_free (gpointer data)
     g_free (view->imap_name);
     g_free (view->definition_ref);
     g_free (view);
+}
+
+static void
+thread_link_free (gpointer data)
+{
+    ThreadLink *link = data;
+
+    g_free (link->message_id);
+    g_free (link->link_key);
+    g_free (link);
 }
 
 static void
@@ -614,6 +647,116 @@ bind_varchar (duckdb_prepared_statement statement, idx_t index,
     return FALSE;
 }
 
+static void
+set_appender_error (duckdb_appender appender, const char *operation,
+    GError **error)
+{
+    g_auto (duckdb_error_data) error_data =
+        duckdb_appender_error_data (appender);
+    const char *message = duckdb_error_data_message (error_data);
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_FAILED,
+        "%s: %s",
+        operation,
+        message != NULL ? message : "unknown DuckDB error");
+}
+
+/*
+ * This connection-local scratch table is replaced before every thread-scope
+ * refresh. If a refresh fails, the next attempt replaces it before reading it.
+ */
+static gboolean
+fill_thread_links (WyreboxDaemonWirelogViews *self, const char *account_id,
+    gboolean full, guint64 since, GError **error)
+{
+    g_autoptr (GPtrArray) links = g_ptr_array_new_with_free_func (
+        thread_link_free);
+
+    {
+        g_auto (duckdb_prepared_statement) statement = NULL;
+        g_auto (duckdb_result) result = { 0 };
+
+        if (!views_prepare (self,
+            "SELECT message_id, args_json FROM message_facts "
+            "WHERE account_id = ? "
+            "AND predicate IN ('message_id', 'replies_to', 'references') "
+            "AND (retracted_at_unix_us = 0 OR journal_sequence > ?) "
+            "ORDER BY fact_id;", &statement, error) ||
+            !bind_varchar (statement, 1, account_id, error) ||
+            !bind_uint64 (statement, 2, full ? G_MAXUINT64 : since, error) ||
+            !views_execute (statement, &result, error))
+            return FALSE;
+
+        for (idx_t row = 0; row < duckdb_row_count (&result); row++) {
+            g_autofree char *message_id = result_string (&result, 0, row);
+            g_autofree char *args_json = result_string (&result, 1, row);
+            g_auto (GStrv) args = parse_args_json (args_json, error);
+            ThreadLink *link = NULL;
+
+            if (args == NULL)
+                return FALSE;
+            if (message_id == NULL || args[0] == NULL || args[1] == NULL)
+                continue;
+
+            link = g_new0 (ThreadLink, 1);
+            link->message_id = g_steal_pointer (&message_id);
+            link->link_key = g_strdup (args[1]);
+            g_ptr_array_add (links, link);
+        }
+    }
+
+    {
+        g_auto (duckdb_result) result = { 0 };
+
+        if (duckdb_query (self->connection,
+            "CREATE OR REPLACE TEMP TABLE wirelog_thread_links ("
+            "message_id VARCHAR, link_key VARCHAR);", &result) !=
+            DuckDBSuccess) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_FAILED,
+                "failed to create Wirelog thread links: %s",
+                duckdb_result_error (&result));
+            return FALSE;
+        }
+    }
+
+    {
+        g_auto (duckdb_appender) appender = NULL;
+
+        if (duckdb_appender_create_ext (self->connection, "temp", "main",
+            "wirelog_thread_links", &appender) != DuckDBSuccess) {
+            set_appender_error (appender,
+                "failed to create Wirelog thread link appender", error);
+            return FALSE;
+        }
+
+        for (guint i = 0; i < links->len; i++) {
+            const ThreadLink *link = g_ptr_array_index (links, i);
+
+            if (duckdb_append_varchar (appender, link->message_id) !=
+                DuckDBSuccess ||
+                duckdb_append_varchar (appender, link->link_key) !=
+                DuckDBSuccess ||
+                duckdb_appender_end_row (appender) != DuckDBSuccess) {
+                set_appender_error (appender,
+                    "failed to append Wirelog thread links", error);
+                return FALSE;
+            }
+        }
+
+        if (duckdb_appender_flush (appender) != DuckDBSuccess) {
+            set_appender_error (appender,
+                "failed to flush Wirelog thread links", error);
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
 static const char *
 view_scope_name (WyreboxDaemonViewScope scope)
 {
@@ -746,18 +889,14 @@ static const char message_scope_sql[] =
 
 /*
  * Messages sharing a message_id, replies_to, or references value are
- * connected. Links whose fact was retracted after $3 still connect, so the
- * messages a retraction disconnects are evaluated again. Each message's
+ * connected. Links retracted since the previous refresh still connect, so
+ * the messages a retraction disconnects are evaluated again. Each message's
  * component is the smallest changed message it is connected to.
  */
 static const char thread_scope_sql[] =
     "CREATE OR REPLACE TEMP TABLE wirelog_refresh_scope AS "
     "WITH RECURSIVE link_keys AS ("
-    "SELECT DISTINCT message_id, "
-    "json_extract_string(args_json, '$[1]') AS link_key "
-    "FROM message_facts WHERE account_id = $1 "
-    "AND predicate IN ('message_id', 'replies_to', 'references') "
-    "AND (retracted_at_unix_us = 0 OR journal_sequence > $3)), "
+    "SELECT DISTINCT message_id, link_key FROM wirelog_thread_links), "
     "links AS (SELECT a.message_id AS source, b.message_id AS target "
     "FROM link_keys a JOIN link_keys b ON a.link_key = b.link_key "
     "AND a.message_id <> b.message_id), "
@@ -777,12 +916,13 @@ fill_refresh_scope (WyreboxDaemonWirelogViews *self, const char *account_id,
     g_auto (duckdb_result) result = { 0 };
     gboolean thread = scope == WYREBOX_DAEMON_VIEW_SCOPE_THREAD;
 
+    if (thread && !fill_thread_links (self, account_id, full, since, error))
+        return FALSE;
+
     return views_prepare (self, thread ? thread_scope_sql : message_scope_sql,
                &statement, error)
            && bind_varchar (statement, 1, account_id, error)
            && bind_uint64 (statement, 2, full ? 0 : since, error)
-           && (!thread || bind_uint64 (statement, 3,
-           full ? G_MAXUINT64 : since, error))
            && views_execute (statement, &result, error);
 }
 
@@ -963,6 +1103,21 @@ refresh_scoped_views (WyreboxDaemonWirelogViews *self, const char *account_id,
             "failed to drop Wirelog views refresh scope: %s",
             duckdb_result_error (&result));
         return FALSE;
+    }
+
+    if (scope == WYREBOX_DAEMON_VIEW_SCOPE_THREAD) {
+        g_auto (duckdb_result) thread_links_result = { 0 };
+
+        if (duckdb_query (self->connection,
+            "DROP TABLE IF EXISTS wirelog_thread_links;",
+            &thread_links_result) != DuckDBSuccess) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_FAILED,
+                "failed to drop Wirelog thread links: %s",
+                duckdb_result_error (&thread_links_result));
+            return FALSE;
+        }
     }
 
     return TRUE;
