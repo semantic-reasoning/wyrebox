@@ -1527,6 +1527,110 @@ assert_mail_event_stream_request_encoder_round_trip (void)
 }
 
 static void
+assert_fact_mutation_request_encoder_round_trip (void)
+{
+    const char *arguments[] = { "journal:0:1", "project", NULL };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) encoded = NULL;
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonFactMutationRequest) request = { };
+    WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+    gpointer decoded_state = NULL;
+    GDestroyNotify decoded_state_clear = NULL;
+
+    g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+        "request-encode-fact", "trusted-tool", "account-1", "fact-importer",
+        "corr-fact", &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_fact_mutation_request_init (&request,
+        WYREBOX_DAEMON_FACT_MUTATION_RETRACT, "has_keyword", "account-1",
+        arguments, &error));
+    g_assert_no_error (error);
+
+    encoded = wyrebox_daemon_capnp_codec_encode_fact_mutation_request
+            (&identity, &request, NULL, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (encoded);
+
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+        encoded, &decoded, &decoded_state, &decoded_state_clear, NULL,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (decoded.request_id, ==, "request-encode-fact");
+    g_assert_cmpstr (decoded.tool_identity, ==, "fact-importer");
+    g_assert_cmpint (decoded.operation, ==,
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_MUTATION);
+    g_assert_nonnull (decoded.fact_mutation);
+    g_assert_cmpint (decoded.fact_mutation->mutation, ==,
+        WYREBOX_DAEMON_FACT_MUTATION_RETRACT);
+    g_assert_cmpstr (decoded.fact_mutation->predicate_id, ==, "has_keyword");
+    g_assert_cmpstr (decoded.fact_mutation->scope_id, ==, "account-1");
+    g_assert_true (g_strv_equal ((const gchar * const *)
+            decoded.fact_mutation->arguments, arguments));
+
+    decoded_state_clear (decoded_state);
+    g_clear_pointer (&encoded, g_bytes_unref);
+
+    encoded = wyrebox_daemon_capnp_codec_encode_fact_mutation_request
+            (&identity, NULL, NULL, &error);
+    g_assert_null (encoded);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
+assert_wirelog_predicate_query_request_encoder_round_trip (void)
+{
+    const char *bindings[] = { NULL };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) encoded = NULL;
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonWirelogPredicateQueryRequest) request = { 0 };
+    WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+    gpointer decoded_state = NULL;
+    GDestroyNotify decoded_state_clear = NULL;
+
+    g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+        "request-encode-wirelog", "wyrebox-admin", "account-1",
+        "wyrebox-admin", "corr-wirelog", &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_wirelog_predicate_query_request_init
+            (&request, "query-1", "show_in_virtual_folder.v1", "account-1",
+        bindings, &error));
+    g_assert_no_error (error);
+
+    encoded =
+        wyrebox_daemon_capnp_codec_encode_wirelog_predicate_query_request
+            (&identity, &request, NULL, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (encoded);
+
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+        encoded, &decoded, &decoded_state, &decoded_state_clear, NULL,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (decoded.request_id, ==, "request-encode-wirelog");
+    g_assert_cmpint (decoded.operation, ==,
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY);
+    g_assert_nonnull (decoded.wirelog_predicate_query);
+    g_assert_cmpstr (decoded.wirelog_predicate_query->query_id, ==, "query-1");
+    g_assert_cmpstr (decoded.wirelog_predicate_query->predicate_id, ==,
+        "show_in_virtual_folder.v1");
+    g_assert_cmpstr (decoded.wirelog_predicate_query->scope_id, ==,
+        "account-1");
+    g_assert_cmpuint (g_strv_length
+        (decoded.wirelog_predicate_query->bindings), ==, 0);
+
+    decoded_state_clear (decoded_state);
+    g_clear_pointer (&encoded, g_bytes_unref);
+
+    encoded =
+        wyrebox_daemon_capnp_codec_encode_wirelog_predicate_query_request
+            (&identity, NULL, NULL, &error);
+    g_assert_null (encoded);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
 assert_request_bytes_rejects_mail_event_stream_bad_cursor (void)
 {
     capnp::MallocMessageBuilder builder;
@@ -4725,6 +4829,12 @@ main (int argc, char **argv)
     g_test_add_func (
         "/daemon-api/capnp/codec/mail-event-stream-encoder-round-trip",
         assert_mail_event_stream_request_encoder_round_trip);
+    g_test_add_func (
+        "/daemon-api/capnp/codec/fact-mutation-encoder-round-trip",
+        assert_fact_mutation_request_encoder_round_trip);
+    g_test_add_func (
+        "/daemon-api/capnp/codec/wirelog-predicate-query-encoder-round-trip",
+        assert_wirelog_predicate_query_request_encoder_round_trip);
     g_test_add_func (
         "/daemon-api/capnp/codec/reject-mail-event-stream-bad-cursor",
         assert_request_bytes_rejects_mail_event_stream_bad_cursor);
