@@ -1,0 +1,5 @@
+.decl has_keyword(message_id: symbol, keyword: symbol)
+.decl show_in_virtual_folder(view_id: symbol, message_id: symbol)
+
+show_in_virtual_folder("projects", message_id) :-
+    has_keyword(message_id, "project").

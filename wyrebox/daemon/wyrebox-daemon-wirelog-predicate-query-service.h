@@ -39,6 +39,27 @@ wyrebox_daemon_wirelog_predicate_query_service_new_wirelog (
     const char *journal_root_dir,
     GError **error);
 
+/*
+ * Returns: (transfer full) (element-type WyreboxWirelogDerivedMembership):
+ * the rows of @relation_name derived for @account_id, or NULL with @error set.
+ */
+typedef GPtrArray *(*WyreboxDaemonWirelogPredicateQueryEvaluateFunc) (
+    const char *account_id,
+    const char *relation_name,
+    gpointer user_data,
+    GError **error);
+
+/*
+ * Creates a service that validates requests against the controlled predicate
+ * catalog and streams the rows @evaluate returns as CSV. The service takes
+ * ownership of @user_data and releases it with @user_data_destroy.
+ */
+WyreboxDaemonWirelogPredicateQueryService *
+wyrebox_daemon_wirelog_predicate_query_service_new_with_evaluator (
+    WyreboxDaemonWirelogPredicateQueryEvaluateFunc evaluate,
+    gpointer user_data,
+    GDestroyNotify user_data_destroy);
+
 void wyrebox_daemon_wirelog_predicate_query_service_set_audit_writer (
     WyreboxDaemonWirelogPredicateQueryService *self,
     WyreboxJournalWriter *audit_writer);

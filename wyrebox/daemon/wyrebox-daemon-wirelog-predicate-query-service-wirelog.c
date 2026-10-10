@@ -150,18 +150,55 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (WirelogPredicateQueryExecutor,
     wirelog_predicate_query_executor_free)
 /* *INDENT-ON* */
 
+static GPtrArray *
+journal_snapshot_evaluate (const char *account_id, const char *relation_name,
+    gpointer user_data, GError **error)
+{
+    WirelogPredicateQueryExecutor *executor = user_data;
+    g_autoptr (GPtrArray) facts = NULL;
+    g_autoptr (GPtrArray) scoped_facts = NULL;
+
+    facts =
+        wyrebox_fact_journal_snapshot_load_active (executor->journal_root_dir,
+            error);
+    if (facts == NULL)
+        return NULL;
+
+    scoped_facts = filter_facts_for_account_scope (facts, account_id, error);
+    if (scoped_facts == NULL)
+        return NULL;
+
+    return wyrebox_wirelog_derived_membership_snapshot_from_rules_and_facts
+               (executor->rules_source, scoped_facts, relation_name, error);
+}
+
+typedef struct
+{
+    WyreboxDaemonWirelogPredicateQueryEvaluateFunc evaluate;
+    gpointer user_data;
+    GDestroyNotify user_data_destroy;
+} EvaluatorExecutor;
+
+static void
+evaluator_executor_free (gpointer data)
+{
+    EvaluatorExecutor *executor = data;
+
+    if (executor->user_data_destroy != NULL)
+        executor->user_data_destroy (executor->user_data);
+    g_free (executor);
+}
+
 static gboolean
 wirelog_predicate_query_execute (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonWirelogPredicateQueryRequest *request,
     WyreboxDaemonStreamChunkFrame *out_chunk, gpointer user_data,
     GError **error)
 {
-    WirelogPredicateQueryExecutor *executor = user_data;
+    EvaluatorExecutor *executor = user_data;
     WyreboxDaemonClientIdentityClass client_class =
         wyrebox_daemon_client_identity_classify_request (identity);
     const WyreboxDaemonWirelogPredicateQueryDescriptor *descriptor = NULL;
-    g_autoptr (GPtrArray) facts = NULL;
-    g_autoptr (GPtrArray) scoped_facts = NULL;
     g_autoptr (GPtrArray) memberships = NULL;
     g_autoptr (GBytes) bytes = NULL;
 
@@ -169,21 +206,8 @@ wirelog_predicate_query_execute (const WyreboxDaemonRequestIdentity *identity,
         identity->account_identity, request, &descriptor, error))
         return FALSE;
 
-    facts =
-        wyrebox_fact_journal_snapshot_load_active (executor->journal_root_dir,
-            error);
-    if (facts == NULL)
-        return FALSE;
-
-    scoped_facts = filter_facts_for_account_scope (facts, request->scope_id,
-            error);
-    if (scoped_facts == NULL)
-        return FALSE;
-
-    memberships =
-        wyrebox_wirelog_derived_membership_snapshot_from_rules_and_facts
-            (executor->rules_source, scoped_facts, descriptor->relation_name,
-            error);
+    memberships = executor->evaluate (request->scope_id,
+            descriptor->relation_name, executor->user_data, error);
     if (memberships == NULL)
         return FALSE;
 
@@ -195,13 +219,31 @@ wirelog_predicate_query_execute (const WyreboxDaemonRequestIdentity *identity,
                TRUE, error);
 }
 
+WyreboxDaemonWirelogPredicateQueryService *
+wyrebox_daemon_wirelog_predicate_query_service_new_with_evaluator
+    (WyreboxDaemonWirelogPredicateQueryEvaluateFunc evaluate,
+    gpointer user_data, GDestroyNotify user_data_destroy)
+{
+    EvaluatorExecutor *executor = NULL;
+
+    g_return_val_if_fail (evaluate != NULL, NULL);
+
+    executor = g_new0 (EvaluatorExecutor, 1);
+    executor->evaluate = evaluate;
+    executor->user_data = user_data;
+    executor->user_data_destroy = user_data_destroy;
+
+    return wyrebox_daemon_wirelog_predicate_query_service_new
+               (wirelog_predicate_query_execute, executor,
+               evaluator_executor_free);
+}
+
 WyreboxDaemonWirelogPredicateQueryService
 * wyrebox_daemon_wirelog_predicate_query_service_new_wirelog
     (const char *rules_source, const char *journal_root_dir, GError **error)
 {
     g_autoptr (WirelogPredicateQueryExecutor) executor = NULL;
     g_autoptr (WyreboxWirelogProgram) program = NULL;
-    g_autoptr (WyreboxDaemonWirelogPredicateQueryService) service = NULL;
 
     g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
@@ -229,8 +271,7 @@ WyreboxDaemonWirelogPredicateQueryService
     executor->rules_source = g_strdup (rules_source);
     executor->journal_root_dir = g_strdup (journal_root_dir);
 
-    service = wyrebox_daemon_wirelog_predicate_query_service_new
-            (wirelog_predicate_query_execute,
-            g_steal_pointer (&executor), wirelog_predicate_query_executor_free);
-    return g_steal_pointer (&service);
+    return wyrebox_daemon_wirelog_predicate_query_service_new_with_evaluator
+               (journal_snapshot_evaluate, g_steal_pointer (&executor),
+               wirelog_predicate_query_executor_free);
 }

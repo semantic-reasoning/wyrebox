@@ -244,6 +244,11 @@ if wirelog_runtime_found
     'test-daemon-wirelog-predicate-query-service-wirelog.c',
     dependencies: [wyrebox_dep],
   )
+  daemon_wirelog_views_test = executable(
+    'test-daemon-wirelog-views',
+    'test-daemon-wirelog-views.c',
+    dependencies: [wyrebox_dep],
+  )
 endif
 
 daemon_duckdb_query_template_request_test = executable(
@@ -490,6 +495,12 @@ test('daemon wirelog predicate query dispatcher',
 if wirelog_runtime_found
   test('daemon wirelog predicate query service wirelog',
     daemon_wirelog_predicate_query_service_wirelog_test)
+  test('daemon wirelog views', daemon_wirelog_views_test,
+    env: {
+      'WYREBOX_EXAMPLES_DIR': meson.project_source_root() / 'examples'
+        / 'wyreboxd',
+    },
+  )
 endif
 test('daemon duckdb query template request',
   daemon_duckdb_query_template_request_test)
