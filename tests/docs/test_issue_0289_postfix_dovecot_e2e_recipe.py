@@ -7,7 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DOVECOT_SOURCE_DIR = REPO_ROOT / "tests" / "dovecot" / "fixtures" / (
-    "valid-2.3.21.1"
+    "valid-2.4.2"
 )
 DEFAULT_DOVECOT_BUILD_DIR = (
     DEFAULT_DOVECOT_SOURCE_DIR / "build-config-valid"

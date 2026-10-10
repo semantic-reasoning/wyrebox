@@ -58,12 +58,12 @@ def main() -> None:
     assert_in_section(
         sections,
         "## Repository Managed Inputs",
-        "tests/dovecot/fixtures/valid-2.3.21.1",
+        "tests/dovecot/fixtures/valid-2.4.2",
     )
     assert_in_section(
         sections,
         "## Repository Managed Inputs",
-        "tests/dovecot/fixtures/valid-2.3.21.1/build-config-valid",
+        "tests/dovecot/fixtures/valid-2.4.2/build-config-valid",
     )
     assert_in_section(
         sections,

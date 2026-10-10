@@ -11,7 +11,7 @@ import tempfile
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_DIR = REPO_ROOT / "tests" / "dovecot" / "fixtures"
-VALID_SOURCE_FIXTURE = FIXTURES_DIR / "valid-2.3.21.1"
+VALID_SOURCE_FIXTURE = FIXTURES_DIR / "valid-2.4.2"
 BUILD_CHECKER_PATH = REPO_ROOT / "tools" / "check-dovecot-build-contract.py"
 CC_SHIM_LOG_ENV = "WYREBOX_CC_SHIM_LOG"
 
@@ -118,14 +118,14 @@ pathlib.Path(os.environ["%s"]).write_text(
 def test_dovecot_build_contract_happy_path() -> None:
     run_checker(
         VALID_SOURCE_FIXTURE,
-        FIXTURES_DIR / "valid-2.3.21.1" / "build-config-valid",
+        FIXTURES_DIR / "valid-2.4.2" / "build-config-valid",
     )
 
 
 def test_dovecot_build_contract_missing_file() -> None:
     assert_checker_fails_with(
         VALID_SOURCE_FIXTURE,
-        FIXTURES_DIR / "valid-2.3.21.1" / "build-config-missing-file",
+        FIXTURES_DIR / "valid-2.4.2" / "build-config-missing-file",
         ["build directory is missing required config.h"],
     )
 
@@ -133,7 +133,7 @@ def test_dovecot_build_contract_missing_file() -> None:
 def test_dovecot_build_contract_invalid_macros() -> None:
     assert_checker_fails_with(
         VALID_SOURCE_FIXTURE,
-        FIXTURES_DIR / "valid-2.3.21.1" / "build-config-missing-uoff-selector",
+        FIXTURES_DIR / "valid-2.4.2" / "build-config-missing-uoff-selector",
         ["config.h must define one uoff_t selector macro"],
     )
 
@@ -141,8 +141,8 @@ def test_dovecot_build_contract_invalid_macros() -> None:
 def test_dovecot_build_contract_wrong_abi() -> None:
     assert_checker_fails_with(
         VALID_SOURCE_FIXTURE,
-        FIXTURES_DIR / "valid-2.3.21.1" / "build-config-wrong-abi",
-        ['config.h DOVECOT_ABI_VERSION must equal "2.3.ABIv21(2.3.21.1)"'],
+        FIXTURES_DIR / "valid-2.4.2" / "build-config-wrong-abi",
+        ['config.h DOVECOT_ABI_VERSION must equal "2.4.ABIv2"'],
     )
 
 
@@ -221,7 +221,7 @@ def test_dovecot_build_contract_list_iterator_iter_deinit_signature() -> None:
 def test_dovecot_build_contract_missing_source_directory() -> None:
     assert_checker_fails_with(
         Path('/definitely-not-a-real-dovecot-source-tree'),
-        FIXTURES_DIR / "valid-2.3.21.1" / "build-config-valid",
+        FIXTURES_DIR / "valid-2.4.2" / "build-config-valid",
         ["source directory not found: /definitely-not-a-real-dovecot-source-tree"],
     )
 
@@ -238,7 +238,7 @@ def test_dovecot_build_contract_cc_wrapper_and_args() -> None:
 
         run_checker(
             VALID_SOURCE_FIXTURE,
-            FIXTURES_DIR / "valid-2.3.21.1" / "build-config-valid",
+            FIXTURES_DIR / "valid-2.4.2" / "build-config-valid",
             env={"CC": cc_spec, CC_SHIM_LOG_ENV: str(log_path)},
             expect_success=True,
         )
@@ -250,7 +250,7 @@ def test_dovecot_build_contract_cc_wrapper_and_args() -> None:
             "-std=gnu11",
             "-fsyntax-only",
             "-Werror=incompatible-pointer-types",
-            f"-I{FIXTURES_DIR / 'valid-2.3.21.1' / 'build-config-valid'}",
+            f"-I{FIXTURES_DIR / 'valid-2.4.2' / 'build-config-valid'}",
             f"-I{VALID_SOURCE_FIXTURE / 'src' / 'lib-index'}",
             f"-I{VALID_SOURCE_FIXTURE / 'src' / 'lib'}",
             f"-I{VALID_SOURCE_FIXTURE / 'src' / 'lib-mail'}",

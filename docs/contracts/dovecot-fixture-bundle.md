@@ -18,8 +18,8 @@ for the source, build, and loader inputs that already gate the recipe.
 The recipe uses these default repository-managed paths when no explicit
 environment overrides are supplied:
 
-- `tests/dovecot/fixtures/valid-2.3.21.1`
-- `tests/dovecot/fixtures/valid-2.3.21.1/build-config-valid`
+- `tests/dovecot/fixtures/valid-2.4.2`
+- `tests/dovecot/fixtures/valid-2.4.2/build-config-valid`
 - `/usr/lib/dovecot/libdovecot-storage.so`
 
 The first two paths are checked-in fixtures. They provide the Dovecot source

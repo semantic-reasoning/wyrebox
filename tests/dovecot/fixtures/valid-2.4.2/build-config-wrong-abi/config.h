@@ -1,9 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#define DOVECOT_ABI_VERSION "2.3.ABIv21(2.3.20)"
-#define HAVE__BOOL 1
-#define HAVE_SOCKLEN_T 1
+#define DOVECOT_ABI_VERSION "2.4.ABIv1"
 #define OFF_T_MAX LONG_MAX
 #define PRIuUOFF_T "lu"
 #define SIZEOF_INT 4
