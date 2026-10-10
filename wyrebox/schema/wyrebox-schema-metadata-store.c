@@ -1195,7 +1195,9 @@ wyrebox_schema_metadata_store_memory_apply_migration_operation
         || operation ==
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_OBJECT_REACHABILITY_VIEW
         || operation ==
-        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_FACT_EXTRACTIONS)
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_FACT_EXTRACTIONS
+        || operation ==
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_REFRESH_STATE)
 
 
         return TRUE;
@@ -1956,6 +1958,21 @@ duckdb_store_create_message_fact_extractions (WyreboxSchemaMetadataStoreDuckdb
                "journal_offset UBIGINT NOT NULL,"
                "journal_sequence UBIGINT NOT NULL,"
                "PRIMARY KEY(account_id, message_id)" ");", error);
+}
+
+/*
+ * One row per account whose derived views were refreshed, recording the
+ * journal sequence the refresh covered and the rules and views it used.
+ */
+static gboolean
+duckdb_store_create_derived_view_refresh_state
+    (WyreboxSchemaMetadataStoreDuckdb *self, GError **error)
+{
+    return duckdb_store_query (self,
+               "CREATE TABLE IF NOT EXISTS derived_view_refresh_state ("
+               "account_id VARCHAR PRIMARY KEY,"
+               "refresh_config_hash VARCHAR NOT NULL,"
+               "refreshed_journal_sequence UBIGINT NOT NULL" ");", error);
 }
 
 static gboolean
@@ -2895,6 +2912,9 @@ wyrebox_schema_metadata_store_duckdb_apply_migration_operation
     case
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_FACT_EXTRACTIONS
         :
+    case
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_REFRESH_STATE
+        :
         break;
     default:
         goto unsupported;
@@ -2941,6 +2961,10 @@ wyrebox_schema_metadata_store_duckdb_apply_migration_operation
         || (operation ==
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_FACT_EXTRACTIONS
         && duckdb_store_create_message_fact_extractions (duckdb_store,
+        error))
+        || (operation ==
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_REFRESH_STATE
+        && duckdb_store_create_derived_view_refresh_state (duckdb_store,
         error))) ||
         !duckdb_store_query (duckdb_store, "COMMIT;", error)) {
         duckdb_store_rollback_quietly (duckdb_store);
