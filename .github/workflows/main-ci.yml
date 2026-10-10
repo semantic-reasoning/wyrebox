@@ -171,3 +171,22 @@ jobs:
           # exceeds Meson's default 30s per-test limit. Scale all test timeouts
           # so slow-but-progressing tests are not killed prematurely.
           meson test -C _build --timeout-multiplier 6 --print-errorlogs
+
+  ubuntu-26-04-dovecot:
+    name: Ubuntu 26.04 Dovecot 2.4.2
+    runs-on: ubuntu-24.04
+    needs: formatting
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v6
+
+      - name: Build the Ubuntu 26.04 image
+        run: |
+          docker build -t wyrebox-ubuntu-26.04 \
+            -f ci/ubuntu-26.04/Containerfile ci/ubuntu-26.04
+
+      - name: Build and test in system and fixture Dovecot modes
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src wyrebox-ubuntu-26.04 \
+            ./tools/ci/run-ubuntu-26.04.sh

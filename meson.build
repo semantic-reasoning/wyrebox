@@ -820,6 +820,12 @@ test(
   args: files('tests/docs/test_issue_0326_ci_capnp_configurations.py'),
 )
 
+test(
+  'docs issue 0354 ubuntu 26.04 ci',
+  python,
+  args: files('tests/docs/test_issue_0354_ubuntu_26_04_ci.py'),
+)
+
 # Activate the committed hook through a worktree-relative hooksPath. Source
 # archives and unpacked sources nested below another repository deliberately
 # skip this developer setup.
