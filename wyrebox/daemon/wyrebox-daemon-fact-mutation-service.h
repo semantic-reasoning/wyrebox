@@ -23,6 +23,24 @@ G_DECLARE_FINAL_TYPE (WyreboxDaemonFactMutationService,
 WyreboxDaemonFactMutationService *wyrebox_daemon_fact_mutation_service_new (
     WyreboxJournalWriter *journal_writer);
 
+/*
+ * Called with the account scope after a fact mutation or batch import and its
+ * audit record are durably journaled, before the success response is built.
+ */
+typedef void (*WyreboxDaemonFactMutationCommitFunc) (
+    const char *scope_id,
+    gpointer user_data);
+
+/*
+ * Installs @hook, replacing any previous one. Takes ownership of @user_data
+ * and releases it with @user_data_destroy when replaced or finalized.
+ */
+void wyrebox_daemon_fact_mutation_service_set_commit_hook (
+    WyreboxDaemonFactMutationService *self,
+    WyreboxDaemonFactMutationCommitFunc hook,
+    gpointer user_data,
+    GDestroyNotify user_data_destroy);
+
 gboolean wyrebox_daemon_fact_mutation_service_configure_wirelog_derived_view (
     WyreboxDaemonFactMutationService *self,
     const char *journal_root_dir,
