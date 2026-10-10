@@ -549,6 +549,13 @@ only.
 Concrete Wirelog predicate query `.capnp` schemas and field layouts are
 deferred. The safe DuckDB query-template operation is separate.
 
+`wyreboxd` registers the fact mutation and Wirelog predicate query operations.
+A committed fact insert or retract refreshes the rule-derived virtual
+mailboxes of its account before the response is sent. When virtual mailboxes
+are configured, predicate queries evaluate the configured rules file against
+the account's active facts; `docs/contracts/linux-runtime.md` describes the
+configuration.
+
 ## DuckDB Query Template Operation Contract
 
 The DuckDB query-template operation is a read-only daemon operation for

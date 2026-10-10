@@ -241,6 +241,67 @@ Startup exit codes:
 - The ADR lists the known misclassifications, for example DuckDB open
   failures with an unrecognised message exiting with 75.
 
+## Rule-Derived Virtual Mailboxes
+
+Virtual mailboxes are configured in the `wyreboxd` configuration file. The
+`[wirelog]` section names one Wirelog rules file, and each `[view:<id>]`
+section adds one virtual mailbox. `examples/wyreboxd/` has a complete example:
+
+```ini
+[wirelog]
+rules_path=/etc/wyrebox/views.dl
+
+[view:projects]
+imap_name=Projects
+```
+
+```
+.decl has_keyword(message_id: symbol, keyword: symbol)
+.decl show_in_virtual_folder(view_id: symbol, message_id: symbol)
+
+show_in_virtual_folder("projects", message_id) :-
+    has_keyword(message_id, "project").
+```
+
+Rules and configuration:
+
+- `rules_path` must be absolute. Views require `rules_path`.
+- A view id uses letters, digits, `-`, `_`, and `.`. Each view needs a
+  unique `imap_name`; `INBOX` is reserved.
+- The rules file must declare `show_in_virtual_folder(view_id: symbol,
+  message_id: symbol)`. A message belongs to a view when the rules derive
+  `show_in_virtual_folder("<view id>", <message id>)`.
+- Message ids have the form `journal:<offset>:<sequence>`, as returned in the
+  delivery receipt.
+- Rules read the account's active facts, as inserted and retracted through
+  the daemon fact mutation operation. Facts of predicates the rules do not
+  declare are ignored, and so are derived message ids that do not exist in
+  the account.
+- A missing or unreadable rules file, rules that do not compile, or rules
+  without `show_in_virtual_folder` stop startup with `EX_CONFIG` (78) and a
+  message naming the file or the view.
+
+Refresh:
+
+- A fact insert or retract refreshes the views of its account before the
+  response is sent. Deliveries refresh the views of their accounts in the same
+  materialization pass.
+- Each startup refreshes the views of every account, so a changed rules file
+  takes effect after a restart.
+- Virtual UIDs and UIDVALIDITY are stable. A message that leaves a view and
+  comes back keeps its UID.
+- A refresh failure holds the account, like a delivery hold. `wyreboxd` logs
+  `held account <account> at virtual mailbox refresh: <error>` and retries
+  with the same backoff. The `show_in_virtual_folder.v1` predicate query over
+  the daemon socket returns the current derived memberships for inspection.
+
+Known limitations:
+
+- Changing the `imap_name` of an existing view conflicts with the stored view
+  and holds the account at refresh. Use a new view id instead.
+- A catalog rebuild does not yet reproduce earlier virtual UIDs.
+- Startup refreshes every account, which grows with the number of accounts.
+
 ## Permission Mismatch Behavior
 
 A permission mismatch exists when the socket owner, group, or mode differs
