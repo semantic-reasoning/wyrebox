@@ -800,10 +800,159 @@ test_aborted_pass_schedules_retry (Fixture *fixture, gconstpointer user_data)
     wyrebox_daemon_delivery_materialization_stop (materialization);
 }
 
+typedef struct
+{
+    GPtrArray *calls;
+    guint failures_left;
+} RefreshRecorder;
+
+static gboolean
+record_refresh (const char *account_id, gpointer user_data, GError **error)
+{
+    RefreshRecorder *recorder = user_data;
+
+    g_ptr_array_add (recorder->calls, g_strdup (account_id));
+    if (recorder->failures_left == 0)
+        return TRUE;
+
+    recorder->failures_left--;
+    g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+        "refresh failed for %s", account_id);
+    return FALSE;
+}
+
+static gchar *
+take_refresh_calls (RefreshRecorder *recorder)
+{
+    gchar *calls = NULL;
+
+    g_ptr_array_add (recorder->calls, NULL);
+    calls = g_strjoinv (",", (gchar **)recorder->calls->pdata);
+    g_ptr_array_set_size (recorder->calls, 0);
+
+    return calls;
+}
+
+static void
+test_refresh_runs_for_materialized_and_queued_accounts (Fixture *fixture,
+    gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonDeliveryMaterialization) materialization = NULL;
+    g_autoptr (GPtrArray) calls = g_ptr_array_new_with_free_func (g_free);
+    RefreshRecorder recorder = { calls, 0 };
+    g_auto (WyreboxEmlIngestResult) a1 = { 0 };
+    g_auto (WyreboxEmlIngestResult) b1 = { 0 };
+    g_autofree gchar *first_calls = NULL;
+    g_autofree gchar *second_calls = NULL;
+    g_autofree gchar *third_calls = NULL;
+    g_autoptr (GError) error = NULL;
+
+    seed_unselectable_account_b_inbox (fixture);
+    materialization = new_materialization (fixture, fixture->catalog_path);
+    wyrebox_daemon_delivery_materialization_set_refresh_func (materialization,
+        record_refresh, &recorder, NULL);
+    ingest (fixture, "simple-crlf.eml", "delivery-a1", "account-a", &a1);
+    ingest (fixture, "duplicate-message-id.eml", "delivery-b1", "account-b",
+        &b1);
+    wyrebox_daemon_delivery_materialization_queue_refresh (materialization,
+        "account-q");
+    wyrebox_daemon_delivery_materialization_queue_refresh (materialization,
+        "account-b");
+
+    g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
+        "*delivery materialization held account account-b*");
+    g_assert_true (wyrebox_daemon_delivery_materialization_catch_up (
+            materialization, &error));
+    g_assert_no_error (error);
+    g_test_assert_expected_messages ();
+    first_calls = take_refresh_calls (&recorder);
+    g_assert_cmpstr (first_calls, ==, "account-a,account-q");
+
+    make_account_b_inbox_selectable (fixture);
+    g_assert_true (wyrebox_daemon_delivery_materialization_catch_up (
+            materialization, &error));
+    g_assert_no_error (error);
+    second_calls = take_refresh_calls (&recorder);
+    g_assert_cmpstr (second_calls, ==, "account-b");
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_OK, 0, 5000, NULL);
+
+    g_assert_true (wyrebox_daemon_delivery_materialization_catch_up (
+            materialization, &error));
+    g_assert_no_error (error);
+    third_calls = take_refresh_calls (&recorder);
+    g_assert_cmpstr (third_calls, ==, "");
+
+    wyrebox_daemon_delivery_materialization_stop (materialization);
+}
+
+static void
+test_refresh_failure_holds_account_until_retry (Fixture *fixture,
+    gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonDeliveryMaterialization) materialization = NULL;
+    g_autoptr (GPtrArray) calls = g_ptr_array_new_with_free_func (g_free);
+    RefreshRecorder recorder = { calls, 1 };
+    g_auto (WyreboxEmlIngestResult) a1 = { 0 };
+    g_auto (WyreboxEmlIngestResult) a2 = { 0 };
+    g_autofree gchar *held_calls = NULL;
+    g_autofree gchar *retry_calls = NULL;
+    gint64 now = 0;
+
+    materialization = new_materialization (fixture, fixture->catalog_path);
+    use_fast_retries (materialization, &now);
+    wyrebox_daemon_delivery_materialization_set_refresh_func (materialization,
+        record_refresh, &recorder, NULL);
+    ingest (fixture, "simple-crlf.eml", "delivery-a1", "account-a", &a1);
+
+    g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
+        "*held account account-a at virtual mailbox refresh: "
+        "refresh failed for account-a*");
+    wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
+        materialization);
+    g_test_assert_expected_messages ();
+    held_calls = take_refresh_calls (&recorder);
+    g_assert_cmpstr (held_calls, ==, "account-a");
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_HELD, 1, 10,
+        "account-a");
+    g_assert_true (wyrebox_daemon_delivery_materialization_is_retry_pending (
+            materialization));
+    g_assert_cmpuint (inbox_uid (fixture->catalog_path, "account-a", &a1), ==,
+        1);
+    assert_checkpoint (fixture->catalog_path, &a1);
+
+    ingest (fixture, "duplicate-message-id.eml", "delivery-a2", "account-a",
+        &a2);
+    wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry (
+        materialization);
+    retry_calls = take_refresh_calls (&recorder);
+    g_assert_cmpstr (retry_calls, ==, "account-a");
+    g_assert_cmpuint (inbox_uid (fixture->catalog_path, "account-a", &a2), ==,
+        2);
+    assert_status (materialization,
+        WYREBOX_DAEMON_DELIVERY_MATERIALIZATION_STATE_OK, 0, 10, NULL);
+    g_assert_false (wyrebox_daemon_delivery_materialization_is_retry_pending (
+            materialization));
+
+    wyrebox_daemon_delivery_materialization_stop (materialization);
+}
+
 int
 main (int argc, char **argv)
 {
     g_test_init (&argc, &argv, NULL);
+
+    g_test_add ("/daemon/delivery-materialization/"
+        "refresh-materialized-and-queued-accounts",
+        Fixture, NULL, (void (*)(Fixture *, gconstpointer)) fixture_set_up,
+        test_refresh_runs_for_materialized_and_queued_accounts,
+        (void (*)(Fixture *, gconstpointer)) fixture_tear_down);
+    g_test_add ("/daemon/delivery-materialization/"
+        "refresh-failure-holds-account-until-retry",
+        Fixture, NULL, (void (*)(Fixture *, gconstpointer)) fixture_set_up,
+        test_refresh_failure_holds_account_until_retry,
+        (void (*)(Fixture *, gconstpointer)) fixture_tear_down);
 
     g_test_add ("/daemon/delivery-materialization/catch-up-into-account-inbox",
         Fixture, NULL, (void (*)(Fixture *, gconstpointer)) fixture_set_up,
