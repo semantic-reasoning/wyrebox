@@ -323,6 +323,12 @@ daemon_delivery_materialization_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_fact_extraction_test = executable(
+  'test-daemon-fact-extraction',
+  'test-daemon-fact-extraction.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_storage_test = executable(
   'test-daemon-storage',
   'test-daemon-storage.c',
@@ -538,6 +544,14 @@ test('daemon runtime', daemon_runtime_test)
 test(
   'daemon delivery materialization',
   daemon_delivery_materialization_test,
+  env: {
+    'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() / 'tests'
+    / 'object-store' / 'fixtures',
+  },
+)
+test(
+  'daemon fact extraction',
+  daemon_fact_extraction_test,
   env: {
     'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() / 'tests'
     / 'object-store' / 'fixtures',
