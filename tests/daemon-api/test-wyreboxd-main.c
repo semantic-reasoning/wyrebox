@@ -205,11 +205,13 @@ daemon_root_init (DaemonRoot *daemon_root)
         "has_keyword(message_id, \"project\").\n"
 
 /*
- * Configures the Projects virtual mailbox with @rules written to the rules
- * file, or with a rules_path that does not exist when @rules is NULL.
+ * Configures the Projects virtual mailbox with @scope and @rules written to
+ * the rules file, or with a rules_path that does not exist when @rules is
+ * NULL.
  */
 static void
-configure_projects_view (const DaemonRoot *daemon_root, const char *rules)
+configure_projects_view_with_scope (const DaemonRoot *daemon_root,
+    const char *rules, const char *scope)
 {
     g_autofree char *rules_path = g_build_filename (daemon_root->root,
             "views.dl", NULL);
@@ -226,10 +228,17 @@ configure_projects_view (const DaemonRoot *daemon_root, const char *rules)
         NULL, &error));
     g_assert_no_error (error);
     extended = g_strdup_printf ("%s\n[wirelog]\nrules_path=%s\n\n"
-            "[view:projects]\nimap_name=Projects\n", config, rules_path);
+            "[view:projects]\nimap_name=Projects\nscope=%s\n", config,
+            rules_path, scope);
     g_assert_true (g_file_set_contents (daemon_root->config_path, extended, -1,
         &error));
     g_assert_no_error (error);
+}
+
+static void
+configure_projects_view (const DaemonRoot *daemon_root, const char *rules)
+{
+    configure_projects_view_with_scope (daemon_root, rules, "message");
 }
 
 /*
@@ -2251,7 +2260,8 @@ test_wyreboxd_threads_replies_delivered_out_of_order (void)
     g_autofree char *expected_members = NULL;
 
     daemon_root_init (&daemon_root);
-    configure_projects_view (&daemon_root, THREAD_RULES);
+    configure_projects_view_with_scope (&daemon_root, THREAD_RULES,
+        "thread");
     configure_extraction_rules (&daemon_root, APOLLO_EXTRACTION_RULES);
     subprocess = start_daemon (&daemon_root);
 

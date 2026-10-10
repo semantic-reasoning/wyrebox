@@ -240,9 +240,15 @@ test_daemon_config_loads_wirelog_views (void)
             "\n"
             "[view:projects]\n"
             "imap_name=Projects\n"
+            "scope=thread\n"
             "\n"
             "[view:ops.alerts]\n"
-            "imap_name=Ops/Alerts\n",
+            "imap_name=Ops/Alerts\n"
+            "scope=message\n"
+            "\n"
+            "[view:vips]\n"
+            "imap_name=VIPs\n"
+            "scope=account\n",
             0600);
     g_autoptr (GError) error = NULL;
     g_autoptr (WyreboxDaemonConfig) config = NULL;
@@ -254,7 +260,7 @@ test_daemon_config_loads_wirelog_views (void)
         "/etc/wyrebox/views.dl");
     g_assert_cmpstr (wyrebox_daemon_config_get_extraction_rules_path (config),
         ==, "/etc/wyrebox/extraction.rules");
-    g_assert_cmpuint (wyrebox_daemon_config_get_n_views (config), ==, 2);
+    g_assert_cmpuint (wyrebox_daemon_config_get_n_views (config), ==, 3);
     g_assert_cmpstr (wyrebox_daemon_config_get_view_id (config, 0), ==,
         "projects");
     g_assert_cmpstr (wyrebox_daemon_config_get_view_imap_name (config, 0), ==,
@@ -263,6 +269,12 @@ test_daemon_config_loads_wirelog_views (void)
         "ops.alerts");
     g_assert_cmpstr (wyrebox_daemon_config_get_view_imap_name (config, 1), ==,
         "Ops/Alerts");
+    g_assert_cmpint (wyrebox_daemon_config_get_view_scope (config, 0), ==,
+        WYREBOX_DAEMON_VIEW_SCOPE_THREAD);
+    g_assert_cmpint (wyrebox_daemon_config_get_view_scope (config, 1), ==,
+        WYREBOX_DAEMON_VIEW_SCOPE_MESSAGE);
+    g_assert_cmpint (wyrebox_daemon_config_get_view_scope (config, 2), ==,
+        WYREBOX_DAEMON_VIEW_SCOPE_ACCOUNT);
 }
 
 static void
@@ -309,14 +321,25 @@ test_daemon_config_rejects_invalid_wirelog_views (void)
     assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
         "[view:bad id]\nimap_name=Projects\n", "invalid view id 'bad id'");
     assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
-        "[view:projects]\nimap_name=Projects\n"
-        "[view:projects]\nimap_name=Other\n",
+        "[view:projects]\nimap_name=Projects\nscope=message\n"
+        "[view:projects]\nimap_name=Other\nscope=message\n",
         "defines view 'projects' more than once");
     assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
-        "[view:a]\nimap_name=Projects\n[view:b]\nimap_name=Projects\n",
+        "[view:a]\nimap_name=Projects\nscope=message\n"
+        "[view:b]\nimap_name=Projects\nscope=message\n",
         "share imap_name 'Projects'");
     assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
-        "[view:a]\nimap_name=INBOX\n", "view 'a' has invalid imap_name");
+        "[view:a]\nimap_name=INBOX\nscope=message\n",
+        "view 'a' has invalid imap_name");
+    assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
+        "[view:a]\nimap_name=Projects\n", "view 'a' is missing scope");
+    assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
+        "[view:a]\nimap_name=Projects\nscope=mailbox\n",
+        "view 'a' has invalid scope 'mailbox': expected message, thread, or "
+        "account");
+    assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
+        "[view:a]\nimap_name=Projects\nscope=message\nscope=thread\n",
+        "more than once");
     assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"
         "relation=show\n", "unknown key 'relation'");
     assert_wirelog_config_rejected ("[wirelog]\nrules_path=/etc/v.dl\n"

@@ -13,6 +13,8 @@ typedef struct
 {
     char *view_id;
     char *imap_name;
+    char *scope_name;
+    WyreboxDaemonViewScope scope;
 } ConfigView;
 
 struct _WyreboxDaemonConfig
@@ -94,6 +96,7 @@ config_view_free (gpointer data)
 
     g_free (view->view_id);
     g_free (view->imap_name);
+    g_free (view->scope_name);
     g_free (view);
 }
 
@@ -217,6 +220,9 @@ assign_key (WyreboxDaemonConfig *self, const char *config_path,
         if (g_strcmp0 (key, "imap_name") == 0)
             return assign_once (config_path, "view", key, value,
                        &view->imap_name, error);
+        if (g_strcmp0 (key, "scope") == 0)
+            return assign_once (config_path, "view", key, value,
+                       &view->scope_name, error);
         break;
     case CONFIG_SECTION_NONE:
     default:
@@ -359,7 +365,7 @@ validate_wirelog_views (const WyreboxDaemonConfig *self, GError **error)
     }
 
     for (guint i = 0; i < self->views->len; i++) {
-        const ConfigView *view = g_ptr_array_index (self->views, i);
+        ConfigView *view = g_ptr_array_index (self->views, i);
         g_autoptr (GError) name_error = NULL;
 
         if (view->imap_name == NULL) {
@@ -386,6 +392,30 @@ validate_wirelog_views (const WyreboxDaemonConfig *self, GError **error)
                 G_IO_ERROR_INVALID_DATA,
                 "daemon config view '%s' has invalid imap_name: INBOX is "
                 "reserved", view->view_id);
+            return FALSE;
+        }
+
+        if (view->scope_name == NULL) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "daemon config view '%s' is missing scope", view->view_id);
+            return FALSE;
+        }
+
+        if (g_strcmp0 (view->scope_name, "message") == 0) {
+            view->scope = WYREBOX_DAEMON_VIEW_SCOPE_MESSAGE;
+        } else if (g_strcmp0 (view->scope_name, "thread") == 0) {
+            view->scope = WYREBOX_DAEMON_VIEW_SCOPE_THREAD;
+        } else if (g_strcmp0 (view->scope_name, "account") == 0) {
+            view->scope = WYREBOX_DAEMON_VIEW_SCOPE_ACCOUNT;
+        } else {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "daemon config view '%s' has invalid scope '%s': expected "
+                "message, thread, or account", view->view_id,
+                view->scope_name);
             return FALSE;
         }
 
@@ -657,4 +687,18 @@ wyrebox_daemon_config_get_view_imap_name (WyreboxDaemonConfig *self,
 
     view = g_ptr_array_index (self->views, index);
     return view->imap_name;
+}
+
+WyreboxDaemonViewScope
+wyrebox_daemon_config_get_view_scope (WyreboxDaemonConfig *self, guint index)
+{
+    const ConfigView *view = NULL;
+
+    g_return_val_if_fail (WYREBOX_IS_DAEMON_CONFIG (self),
+        WYREBOX_DAEMON_VIEW_SCOPE_ACCOUNT);
+    g_return_val_if_fail (index < self->views->len,
+        WYREBOX_DAEMON_VIEW_SCOPE_ACCOUNT);
+
+    view = g_ptr_array_index (self->views, index);
+    return view->scope;
 }
