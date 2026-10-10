@@ -751,6 +751,12 @@ test(
 )
 
 test(
+  'docs issue 0354 dovecot 2.4 baseline adr',
+  python,
+  args: files('tests/docs/test_issue_0354_dovecot_24_baseline_adr.py'),
+)
+
+test(
   'docs issue 0331 object error classification',
   python,
   args: files('tests/docs/test_issue_0331_object_error_classification.py'),
