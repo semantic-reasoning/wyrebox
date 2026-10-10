@@ -96,6 +96,12 @@ The required canonical event names are:
 - `FactInserted`
 - `FactRetracted`
 - `DerivedViewMembershipChanged`
+- `FactsExtracted`
+
+`FactsExtracted` records the facts `wyreboxd` extracted from one delivered
+message's headers. It carries the account, the message, and the extracted
+facts, and it marks the message as extracted even when no fact matched. Replay
+applies the first `FactsExtracted` record of a message and ignores later ones.
 
 Additional event names require an update to this contract or a follow-up
 contract before implementation.

@@ -232,6 +232,34 @@ configure_projects_view (const DaemonRoot *daemon_root, const char *rules)
     g_assert_no_error (error);
 }
 
+/*
+ * Adds an extraction rules file with @rules to the [wirelog] section, or a
+ * path that does not exist when @rules is NULL.
+ */
+static void
+configure_extraction_rules (const DaemonRoot *daemon_root, const char *rules)
+{
+    g_autofree char *rules_path = g_build_filename (daemon_root->root,
+            "extraction.rules", NULL);
+    g_autofree char *config = NULL;
+    g_autofree char *extended = NULL;
+    g_autoptr (GError) error = NULL;
+
+    if (rules != NULL) {
+        g_assert_true (g_file_set_contents (rules_path, rules, -1, &error));
+        g_assert_no_error (error);
+    }
+
+    g_assert_true (g_file_get_contents (daemon_root->config_path, &config,
+        NULL, &error));
+    g_assert_no_error (error);
+    extended = g_strdup_printf ("%s\n[wirelog]\nextraction_rules_path=%s\n",
+            config, rules_path);
+    g_assert_true (g_file_set_contents (daemon_root->config_path, extended, -1,
+        &error));
+    g_assert_no_error (error);
+}
+
 static char *
 storage_marker_path (const DaemonRoot *daemon_root, gboolean journal)
 {
@@ -513,11 +541,10 @@ journal_fact_offline (const DaemonRoot *daemon_root,
 }
 
 static GBytes *
-build_delivery_request (const char *delivery_id)
+build_delivery_request_for_message (const char *delivery_id, GBytes *message)
 {
     g_autoptr (GError) error = NULL;
     g_autoptr (GBytes) encoded = NULL;
-    g_autoptr (GBytes) message = build_message (delivery_id);
     g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
     g_auto (WyreboxDaemonDeliveryIngestionRequest) request = { 0 };
     const gchar *const recipients[] = { "recipient@example.com", NULL };
@@ -541,6 +568,14 @@ build_delivery_request (const char *delivery_id)
     g_assert_nonnull (encoded);
 
     return g_steal_pointer (&encoded);
+}
+
+static GBytes *
+build_delivery_request (const char *delivery_id)
+{
+    g_autoptr (GBytes) message = build_message (delivery_id);
+
+    return build_delivery_request_for_message (delivery_id, message);
 }
 
 static void
@@ -927,6 +962,34 @@ static char *
 deliver_message (const DaemonRoot *daemon_root, const char *delivery_id)
 {
     g_autoptr (GBytes) request = build_delivery_request (delivery_id);
+    g_autoptr (GBytes) response = roundtrip_request (daemon_root->socket_path,
+            request);
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_response_frame (response,
+        &frame, &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+
+    return g_strdup_printf ("journal:%" G_GUINT64_FORMAT ":%" G_GUINT64_FORMAT,
+               frame.success.journal_offset, frame.success.journal_sequence);
+}
+
+/*
+ * Delivers @headers followed by a short body to account-1 and returns the
+ * journal message id.
+ */
+static char *
+deliver_headers (const DaemonRoot *daemon_root, const char *delivery_id,
+    const char *headers)
+{
+    g_autofree char *text = g_strdup_printf ("%s\r\nbody\r\n", headers);
+    gsize length = strlen (text);
+    g_autoptr (GBytes) message = g_bytes_new_take (g_steal_pointer (&text),
+            length);
+    g_autoptr (GBytes) request = build_delivery_request_for_message
+            (delivery_id, message);
     g_autoptr (GBytes) response = roundtrip_request (daemon_root->socket_path,
             request);
     g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
@@ -2067,6 +2130,168 @@ test_wyreboxd_derives_virtual_mailboxes_from_facts (void)
             members_sql);
     g_assert_cmpstr (after_restart, ==, before_restart);
 }
+#define APOLLO_RULES \
+        ".decl project_keyword(message_id: symbol, project: symbol)\n" \
+        ".decl show_in_virtual_folder(view_id: symbol, message_id: symbol)\n" \
+        "show_in_virtual_folder(\"projects\", m) :- " \
+        "project_keyword(m, \"apollo\").\n"
+
+#define APOLLO_EXTRACTION_RULES \
+        "[dictionary:apollo]\nfield=subject\nmatch=apollo\nproject=apollo\n"
+
+/*
+ * Summarizes extracted facts, extraction markers, derived view memberships
+ * and derived view UID state for comparison across a rebuild.
+ */
+static char *
+derived_state_snapshot (const char *catalog_path)
+{
+    g_autofree char *facts = query_catalog_string (catalog_path,
+            "SELECT COALESCE(string_agg(message_id || ' ' || predicate || ' ' "
+            "|| args_json || ' ' || source || '@' || journal_sequence, ';' "
+            "ORDER BY fact_id), '') FROM message_facts;");
+    g_autofree char *markers = query_catalog_string (catalog_path,
+            "SELECT COALESCE(string_agg(message_id || ' ' || fact_count || '@' "
+            "|| journal_sequence, ';' ORDER BY message_id), '') "
+            "FROM message_fact_extractions;");
+    g_autofree char *members = query_catalog_string (catalog_path,
+            "SELECT COALESCE(string_agg(view_id || ' ' || message_id || '=' || "
+            "uid || ':' || is_visible, ';' ORDER BY view_id, uid), '') "
+            "FROM derived_view_memberships;");
+    g_autofree char *uid_state = query_catalog_string (catalog_path,
+            "SELECT COALESCE(string_agg(namespace_id || ' next=' || uidnext || "
+            "' validity=' || uidvalidity, ';' ORDER BY namespace_id), '') "
+            "FROM mailbox_uid_state WHERE namespace_kind = 'derived_view';");
+
+    return g_strdup_printf ("facts[%s] markers[%s] members[%s] uids[%s]",
+               facts, markers, members, uid_state);
+}
+
+static void
+test_wyreboxd_derives_virtual_mailboxes_from_delivery_headers (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) subprocess = NULL;
+    g_autofree char *apollo = NULL;
+    g_autofree char *weekly = NULL;
+    g_autofree char *members = NULL;
+    g_autofree char *expected_members = NULL;
+    g_autofree char *before = NULL;
+    g_autofree char *after = NULL;
+    g_autofree char *catalog_wal_path = NULL;
+    gsize journal_length = 0;
+    gsize rebuilt_journal_length = 0;
+    guint32 uid_validity = 0;
+
+    daemon_root_init (&daemon_root);
+    catalog_wal_path = g_strconcat (daemon_root.catalog_path, ".wal", NULL);
+    configure_projects_view (&daemon_root, APOLLO_RULES);
+    configure_extraction_rules (&daemon_root, APOLLO_EXTRACTION_RULES);
+    subprocess = start_daemon (&daemon_root);
+
+    weekly = deliver_message (&daemon_root, "weekly-report");
+    assert_projects_state (&daemon_root, 0, 1, 0);
+    apollo = deliver_message (&daemon_root, "Apollo launch plan");
+    uid_validity = projects_uid_validity (&daemon_root);
+    assert_projects_state (&daemon_root, uid_validity, 2, 1);
+    stop_daemon (subprocess);
+    g_clear_object (&subprocess);
+
+    members = query_catalog_string (daemon_root.catalog_path,
+            "SELECT string_agg(message_id || '=' || uid || ':' || is_visible, "
+            "', ' ORDER BY uid) FROM derived_view_memberships;");
+    expected_members = g_strdup_printf ("%s=1:true", apollo);
+    g_assert_cmpstr (members, ==, expected_members);
+    g_assert_cmpstr (weekly, !=, apollo);
+    before = derived_state_snapshot (daemon_root.catalog_path);
+    g_assert_nonnull (strstr (before, "dictionary:subject:apollo"));
+    g_assert_nonnull (strstr (before, "header:from"));
+    g_free (read_segment (&daemon_root, &journal_length));
+
+    g_assert_cmpint (g_remove (daemon_root.catalog_path), ==, 0);
+    (void)g_remove (catalog_wal_path);
+    subprocess = start_daemon (&daemon_root);
+    assert_projects_state (&daemon_root, uid_validity, 2, 1);
+    stop_daemon (subprocess);
+    after = derived_state_snapshot (daemon_root.catalog_path);
+    g_assert_cmpstr (after, ==, before);
+    g_free (read_segment (&daemon_root, &rebuilt_journal_length));
+    g_assert_cmpuint (rebuilt_journal_length, ==, journal_length);
+}
+
+#define THREAD_RULES \
+        ".decl message_id(message: symbol, rfc_id: symbol)\n" \
+        ".decl replies_to(message: symbol, rfc_id: symbol)\n" \
+        ".decl project_keyword(message: symbol, project: symbol)\n" \
+        ".decl linked(a: symbol, b: symbol)\n" \
+        ".decl in_thread(a: symbol, b: symbol)\n" \
+        ".decl show_in_virtual_folder(view_id: symbol, message_id: symbol)\n" \
+        "linked(a, b) :- replies_to(a, id), message_id(b, id).\n" \
+        "linked(a, b) :- replies_to(b, id), message_id(a, id).\n" \
+        "in_thread(a, a) :- project_keyword(a, \"apollo\").\n" \
+        "in_thread(a, c) :- in_thread(a, b), linked(b, c).\n" \
+        "show_in_virtual_folder(\"projects\", m) :- in_thread(r, m).\n"
+
+static gint
+compare_strings (gconstpointer a, gconstpointer b)
+{
+    return g_strcmp0 (*(const char * const *)a, *(const char * const *)b);
+}
+
+static void
+test_wyreboxd_threads_replies_delivered_out_of_order (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) subprocess = NULL;
+    g_autofree char *grandchild = NULL;
+    g_autofree char *reply = NULL;
+    g_autofree char *root = NULL;
+    g_autofree char *unrelated = NULL;
+    g_autofree char *members = NULL;
+    g_autofree char *expected_members = NULL;
+
+    daemon_root_init (&daemon_root);
+    configure_projects_view (&daemon_root, THREAD_RULES);
+    configure_extraction_rules (&daemon_root, APOLLO_EXTRACTION_RULES);
+    subprocess = start_daemon (&daemon_root);
+
+    grandchild = deliver_headers (&daemon_root, "delivery-grandchild",
+            "From: carol@example.com\r\nTo: team@example.com\r\n"
+            "Subject: Re: Re: notes\r\n"
+            "Message-ID: <grandchild@example.com>\r\n"
+            "In-Reply-To: <reply@example.com>\r\n");
+    reply = deliver_headers (&daemon_root, "delivery-reply",
+            "From: bob@example.com\r\nTo: team@example.com\r\n"
+            "Subject: Re: notes\r\nMessage-ID: <reply@example.com>\r\n"
+            "In-Reply-To: <root@example.com>\r\n");
+    assert_projects_state (&daemon_root, 0, 1, 0);
+    unrelated = deliver_headers (&daemon_root, "delivery-unrelated",
+            "From: dave@example.com\r\nTo: team@example.com\r\n"
+            "Subject: Lunch\r\nMessage-ID: <lunch@example.com>\r\n");
+    root = deliver_headers (&daemon_root, "delivery-root",
+            "From: alice@example.com\r\nTo: team@example.com\r\n"
+            "Subject: Apollo notes\r\nMessage-ID: <root@example.com>\r\n");
+    assert_projects_state (&daemon_root, 0, 4, 3);
+    stop_daemon (subprocess);
+
+    members = query_catalog_string (daemon_root.catalog_path,
+            "SELECT string_agg(message_id, ', ' ORDER BY message_id) "
+            "FROM derived_view_memberships WHERE is_visible;");
+    {
+        g_autoptr (GPtrArray) ids = g_ptr_array_new ();
+
+        g_ptr_array_add (ids, grandchild);
+        g_ptr_array_add (ids, reply);
+        g_ptr_array_add (ids, root);
+        g_ptr_array_sort (ids, compare_strings);
+        expected_members = g_strdup_printf ("%s, %s, %s",
+                (char *)g_ptr_array_index (ids, 0),
+                (char *)g_ptr_array_index (ids, 1),
+                (char *)g_ptr_array_index (ids, 2));
+    }
+    g_assert_cmpstr (members, ==, expected_members);
+    g_assert_null (strstr (members, unrelated));
+}
 #endif
 
 static void
@@ -2075,6 +2300,8 @@ test_wyreboxd_rejects_invalid_wirelog_config (void)
     g_auto (DaemonRoot) missing_rules = { 0 };
     g_auto (DaemonRoot) broken_rules = { 0 };
     g_auto (DaemonRoot) undeclared_relation = { 0 };
+    g_auto (DaemonRoot) missing_extraction_rules = { 0 };
+    g_auto (DaemonRoot) invalid_extraction_rules = { 0 };
 
     daemon_root_init (&missing_rules);
     configure_projects_view (&missing_rules, NULL);
@@ -2091,6 +2318,20 @@ test_wyreboxd_rejects_invalid_wirelog_config (void)
         ".decl has_keyword(message_id: symbol, keyword: symbol)\n");
     assert_daemon_startup_fails (&undeclared_relation, EX_CONFIG,
         "must declare show_in_virtual_folder");
+
+    daemon_root_init (&missing_extraction_rules);
+    configure_projects_view (&missing_extraction_rules, PROJECTS_RULES);
+    configure_extraction_rules (&missing_extraction_rules, NULL);
+    assert_daemon_startup_fails (&missing_extraction_rules, EX_CONFIG,
+        "extraction rules file");
+
+    daemon_root_init (&invalid_extraction_rules);
+    configure_projects_view (&invalid_extraction_rules, PROJECTS_RULES);
+    configure_extraction_rules (&invalid_extraction_rules,
+        "[regex:invoice]\nfield=subject\npredicate=reference_candidate\n"
+        "pattern=INV-(\n");
+    assert_daemon_startup_fails (&invalid_extraction_rules, EX_CONFIG,
+        "invalid regex pattern for rule 'invoice'");
 }
 
 int
@@ -2193,6 +2434,12 @@ main (int argc, char **argv)
     g_test_add_func
         ("/daemon-api/wyreboxd/derives-virtual-mailboxes-from-facts",
         test_wyreboxd_derives_virtual_mailboxes_from_facts);
+    g_test_add_func ("/daemon-api/wyreboxd/"
+        "derives-virtual-mailboxes-from-delivery-headers",
+        test_wyreboxd_derives_virtual_mailboxes_from_delivery_headers);
+    g_test_add_func ("/daemon-api/wyreboxd/"
+        "threads-replies-delivered-out-of-order",
+        test_wyreboxd_threads_replies_delivered_out_of_order);
 #endif
     g_test_add_func ("/daemon-api/wyreboxd/rejects-invalid-wirelog-config",
         test_wyreboxd_rejects_invalid_wirelog_config);

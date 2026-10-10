@@ -13,6 +13,11 @@ The extractor does not require a probabilistic service, network service,
 external text service, body scanner, persistence layer, reload scheduler,
 daemon API, DuckDB schema change, or Wirelog runtime rule loading.
 
+`wyreboxd` runs this extractor on delivered messages with rules read from a
+configuration file. That wiring, the rules file format, and the journal record
+are described in `docs/contracts/linux-runtime.md` and
+`docs/contracts/mutation-journal.md`.
+
 ## Fact Record Shape
 
 Each extracted fact is represented as a `WyreboxFactRecord` with:
