@@ -75,12 +75,13 @@ typedef struct
  *   journal order of their first unmaterialized record, including holds
  *   carried into a resumed pass; empty when every pending record was
  *   materialized.
- * @records_scanned: delivery and flag change records replayed by the pass.
+ * @records_scanned: delivery and mutation records replayed by the pass.
  * @scanned_through: the last record replayed by the pass, or the
  *   position the pass resumed after when it replayed none; not present when a
  *   pass from the checkpoint replayed nothing.
  * @materialized_accounts: (owned) (element-type utf8): distinct accounts, in
- *   ascending order, with at least one record applied by the pass.
+ *   ascending order, with at least one record other than a derived view
+ *   membership change applied by the pass.
  */
 typedef struct
 {
@@ -102,14 +103,19 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDeliveryCatchupReport,
  * of the account recorded in its payload, as resolved by
  * wyrebox_delivery_materializer_apply_to_inbox_full().
  *
- * FlagChanged, FactInserted, and FactRetracted records are replayed in journal
- * order with the deliveries. Each is applied on its own with
- * wyrebox_delivery_materializer_apply_flag_change() or
- * wyrebox_delivery_materializer_apply_fact_mutation() and follows the same
- * hold rules as a delivery run of its account (a fact mutation's account is
- * its scope): it is skipped while the account is held, and a
+ * FlagChanged, FactInserted, FactRetracted, FactsExtracted, and
+ * DerivedViewMembershipChanged records are replayed in journal order with the
+ * deliveries. Each is applied on its own with
+ * wyrebox_delivery_materializer_apply_flag_change(),
+ * wyrebox_delivery_materializer_apply_fact_mutation(),
+ * wyrebox_delivery_materializer_apply_facts_extracted(), or
+ * wyrebox_delivery_materializer_apply_membership_change() and follows the
+ * same hold rules as a delivery run of its account (a fact mutation's account
+ * is its scope): it is skipped while the account is held, and a
  * G_IO_ERROR_INVALID_DATA failure, such as a flag target that is not
- * materialized, holds the account.
+ * materialized, holds the account. Membership changes only restore what the
+ * derived view materializer already wrote, so they do not count their account
+ * as materialized.
  *
  * Consecutive deliveries for the same account are applied in one materializer
  * transaction, in journal order. Before a run is applied, the raw object of

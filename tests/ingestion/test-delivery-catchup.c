@@ -1,7 +1,9 @@
 #include "wyrebox-daemon-fact-mutation-request.h"
 #include "wyrebox-delivery-catchup.h"
 #include "wyrebox-delivery-materializer.h"
+#include "wyrebox-derived-view-membership-changed-payload.h"
 #include "wyrebox-eml-ingestor.h"
+#include "wyrebox-facts-extracted-payload.h"
 #include "wyrebox-flag-changed-payload.h"
 #include "wyrebox-journal-reader.h"
 #include "wyrebox-journal-writer.h"
@@ -269,6 +271,11 @@ create_bootstrap_catalog (void)
             store,
             WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_HEADER_PROVENANCE_SPANS,
             8, wyrebox_schema_migration_get_current_schema_version (), &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (
+            store,
+            WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_FACT_EXTRACTIONS,
+            9, wyrebox_schema_migration_get_current_schema_version (), &error));
     g_assert_no_error (error);
 
     return g_steal_pointer (&path);
@@ -2294,6 +2301,206 @@ test_account_catchup_fact_mutations_follow_holds (InterleavedFixture *fixture,
     remove_catalog (rebuilt_path);
 }
 
+static gchar *
+journal_message_id (const WyreboxEmlIngestResult *message)
+{
+    return g_strdup_printf ("journal:%" G_GUINT64_FORMAT ":%" G_GUINT64_FORMAT,
+               message->journal_offset, message->journal_sequence);
+}
+
+static JournalPosition
+append_facts_extracted (WyreboxJournalWriter *writer, const gchar *account_id,
+    const WyreboxEmlIngestResult *message, const gchar *keyword)
+{
+    g_autofree gchar *message_id = journal_message_id (message);
+    const gchar *const args[] = { message_id, keyword, NULL };
+    g_auto (WyreboxFactsExtractedPayload) payload = { 0 };
+    WyreboxFactRecord *fact = g_new0 (WyreboxFactRecord, 1);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    JournalPosition position = { 0 };
+
+    g_assert_true (wyrebox_fact_record_init (fact, "project_keyword", args,
+        "dictionary:subject:projects", 1000000, 1, &error));
+    g_assert_no_error (error);
+    payload.account_id = g_strdup (account_id);
+    payload.message_id = g_strdup (message_id);
+    payload.extracted_at_unix_us = 1;
+    payload.facts = g_ptr_array_new_with_free_func
+            (wyrebox_facts_extracted_payload_fact_free);
+    g_ptr_array_add (payload.facts, fact);
+
+    bytes = wyrebox_facts_extracted_payload_encode (&payload, &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_journal_writer_append (writer,
+        WYREBOX_JOURNAL_EVENT_FACTS_EXTRACTED, bytes,
+        &position.journal_offset, &position.journal_sequence, &error));
+    g_assert_no_error (error);
+    return position;
+}
+
+static JournalPosition
+append_membership_change (WyreboxJournalWriter *writer,
+    const gchar *account_id, const WyreboxEmlIngestResult *message,
+    guint64 uid, gboolean is_visible)
+{
+    g_autofree gchar *message_id = journal_message_id (message);
+    g_autofree gchar *membership_id = g_strdup_printf ("%s/projects/%s",
+            account_id, message_id);
+    WyreboxDerivedViewMembershipChangedPayload payload = {
+        .account_id = (char *)account_id,
+        .view_id = (char *)"projects",
+        .message_id = message_id,
+        .membership_id = membership_id,
+        .rule_version_hash = (char *)"rules-1",
+        .uid = uid,
+        .uidvalidity = 77,
+        .is_visible = is_visible,
+        .materialized_at_unix_us = 1,
+    };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    JournalPosition position = { 0 };
+
+    bytes = wyrebox_derived_view_membership_changed_payload_encode (&payload,
+            &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_journal_writer_append (writer,
+        WYREBOX_JOURNAL_EVENT_DERIVED_VIEW_MEMBERSHIP_CHANGED, bytes,
+        &position.journal_offset, &position.journal_sequence, &error));
+    g_assert_no_error (error);
+    return position;
+}
+
+/*
+ * Summarizes extracted facts, extraction markers, derived view memberships,
+ * and derived view UID state.
+ */
+static gchar *
+extraction_rows (const gchar *catalog_path)
+{
+    TestDuckdbFixture duckdb = { 0 };
+    gchar *rows = NULL;
+
+    open_duckdb_fixture (catalog_path, &duckdb);
+    rows = query_string (duckdb.connection,
+            "SELECT 'facts [' || COALESCE((SELECT string_agg(account_id || ' ' "
+            "|| message_id || ' ' || object_id || ' ' || args_json || '@' || "
+            "journal_sequence, '; ' ORDER BY account_id, message_id) "
+            "FROM message_facts), '') || '] markers [' || COALESCE(("
+            "SELECT string_agg(account_id || ' ' || message_id || ' ' || "
+            "fact_count || '@' || journal_sequence, '; ' "
+            "ORDER BY account_id, message_id) "
+            "FROM message_fact_extractions), '') || '] members [' || "
+            "COALESCE((SELECT string_agg(account_id || ' ' || message_id || "
+            "' ' || uid || ' ' || is_visible, '; ' "
+            "ORDER BY account_id, uid) FROM derived_view_memberships), '') || "
+            "'] uids [' || COALESCE((SELECT string_agg(account_id || ' ' || "
+            "uidnext || '/' || uidvalidity, '; ' ORDER BY account_id) "
+            "FROM mailbox_uid_state WHERE namespace_kind = 'derived_view'), "
+            "'') || ']';");
+    close_duckdb_fixture (&duckdb);
+
+    return rows;
+}
+
+static gchar *
+expected_extraction_rows (const InterleavedFixture *fixture,
+    gboolean include_b, JournalPosition a_facts, JournalPosition b_facts)
+{
+    g_autofree gchar *a1 = journal_message_id (&fixture->a1);
+    g_autofree gchar *b1 = journal_message_id (&fixture->b1);
+
+    if (!include_b)
+        return g_strdup_printf ("facts [account-a %s %s [\"%s\",\"apollo\"]@%"
+                   G_GUINT64_FORMAT "] markers [account-a %s 1@%"
+                   G_GUINT64_FORMAT "] members [account-a %s 1 true] "
+                   "uids [account-a 2/77]", a1, fixture->a1.object_key, a1,
+                   a_facts.journal_sequence, a1, a_facts.journal_sequence, a1);
+
+    return g_strdup_printf ("facts [account-a %s %s [\"%s\",\"apollo\"]@%"
+               G_GUINT64_FORMAT "; account-b %s %s [\"%s\",\"hermes\"]@%"
+               G_GUINT64_FORMAT "] markers [account-a %s 1@%" G_GUINT64_FORMAT
+               "; account-b %s 1@%" G_GUINT64_FORMAT "] members [account-a %s "
+               "1 true; account-b %s 1 true] uids [account-a 2/77; "
+               "account-b 2/77]", a1, fixture->a1.object_key, a1,
+               a_facts.journal_sequence, b1, fixture->b1.object_key, b1,
+               b_facts.journal_sequence, a1, a_facts.journal_sequence, b1,
+               b_facts.journal_sequence, a1, b1);
+}
+
+static void
+test_account_catchup_extractions_follow_holds (InterleavedFixture *fixture,
+    gconstpointer user_data)
+{
+    g_auto (WyreboxDeliveryCatchupReport) held = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) recovered = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) rebuilt = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) membership_only = { 0 };
+    g_autofree gchar *rebuilt_path = create_bootstrap_catalog ();
+    g_autofree gchar *expected = NULL;
+    g_autofree gchar *rows = NULL;
+    g_autofree gchar *rebuilt_rows = NULL;
+    g_autoptr (GError) error = NULL;
+    JournalPosition a_facts = { 0 };
+    JournalPosition b_facts = { 0 };
+    JournalPosition b_member = { 0 };
+    JournalPosition a_hidden = { 0 };
+
+    a_facts = append_facts_extracted (fixture->writer, "account-a",
+            &fixture->a1, "apollo");
+    b_facts = append_facts_extracted (fixture->writer, "account-b",
+            &fixture->b1, "hermes");
+    append_membership_change (fixture->writer, "account-a", &fixture->a1, 1,
+        TRUE);
+    b_member = append_membership_change (fixture->writer, "account-b",
+            &fixture->b1, 1, TRUE);
+
+    g_assert_true (run_isolated_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &held, &error));
+    g_assert_no_error (error);
+    assert_single_hold (&held, "account-b", &fixture->b1);
+    g_assert_cmpuint (held.records_scanned, ==, 9);
+    assert_materialized_accounts (&held, "account-a", NULL);
+    assert_catalog_checkpoint (fixture->catalog_path, &fixture->a1);
+    rows = extraction_rows (fixture->catalog_path);
+    expected = expected_extraction_rows (fixture, FALSE, a_facts, b_facts);
+    g_assert_cmpstr (rows, ==, expected);
+
+    make_account_b_inbox_selectable_in (fixture->catalog_path);
+    g_assert_true (run_isolated_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &recovered, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (recovered.holds->len, ==, 0);
+    assert_materialized_accounts (&recovered, "account-a", "account-b", NULL);
+    assert_catalog_checkpoint_at (fixture->catalog_path, b_member);
+    g_clear_pointer (&rows, g_free);
+    g_clear_pointer (&expected, g_free);
+    rows = extraction_rows (fixture->catalog_path);
+    expected = expected_extraction_rows (fixture, TRUE, a_facts, b_facts);
+    g_assert_cmpstr (rows, ==, expected);
+
+    seed_account_b_inbox (rebuilt_path, TRUE);
+    g_assert_true (run_isolated_catchup (rebuilt_path, fixture->object_root,
+        fixture->journal_root, &rebuilt, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (rebuilt.holds->len, ==, 0);
+    rebuilt_rows = extraction_rows (rebuilt_path);
+    g_assert_cmpstr (rebuilt_rows, ==, rows);
+
+    a_hidden = append_membership_change (fixture->writer, "account-a",
+            &fixture->a1, 1, FALSE);
+    g_assert_true (run_isolated_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &membership_only,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (membership_only.records_scanned, ==, 1);
+    assert_materialized_accounts (&membership_only, NULL);
+    assert_catalog_checkpoint_at (fixture->catalog_path, a_hidden);
+
+    remove_catalog (rebuilt_path);
+}
+
 static void
 test_account_catchup_unknown_flag_target_holds_account (void)
 {
@@ -2379,6 +2586,14 @@ main (int argc, char **argv)
         (void (*)(InterleavedFixture *, gconstpointer))
         interleaved_fixture_set_up,
         test_account_catchup_fact_mutations_follow_holds,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_tear_down);
+    g_test_add (
+        "/ingestion/delivery-catchup/accounts/extractions-follow-holds",
+        InterleavedFixture, NULL,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_set_up,
+        test_account_catchup_extractions_follow_holds,
         (void (*)(InterleavedFixture *, gconstpointer))
         interleaved_fixture_tear_down);
     g_test_add_func ("/ingestion/delivery-catchup/accounts/"

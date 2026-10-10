@@ -2,6 +2,7 @@
 #include "wyrebox-delivery-projection.h"
 #include "wyrebox-duckdb-shared.h"
 #include "wyrebox-schema-metadata-store.h"
+#include "wyrebox-schema-migration.h"
 
 #include <duckdb.h>
 #include <gio/gio.h>
@@ -1912,6 +1913,262 @@ test_fact_mutation_without_checkpoint_keeps_checkpoint (void)
     remove_catalog (path);
 }
 
+static gchar *
+create_current_catalog_with_one_inbox_message (void)
+{
+    g_autofree gchar *dir = NULL;
+    g_autofree gchar *path = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+    g_autoptr (WyreboxSchemaMigration) migration = NULL;
+    g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+
+    dir = g_dir_make_tmp ("wyrebox-delivery-materializer-XXXXXX", &error);
+    g_assert_no_error (error);
+    path = g_build_filename (dir, "catalog.duckdb", NULL);
+    store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+    g_assert_no_error (error);
+    migration = wyrebox_schema_migration_new ();
+    g_assert_true (wyrebox_schema_migration_run_store_to_current (migration,
+        store, FALSE, &error));
+    g_assert_no_error (error);
+    g_clear_object (&store);
+
+    append_projection_record (&projection, "sha256:first", 101, 1001, 11, 1);
+    apply_projection_to_account_inbox (path, "account-1", &projection);
+    return g_steal_pointer (&path);
+}
+
+static WyreboxFactRecord *
+new_extracted_fact (const gchar *predicate, const gchar *source,
+    const gchar *value)
+{
+    const gchar *args[] = { "journal:11:1", value, NULL };
+    WyreboxFactRecord *fact = g_new0 (WyreboxFactRecord, 1);
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (wyrebox_fact_record_init (fact, predicate, args, source,
+        1000000, 5, &error));
+    g_assert_no_error (error);
+    return fact;
+}
+
+static gboolean
+apply_facts_extracted (const gchar *path, const gchar *subject,
+    guint64 journal_offset, guint64 journal_sequence,
+    gboolean advance_checkpoint, GError **error)
+{
+    g_auto (WyreboxFactsExtractedPayload) payload = { 0 };
+    g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+
+    payload.account_id = g_strdup ("account-1");
+    payload.message_id = g_strdup ("journal:11:1");
+    payload.extracted_at_unix_us = 5;
+    payload.facts = g_ptr_array_new_with_free_func
+            (wyrebox_facts_extracted_payload_fact_free);
+    g_ptr_array_add (payload.facts, new_extracted_fact ("message_id",
+        "header:message-id", "<root@example.test>"));
+    g_ptr_array_add (payload.facts, new_extracted_fact ("project_keyword",
+        "dictionary:subject:apollo", subject));
+
+    materializer = wyrebox_delivery_materializer_new_duckdb (path, error);
+    if (materializer == NULL)
+        return FALSE;
+
+    return wyrebox_delivery_materializer_apply_facts_extracted (materializer,
+               &payload, journal_offset, journal_sequence, advance_checkpoint,
+               error);
+}
+
+static gchar *
+fact_extractions_state (const gchar *path)
+{
+    TestDuckdbFixture duckdb = { 0 };
+    gchar *state = NULL;
+
+    open_duckdb_fixture (path, &duckdb);
+    state = query_string (duckdb.connection,
+            "SELECT COALESCE(string_agg(account_id || '|' || message_id || "
+            "'|' || fact_count || '|' || journal_offset || ':' || "
+            "journal_sequence, ';' ORDER BY message_id), '') "
+            "FROM message_fact_extractions;");
+    close_duckdb_fixture (&duckdb);
+
+    return state;
+}
+
+static void
+test_facts_extracted_materializes_facts_and_marker (void)
+{
+    g_autofree gchar *path = create_current_catalog_with_one_inbox_message ();
+    g_autoptr (GError) error = NULL;
+    g_autofree gchar *facts = NULL;
+    g_autofree gchar *marker = NULL;
+    TestDuckdbFixture duckdb = { 0 };
+
+    g_assert_true (apply_facts_extracted (path, "apollo", 30, 2, TRUE,
+        &error));
+    g_assert_no_error (error);
+    facts = message_facts_state (path);
+    marker = fact_extractions_state (path);
+    g_assert_cmpstr (marker, ==, "account-1|journal:11:1|2|30:2");
+    open_duckdb_fixture (path, &duckdb);
+    assert_query_string (duckdb.connection,
+        "SELECT string_agg(account_id || '|' || object_id || '|' || "
+        "predicate || '|' || args_json || '|' || source || '|' || "
+        "created_at_unix_us || '|' || retracted_at_unix_us, ';' "
+        "ORDER BY predicate) FROM message_facts;",
+        "account-1|sha256:first|message_id|"
+        "[\"journal:11:1\",\"<root@example.test>\"]|header:message-id|2|0;"
+        "account-1|sha256:first|project_keyword|"
+        "[\"journal:11:1\",\"apollo\"]|dictionary:subject:apollo|2|0");
+    assert_materialization_checkpoint (duckdb.connection, 30, 2);
+    close_duckdb_fixture (&duckdb);
+
+    g_assert_true (apply_facts_extracted (path, "apollo", 30, 2, TRUE,
+        &error));
+    g_assert_no_error (error);
+    g_assert_true (apply_facts_extracted (path, "hermes", 40, 3, TRUE,
+        &error));
+    g_assert_no_error (error);
+    {
+        g_autofree gchar *facts_after = message_facts_state (path);
+        g_autofree gchar *marker_after = fact_extractions_state (path);
+
+        g_assert_cmpstr (facts_after, ==, facts);
+        g_assert_cmpstr (marker_after, ==, marker);
+    }
+
+    remove_catalog (path);
+}
+
+static void
+test_facts_extracted_without_checkpoint_keeps_checkpoint (void)
+{
+    g_autofree gchar *path = create_current_catalog_with_one_inbox_message ();
+    g_autoptr (GError) error = NULL;
+    TestDuckdbFixture duckdb = { 0 };
+
+    g_assert_true (apply_facts_extracted (path, "apollo", 30, 2, FALSE,
+        &error));
+    g_assert_no_error (error);
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_table_count (duckdb.connection, "message_fact_extractions", 1);
+    assert_materialization_checkpoint (duckdb.connection, 11, 1);
+    close_duckdb_fixture (&duckdb);
+
+    remove_catalog (path);
+}
+
+static gboolean
+apply_membership_change (const gchar *path, const gchar *membership_id,
+    guint64 uid, guint64 uidvalidity, gboolean is_visible,
+    guint64 journal_sequence, GError **error)
+{
+    WyreboxDerivedViewMembershipChangedPayload payload = {
+        .account_id = (char *)"account-1",
+        .view_id = (char *)"projects",
+        .message_id = (char *)"journal:11:1",
+        .membership_id = (char *)membership_id,
+        .rule_version_hash = (char *)"rules-1",
+        .uid = uid,
+        .uidvalidity = uidvalidity,
+        .is_visible = is_visible,
+        .materialized_at_unix_us = 100 + journal_sequence,
+    };
+    g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+
+    materializer = wyrebox_delivery_materializer_new_duckdb (path, error);
+    if (materializer == NULL)
+        return FALSE;
+
+    return wyrebox_delivery_materializer_apply_membership_change
+               (materializer, &payload, 10 * journal_sequence,
+               journal_sequence, TRUE, error);
+}
+
+static gchar *
+derived_view_state (const gchar *path)
+{
+    TestDuckdbFixture duckdb = { 0 };
+    gchar *state = NULL;
+
+    open_duckdb_fixture (path, &duckdb);
+    state = query_string (duckdb.connection,
+            "SELECT COALESCE((SELECT string_agg(membership_id || '|' || "
+            "message_id || '|' || uid || '|' || is_visible || '|' || "
+            "rule_version_hash, ';' ORDER BY uid) "
+            "FROM derived_view_memberships), '') || '#' || "
+            "COALESCE((SELECT uidnext || '|' || uidvalidity "
+            "FROM mailbox_uid_state WHERE namespace_kind = 'derived_view' "
+            "AND namespace_id = 'projects'), '');");
+    close_duckdb_fixture (&duckdb);
+
+    return state;
+}
+
+static void
+test_membership_change_restores_uid_state (void)
+{
+    g_autofree gchar *path = create_current_catalog_with_one_inbox_message ();
+    g_autoptr (GError) error = NULL;
+    g_autofree gchar *state = NULL;
+
+    g_assert_true (apply_membership_change (path, "m-1", 3, 77, TRUE, 2,
+        &error));
+    g_assert_no_error (error);
+    state = derived_view_state (path);
+    g_assert_cmpstr (state, ==, "m-1|journal:11:1|3|true|rules-1#4|77");
+
+    g_assert_true (apply_membership_change (path, "m-1", 3, 77, FALSE, 3,
+        &error));
+    g_assert_no_error (error);
+    g_clear_pointer (&state, g_free);
+    state = derived_view_state (path);
+    g_assert_cmpstr (state, ==, "m-1|journal:11:1|3|false|rules-1#4|77");
+
+    g_assert_true (apply_membership_change (path, "m-1", 3, 77, TRUE, 2,
+        &error));
+    g_assert_no_error (error);
+    g_clear_pointer (&state, g_free);
+    state = derived_view_state (path);
+    g_assert_cmpstr (state, ==, "m-1|journal:11:1|3|true|rules-1#4|77");
+
+    remove_catalog (path);
+}
+
+static void
+test_membership_change_conflicts_are_invalid_data (void)
+{
+    g_autofree gchar *path = create_current_catalog_with_one_inbox_message ();
+    g_autoptr (GError) error = NULL;
+    g_autofree gchar *before = NULL;
+    g_autofree gchar *after = NULL;
+
+    g_assert_true (apply_membership_change (path, "m-1", 3, 77, TRUE, 2,
+        &error));
+    g_assert_no_error (error);
+    before = derived_view_state (path);
+
+    g_assert_false (apply_membership_change (path, "m-1", 5, 77, TRUE, 3,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_clear_error (&error);
+    g_assert_false (apply_membership_change (path, "m-2", 3, 77, TRUE, 3,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_clear_error (&error);
+    g_assert_false (apply_membership_change (path, "m-1", 3, 78, TRUE, 3,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+    after = derived_view_state (path);
+    g_assert_cmpstr (after, ==, before);
+
+    remove_catalog (path);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1991,6 +2248,16 @@ main (int argc, char **argv)
     g_test_add_func (
         "/ingestion/delivery-materializer/fact-mutation-without-checkpoint",
         test_fact_mutation_without_checkpoint_keeps_checkpoint);
+    g_test_add_func ("/ingestion/delivery-materializer/facts-extracted",
+        test_facts_extracted_materializes_facts_and_marker);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/facts-extracted-without-checkpoint",
+        test_facts_extracted_without_checkpoint_keeps_checkpoint);
+    g_test_add_func ("/ingestion/delivery-materializer/membership-change",
+        test_membership_change_restores_uid_state);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/membership-change-conflicts",
+        test_membership_change_conflicts_are_invalid_data);
 
     return g_test_run ();
 }
