@@ -411,6 +411,20 @@ append_regex_facts (GPtrArray *facts,
     return TRUE;
 }
 
+gboolean
+wyrebox_deterministic_fact_rules_validate (const
+    WyreboxDeterministicFactDictionaryRule *dictionary_rules,
+    gsize n_dictionary_rules,
+    const WyreboxDeterministicFactRegexRule *regex_rules, gsize n_regex_rules,
+    GError **error)
+{
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    return validate_dictionary_rules (dictionary_rules, n_dictionary_rules,
+               error) && validate_regex_rules (regex_rules, n_regex_rules,
+               error);
+}
+
 GPtrArray *
 wyrebox_deterministic_fact_extract_from_metadata_with_rules (const char
     *mail_id, const WyreboxEmlMetadata *metadata, guint64 created_at_unix_us,
@@ -439,11 +453,8 @@ wyrebox_deterministic_fact_extract_from_metadata_with_rules (const char
         return NULL;
     }
 
-    if (!validate_dictionary_rules (dictionary_rules, n_dictionary_rules,
-        error))
-        return NULL;
-
-    if (!validate_regex_rules (regex_rules, n_regex_rules, error))
+    if (!wyrebox_deterministic_fact_rules_validate (dictionary_rules,
+        n_dictionary_rules, regex_rules, n_regex_rules, error))
         return NULL;
 
     facts = g_ptr_array_new_with_free_func (fact_record_free);
