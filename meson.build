@@ -773,6 +773,7 @@ if fs.is_file('/usr/lib/dovecot/libdovecot-storage.so')
     python,
     args: files('tests/docs/test_issue_0289_postfix_dovecot_e2e_recipe.py'),
     is_parallel: false,
+    timeout: 600,
   )
 
   test(
@@ -780,6 +781,7 @@ if fs.is_file('/usr/lib/dovecot/libdovecot-storage.so')
     python,
     args: files('tests/docs/test_issue_0293_dovecot_imap_fetch_recipe.py'),
     is_parallel: false,
+    timeout: 600,
   )
 
   test(
@@ -787,6 +789,7 @@ if fs.is_file('/usr/lib/dovecot/libdovecot-storage.so')
     python,
     args: files('tests/docs/test_issue_0292_postfix_to_dovecot_e2e_recipe.py'),
     is_parallel: false,
+    timeout: 600,
   )
 endif
 

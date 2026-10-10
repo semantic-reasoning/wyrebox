@@ -24,11 +24,14 @@
         ".decl has_keyword(message_id: symbol, keyword: symbol)\n" \
         ".decl message_id(message: symbol, rfc_id: symbol)\n" \
         ".decl replies_to(message: symbol, rfc_id: symbol)\n" \
+        ".decl references(message: symbol, rfc_id: symbol)\n" \
         ".decl linked(a: symbol, b: symbol)\n" \
         ".decl in_thread(a: symbol, b: symbol)\n" \
         ".decl show_in_virtual_folder(view_id: symbol, message_id: symbol)\n" \
         "linked(a, b) :- replies_to(a, id), message_id(b, id).\n" \
         "linked(a, b) :- replies_to(b, id), message_id(a, id).\n" \
+        "linked(a, b) :- references(a, id), message_id(b, id).\n" \
+        "linked(a, b) :- references(b, id), message_id(a, id).\n" \
         "in_thread(a, a) :- has_keyword(a, \"project\").\n" \
         "in_thread(a, c) :- in_thread(a, b), linked(b, c).\n" \
         "show_in_virtual_folder(\"projects\", m) :- in_thread(r, m).\n" \
@@ -253,10 +256,11 @@ static void
 refresh (WyreboxDaemonWirelogViews *views, const gchar *account_id)
 {
     g_autoptr (GError) error = NULL;
+    gboolean refreshed = wyrebox_daemon_wirelog_views_refresh_account (views,
+            account_id, &error);
 
-    g_assert_true (wyrebox_daemon_wirelog_views_refresh_account (views,
-        account_id, &error));
     g_assert_no_error (error);
+    g_assert_true (refreshed);
 }
 
 /*
@@ -375,24 +379,50 @@ test_thread_scope_refresh_loads_connected_messages (ViewsFixture *fixture,
         "[\"msg-3\",\"<c>\"]", 7);
     insert_fact_at (fixture, "c2", "msg-3", "has_keyword",
         "[\"msg-3\",\"ops\"]", 7);
-    g_assert_cmpuint (refresh_loading (views), ==, 6);
+    insert_fact_at (fixture, "c3", "msg-3", "references",
+        "[\"msg-3\",\"<a>\"]", 7);
+    g_assert_cmpuint (refresh_loading (views), ==, 7);
     initial = visible_memberships (fixture);
     g_assert_cmpstr (initial, ==,
-        "ops,msg-3,1; projects,msg-1,1; projects,msg-2,2");
+        "ops,msg-3,1; projects,msg-1,1; projects,msg-2,2; "
+        "projects,msg-3,3");
 
     insert_fact_at (fixture, "d1", "msg-4", "message_id",
         "[\"msg-4\",\"<d>\"]", 8);
     insert_fact_at (fixture, "d2", "msg-4", "replies_to",
         "[\"msg-4\",\"<b>\"]", 8);
-    g_assert_cmpuint (refresh_loading (views), ==, 6);
+    g_assert_cmpuint (refresh_loading (views), ==, 9);
     grown = visible_memberships (fixture);
     g_assert_cmpstr (grown, ==,
-        "ops,msg-3,1; projects,msg-1,1; projects,msg-2,2; projects,msg-4,3");
+        "ops,msg-3,1; projects,msg-1,1; projects,msg-2,2; "
+        "projects,msg-3,3; projects,msg-4,4");
 
     retract_fact_at (fixture, "b2", 9);
-    g_assert_cmpuint (refresh_loading (views), ==, 5);
+    g_assert_cmpuint (refresh_loading (views), ==, 8);
     split = visible_memberships (fixture);
-    g_assert_cmpstr (split, ==, "ops,msg-3,1; projects,msg-1,1");
+    g_assert_cmpstr (split, ==,
+        "ops,msg-3,1; projects,msg-1,1; projects,msg-3,3");
+}
+
+static void
+test_thread_scope_refresh_rejects_malformed_link_facts (ViewsFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonWirelogViews) views = NULL;
+    g_autoptr (GError) error = NULL;
+
+    (void)user_data;
+
+    write_rules (fixture, THREAD_RULES);
+    views = open_views_with_scopes (fixture, WYREBOX_DAEMON_VIEW_SCOPE_THREAD,
+            WYREBOX_DAEMON_VIEW_SCOPE_THREAD);
+    insert_fact_at (fixture, "invalid", "msg-1", "replies_to", "not-json", 4);
+
+    g_assert_false (wyrebox_daemon_wirelog_views_refresh_account (views,
+        "account-1", &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_assert_nonnull (strstr (error->message,
+        "message_facts args_json is not a JSON array of strings"));
 }
 
 static void
@@ -618,6 +648,11 @@ main (int argc, char **argv)
     g_test_add ("/daemon-api/wirelog-views/thread-scope-loads-connected",
         ViewsFixture, NULL, views_fixture_set_up,
         test_thread_scope_refresh_loads_connected_messages,
+        views_fixture_tear_down);
+    g_test_add (
+        "/daemon-api/wirelog-views/thread-scope-rejects-malformed-links",
+        ViewsFixture, NULL, views_fixture_set_up,
+        test_thread_scope_refresh_rejects_malformed_link_facts,
         views_fixture_tear_down);
     g_test_add ("/daemon-api/wirelog-views/account-scope-loads-all",
         ViewsFixture, NULL, views_fixture_set_up,
