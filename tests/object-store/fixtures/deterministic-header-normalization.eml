@@ -1,0 +1,12 @@
+From: =?UTF-8?Q?=ED=99=8D_Hong?= (team) <Sender@EXAMPLE.TEST> (account)
+To: Team: "Doe, Alice" <Alice@Example.TEST> (primary), Bob (finance) <Bob@Example.TEST>;
+Cc: =?UTF-8?Q?Zo=C3=AB,_Reader_(alias)?= <Zoe@EXAMPLE.TEST>, other@example.test
+Bcc: =?X-UNKNOWN?B?Tm9tZQ==?= <Blind@EXAMPLE.TEST>
+Subject: =?UTF-8?B?7ZqM?= =?UTF-8?Q?=EC=9D=98?=
+Date: Tue, 02 Jun 2026 12:34:56 +0000
+Message-ID: <deterministic-header-normalization@example.test>
+List-Id: WyreBox notifications <updates.wyrebox.example>
+Delivered-To: "Alias" <Inbox+Tag@EXAMPLE.TEST>
+X-Original-To: original@example.test
+
+Body bytes remain unchanged.

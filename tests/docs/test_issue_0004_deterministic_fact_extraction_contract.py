@@ -26,9 +26,12 @@ HEADER_PREDICATES = [
     "message_id",
     "sender_domain",
     "participant",
+    "participant_display_name",
     "sent_at",
     "replies_to",
     "references",
+    "list_id",
+    "delivered_to",
 ]
 
 REGEX_PREDICATES = [
@@ -47,6 +50,7 @@ METADATA_FIELDS = [
 
 PROVENANCE_FORMATS = [
     "header:<field>",
+    "header:x-original-to",
     "dictionary:<field>:<rule-id>",
     "regex:<field>:<rule-id>",
 ]
@@ -122,6 +126,29 @@ def main() -> None:
 
     for predicate in HEADER_PREDICATES:
         assert_contains("## Header Facts", predicate, sections["## Header Facts"])
+    for contract_text in [
+        "normalized_address",
+        "first valid normalized address",
+        "X-Original-To",
+    ]:
+        assert_contains(
+            "## Header Facts", contract_text, sections["## Header Facts"]
+        )
+
+    for contract_text in [
+        "RFC 2047 B and Q encoded words",
+        "unknown charset",
+        "preserved including case",
+        "domain is lowercased",
+        "from their raw syntax",
+        "decoded punctuation cannot create",
+        "encoded-word contents are treated",
+        "Invalid address-list members",
+        "Unicode-aware lowercase conversion",
+    ]:
+        assert_contains(
+            "## Normalization", contract_text, sections["## Normalization"]
+        )
 
     assert_contains(
         "## Dictionary Project Keywords",

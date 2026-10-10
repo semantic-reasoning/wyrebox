@@ -113,6 +113,56 @@ test_non_ascii_headers_preserve_rfc2047_values (void)
 }
 
 static void
+test_preserves_list_and_delivery_header_values (void)
+{
+    const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
+
+    g_assert_nonnull (fixture_dir);
+
+    bytes = load_fixture_bytes (fixture_dir,
+            "deterministic-header-normalization.eml");
+
+    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (metadata.subject, ==,
+        "=?UTF-8?B?7ZqM?= =?UTF-8?Q?=EC=9D=98?=");
+    g_assert_cmpstr (metadata.from, ==,
+        "=?UTF-8?Q?=ED=99=8D_Hong?= (team) "
+        "<Sender@EXAMPLE.TEST> (account)");
+    g_assert_cmpstr (metadata.to, ==,
+        "Team: \"Doe, Alice\" <Alice@Example.TEST> (primary), "
+        "Bob (finance) <Bob@Example.TEST>;");
+    g_assert_cmpstr (metadata.list_id, ==,
+        "WyreBox notifications <updates.wyrebox.example>");
+    g_assert_cmpstr (metadata.delivered_to, ==,
+        "\"Alias\" <Inbox+Tag@EXAMPLE.TEST>");
+    g_assert_cmpstr (metadata.x_original_to, ==, "original@example.test");
+}
+
+static void
+test_preserves_x_original_to_without_delivered_to (void)
+{
+    const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
+
+    g_assert_nonnull (fixture_dir);
+
+    bytes = load_fixture_bytes (fixture_dir,
+            "deterministic-header-normalization-fallback.eml");
+
+    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+    g_assert_no_error (error);
+    g_assert_null (metadata.delivered_to);
+    g_assert_cmpstr (metadata.x_original_to, ==,
+        "Original <Mailbox@EXAMPLE.TEST>");
+}
+
+static void
 test_unfolds_header_continuations (void)
 {
     static const char raw[] =
@@ -307,6 +357,10 @@ main (int argc, char **argv)
         test_duplicate_message_id_keeps_first_and_counts_extra);
     g_test_add_func ("/ingestion/eml-metadata/non-ascii-headers",
         test_non_ascii_headers_preserve_rfc2047_values);
+    g_test_add_func ("/ingestion/eml-metadata/list-and-delivery-headers",
+        test_preserves_list_and_delivery_header_values);
+    g_test_add_func ("/ingestion/eml-metadata/x-original-to-fallback",
+        test_preserves_x_original_to_without_delivered_to);
     g_test_add_func ("/ingestion/eml-metadata/header-continuations",
         test_unfolds_header_continuations);
     g_test_add_func ("/ingestion/eml-metadata/subject-span-folded-header",

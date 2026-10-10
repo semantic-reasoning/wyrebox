@@ -1,7 +1,23 @@
 #include "wyrebox-deterministic-fact-extractor.h"
 
+#include <string.h>
+
 #include <gio/gio.h>
 #include <glib.h>
+
+static GBytes *
+load_fixture_bytes (const char *fixture_dir, const char *name)
+{
+    g_autoptr (GError) error = NULL;
+    g_autofree char *path = g_build_filename (fixture_dir, name, NULL);
+    g_autofree char *contents = NULL;
+    gsize length = 0;
+
+    g_assert_true (g_file_get_contents (path, &contents, &length, &error));
+    g_assert_no_error (error);
+
+    return g_bytes_new_take (g_steal_pointer (&contents), length);
+}
 
 static const WyreboxFactRecord *
 fact_at (GPtrArray *facts, guint index)
@@ -28,11 +44,357 @@ assert_fact (const WyreboxFactRecord *fact,
 }
 
 static void
+assert_fact_with_display_name (const WyreboxFactRecord *fact,
+    const char *mail_id,
+    const char *address,
+    const char *display_name,
+    const char *source)
+{
+    g_assert_cmpstr (fact->predicate, ==, "participant_display_name");
+    g_assert_cmpstr (fact->args[0], ==, mail_id);
+    g_assert_cmpstr (fact->args[1], ==, address);
+    g_assert_cmpstr (fact->args[2], ==, display_name);
+    g_assert_null (fact->args[3]);
+    g_assert_cmpstr (fact->source, ==, source);
+}
+
+static void
+test_extracts_decoded_and_normalized_header_facts (void)
+{
+    const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+    const WyreboxDeterministicFactDictionaryRule rules[] = {
+        {
+            .field = "subject",
+            .rule_id = "korean-subject",
+            .match_text = "회의",
+            .canonical_project_key = "project-meeting",
+        },
+    };
+    const WyreboxDeterministicFactRegexRule regex_rules[] = {
+        {
+            .field = "subject",
+            .rule_id = "decoded-meeting",
+            .predicate = "reference_candidate",
+            .pattern = "회의",
+            .capture_group = 0,
+        },
+    };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
+    g_autoptr (GPtrArray) facts = NULL;
+    g_autoptr (GPtrArray) repeated_facts = NULL;
+    g_autofree char *wirelog = NULL;
+    g_autofree char *repeated_wirelog = NULL;
+
+    g_assert_nonnull (fixture_dir);
+    bytes = load_fixture_bytes (fixture_dir,
+            "deterministic-header-normalization.eml");
+    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (metadata.subject, ==,
+        "=?UTF-8?B?7ZqM?= =?UTF-8?Q?=EC=9D=98?=");
+    g_assert_cmpstr (metadata.from, ==,
+        "=?UTF-8?Q?=ED=99=8D_Hong?= (team) "
+        "<Sender@EXAMPLE.TEST> (account)");
+
+    facts = wyrebox_deterministic_fact_extract_from_metadata_with_rules
+            ("mail-normalized", &metadata, 1800000000000000, rules,
+            G_N_ELEMENTS (rules), regex_rules, G_N_ELEMENTS (regex_rules),
+            &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (facts);
+    g_assert_cmpuint (facts->len, ==, 18);
+    g_assert_cmpstr (metadata.subject, ==,
+        "=?UTF-8?B?7ZqM?= =?UTF-8?Q?=EC=9D=98?=");
+    g_assert_cmpstr (metadata.from, ==,
+        "=?UTF-8?Q?=ED=99=8D_Hong?= (team) "
+        "<Sender@EXAMPLE.TEST> (account)");
+
+    assert_fact (fact_at (facts, 0),
+        "message_id", "mail-normalized",
+        "<deterministic-header-normalization@example.test>",
+        "header:message-id");
+    assert_fact (fact_at (facts, 1),
+        "sender_domain", "mail-normalized", "example.test", "header:from");
+    assert_fact (fact_at (facts, 2),
+        "participant", "mail-normalized", "Sender@example.test",
+        "header:from");
+    assert_fact_with_display_name (fact_at (facts, 3),
+        "mail-normalized", "Sender@example.test", "홍 Hong", "header:from");
+    assert_fact (fact_at (facts, 4),
+        "participant", "mail-normalized", "Alice@example.test", "header:to");
+    assert_fact_with_display_name (fact_at (facts, 5),
+        "mail-normalized", "Alice@example.test", "Doe, Alice", "header:to");
+    assert_fact (fact_at (facts, 6),
+        "participant", "mail-normalized", "Bob@example.test", "header:to");
+    assert_fact_with_display_name (fact_at (facts, 7),
+        "mail-normalized", "Bob@example.test", "Bob", "header:to");
+    assert_fact (fact_at (facts, 8),
+        "participant", "mail-normalized", "Zoe@example.test", "header:cc");
+    assert_fact_with_display_name (fact_at (facts, 9),
+        "mail-normalized", "Zoe@example.test", "Zoë, Reader (alias)",
+        "header:cc");
+    assert_fact (fact_at (facts, 10),
+        "participant", "mail-normalized", "other@example.test", "header:cc");
+    assert_fact (fact_at (facts, 11),
+        "participant", "mail-normalized", "Blind@example.test",
+        "header:bcc");
+    assert_fact_with_display_name (fact_at (facts, 12),
+        "mail-normalized", "Blind@example.test",
+        "=?X-UNKNOWN?B?Tm9tZQ==?=", "header:bcc");
+    assert_fact (fact_at (facts, 13),
+        "sent_at", "mail-normalized", "Tue, 02 Jun 2026 12:34:56 +0000",
+        "header:date");
+    assert_fact (fact_at (facts, 14),
+        "list_id", "mail-normalized", "updates.wyrebox.example",
+        "header:list-id");
+    assert_fact (fact_at (facts, 15),
+        "delivered_to", "mail-normalized", "Inbox+Tag@example.test",
+        "header:delivered-to");
+    assert_fact (fact_at (facts, 16),
+        "project_keyword", "mail-normalized", "project-meeting",
+        "dictionary:subject:korean-subject");
+    assert_fact (fact_at (facts, 17),
+        "reference_candidate", "mail-normalized", "회의",
+        "regex:subject:decoded-meeting");
+
+    repeated_facts = wyrebox_deterministic_fact_extract_from_metadata_with_rules
+            ("mail-normalized", &metadata, 1800000000000000, rules,
+            G_N_ELEMENTS (rules), regex_rules, G_N_ELEMENTS (regex_rules),
+            &error);
+    g_assert_no_error (error);
+    wirelog = wyrebox_fact_record_array_to_wirelog_facts (facts, &error);
+    g_assert_no_error (error);
+    repeated_wirelog =
+        wyrebox_fact_record_array_to_wirelog_facts (repeated_facts, &error);
+    g_assert_no_error (error);
+    g_assert_cmpstr (repeated_wirelog, ==, wirelog);
+}
+
+static void
+test_undecodable_encoded_word_falls_back_to_raw_value (void)
+{
+    WyreboxEmlMetadata metadata = {
+        .subject = "=?UTF-8?B?@@@?=",
+    };
+    const WyreboxDeterministicFactDictionaryRule rule = {
+        .field = "subject",
+        .rule_id = "raw-encoded-fallback",
+        .match_text = "=?UTF-8?B?@@@?=",
+        .canonical_project_key = "raw-fallback",
+    };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GPtrArray) facts = NULL;
+
+    facts =
+        wyrebox_deterministic_fact_extract_from_metadata_with_dictionary
+            ("mail-raw-fallback", &metadata, 1800000000000000, &rule, 1,
+            &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (facts);
+    g_assert_cmpuint (facts->len, ==, 1);
+    assert_fact (fact_at (facts, 0),
+        "project_keyword", "mail-raw-fallback", "raw-fallback",
+        "dictionary:subject:raw-encoded-fallback");
+
+    {
+        const WyreboxDeterministicFactDictionaryRule q_rule = {
+            .field = "subject",
+            .rule_id = "raw-q-fallback",
+            .match_text = "=?UTF-8?Q?Hello World?=",
+            .canonical_project_key = "raw-fallback",
+        };
+
+        metadata.subject = "=?UTF-8?Q?Hello World?=";
+        g_clear_pointer (&facts, g_ptr_array_unref);
+        facts =
+            wyrebox_deterministic_fact_extract_from_metadata_with_dictionary
+                ("mail-raw-fallback", &metadata, 1800000000000000, &q_rule, 1,
+                &error);
+        g_assert_no_error (error);
+        g_assert_nonnull (facts);
+        g_assert_cmpuint (facts->len, ==, 1);
+        assert_fact (fact_at (facts, 0),
+            "project_keyword", "mail-raw-fallback", "raw-fallback",
+            "dictionary:subject:raw-q-fallback");
+    }
+
+    {
+        const WyreboxDeterministicFactDictionaryRule base64_rule = {
+            .field = "subject",
+            .rule_id = "raw-base64-fallback",
+            .match_text = "=?UTF-8?B?Zh==?=",
+            .canonical_project_key = "raw-fallback",
+        };
+
+        metadata.subject = "=?UTF-8?B?Zh==?=";
+        g_clear_pointer (&facts, g_ptr_array_unref);
+        facts =
+            wyrebox_deterministic_fact_extract_from_metadata_with_dictionary
+                ("mail-raw-fallback", &metadata, 1800000000000000,
+                &base64_rule, 1, &error);
+        g_assert_no_error (error);
+        g_assert_nonnull (facts);
+        g_assert_cmpuint (facts->len, ==, 1);
+        assert_fact (fact_at (facts, 0),
+            "project_keyword", "mail-raw-fallback", "raw-fallback",
+            "dictionary:subject:raw-base64-fallback");
+    }
+}
+
+static void
+test_delivered_to_falls_back_to_x_original_to (void)
+{
+    const char *fixture_dir = g_getenv ("WYREBOX_EML_FIXTURE_DIR");
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    g_auto (WyreboxEmlMetadata) metadata = { 0 };
+    g_autoptr (GPtrArray) facts = NULL;
+
+    g_assert_nonnull (fixture_dir);
+    bytes = load_fixture_bytes (fixture_dir,
+            "deterministic-header-normalization-fallback.eml");
+    g_assert_true (wyrebox_eml_metadata_parse_bytes (bytes, &metadata, &error));
+    g_assert_no_error (error);
+
+    facts = wyrebox_deterministic_fact_extract_from_metadata ("mail-fallback",
+            &metadata, 1800000000000000, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (facts);
+    g_assert_cmpuint (facts->len, ==, 3);
+    assert_fact (fact_at (facts, 0),
+        "sender_domain", "mail-fallback", "example.test", "header:from");
+    assert_fact (fact_at (facts, 1),
+        "participant", "mail-fallback", "sender@example.test", "header:from");
+    assert_fact (fact_at (facts, 2),
+        "delivered_to", "mail-fallback", "Mailbox@example.test",
+        "header:x-original-to");
+}
+
+static void
+test_sender_domain_uses_first_valid_from_address (void)
+{
+    WyreboxEmlMetadata metadata = {
+        .from = "invalid-address, a@@b, a..b@invalid.test, "
+            "a(note)b@example.test, "
+            "Broken <broken@example.test> trailing, "
+            "source@example.test <real@example.test>, "
+            "First@EXAMPLE.TEST, second@elsewhere.test",
+    };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GPtrArray) facts = NULL;
+
+    facts = wyrebox_deterministic_fact_extract_from_metadata ("mail-senders",
+            &metadata, 1800000000000000, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (facts);
+    g_assert_cmpuint (facts->len, ==, 3);
+    assert_fact (fact_at (facts, 0),
+        "sender_domain", "mail-senders", "example.test", "header:from");
+    assert_fact (fact_at (facts, 1),
+        "participant", "mail-senders", "First@example.test", "header:from");
+    assert_fact (fact_at (facts, 2),
+        "participant", "mail-senders", "second@elsewhere.test",
+        "header:from");
+}
+
+static void
+test_unicode_domains_are_lowercased (void)
+{
+    WyreboxEmlMetadata metadata = {
+        .from = "User@BÜCHER.Example",
+    };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GPtrArray) facts = NULL;
+
+    facts = wyrebox_deterministic_fact_extract_from_metadata ("mail-idn",
+            &metadata, 1800000000000000, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (facts);
+    g_assert_cmpuint (facts->len, ==, 2);
+    assert_fact (fact_at (facts, 0),
+        "sender_domain", "mail-idn", "bücher.example", "header:from");
+    assert_fact (fact_at (facts, 1),
+        "participant", "mail-idn", "User@bücher.example", "header:from");
+}
+
+static void
+test_unterminated_comment_rejects_address_member (void)
+{
+    WyreboxEmlMetadata metadata = {
+        .from = "valid@example.test, invalid@example.test (unfinished",
+    };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GPtrArray) facts = NULL;
+
+    facts = wyrebox_deterministic_fact_extract_from_metadata ("mail-comment",
+            &metadata, 1800000000000000, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (facts);
+    g_assert_cmpuint (facts->len, ==, 2);
+    assert_fact (fact_at (facts, 0),
+        "sender_domain", "mail-comment", "example.test", "header:from");
+    assert_fact (fact_at (facts, 1),
+        "participant", "mail-comment", "valid@example.test", "header:from");
+}
+
+static void
+test_invalid_utf8_local_part_is_ignored (void)
+{
+    char raw_from[] = {
+        'b', 'a', 'd', (char)0xff, '@', 'e', 'x', 'a', 'm', 'p', 'l', 'e',
+        '.', 't', 'e', 's', 't', '\0',
+    };
+    WyreboxEmlMetadata metadata = {
+        .from = raw_from,
+    };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GPtrArray) facts = NULL;
+
+    facts = wyrebox_deterministic_fact_extract_from_metadata ("mail-invalid",
+            &metadata, 1800000000000000, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (facts);
+    g_assert_cmpuint (facts->len, ==, 0);
+}
+
+static void
+test_groups_with_quoted_or_commented_markers (void)
+{
+    WyreboxEmlMetadata metadata = {
+        .to = "\"Ops@Cloud\": Alice <alice@example.test>;, "
+            "Ops (<Cloud>): Bob <bob@example.test>;, "
+            "Ops@Cloud: Carol <carol@example.test>;",
+    };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GPtrArray) facts = NULL;
+
+    facts = wyrebox_deterministic_fact_extract_from_metadata ("mail-groups",
+            &metadata, 1800000000000000, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (facts);
+    g_assert_cmpuint (facts->len, ==, 6);
+    assert_fact (fact_at (facts, 0),
+        "participant", "mail-groups", "alice@example.test", "header:to");
+    assert_fact_with_display_name (fact_at (facts, 1),
+        "mail-groups", "alice@example.test", "Alice", "header:to");
+    assert_fact (fact_at (facts, 2),
+        "participant", "mail-groups", "bob@example.test", "header:to");
+    assert_fact_with_display_name (fact_at (facts, 3),
+        "mail-groups", "bob@example.test", "Bob", "header:to");
+    assert_fact (fact_at (facts, 4),
+        "participant", "mail-groups", "carol@example.test", "header:to");
+    assert_fact_with_display_name (fact_at (facts, 5),
+        "mail-groups", "carol@example.test", "Carol", "header:to");
+}
+
+static void
 test_extracts_header_facts_from_metadata (void)
 {
     WyreboxEmlMetadata metadata = {
         .message_id = "<mail-1@example.test>",
-        .from = "Alice <alice@Example.TEST>",
+        .from = "Alice A. <alice@Example.TEST>",
         .to = "Bob <bob@example.test>",
         .cc = "Carol <carol@example.test>",
         .date = "Tue, 02 Jun 2026 12:34:56 +0000",
@@ -44,19 +406,25 @@ test_extracts_header_facts_from_metadata (void)
             &metadata, 1800000000000000, &error);
     g_assert_no_error (error);
     g_assert_nonnull (facts);
-    g_assert_cmpuint (facts->len, ==, 6);
+    g_assert_cmpuint (facts->len, ==, 9);
 
     assert_fact (fact_at (facts, 0),
         "message_id", "mail-1", "<mail-1@example.test>", "header:message-id");
     assert_fact (fact_at (facts, 1),
         "sender_domain", "mail-1", "example.test", "header:from");
     assert_fact (fact_at (facts, 2),
-        "participant", "mail-1", "Alice <alice@Example.TEST>", "header:from");
-    assert_fact (fact_at (facts, 3),
-        "participant", "mail-1", "Bob <bob@example.test>", "header:to");
+        "participant", "mail-1", "alice@example.test", "header:from");
+    assert_fact_with_display_name (fact_at (facts, 3),
+        "mail-1", "alice@example.test", "Alice A.", "header:from");
     assert_fact (fact_at (facts, 4),
-        "participant", "mail-1", "Carol <carol@example.test>", "header:cc");
-    assert_fact (fact_at (facts, 5),
+        "participant", "mail-1", "bob@example.test", "header:to");
+    assert_fact_with_display_name (fact_at (facts, 5),
+        "mail-1", "bob@example.test", "Bob", "header:to");
+    assert_fact (fact_at (facts, 6),
+        "participant", "mail-1", "carol@example.test", "header:cc");
+    assert_fact_with_display_name (fact_at (facts, 7),
+        "mail-1", "carol@example.test", "Carol", "header:cc");
+    assert_fact (fact_at (facts, 8),
         "sent_at", "mail-1", "Tue, 02 Jun 2026 12:34:56 +0000", "header:date");
 }
 
@@ -77,9 +445,9 @@ test_extracts_only_present_header_facts (void)
     g_assert_cmpuint (facts->len, ==, 2);
 
     assert_fact (fact_at (facts, 0),
-        "participant", "mail-2", "no-domain-address", "header:from");
-    assert_fact (fact_at (facts, 1),
-        "participant", "mail-2", "Hidden <hidden@example.test>", "header:bcc");
+        "participant", "mail-2", "hidden@example.test", "header:bcc");
+    assert_fact_with_display_name (fact_at (facts, 1),
+        "mail-2", "hidden@example.test", "Hidden", "header:bcc");
 }
 
 static void
@@ -177,23 +545,23 @@ test_appends_dictionary_project_keywords_after_header_facts (void)
             &error);
     g_assert_no_error (error);
     g_assert_nonnull (facts);
-    g_assert_cmpuint (facts->len, ==, 12);
+    g_assert_cmpuint (facts->len, ==, 16);
 
     assert_fact (fact_at (facts, 0),
         "message_id", "mail-dict", "<mail-dict@example.test>",
         "header:message-id");
-    assert_fact (fact_at (facts, 7),
+    assert_fact (fact_at (facts, 11),
         "project_keyword", "mail-dict", "project-bravo",
         "dictionary:to:to-bravo");
-    assert_fact (fact_at (facts, 8),
+    assert_fact (fact_at (facts, 12),
         "project_keyword", "mail-dict", "project-alpha",
         "dictionary:subject:subject-alpha");
-    assert_fact (fact_at (facts, 9),
+    assert_fact (fact_at (facts, 13),
         "project_keyword", "mail-dict", "project-lead",
         "dictionary:from:from-lead-domain");
-    assert_fact (fact_at (facts, 10),
+    assert_fact (fact_at (facts, 14),
         "project_keyword", "mail-dict", "project-ops", "dictionary:cc:cc-ops");
-    assert_fact (fact_at (facts, 11),
+    assert_fact (fact_at (facts, 15),
         "project_keyword", "mail-dict", "project-hidden",
         "dictionary:bcc:bcc-audit");
 }
@@ -459,15 +827,15 @@ test_regex_facts_append_after_header_and_dictionary_facts (void)
             &error);
     g_assert_no_error (error);
     g_assert_nonnull (facts);
-    g_assert_cmpuint (facts->len, ==, 5);
+    g_assert_cmpuint (facts->len, ==, 6);
 
     assert_fact (fact_at (facts, 0),
         "message_id", "mail-combined", "<mail-combined@example.test>",
         "header:message-id");
-    assert_fact (fact_at (facts, 3),
+    assert_fact (fact_at (facts, 4),
         "project_keyword", "mail-combined", "project-alpha",
         "dictionary:subject:project-alpha");
-    assert_fact (fact_at (facts, 4),
+    assert_fact (fact_at (facts, 5),
         "amount_candidate", "mail-combined", "42",
         "regex:subject:subject-amount");
 }
@@ -588,6 +956,30 @@ main (int argc, char **argv)
 {
     g_test_init (&argc, &argv, NULL);
 
+    g_test_add_func ("/facts/deterministic-extractor/"
+        "decoded-normalized-header-facts",
+        test_extracts_decoded_and_normalized_header_facts);
+    g_test_add_func ("/facts/deterministic-extractor/"
+        "undecodable-word-raw-fallback",
+        test_undecodable_encoded_word_falls_back_to_raw_value);
+    g_test_add_func ("/facts/deterministic-extractor/"
+        "delivered-to-original-to-fallback",
+        test_delivered_to_falls_back_to_x_original_to);
+    g_test_add_func ("/facts/deterministic-extractor/"
+        "sender-domain-first-valid-from-address",
+        test_sender_domain_uses_first_valid_from_address);
+    g_test_add_func ("/facts/deterministic-extractor/"
+        "unicode-domain-lowercase",
+        test_unicode_domains_are_lowercased);
+    g_test_add_func ("/facts/deterministic-extractor/"
+        "unterminated-comment-rejects-address",
+        test_unterminated_comment_rejects_address_member);
+    g_test_add_func ("/facts/deterministic-extractor/"
+        "invalid-utf8-local-part-is-ignored",
+        test_invalid_utf8_local_part_is_ignored);
+    g_test_add_func ("/facts/deterministic-extractor/"
+        "group-markers-in-quotes-and-comments",
+        test_groups_with_quoted_or_commented_markers);
     g_test_add_func ("/facts/deterministic-extractor/header-facts",
         test_extracts_header_facts_from_metadata);
     g_test_add_func ("/facts/deterministic-extractor/only-present-header-facts",

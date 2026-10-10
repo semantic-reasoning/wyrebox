@@ -13,6 +13,8 @@ static const char *fixture_names[] = {
     "duplicate-message-id.eml",
     "folded-subject.eml",
     "folded-message-id.eml",
+    "deterministic-header-normalization.eml",
+    "deterministic-header-normalization-fallback.eml",
 };
 
 static void
