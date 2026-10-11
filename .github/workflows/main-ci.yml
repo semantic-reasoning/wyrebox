@@ -15,6 +15,8 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Route C/C++ compiles through sccache backed by the GitHub Actions cache.
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   formatting:
@@ -45,12 +47,15 @@ jobs:
         compiler: [gcc, clang]
 
     env:
-      CC: ${{ matrix.compiler }}
-      CXX: ${{ matrix.compiler == 'clang' && 'clang++' || 'g++' }}
+      CC: sccache ${{ matrix.compiler }}
+      CXX: sccache ${{ matrix.compiler == 'clang' && 'clang++' || 'g++' }}
 
     steps:
       - name: Check out sources
         uses: actions/checkout@v6
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Install build dependencies
         run: |
@@ -96,6 +101,8 @@ jobs:
             runner: ubuntu-24.04-arm
 
     env:
+      CC: sccache gcc
+      CXX: sccache g++
       ASAN_OPTIONS: "abort_on_error=1:halt_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1"
       UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
       # DuckDB version built from source on architectures without a prebuilt.
@@ -105,6 +112,9 @@ jobs:
     steps:
       - name: Check out sources
         uses: actions/checkout@v6
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Install build dependencies
         run: |
@@ -137,7 +147,9 @@ jobs:
         run: |
           git clone --depth 1 --branch "$DUCKDB_VERSION" \
             https://github.com/duckdb/duckdb.git duckdb-src
-          cmake -S duckdb-src -B duckdb-src/build \
+          CC=gcc CXX=g++ cmake -S duckdb-src -B duckdb-src/build \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
@@ -177,9 +189,16 @@ jobs:
     runs-on: ubuntu-26.04
     needs: formatting
 
+    env:
+      CC: sccache gcc
+      CXX: sccache g++
+
     steps:
       - name: Check out sources
         uses: actions/checkout@v6
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Install build dependencies
         run: |
