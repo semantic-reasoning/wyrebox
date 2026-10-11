@@ -16,6 +16,11 @@ CAPNP_JOBS = {
     "main-ci.yml": ["build", "sanitize"],
 }
 MINIMAL_JOB = ("pr-lint.yml", "pr-build-minimal")
+SANITIZE_ARCH_JOBS = {
+    "pr-lint.yml": "pr-sanitize",
+    "main-ci.yml": "sanitize",
+}
+SANITIZE_RUNNERS = ["ubuntu-24.04", "ubuntu-24.04-arm"]
 
 
 def read_jobs(workflow: str) -> dict[str, str]:
@@ -74,12 +79,30 @@ def assert_minimal_job(workflow: str, name: str, job_text: str) -> None:
     assert "meson test" in job_text, f"{workflow}:{name} must run tests"
 
 
+def assert_sanitize_architectures(workflow: str, name: str,
+                                  job_text: str) -> None:
+    for runner in SANITIZE_RUNNERS:
+        assert re.search(rf"^\s+runner:\s*{re.escape(runner)}\s*$", job_text,
+                         re.M), f"{workflow}:{name} must run on {runner}"
+    assert "runs-on: ${{ matrix.runner }}" in job_text, (
+        f"{workflow}:{name} must run on the matrix runner"
+    )
+    assert "-Dduckdb_root=$DUCKDB_ROOT" in job_text, (
+        f"{workflow}:{name} must use a source-built DuckDB on arm64"
+    )
+
+
 def main() -> None:
     for workflow, names in CAPNP_JOBS.items():
         jobs = read_jobs(workflow)
         for name in names:
             assert name in jobs, f"{workflow}: missing job {name}"
             assert_capnp_job(workflow, name, jobs[name])
+
+    for workflow, name in SANITIZE_ARCH_JOBS.items():
+        jobs = read_jobs(workflow)
+        assert name in jobs, f"{workflow}: missing job {name}"
+        assert_sanitize_architectures(workflow, name, jobs[name])
 
     workflow, name = MINIMAL_JOB
     jobs = read_jobs(workflow)
