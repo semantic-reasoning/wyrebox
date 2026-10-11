@@ -824,6 +824,12 @@ test(
 )
 
 test(
+  'docs ci sccache',
+  python,
+  args: files('tests/docs/test_ci_sccache.py'),
+)
+
+test(
   'docs issue 0354 ubuntu 26.04 ci',
   python,
   args: files('tests/docs/test_issue_0354_ubuntu_26_04_ci.py'),
