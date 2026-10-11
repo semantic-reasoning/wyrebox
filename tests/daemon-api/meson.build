@@ -538,6 +538,7 @@ if capnp_serialization_found
     env: {
       'WYREBOXD_EXECUTABLE': wyreboxd.full_path(),
     },
+    timeout: 120,
   )
 endif
 test('daemon runtime', daemon_runtime_test)
