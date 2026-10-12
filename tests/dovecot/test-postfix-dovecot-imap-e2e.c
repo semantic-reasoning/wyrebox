@@ -1071,6 +1071,8 @@ skip_reason (void)
         return "the Dovecot master binary is not installed";
     if (!env_file_is ("DOVECOT_IMAP_LOGIN", G_FILE_TEST_IS_EXECUTABLE))
         return "the Dovecot imap-login binary is not installed";
+    if (!env_file_is ("DOVECOT_IMAP", G_FILE_TEST_IS_EXECUTABLE))
+        return "the Dovecot imap binary is not installed";
     if (!env_file_is ("WYREBOXD_EXECUTABLE", G_FILE_TEST_IS_EXECUTABLE)
         || !env_file_is ("WYREBOX_POSTFIX_PIPE_EXECUTABLE",
         G_FILE_TEST_IS_EXECUTABLE)
@@ -1090,6 +1092,11 @@ main (int argc, char **argv)
 {
     const char *reason = skip_reason ();
 
+    if (reason != NULL
+        && g_strcmp0 (g_getenv ("WYREBOX_E2E_REQUIRE_RUNTIME"), "1") == 0) {
+        g_printerr ("required e2e runtime is missing: %s\n", reason);
+        return EXIT_FAILURE;
+    }
     if (reason != NULL) {
         g_print ("skipping: %s\n", reason);
         return MESON_TEST_SKIP;

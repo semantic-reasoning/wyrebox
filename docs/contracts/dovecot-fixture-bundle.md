@@ -5,6 +5,7 @@
 Accepted for issue #298 as the reproducible input contract for the IMAP fetch
 verification recipe. Amended by issue #355 (ADR 0005): fixture mode no longer
 compiles the plugin, and the recipe builds against an installed Dovecot.
+Amended by issue #315: adds the Postfix-to-Dovecot IMAP e2e recipe.
 
 ## Scope
 
@@ -33,6 +34,11 @@ recipes build the plugin against it in system mode and run the
 `dovecot imap real daemon` test, so they also require the `dovecot-imapd`
 binary at `/usr/lib/dovecot/imap` and a non-root user.
 
+The `postfix dovecot imap e2e` test also starts its own Dovecot master, so its
+recipe additionally requires `/usr/sbin/dovecot` from `dovecot-core` and
+`/usr/lib/dovecot/imap-login` from `dovecot-imapd`, which depends on
+`dovecot-core`.
+
 ## Recipe Discovery Rules
 
 1. The IMAP fetch recipe accepts `WYREBOX_DOVECOT_CONFIG` to override the
@@ -41,6 +47,11 @@ binary at `/usr/lib/dovecot/imap` and a non-root user.
 2. If `dovecot-config` or the `imap` binary is missing, or the recipe runs as
    root, the recipe fails with a prerequisite error.
 3. The recipe does not silently skip when its prerequisites are absent.
+4. `docs issue 0315 postfix dovecot imap e2e recipe` runs only
+   `postfix dovecot imap e2e` with `WYREBOX_E2E_REQUIRE_RUNTIME=1`, so the
+   test fails instead of skipping when its runtime is missing. Missing
+   `/usr/sbin/dovecot`, `/usr/lib/dovecot/imap-login`, or
+   `/usr/lib/dovecot/imap` is a prerequisite error.
 
 ## Verification
 

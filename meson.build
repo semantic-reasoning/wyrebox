@@ -660,6 +660,14 @@ if fs.is_file('/usr/lib/dovecot/dovecot-config')
     is_parallel: false,
     timeout: 600,
   )
+
+  test(
+    'docs issue 0315 postfix dovecot imap e2e recipe',
+    python,
+    args: files('tests/docs/test_issue_0315_postfix_dovecot_imap_e2e_recipe.py'),
+    is_parallel: false,
+    timeout: 600,
+  )
 endif
 
 test(
@@ -684,6 +692,12 @@ test(
   'docs issue 0355 dovecot runtime adr',
   python,
   args: files('tests/docs/test_issue_0355_dovecot_runtime_adr.py'),
+)
+
+test(
+  'docs issue 0315 postfix dovecot imap e2e docs',
+  python,
+  args: files('tests/docs/test_issue_0315_postfix_dovecot_imap_e2e_docs.py'),
 )
 
 test(
