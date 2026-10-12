@@ -61,6 +61,13 @@ def main() -> None:
     assert_section_matches(
         sections, decision, r"UIDVALIDITY change inside one session fails the sync"
     )
+    assert_section_matches(sections, decision, r"is_inconsistent")
+    assert_section_matches(sections, decision, r"only after the index commit")
+    assert_section_matches(sections, decision, r"\[NONEXISTENT\]")
+    assert_section_matches(sections, decision, r"\[UNAVAILABLE\]")
+    assert_section_matches(sections, decision, r"WYREBOX_DOVECOT_DAEMON_CLIENT_ERROR")
+    assert_section_matches(sections, decision, r"no namespace prefix")
+    assert_section_matches(sections, decision, r"STATUS")
     assert_section_matches(sections, decision, r"mailbox_list_register")
     assert_section_matches(sections, decision, r"mailbox_list_layout = wyrebox")
     assert_section_matches(sections, decision, r"`/` as the separator")
@@ -94,6 +101,12 @@ def main() -> None:
     assert_section_matches(sections, gaps, r"#314")
     assert_section_matches(sections, gaps, r"blocking")
     assert_section_matches(sections, gaps, r"compile coverage")
+    assert_section_matches(sections, gaps, r"unseen")
+    assert_section_matches(sections, gaps, r"INTERNALDATE")
+    assert_section_matches(sections, gaps, r"LSUB")
+    assert_section_matches(sections, gaps, r"timeout")
+    assert_section_matches(sections, gaps, r"account")
+    assert_section_matches(sections, gaps, r"interactive")
 
 
 if __name__ == "__main__":

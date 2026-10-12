@@ -18,8 +18,8 @@ installed Dovecot `2.4.2`.
 
 ## Repository Managed Inputs
 
-The backend and the recipe use these default paths when no explicit
-environment overrides are supplied:
+The fixture-mode contract checks use the first two paths, and the IMAP recipes
+use the installed `dovecot-config`:
 
 - `tests/dovecot/fixtures/valid-2.4.2`
 - `tests/dovecot/fixtures/valid-2.4.2/build-config-valid`
@@ -29,14 +29,17 @@ The first two paths are checked-in fixtures. They provide the Dovecot source
 tree contract and configured build tree contract checked in fixture mode.
 
 The `dovecot-config` path comes from the installed `dovecot-dev` package. The
-recipe builds the plugin against it in system mode, treats it as a required
-prerequisite, and fails explicitly if it is missing.
+recipes build the plugin against it in system mode and run the
+`dovecot imap real daemon` test, so they also require the `dovecot-imapd`
+binary at `/usr/lib/dovecot/imap` and a non-root user.
 
 ## Recipe Discovery Rules
 
-1. `WYREBOX_DOVECOT_CONFIG` overrides the default installed `dovecot-config`.
-2. If the `dovecot-config` path is missing, the recipe fails with a
-   prerequisite error.
+1. The IMAP fetch recipe accepts `WYREBOX_DOVECOT_CONFIG` to override the
+   default installed `dovecot-config`. The Postfix-to-Dovecot recipe always
+   uses the default path.
+2. If `dovecot-config` or the `imap` binary is missing, or the recipe runs as
+   root, the recipe fails with a prerequisite error.
 3. The recipe does not silently skip when its prerequisites are absent.
 
 ## Verification

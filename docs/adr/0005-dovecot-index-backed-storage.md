@@ -32,13 +32,24 @@ They model the old design and cannot exercise lib-index at all.
   - It writes the daemon UIDVALIDITY into an empty index.
   - It appends new UIDs in ascending order and raises the next UID to the
     daemon's UIDNEXT.
-  - A UIDVALIDITY change inside one session fails the sync.
+  - During sync, daemon state replaces the mailbox's copy only after the
+    index commit succeeds, so the index UIDs and the rows used for FETCH always match.
+  - A UIDVALIDITY change inside one session fails the sync. The mailbox keeps
+    its previous state and reports itself through `is_inconsistent`, so
+    `imap` disconnects the session instead of serving new bytes under old
+    UIDs.
 - Message bytes come from the daemon FETCH path and are served as an istream
   through `index_mail_init_stream`. The daemon client is the plugin's only
   path to WyreBox state; it never opens DuckDB or the object store.
 - LIST uses a `wyrebox` mailbox list driver registered with
   `mailbox_list_register` when the plugin loads, replacing the iterator hook.
-  It lists the daemon's mailboxes with `/` as the separator.
+  It lists the daemon's mailboxes with `/` as the separator. Mailbox names
+  pass to the daemon unchanged, so the namespace must have no namespace prefix.
+- Daemon-reported errors use the `WYREBOX_DOVECOT_DAEMON_CLIENT_ERROR` domain
+  with the daemon error class as the code; transport errors stay in
+  `G_IO_ERROR`. A missing mailbox answers `NO [NONEXISTENT]`. An unreachable
+  daemon or a daemon temporary failure answers `NO [UNAVAILABLE]` for SELECT,
+  STATUS and LIST and is logged. Anything else is a critical storage error.
 - Operators select the backend with `mail_driver = wyrebox` and
   `mailbox_list_layout = wyrebox`. The storage refuses to start with any other
   list layout. A minimal Dovecot `2.4.2` configuration looks like this:
@@ -79,8 +90,9 @@ They model the old design and cannot exercise lib-index at all.
   tests are retired.
 - A scripted IMAP test runs the real Dovecot `imap` binary against a real
   `wyreboxd` holding a delivered fixture message:
-  - It runs LIST, SELECT, and `UID FETCH (BODY.PEEK[])` and compares the
-    fetched bytes with the golden file.
+  - It runs LIST, SELECT, STATUS, and `UID FETCH (BODY.PEEK[])`, compares
+    UIDVALIDITY, UIDNEXT and the message count with the daemon's own values,
+    and compares the fetched bytes with the golden file.
   - It also covers the missing-mailbox and daemon-down error paths.
   - It runs `imap` as a non-root user, because `imap` refuses to run as root
     without `mail_uid`. When Dovecot is missing or the test runs as root, it
@@ -113,3 +125,15 @@ They model the old design and cannot exercise lib-index at all.
   non-root user.
 - The plugin links the full WyreBox library into `imap`. Splitting out a
   thin daemon-client dependency is a follow-up.
+- Daemon flags are not mapped into the index yet, so every message appears
+  unseen. INTERNALDATE and the save date come from the message `Date:` header
+  rather than the WyreBox delivery time.
+- LSUB and `LIST (SUBSCRIBED)` return every mailbox, and subscribing is not
+  supported. This must be settled before Thunderbird smoke testing.
+- The daemon client sets no socket timeout, so a stuck `wyreboxd` blocks the
+  `imap` process. Opening a mailbox and its first sync each cost a SELECT and
+  a UID map round trip.
+- The daemon trusts the account identity that the caller supplies. Binding
+  callers to an account before multi-user deployment is a follow-up.
+- Keeping the previous state on a failed re-sync and disconnecting on a
+  UIDVALIDITY change need an interactive IMAP session harness to test.

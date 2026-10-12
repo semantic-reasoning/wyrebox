@@ -32,8 +32,11 @@ System mode (issue #354) builds against an installed `dovecot-dev` instead:
 - `-Ddovecot_config` cannot be combined with `-Ddovecot_source_dir` or
   `-Ddovecot_build_dir`.
 - Issue #355 (ADR 0005): only system mode compiles the plugin and registers
-  the `dovecot plugin symbols` test. Fixture mode runs the contract checks
-  only. The fixture-based mailbox and loader smoke tests and the
+  the `dovecot plugin symbols` test. `dovecot imap real daemon` is registered
+  whenever Cap'n Proto serialization is available. It drives the installed
+  `imap` binary against a live `wyreboxd`, and skips unless the plugin was
+  built (system mode), `imap` is installed, and the user is non-root. Fixture
+  mode runs the contract checks only. The fixture-based mailbox and loader smoke tests and the
   `dovecot_loader_*` options are retired.
 
 In both modes Meson additionally requires `cc.get_define('DOVECOT_ABI_VERSION')`
