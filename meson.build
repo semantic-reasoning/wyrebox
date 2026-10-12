@@ -812,6 +812,12 @@ test(
 )
 
 test(
+  'docs issue 0355 dovecot runtime adr',
+  python,
+  args: files('tests/docs/test_issue_0355_dovecot_runtime_adr.py'),
+)
+
+test(
   'docs issue 0331 object error classification',
   python,
   args: files('tests/docs/test_issue_0331_object_error_classification.py'),
