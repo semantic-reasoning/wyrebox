@@ -3,7 +3,8 @@
 ## Status
 
 Accepted for issue #8 before any storage plugin implementation. Amended by
-issue #354: the baseline is Dovecot `2.4.2` (ADR 0004).
+issue #354: the baseline is Dovecot `2.4.2` (ADR 0004). Amended by issue
+#355: fixture mode no longer compiles the plugin (ADR 0005).
 
 ## Scope
 
@@ -30,10 +31,10 @@ System mode (issue #354) builds against an installed `dovecot-dev` instead:
   `--include-dir` mode against it.
 - `-Ddovecot_config` cannot be combined with `-Ddovecot_source_dir` or
   `-Ddovecot_build_dir`.
-- `-Ddovecot_loader_smoke=enabled` is rejected in system mode because the
-  loader smoke needs `liblib.a` from a Dovecot source build.
-- The `dovecot plugin mailbox smoke` test is built only in fixture mode,
-  because it relies on test seams that exist only in the fixture headers.
+- Issue #355 (ADR 0005): only system mode compiles the plugin and registers
+  the `dovecot plugin symbols` test. Fixture mode runs the contract checks
+  only. The fixture-based mailbox and loader smoke tests and the
+  `dovecot_loader_*` options are retired.
 
 In both modes Meson additionally requires `cc.get_define('DOVECOT_ABI_VERSION')`
 to equal `"2.4.ABIv2"`. The `dovecot system setup` test configures system mode

@@ -3,7 +3,8 @@
 ## Status
 
 Accepted for issue 0001 boundary planning. Production Dovecot plugin code is
-not part of this ADR.
+not part of this ADR. ADR 0005 (issue #355) records how the plugin implements
+this boundary on the Dovecot `2.4.2` index-backed storage runtime.
 
 ## Context
 

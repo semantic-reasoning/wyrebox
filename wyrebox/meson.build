@@ -206,7 +206,7 @@ wyrebox_admin = executable(
 )
 
 wyrebox_dovecot_plugin_module = []
-if have_dovecot_backend
+if have_dovecot_backend and dovecot_uses_system_headers
   wyrebox_dovecot_plugin_module = shared_module(
     'wyrebox_plugin',
     'dovecot/wyrebox-dovecot-plugin.c',

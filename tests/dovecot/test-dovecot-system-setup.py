@@ -79,13 +79,6 @@ def main() -> int:
             *system_options,
             f"-Ddovecot_source_dir={fixture_dir}",
         )
-        assert_setup_rejected(
-            tempdir,
-            "with-loader-smoke",
-            "Dovecot loader smoke is not supported with -Ddovecot_config",
-            *system_options,
-            "-Ddovecot_loader_smoke=enabled",
-        )
 
         builddir = tempdir / "build"
         result = meson_setup(builddir, *system_options)
@@ -98,10 +91,6 @@ def main() -> int:
         tests = list_meson_tests(builddir)
         if "dovecot plugin symbols" not in tests:
             raise AssertionError("system mode must register dovecot plugin symbols")
-        if "dovecot plugin mailbox smoke" in tests:
-            raise AssertionError(
-                "the fixture-only mailbox smoke test must not build in system mode"
-            )
 
         subprocess.run(
             ["meson", "compile", "-C", str(builddir), "wyrebox_plugin"],

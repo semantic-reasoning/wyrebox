@@ -68,7 +68,21 @@ def main() -> None:
     assert_in_section(
         sections,
         "## Repository Managed Inputs",
-        "/usr/lib/dovecot/libdovecot-storage.so",
+        "/usr/lib/dovecot/dovecot-config",
+    )
+    assert "libdovecot-storage.so" not in text, (
+        "the fixture bundle must not name the retired loader input"
+    )
+    assert_section_matches(sections, "## Status", r"issue #355")
+    assert_section_matches(
+        sections,
+        "## Scope",
+        r"contract checks only",
+    )
+    assert_section_matches(
+        sections,
+        "## Recipe Discovery Rules",
+        r"WYREBOX_DOVECOT_CONFIG",
     )
     assert_section_matches(
         sections,

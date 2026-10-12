@@ -6,12 +6,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DOVECOT_SOURCE_DIR = REPO_ROOT / "tests" / "dovecot" / "fixtures" / (
-    "valid-2.4.2"
-)
-DEFAULT_DOVECOT_BUILD_DIR = (
-    DEFAULT_DOVECOT_SOURCE_DIR / "build-config-valid"
-)
+DOVECOT_CONFIG = Path("/usr/lib/dovecot/dovecot-config")
 
 
 def run(command: list[str], cwd: Path) -> None:
@@ -28,8 +23,7 @@ def main() -> None:
                 "meson",
                 "setup",
                 "-Ddovecot_backend=enabled",
-                f"-Ddovecot_source_dir={DEFAULT_DOVECOT_SOURCE_DIR}",
-                f"-Ddovecot_build_dir={DEFAULT_DOVECOT_BUILD_DIR}",
+                f"-Ddovecot_config={DOVECOT_CONFIG}",
                 str(builddir),
                 str(REPO_ROOT),
             ],
@@ -51,7 +45,7 @@ def main() -> None:
                 "test",
                 "-C",
                 str(builddir),
-                "dovecot plugin mailbox smoke",
+                "dovecot plugin symbols",
             ],
             cwd=tempdir,
         )

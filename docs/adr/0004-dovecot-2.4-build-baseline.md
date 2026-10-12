@@ -6,7 +6,9 @@ Accepted for issue #354. `.internal-docs/` is not part of the repository, so
 this ADR together with the Dovecot source, build, and fixture-bundle contracts
 is the decision record. The decision is implemented by follow-up changes under
 issue #354; until each lands, the contracts it touches still describe the
-`2.3.21.1` fixture baseline.
+`2.3.21.1` fixture baseline. ADR 0005 (issue #355) supersedes the fixture-mode
+plugin compile described below: fixture mode now runs contract checks only,
+and the fixture mailbox and loader smoke tests are retired.
 
 ## Context
 
