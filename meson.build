@@ -267,30 +267,18 @@ endif
 summary('libchronoid', chronoid_summary, section: 'Dependencies')
 
 dovecot_backend_option = get_option('dovecot_backend')
-dovecot_loader_smoke_option = get_option('dovecot_loader_smoke')
 dovecot_source_dir_option = get_option('dovecot_source_dir')
 dovecot_build_dir_option = get_option('dovecot_build_dir')
 dovecot_config_option = get_option('dovecot_config')
-dovecot_loader_archive_option = get_option('dovecot_loader_archive')
-dovecot_loader_extra_link_args = get_option('dovecot_loader_extra_link_args')
 have_dovecot_backend = false
 dovecot_uses_system_headers = false
-have_dovecot_loader_smoke = false
-dovecot_loader_has_real_storage_registration = false
 dovecot_backend_c_args = []
-dovecot_loader_dep = disabler()
 if dovecot_backend_option.enabled()
   if dovecot_config_option != ''
     if dovecot_source_dir_option != '' or dovecot_build_dir_option != ''
       error(
         '-Ddovecot_config cannot be combined with -Ddovecot_source_dir or ' +
         '-Ddovecot_build_dir',
-      )
-    endif
-    if dovecot_loader_smoke_option.enabled()
-      error(
-        'Dovecot loader smoke is not supported with -Ddovecot_config; it ' +
-        'needs liblib.a from a Dovecot source build',
       )
     endif
     dovecot_config = meson.current_source_dir() / dovecot_config_option
@@ -465,115 +453,6 @@ if dovecot_backend_option.enabled()
   have_dovecot_backend = true
 endif
 
-if dovecot_loader_smoke_option.enabled()
-  if not have_dovecot_backend
-    error(
-      'Dovecot loader smoke is enabled but the Dovecot backend is not; set ' +
-      '-Ddovecot_backend=enabled with Dovecot source/build directories.',
-    )
-  endif
-  if dovecot_loader_archive_option == ''
-    error(
-      'Dovecot loader smoke is enabled but no loader archive was provided; ' +
-      'set -Ddovecot_loader_archive=/path/to/dovecot/src/lib/.libs/liblib.a',
-    )
-  endif
-
-  dovecot_loader_archive = (
-    meson.current_source_dir() / dovecot_loader_archive_option
-  )
-  if not fs.is_file(dovecot_loader_archive)
-    error(
-      'Dovecot loader smoke archive does not exist or is not a file: ' +
-      dovecot_loader_archive,
-    )
-  endif
-
-  check_dovecot_loader_storage_symbols = run_command(
-    python,
-    meson.current_source_dir() / 'tools' / 'check-dovecot-loader-storage-symbols.py',
-    dovecot_loader_archive,
-    check: false,
-  )
-  dovecot_loader_has_real_storage_registration = (
-    check_dovecot_loader_storage_symbols.returncode() == 0
-  )
-
-  if not dovecot_loader_has_real_storage_registration
-    warning(
-      'Dovecot loader archive does not define storage registration symbols: ' +
-      check_dovecot_loader_storage_symbols.stderr().strip(),
-    )
-  endif
-
-  if not dovecot_loader_has_real_storage_registration
-    message(
-      'Dovecot loader archive does not expose storage registration symbols; ' +
-      'loader smoke test will run with explicit registration shim symbols.',
-    )
-  endif
-
-  dovecot_loader_link_args = []
-  if dovecot_loader_has_real_storage_registration
-    dovecot_loader_link_args += [
-      '-Wl,-u,mail_storage_class_register',
-      '-Wl,-u,mail_storage_class_unregister',
-    ]
-  endif
-  dovecot_loader_link_args += [
-    dovecot_loader_archive,
-  ] + dovecot_loader_extra_link_args
-  dovecot_loader_dep = declare_dependency(
-    link_args: dovecot_loader_link_args,
-  )
-
-  dovecot_loader_probe = '''
-    #include "config.h"
-    #include "lib.h"
-    #include "module-dir.h"
-
-    int
-    main (void)
-    {
-      struct module *modules = 0;
-      struct module_dir_load_settings settings = { 0 };
-
-      settings.abi_version = DOVECOT_ABI_VERSION;
-      settings.require_init_funcs = 1;
-
-      lib_init ();
-      modules = module_dir_load (".", NULL, &settings);
-      module_dir_unload (&modules);
-      lib_deinit ();
-
-      return settings.require_init_funcs ? 0 : 1;
-    }
-  '''
-  if not cc.links(
-    dovecot_loader_probe,
-    name: 'Dovecot module loader smoke link check',
-    args: dovecot_backend_c_args,
-    dependencies: [dovecot_loader_dep],
-  )
-    if dovecot_loader_has_real_storage_registration
-      error(
-        'Dovecot loader smoke is enabled but the supplied loader archive ' +
-        'could not be linked. Set -Ddovecot_loader_archive to the Dovecot ' +
-        'src/lib/.libs/liblib.a artifact and add any required system libraries ' +
-        'with -Ddovecot_loader_extra_link_args=...',
-      )
-    endif
-
-    message(
-      'Dovecot loader smoke is enabled but the supplied loader archive could ' +
-      'not be linked; loader smoke is disabled because registration validation ' +
-      'cannot be executed.',
-    )
-  else
-    have_dovecot_loader_smoke = true
-  endif
-endif
-
 summary(
   'dovecot backend',
   have_dovecot_backend ? 'enabled' : 'disabled',
@@ -581,17 +460,7 @@ summary(
 )
 summary(
   'dovecot headers',
-  dovecot_uses_system_headers ? 'system (dovecot-config)' : 'source/build tree',
-  section: 'Features',
-)
-summary(
-  'dovecot loader smoke',
-  have_dovecot_loader_smoke ? 'enabled' : 'disabled',
-  section: 'Features',
-)
-summary(
-  'dovecot loader smoke registration',
-  dovecot_loader_has_real_storage_registration ? 'real symbols' : 'shimmed validation only',
+  dovecot_uses_system_headers ? 'system (dovecot-config)' : 'source/build tree (contract checks only)',
   section: 'Features',
 )
 
@@ -767,7 +636,7 @@ test(
   args: files('tests/docs/test_issue_0025_backup_restore_workflow_contract.py'),
 )
 
-if fs.is_file('/usr/lib/dovecot/libdovecot-storage.so')
+if fs.is_file('/usr/lib/dovecot/dovecot-config')
   test(
     'docs issue 0289 postfix dovecot e2e recipe',
     python,
