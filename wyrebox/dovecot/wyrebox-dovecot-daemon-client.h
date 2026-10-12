@@ -1,6 +1,7 @@
 #pragma once
 
 #include "wyrebox-daemon-error.h"
+#include "wyrebox-daemon-flag-keyword-update-request.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
 #include <glib-object.h>
 
@@ -87,6 +88,26 @@ GBytes *wyrebox_dovecot_daemon_client_fetch_message_bytes (
     guint64 uid_validity,
     guint64 mailbox_uid,
     const char *expected_message_id,
+    GError **error);
+
+/*
+ * Applies one flag/keyword delta to an ordinary mailbox message. Inputs are
+ * borrowed. The request is validated locally before any I/O, so invalid
+ * flags or keywords fail with G_IO_ERROR_INVALID_ARGUMENT. Daemon refusals use
+ * WYREBOX_DOVECOT_DAEMON_CLIENT_ERROR; protocol mismatches use
+ * G_IO_ERROR_INVALID_DATA. @out_journal_offset may be NULL; when given it
+ * receives the journal offset on success and 0 on failure.
+ */
+gboolean wyrebox_dovecot_daemon_client_update_flags (
+    const char *socket_path,
+    const char *account_identity,
+    const char *mailbox_id,
+    guint64 uid_validity,
+    guint64 mailbox_uid,
+    WyreboxDaemonFlagKeywordUpdateMode mode,
+    const char *const *system_flags,
+    const char *const *user_keywords,
+    guint64 *out_journal_offset,
     GError **error);
 
 G_END_DECLS
