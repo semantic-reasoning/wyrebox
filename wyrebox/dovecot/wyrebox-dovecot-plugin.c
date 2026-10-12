@@ -51,6 +51,8 @@ struct wyrebox_dovecot_mailbox
     gboolean inconsistent;
     /* Set while this mailbox holds an index sync; commits must not nest. */
     gboolean in_index_sync;
+    /* Ordinary mailboxes accept flag changes; views stay read-only. */
+    gboolean writable;
 };
 
 struct wyrebox_dovecot_transaction
@@ -58,6 +60,7 @@ struct wyrebox_dovecot_transaction
     /* First member: index_transaction_commit() frees the whole struct. */
     struct mailbox_transaction_context t;
     gboolean flags_changed;
+    gboolean expunge_refused;
 };
 
 struct wyrebox_dovecot_mailbox_list
@@ -1169,8 +1172,10 @@ wyrebox_dovecot_mailbox_alloc (struct mail_storage *storage,
 static bool
 wyrebox_dovecot_mailbox_is_readonly (struct mailbox *box)
 {
-    (void)box;
-    return TRUE;
+    struct wyrebox_dovecot_mailbox *wbox =
+        (struct wyrebox_dovecot_mailbox *)box;
+
+    return index_storage_is_readonly (box) || !wbox->writable;
 }
 
 static int
@@ -1216,6 +1221,8 @@ wyrebox_dovecot_mailbox_open (struct mailbox *box)
     }
 
     wyrebox_dovecot_mailbox_install_state (wbox, &state);
+    wbox->writable = wbox->state.select_result.kind ==
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
     return index_storage_mailbox_open (box, FALSE);
 }
 
@@ -1227,6 +1234,7 @@ wyrebox_dovecot_mailbox_close (struct mailbox *box)
 
     wyrebox_dovecot_mailbox_state_clear (&wbox->state);
     wbox->inconsistent = FALSE;
+    wbox->writable = FALSE;
     index_storage_mailbox_close (box);
 }
 
@@ -1253,7 +1261,7 @@ static int
 wyrebox_dovecot_mailbox_not_possible (struct mailbox *box)
 {
     mail_storage_set_error (box->storage, MAIL_ERROR_NOTPOSSIBLE,
-        "WyreBox mailboxes are read-only");
+        "WyreBox does not support this mailbox operation");
     return -1;
 }
 
@@ -1469,12 +1477,17 @@ wyrebox_dovecot_mail_get_save_date (struct mail *_mail, time_t *date_r)
     return wyrebox_dovecot_mail_get_received_date (_mail, date_r);
 }
 
+static struct wyrebox_dovecot_transaction *
+wyrebox_dovecot_mail_transaction (struct mail *_mail)
+{
+    return (struct wyrebox_dovecot_transaction *)_mail->transaction;
+}
+
 static void
 wyrebox_dovecot_mail_update_flags (struct mail *_mail,
     enum modify_type modify_type, enum mail_flags flags)
 {
-    ((struct wyrebox_dovecot_transaction *)_mail->transaction)->flags_changed =
-        TRUE;
+    wyrebox_dovecot_mail_transaction (_mail)->flags_changed = TRUE;
     index_mail_update_flags (_mail, modify_type, flags);
 }
 
@@ -1482,9 +1495,22 @@ static void
 wyrebox_dovecot_mail_update_keywords (struct mail *_mail,
     enum modify_type modify_type, struct mail_keywords *keywords)
 {
-    ((struct wyrebox_dovecot_transaction *)_mail->transaction)->flags_changed =
-        TRUE;
+    struct index_mail *imail = INDEX_MAIL (_mail);
+
+    /* Attachment keywords are derived by Dovecot on every body parse and
+     * are not WyreBox state. */
+    if (imail->data.attachment_flags_updating) {
+        return;
+    }
+    wyrebox_dovecot_mail_transaction (_mail)->flags_changed = TRUE;
     index_mail_update_keywords (_mail, modify_type, keywords);
+}
+
+/* The refusal surfaces at commit as MAIL_ERROR_PERM. */
+static void
+wyrebox_dovecot_mail_expunge (struct mail *_mail)
+{
+    wyrebox_dovecot_mail_transaction (_mail)->expunge_refused = TRUE;
 }
 
 static struct mailbox_transaction_context *
@@ -1508,11 +1534,16 @@ wyrebox_dovecot_transaction_commit (struct mailbox_transaction_context *t,
         (struct wyrebox_dovecot_mailbox *)t->box;
     struct mailbox *box = t->box;
 
-    if (wt->flags_changed && wbox->state.select_result.kind !=
-        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY) {
+    if (wt->expunge_refused) {
+        index_transaction_rollback (t);
+        mail_storage_set_error (box->storage, MAIL_ERROR_PERM,
+            "WyreBox does not support EXPUNGE yet");
+        return -1;
+    }
+    if (wt->flags_changed && mailbox_is_readonly (box)) {
         index_transaction_rollback (t);
         mail_storage_set_error (box->storage, MAIL_ERROR_NOTPOSSIBLE,
-            "WyreBox virtual mailboxes are read-only");
+            "WyreBox mailbox is read-only");
         return -1;
     }
     if (index_transaction_commit (t, changes_r) < 0) {
@@ -1562,7 +1593,7 @@ static struct mail_vfuncs wyrebox_dovecot_mail_vfuncs = {
     .update_keywords = wyrebox_dovecot_mail_update_keywords,
     .update_modseq = index_mail_update_modseq,
     .update_pvt_modseq = index_mail_update_pvt_modseq,
-    .expunge = index_mail_expunge,
+    .expunge = wyrebox_dovecot_mail_expunge,
     .set_cache_corrupted = index_mail_set_cache_corrupted,
     .istream_opened = index_mail_opened,
 };

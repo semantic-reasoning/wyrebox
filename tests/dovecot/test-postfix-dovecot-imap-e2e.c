@@ -874,7 +874,7 @@ test_login_list_select (E2eFixture *fixture, gconstpointer user_data)
     g_assert_nonnull (strstr (select.text->str, "[UIDNEXT 3]"));
     g_assert_nonnull (strstr (select.text->str, uidvalidity));
     expect_tagged_ok (&select, "c");
-    g_assert_true (g_str_has_prefix (select.tagged, "c OK [READ-ONLY]"));
+    g_assert_true (g_str_has_prefix (select.tagged, "c OK [READ-WRITE]"));
     imap_logout (&client);
 }
 
