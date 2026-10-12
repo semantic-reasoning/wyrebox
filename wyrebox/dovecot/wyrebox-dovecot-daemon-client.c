@@ -12,6 +12,9 @@
 
 #include <gio/gio.h>
 
+G_DEFINE_QUARK (wyrebox-dovecot-daemon-client-error-quark,
+    wyrebox_dovecot_daemon_client_error);
+
 #define WYREBOX_DOVECOT_CALLER_IDENTITY "dovecot"
 #define WYREBOX_DOVECOT_TOOL_IDENTITY "dovecot-storage"
 #define WYREBOX_DOVECOT_MAILBOX_UID_MAP_TEMPLATE_ID "mailbox.uid_map.v1"
@@ -262,8 +265,8 @@ set_daemon_error_response (const WyreboxDaemonResponseFrame *response,
         wyrebox_daemon_error_class_to_string (response->error.error_class);
 
     g_set_error (error,
-        G_IO_ERROR,
-        G_IO_ERROR_FAILED,
+        WYREBOX_DOVECOT_DAEMON_CLIENT_ERROR,
+        response->error.error_class,
         "daemon %s failed (%s): %s",
         operation_name,
         error_class != NULL ? error_class : "unknown",
