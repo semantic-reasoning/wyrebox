@@ -4,6 +4,7 @@ from pathlib import Path
 import ctypes
 import os
 import subprocess
+import sys
 import tempfile
 
 
@@ -11,11 +12,21 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DOVECOT_CONFIG = Path("/usr/lib/dovecot/dovecot-config")
 EXPECTED_ABI_VERSION = b"2.4.ABIv2"
 MESON_SKIP = 77
+# Extra arguments are Meson -D options from the enclosing build, such as
+# -Dduckdb_root on architectures without a bundled DuckDB prebuilt.
+FORWARDED_SETUP_OPTIONS = tuple(sys.argv[1:])
 
 
 def meson_setup(builddir: Path, *options: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["meson", "setup", *options, str(builddir), str(REPO_ROOT)],
+        [
+            "meson",
+            "setup",
+            *FORWARDED_SETUP_OPTIONS,
+            *options,
+            str(builddir),
+            str(REPO_ROOT),
+        ],
         check=False,
         text=True,
         capture_output=True,

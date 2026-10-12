@@ -3,6 +3,7 @@
 from pathlib import Path
 import json
 import subprocess
+import sys
 import tempfile
 
 
@@ -32,12 +33,17 @@ def introspect(builddir: Path, what: str) -> list[dict]:
 
 
 def main() -> None:
+    # Extra arguments are Meson -D options from the enclosing build, such as
+    # -Dduckdb_root on architectures without a bundled DuckDB prebuilt.
+    forwarded_options = sys.argv[1:]
+
     with tempfile.TemporaryDirectory(prefix="wyrebox-dovecot-fixture-") as tmp:
         builddir = Path(tmp) / "build"
         result = subprocess.run(
             [
                 "meson",
                 "setup",
+                *forwarded_options,
                 "-Ddovecot_backend=enabled",
                 f"-Ddovecot_source_dir={FIXTURE_DIR}",
                 f"-Ddovecot_build_dir={FIXTURE_DIR / 'build-config-valid'}",
