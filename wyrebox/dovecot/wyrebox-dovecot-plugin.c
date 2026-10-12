@@ -494,6 +494,88 @@ wyrebox_dovecot_mailbox_load_state (struct wyrebox_dovecot_mailbox *wbox,
                &state->uid_map, state->rows_by_uid, error);
 }
 
+static const struct
+{
+    const char *name;
+    enum mail_flags flag;
+} wyrebox_dovecot_system_flags[] = {
+    { "\\Seen", MAIL_SEEN },
+    { "\\Answered", MAIL_ANSWERED },
+    { "\\Flagged", MAIL_FLAGGED },
+    { "\\Deleted", MAIL_DELETED },
+    { "\\Draft", MAIL_DRAFT },
+};
+
+static gboolean
+wyrebox_dovecot_system_flag_from_name (const char *name,
+    enum mail_flags *flag_r)
+{
+    for (guint i = 0; i < G_N_ELEMENTS (wyrebox_dovecot_system_flags); i++) {
+        if (g_ascii_strcasecmp (name,
+            wyrebox_dovecot_system_flags[i].name) == 0) {
+            *flag_r = wyrebox_dovecot_system_flags[i].flag;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Replaces the flags and keywords of @seq with the daemon's row. */
+static void
+wyrebox_dovecot_index_apply_row_flags (struct mailbox *box,
+    struct mail_index_transaction *trans, uint32_t seq,
+    const WyreboxDovecotMailboxUidMapRow *row)
+{
+    T_BEGIN {
+        ARRAY_TYPE (const_string) keywords;
+        struct mail_keywords *index_keywords;
+        enum mail_flags flags = 0;
+
+        t_array_init (&keywords, 4);
+        for (guint i = 0; row->flags != NULL && row->flags[i] != NULL; i++) {
+            const char *name = row->flags[i];
+            enum mail_flags flag;
+
+            if (name[0] != '\\') {
+                array_push_back (&keywords, &name);
+            } else if (wyrebox_dovecot_system_flag_from_name (name, &flag)) {
+                flags |= flag;
+            } else {
+                e_warning (box->event, "Ignoring unknown WyreBox flag %s "
+                    "on UID %" G_GUINT64_FORMAT, name, row->uid);
+            }
+        }
+        array_append_zero (&keywords);
+
+        mail_index_update_flags (trans, seq, MODIFY_REPLACE, flags);
+        index_keywords = mail_index_keywords_create (box->index,
+                array_front (&keywords));
+        mail_index_update_keywords (trans, seq, MODIFY_REPLACE,
+            index_keywords);
+        mail_index_keywords_unref (&index_keywords);
+    } T_END;
+}
+
+static void
+wyrebox_dovecot_sync_apply_existing_flags (struct mailbox *box,
+    const WyreboxDovecotMailboxState *state,
+    struct mail_index_view *sync_view,
+    struct mail_index_transaction *sync_trans)
+{
+    const struct mail_index_header *hdr = mail_index_get_header (sync_view);
+
+    for (uint32_t seq = 1; seq <= hdr->messages_count; seq++) {
+        const WyreboxDovecotMailboxUidMapRow *row;
+        uint32_t uid;
+
+        mail_index_lookup_uid (sync_view, seq, &uid);
+        row = g_hash_table_lookup (state->rows_by_uid, GUINT_TO_POINTER (uid));
+        if (row != NULL) {
+            wyrebox_dovecot_index_apply_row_flags (box, sync_trans, seq, row);
+        }
+    }
+}
+
 static void
 wyrebox_dovecot_sync_expunge_missing (const WyreboxDovecotMailboxState *state,
     struct mail_index_view *sync_view,
@@ -513,7 +595,8 @@ wyrebox_dovecot_sync_expunge_missing (const WyreboxDovecotMailboxState *state,
 }
 
 static void
-wyrebox_dovecot_sync_append_new (const WyreboxDovecotMailboxState *state,
+wyrebox_dovecot_sync_append_new (struct mailbox *box,
+    const WyreboxDovecotMailboxState *state,
     struct mail_index_view *sync_view,
     struct mail_index_transaction *sync_trans)
 {
@@ -534,9 +617,12 @@ wyrebox_dovecot_sync_append_new (const WyreboxDovecotMailboxState *state,
     g_array_sort (uids, wyrebox_dovecot_compare_uid);
 
     for (guint i = 0; i < uids->len; i++) {
+        guint32 uid = g_array_index (uids, guint32, i);
         uint32_t seq;
 
-        mail_index_append (sync_trans, g_array_index (uids, guint32, i), &seq);
+        mail_index_append (sync_trans, uid, &seq);
+        wyrebox_dovecot_index_apply_row_flags (box, sync_trans, seq,
+            g_hash_table_lookup (state->rows_by_uid, GUINT_TO_POINTER (uid)));
     }
 
     if (state->select_result.uid_next > next_uid) {
@@ -571,7 +657,8 @@ wyrebox_dovecot_mailbox_sync_index (struct wyrebox_dovecot_mailbox *wbox)
 
     ret = mail_index_sync_begin (box->index, &sync_ctx, &sync_view,
             &sync_trans, index_storage_get_sync_flags (box) |
-            MAIL_INDEX_SYNC_FLAG_FLUSH_DIRTY);
+            MAIL_INDEX_SYNC_FLAG_FLUSH_DIRTY |
+            MAIL_INDEX_SYNC_FLAG_AVOID_FLAG_UPDATES);
     if (ret <= 0) {
         if (ret < 0) {
             mailbox_set_index_error (box);
@@ -597,7 +684,9 @@ wyrebox_dovecot_mailbox_sync_index (struct wyrebox_dovecot_mailbox *wbox)
     }
 
     wyrebox_dovecot_sync_expunge_missing (&state, sync_view, sync_trans);
-    wyrebox_dovecot_sync_append_new (&state, sync_view, sync_trans);
+    wyrebox_dovecot_sync_apply_existing_flags (box, &state, sync_view,
+        sync_trans);
+    wyrebox_dovecot_sync_append_new (box, &state, sync_view, sync_trans);
 
     /* The storage is read-only, so there are no local changes to push. */
     while (mail_index_sync_next (sync_ctx, &sync_rec)) {

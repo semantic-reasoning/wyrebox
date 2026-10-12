@@ -32,6 +32,10 @@ They model the old design and cannot exercise lib-index at all.
   - It writes the daemon UIDVALIDITY into an empty index.
   - It appends new UIDs in ascending order and raises the next UID to the
     daemon's UIDNEXT.
+  - It copies the daemon flags and keywords from the UID map onto every
+    message in the index, replacing the index values. The sync transaction
+    skips unchanged messages, so an unchanged mailbox reports no flag
+    updates.
   - During sync, daemon state replaces the mailbox's copy only after the
     index commit succeeds, so the index UIDs and the rows used for FETCH always match.
   - A UIDVALIDITY change inside one session fails the sync. The mailbox keeps
@@ -115,8 +119,8 @@ They model the old design and cannot exercise lib-index at all.
 
 ## Consequences And Known Gaps
 
-- Flags and keywords stay unsupported until #313. APPEND, COPY, MOVE, and
-  EXPUNGE stay unsupported until #314.
+- Changing flags and keywords stays unsupported until #313. APPEND, COPY,
+  MOVE, and EXPUNGE stay unsupported until #314.
 - Daemon calls are blocking and run on the `imap` ioloop, as `pop3c` does.
   Async daemon calls are a follow-up.
 - Builders without Dovecot `2.4.2` headers lose plugin compile coverage. Only
@@ -125,9 +129,10 @@ They model the old design and cannot exercise lib-index at all.
   non-root user.
 - The plugin links the full WyreBox library into `imap`. Splitting out a
   thin daemon-client dependency is a follow-up.
-- Daemon flags are not mapped into the index yet, so every message appears
-  unseen. INTERNALDATE and the save date come from the message `Date:` header
+- INTERNALDATE and the save date come from the message `Date:` header
   rather than the WyreBox delivery time.
+- Virtual mailbox views report no flags or keywords, because the daemon UID
+  map for a view carries none.
 - LSUB and `LIST (SUBSCRIBED)` return every mailbox, and subscribing is not
   supported. This must be settled before Thunderbird smoke testing.
 - The daemon client sets no socket timeout, so a stuck `wyreboxd` blocks the
