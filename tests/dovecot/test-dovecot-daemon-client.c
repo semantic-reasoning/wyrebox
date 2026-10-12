@@ -29,6 +29,7 @@ typedef enum
     FAKE_SERVER_CLOSE_WITHOUT_RESPONSE,
     FAKE_SERVER_TRUNCATED_RESPONSE,
     FAKE_SERVER_UID_MAP_CSV_RESPONSE,
+    FAKE_SERVER_FLAG_UPDATE_RESPONSE,
 } FakeServerBehavior;
 
 typedef struct
@@ -57,6 +58,8 @@ typedef struct
     gboolean expect_message_fetch_request;
     gboolean expect_mailbox_list_request;
     const char *expected_mailbox_list_namespace_prefix;
+    gboolean expect_flag_update_request;
+    WyreboxDaemonErrorClass daemon_error_class;
 } FakeServer;
 
 static void
@@ -210,8 +213,53 @@ static GBytes *encode_message_fetch_response (const char *request_id,
     const char *query_id,
     guint64 chunk_index,
     const guint8 *payload, gsize payload_size, gboolean end_of_stream);
-static GBytes *encode_daemon_error_response (const char *request_id);
+static GBytes *encode_daemon_error_response (const char *request_id,
+    WyreboxDaemonErrorClass error_class);
 static GBytes *encode_unexpected_success_response (const char *request_id);
+static GBytes *encode_flag_update_success_response (const char *request_id);
+
+static char *
+assert_decoded_flag_update_request (GBytes *request)
+{
+    g_autoptr (GError) error = NULL;
+    WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+    gpointer decoded_state = NULL;
+    GDestroyNotify decoded_state_clear = NULL;
+    const WyreboxDaemonFlagKeywordUpdateRequest *update = NULL;
+    char *request_id = NULL;
+
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+        request, &decoded, &decoded_state, &decoded_state_clear, NULL,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (decoded.operation, ==,
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FLAG_KEYWORD_UPDATE);
+    g_assert_cmpstr (decoded.caller_identity, ==, "dovecot");
+    g_assert_cmpstr (decoded.account_identity, ==, "account-1");
+    g_assert_cmpstr (decoded.tool_identity, ==, "dovecot-storage");
+    g_assert_nonnull (decoded.request_id);
+    update = decoded.flag_keyword_update;
+    g_assert_nonnull (update);
+    g_assert_cmpstr (update->account_identity, ==, "account-1");
+    g_assert_cmpstr (update->mailbox_id, ==, "mailbox-inbox");
+    g_assert_cmpuint (update->uid_validity, ==, 77);
+    g_assert_cmpuint (update->mailbox_uid, ==, 42);
+    g_assert_cmpint (update->mode, ==,
+        WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET);
+    g_assert_nonnull (update->system_flags);
+    g_assert_cmpuint (g_strv_length (update->system_flags), ==, 1);
+    g_assert_cmpstr (update->system_flags[0], ==, "\\Seen");
+    g_assert_nonnull (update->user_keywords);
+    g_assert_cmpuint (g_strv_length (update->user_keywords), ==, 1);
+    g_assert_cmpstr (update->user_keywords[0], ==, "Project-X");
+
+    g_assert_nonnull (decoded_state_clear);
+    g_assert_nonnull (decoded_state);
+    request_id = g_strdup (decoded.request_id);
+    decoded_state_clear (decoded_state);
+
+    return request_id;
+}
 
 static char *
 assert_decoded_select_request (GBytes *request)
@@ -444,7 +492,10 @@ fake_server_thread_main (gpointer user_data)
 
     request = wyrebox_daemon_frame_io_read_payload (input, &error);
     g_assert_no_error (error);
-    if (server->behavior == FAKE_SERVER_MAILBOX_LIST_RESPONSE
+    if (server->behavior == FAKE_SERVER_FLAG_UPDATE_RESPONSE
+        || server->expect_flag_update_request) {
+        request_id = assert_decoded_flag_update_request (request);
+    } else if (server->behavior == FAKE_SERVER_MAILBOX_LIST_RESPONSE
         || server->expect_mailbox_list_request) {
         request_id =
             assert_decoded_list_request (request,
@@ -533,7 +584,8 @@ fake_server_thread_main (gpointer user_data)
         response =
             encode_daemon_error_response (
             server->response_request_id_override !=
-            NULL ? server->response_request_id_override : request_id);
+            NULL ? server->response_request_id_override : request_id,
+            server->daemon_error_class);
         g_assert_nonnull (response);
         server->response = g_bytes_get_data (response, &server->response_size);
         g_assert_true (wyrebox_daemon_frame_io_write_payload (output,
@@ -569,6 +621,17 @@ fake_server_thread_main (gpointer user_data)
     case FAKE_SERVER_UID_MAP_UNEXPECTED_SUCCESS_RESPONSE:
         response =
             encode_unexpected_success_response
+                (server->response_request_id_override !=
+                NULL ? server->response_request_id_override : request_id);
+        g_assert_nonnull (response);
+        server->response = g_bytes_get_data (response, &server->response_size);
+        g_assert_true (wyrebox_daemon_frame_io_write_payload (output,
+            server->response, server->response_size, &error));
+        g_assert_no_error (error);
+        break;
+    case FAKE_SERVER_FLAG_UPDATE_RESPONSE:
+        response =
+            encode_flag_update_success_response
                 (server->response_request_id_override !=
                 NULL ? server->response_request_id_override : request_id);
         g_assert_nonnull (response);
@@ -619,6 +682,8 @@ fake_server_start (FakeServer *server,
     server->expect_message_fetch_request = FALSE;
     server->expect_mailbox_list_request = FALSE;
     server->expected_mailbox_list_namespace_prefix = "";
+    server->expect_flag_update_request = FALSE;
+    server->daemon_error_class = WYREBOX_DAEMON_ERROR_NOT_FOUND;
     if (response_payload != NULL)
         server->response = g_bytes_get_data (response_payload,
                 &server->response_size);
@@ -734,15 +799,35 @@ encode_message_fetch_response (const char *request_id,
 }
 
 static GBytes *
-encode_daemon_error_response (const char *request_id)
+encode_flag_update_success_response (const char *request_id)
+{
+    g_auto (WyreboxDaemonSuccessReceipt) receipt = { 0 };
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    receipt.request_id = g_strdup (request_id);
+    receipt.durable_marker = g_strdup ("journal:42:3");
+    receipt.journal_offset = 42;
+    receipt.journal_sequence = 3;
+    receipt.summary = g_strdup ("flag_keyword_update mode=set");
+    g_assert_true (wyrebox_daemon_response_frame_init_success (&frame,
+        &receipt, NULL, &error));
+    g_assert_no_error (error);
+
+    return wyrebox_daemon_capnp_codec_encode_response_frame (&frame, NULL,
+               &error);
+}
+
+static GBytes *
+encode_daemon_error_response (const char *request_id,
+    WyreboxDaemonErrorClass error_class)
 {
     g_auto (WyreboxDaemonErrorFrame) daemon_error = { 0 };
     g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
     g_autoptr (GError) error = NULL;
 
     g_assert_true (wyrebox_daemon_error_frame_init (&daemon_error,
-        request_id, WYREBOX_DAEMON_ERROR_NOT_FOUND,
-        "mailbox not found", NULL, &error));
+        request_id, error_class, "mailbox not found", NULL, &error));
     g_assert_no_error (error);
     g_assert_true (wyrebox_daemon_response_frame_init_error (&frame,
         &daemon_error, NULL, &error));
@@ -1719,6 +1804,120 @@ test_dovecot_daemon_client_truncated_response_fails_cleanly (void)
     remove_tree (root);
 }
 
+static const char *const update_flags_system_flags[] = { "\\Seen", NULL };
+static const char *const update_flags_user_keywords[] = { "Project-X", NULL };
+
+static gboolean
+call_update_flags (const char *socket_path, guint64 *out_journal_offset,
+    GError **error)
+{
+    return wyrebox_dovecot_daemon_client_update_flags (socket_path,
+               "account-1", "mailbox-inbox", 77, 42,
+               WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET,
+               update_flags_system_flags, update_flags_user_keywords,
+               out_journal_offset, error);
+}
+
+static void
+test_dovecot_daemon_client_update_flags_returns_offset (void)
+{
+    g_autofree char *root = NULL;
+    g_autofree char *socket_path = make_socket_path (&root);
+    g_autoptr (GError) error = NULL;
+    guint64 journal_offset = 0;
+    FakeServer server = { 0 };
+
+    fake_server_start (&server, socket_path,
+        FAKE_SERVER_FLAG_UPDATE_RESPONSE,
+        NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+
+    g_assert_true (call_update_flags (socket_path, &journal_offset, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (journal_offset, ==, 42);
+    fake_server_join (&server);
+    remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_update_flags_daemon_error (void)
+{
+    g_autofree char *root = NULL;
+    g_autofree char *socket_path = make_socket_path (&root);
+    g_autoptr (GError) error = NULL;
+    guint64 journal_offset = 99;
+    FakeServer server = { 0 };
+
+    fake_server_start (&server, socket_path,
+        FAKE_SERVER_DAEMON_ERROR_RESPONSE,
+        NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+    server.expect_flag_update_request = TRUE;
+    server.daemon_error_class = WYREBOX_DAEMON_ERROR_CONFLICT;
+
+    g_assert_false (call_update_flags (socket_path, &journal_offset, &error));
+    g_assert_error (error, WYREBOX_DOVECOT_DAEMON_CLIENT_ERROR,
+        WYREBOX_DAEMON_ERROR_CONFLICT);
+    g_assert_cmpuint (journal_offset, ==, 0);
+    fake_server_join (&server);
+    remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_update_flags_rejects_mismatched_request_id (void)
+{
+    g_autofree char *root = NULL;
+    g_autofree char *socket_path = make_socket_path (&root);
+    g_autoptr (GError) error = NULL;
+    guint64 journal_offset = 99;
+    FakeServer server = { 0 };
+
+    fake_server_start (&server, socket_path,
+        FAKE_SERVER_FLAG_UPDATE_RESPONSE,
+        NULL, "other-request", NULL,
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+
+    g_assert_false (call_update_flags (socket_path, &journal_offset, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_assert_cmpuint (journal_offset, ==, 0);
+    fake_server_join (&server);
+    remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_update_flags_rejects_unexpected_response_kind (void)
+{
+    g_autofree char *root = NULL;
+    g_autofree char *socket_path = make_socket_path (&root);
+    g_autoptr (GError) error = NULL;
+    guint64 journal_offset = 99;
+    FakeServer server = { 0 };
+
+    fake_server_start (&server, socket_path,
+        FAKE_SERVER_MAILBOX_SELECT_RESPONSE,
+        NULL, NULL, NULL, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY);
+    server.expect_flag_update_request = TRUE;
+
+    g_assert_false (call_update_flags (socket_path, &journal_offset, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_assert_cmpuint (journal_offset, ==, 0);
+    fake_server_join (&server);
+    remove_tree (root);
+}
+
+static void
+test_dovecot_daemon_client_update_flags_rejects_invalid_keyword_locally (void)
+{
+    const char *const keywords[] = { "$Forwarded", NULL };
+    g_autoptr (GError) error = NULL;
+    guint64 journal_offset = 99;
+
+    g_assert_false (wyrebox_dovecot_daemon_client_update_flags
+            ("/nonexistent/wyrebox.sock", "account-1", "mailbox-inbox", 77, 42,
+        WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET, NULL, keywords,
+        &journal_offset, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_assert_cmpuint (journal_offset, ==, 0);
+}
+
 #else
 
 static void
@@ -1763,6 +1962,19 @@ test_dovecot_daemon_client_capnp_disabled_is_not_supported (void)
         WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, "message-1",
         &error));
     g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
+
+    g_clear_error (&error);
+    {
+        const char *const system_flags[] = { "\\Seen", NULL };
+        guint64 journal_offset = 99;
+
+        g_assert_false (wyrebox_dovecot_daemon_client_update_flags
+                ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox", 77, 42,
+            WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET, system_flags, NULL,
+            &journal_offset, &error));
+        g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED);
+        g_assert_cmpuint (journal_offset, ==, 0);
+    }
 }
 
 #endif
@@ -1912,6 +2124,31 @@ test_dovecot_daemon_client_invalid_inputs_fail_cleanly (void)
             ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox",
         WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, 42, "", &error));
     g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+    g_clear_error (&error);
+    {
+        const char *const system_flags[] = { "\\Seen", NULL };
+
+        g_assert_false (wyrebox_dovecot_daemon_client_update_flags (NULL,
+            "account-1", "mailbox-inbox", 77, 42,
+            WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET, system_flags, NULL,
+            NULL, &error));
+        g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+        g_clear_error (&error);
+        g_assert_false (wyrebox_dovecot_daemon_client_update_flags ("",
+            "account-1", "mailbox-inbox", 77, 42,
+            WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET, system_flags, NULL,
+            NULL, &error));
+        g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+
+        g_clear_error (&error);
+        g_assert_false (wyrebox_dovecot_daemon_client_update_flags
+                ("/tmp/wyrebox.sock", "account-1", "mailbox-inbox", 77, 42,
+            WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_CLEAR, NULL, NULL, NULL,
+            &error));
+        g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    }
 #endif
 }
 
@@ -2011,6 +2248,19 @@ main (int argc, char **argv)
     g_test_add_func (
         "/dovecot/daemon-client/load-uid-map-rejects-malformed-csv",
         test_dovecot_daemon_client_load_uid_map_rejects_malformed_csv);
+    g_test_add_func ("/dovecot/daemon-client/update-flags-returns-offset",
+        test_dovecot_daemon_client_update_flags_returns_offset);
+    g_test_add_func ("/dovecot/daemon-client/update-flags-daemon-error",
+        test_dovecot_daemon_client_update_flags_daemon_error);
+    g_test_add_func
+        ("/dovecot/daemon-client/update-flags-rejects-mismatched-request-id",
+        test_dovecot_daemon_client_update_flags_rejects_mismatched_request_id);
+    g_test_add_func
+        ("/dovecot/daemon-client/update-flags-rejects-unexpected-response-kind",
+        test_dovecot_daemon_client_update_flags_rejects_unexpected_response_kind);
+    g_test_add_func
+        ("/dovecot/daemon-client/update-flags-rejects-invalid-keyword-locally",
+        test_dovecot_daemon_client_update_flags_rejects_invalid_keyword_locally);
 #else
     g_test_add_func ("/dovecot/daemon-client/capnp-disabled-not-supported",
         test_dovecot_daemon_client_capnp_disabled_is_not_supported);
