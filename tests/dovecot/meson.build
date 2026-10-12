@@ -99,6 +99,40 @@ if capnp_serialization_found
     'test-dovecot-imap-real-daemon.c',
     dependencies: [wyrebox_dep],
   )
+  dovecot_master = find_program(
+    'dovecot',
+    dirs: ['/usr/sbin'],
+    required: false,
+  )
+  dovecot_imap_login = find_program(
+    'imap-login',
+    dirs: ['/usr/lib/dovecot'],
+    required: false,
+  )
+  postfix_dovecot_imap_e2e_env = dovecot_imap_real_daemon_env
+  if dovecot_master.found()
+    postfix_dovecot_imap_e2e_env += {
+      'DOVECOT_MASTER': dovecot_master.full_path(),
+    }
+  endif
+  if dovecot_imap_login.found()
+    postfix_dovecot_imap_e2e_env += {
+      'DOVECOT_IMAP_LOGIN': dovecot_imap_login.full_path(),
+    }
+  endif
+  postfix_dovecot_imap_e2e_test = executable(
+    'test-postfix-dovecot-imap-e2e',
+    'test-postfix-dovecot-imap-e2e.c',
+    dependencies: [wyrebox_dep],
+  )
+  test(
+    'postfix dovecot imap e2e',
+    postfix_dovecot_imap_e2e_test,
+    depends: dovecot_imap_real_daemon_depends,
+    env: postfix_dovecot_imap_e2e_env,
+    timeout: 120,
+  )
+
   test(
     'dovecot imap real daemon',
     dovecot_imap_real_daemon_test,
