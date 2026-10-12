@@ -19,6 +19,7 @@
 #define TEST_ACCOUNT "account-1"
 #define TEST_PASSWORD "secret"
 #define PIPE_FIXTURE "simple-crlf.eml"
+#define LMTP_FIXTURE "multipart-attachment-like.eml"
 #define PROCESS_DEADLINE_SECONDS 10
 #define IMAP_TIMEOUT_SECONDS 30
 
@@ -318,6 +319,151 @@ deliver_pipe (E2eFixture *fixture, const char *delivery_id,
     };
 
     run_checked (argv, message);
+}
+
+static void
+dump_file (const char *path)
+{
+    g_autofree char *contents = NULL;
+
+    if (g_file_get_contents (path, &contents, NULL, NULL))
+        g_test_message ("%s:\n%s", path, contents);
+}
+
+/* Reads one LMTP reply, skipping "NNN-" continuation lines, and asserts its
+ * final line starts with @prefix. */
+static void
+lmtp_expect (GDataInputStream *input, const char *prefix,
+    const char *listener_output)
+{
+    for (;;) {
+        g_autoptr (GError) error = NULL;
+        g_autofree char *line = g_data_input_stream_read_line (input, NULL,
+                NULL, &error);
+
+        if (line != NULL && strlen (line) > 3 && line[3] == '-')
+            continue;
+        if (line == NULL || !g_str_has_prefix (line, prefix)) {
+            g_test_message ("expected LMTP reply %s, got %s", prefix,
+                line != NULL ? line : "EOF");
+            dump_file (listener_output);
+        }
+        g_assert_no_error (error);
+        g_assert_nonnull (line);
+        g_assert_true (g_str_has_prefix (line, prefix));
+        return;
+    }
+}
+
+static void
+lmtp_send (GOutputStream *output, const char *data, gssize size)
+{
+    g_autoptr (GError) error = NULL;
+
+    if (size < 0)
+        size = strlen (data);
+    g_assert_true (g_output_stream_write_all (output, data, size, NULL, NULL,
+        &error));
+    g_assert_no_error (error);
+}
+
+/* Returns @message as an LMTP DATA payload: dot-stuffed and terminated by
+ * ".\r\n". @message must end with CRLF so its bytes are stored unchanged. */
+static GString *
+lmtp_data_payload (GBytes *message)
+{
+    gsize size = 0;
+    const char *data = g_bytes_get_data (message, &size);
+    GString *payload = g_string_sized_new (size + 8);
+    gboolean line_start = TRUE;
+
+    for (gsize i = 0; i < size; i++) {
+        if (line_start && data[i] == '.')
+            g_string_append_c (payload, '.');
+        g_string_append_c (payload, data[i]);
+        line_start = data[i] == '\n';
+    }
+    g_assert_true (g_str_has_suffix (payload->str, "\r\n"));
+    g_string_append (payload, ".\r\n");
+    return payload;
+}
+
+/* Delivers @eml_name through the one-shot wyrebox-postfix-lmtp-delivery
+ * listener, speaking the LMTP dialog Postfix lmtp(8) would. */
+static void
+deliver_lmtp (E2eFixture *fixture, const char *delivery_id,
+    const char *eml_name)
+{
+    g_autoptr (GBytes) message = load_fixture (eml_name);
+    g_autofree char *listen_socket = g_build_filename (fixture->root, "run",
+            "wyrebox-lmtp.sock", NULL);
+    g_autofree char *listener_output = g_build_filename (fixture->root,
+            "lmtp.out", NULL);
+    const char *argv[] = {
+        required_env ("WYREBOX_POSTFIX_LMTP_DELIVERY_EXECUTABLE"),
+        "--account-id", TEST_ACCOUNT,
+        "--delivery-id", delivery_id,
+        "--listen-socket", listen_socket,
+        "--daemon-socket", fixture->socket_path,
+        NULL
+    };
+    g_autoptr (GSubprocess) listener = NULL;
+    g_autoptr (GSocketClient) socket_client = g_socket_client_new ();
+    g_autoptr (GSocketAddress) address = NULL;
+    g_autoptr (GSocketConnection) connection = NULL;
+    g_autoptr (GDataInputStream) input = NULL;
+    g_autoptr (GString) payload = lmtp_data_payload (message);
+    g_autoptr (GError) error = NULL;
+    GOutputStream *output;
+    gint64 deadline;
+    gboolean exited;
+
+    listener = spawn_with_parent_death (argv, G_SUBPROCESS_FLAGS_NONE,
+            listener_output);
+    deadline = g_get_monotonic_time () +
+        PROCESS_DEADLINE_SECONDS * G_TIME_SPAN_SECOND;
+    while (!g_file_test (listen_socket, G_FILE_TEST_EXISTS)) {
+        if (g_get_monotonic_time () >= deadline
+            || g_subprocess_get_identifier (listener) == NULL) {
+            g_test_message ("LMTP listener did not create %s", listen_socket);
+            dump_file (listener_output);
+            g_assert_not_reached ();
+        }
+        g_usleep (10 * 1000);
+    }
+
+    address = g_unix_socket_address_new (listen_socket);
+    g_socket_client_set_timeout (socket_client, IMAP_TIMEOUT_SECONDS);
+    connection = g_socket_client_connect (socket_client,
+            G_SOCKET_CONNECTABLE (address), NULL, &error);
+    g_assert_no_error (error);
+    input = g_data_input_stream_new (g_io_stream_get_input_stream
+                (G_IO_STREAM (connection)));
+    g_data_input_stream_set_newline_type (input,
+        G_DATA_STREAM_NEWLINE_TYPE_CR_LF);
+    output = g_io_stream_get_output_stream (G_IO_STREAM (connection));
+
+    lmtp_expect (input, "220 ", listener_output);
+    lmtp_send (output, "LHLO localhost\r\n", -1);
+    lmtp_expect (input, "250 ", listener_output);
+    lmtp_send (output, "MAIL FROM:<sender@example.com>\r\n", -1);
+    lmtp_expect (input, "250 ", listener_output);
+    lmtp_send (output, "RCPT TO:<alice@example.com>\r\n", -1);
+    lmtp_expect (input, "250 ", listener_output);
+    lmtp_send (output, "DATA\r\n", -1);
+    lmtp_expect (input, "354 ", listener_output);
+    lmtp_send (output, payload->str, payload->len);
+    lmtp_expect (input, "250 2.0.0 ", listener_output);
+    lmtp_expect (input, "221 ", listener_output);
+    g_assert_true (g_io_stream_close (G_IO_STREAM (connection), NULL, NULL));
+
+    exited = wait_with_deadline (listener, PROCESS_DEADLINE_SECONDS);
+    if (!exited || !g_subprocess_get_if_exited (listener)
+        || g_subprocess_get_exit_status (listener) != 0)
+        dump_file (listener_output);
+    g_assert_true (exited);
+    g_assert_true (g_subprocess_get_if_exited (listener));
+    g_assert_cmpint (g_subprocess_get_exit_status (listener), ==, 0);
 }
 
 static void
@@ -660,6 +806,7 @@ fixture_set_up (E2eFixture *fixture, gconstpointer user_data)
     bootstrap_daemon_storage (fixture);
     start_daemon (fixture);
     deliver_pipe (fixture, "pipe-simple", PIPE_FIXTURE);
+    deliver_lmtp (fixture, "lmtp-multipart", LMTP_FIXTURE);
 
     write_dovecot_config (fixture);
     start_master (fixture);
@@ -723,37 +870,55 @@ test_login_list_select (E2eFixture *fixture, gconstpointer user_data)
     imap_command (&client, "c", "SELECT INBOX", &select);
     uidvalidity = g_strdup_printf ("[UIDVALIDITY %u]",
             daemon_state.uid_validity);
-    g_assert_nonnull (strstr (select.text->str, "* 1 EXISTS\r\n"));
+    g_assert_nonnull (strstr (select.text->str, "* 2 EXISTS\r\n"));
+    g_assert_nonnull (strstr (select.text->str, "[UIDNEXT 3]"));
     g_assert_nonnull (strstr (select.text->str, uidvalidity));
     expect_tagged_ok (&select, "c");
     g_assert_true (g_str_has_prefix (select.tagged, "c OK [READ-ONLY]"));
     imap_logout (&client);
 }
 
+/* Fetches message @uid (also its sequence number) and compares it
+ * byte-for-byte with fixture @eml_name. */
 static void
-test_fetch_pipe_delivery (E2eFixture *fixture, gconstpointer user_data)
+expect_fetch_matches_fixture (E2eFixture *fixture, guint uid,
+    const char *eml_name)
 {
     g_auto (ImapClient) client = { 0 };
     g_auto (ImapResponse) select = { 0 };
     g_auto (ImapResponse) fetch = { 0 };
-    g_autoptr (GBytes) expected = load_fixture (PIPE_FIXTURE);
+    g_autoptr (GBytes) expected = load_fixture (eml_name);
+    g_autofree char *command = NULL;
     g_autofree char *prefix = NULL;
-
-    (void)user_data;
 
     imap_login (&client, fixture);
     imap_command (&client, "b", "SELECT INBOX", &select);
     expect_tagged_ok (&select, "b");
-    imap_command (&client, "c", "UID FETCH 1 (BODY.PEEK[])", &fetch);
+    command = g_strdup_printf ("UID FETCH %u (BODY.PEEK[])", uid);
+    imap_command (&client, "c", command, &fetch);
 
-    prefix = g_strdup_printf ("* 1 FETCH (UID 1 BODY[] {%" G_GSIZE_FORMAT
-            "}\r\n", g_bytes_get_size (expected));
+    prefix = g_strdup_printf ("* %u FETCH (UID %u BODY[] {%" G_GSIZE_FORMAT
+            "}\r\n", uid, uid, g_bytes_get_size (expected));
     g_assert_true (g_str_has_prefix (fetch.text->str, prefix));
     g_assert_cmpuint (fetch.literals->len, ==, 1);
     g_assert_true (g_bytes_equal (g_ptr_array_index (fetch.literals, 0),
         expected));
     expect_tagged_ok (&fetch, "c");
     imap_logout (&client);
+}
+
+static void
+test_fetch_pipe_delivery (E2eFixture *fixture, gconstpointer user_data)
+{
+    (void)user_data;
+    expect_fetch_matches_fixture (fixture, 1, PIPE_FIXTURE);
+}
+
+static void
+test_fetch_lmtp_delivery (E2eFixture *fixture, gconstpointer user_data)
+{
+    (void)user_data;
+    expect_fetch_matches_fixture (fixture, 2, LMTP_FIXTURE);
 }
 
 static gboolean
@@ -775,6 +940,8 @@ skip_reason (void)
         return "the Dovecot imap-login binary is not installed";
     if (!env_file_is ("WYREBOXD_EXECUTABLE", G_FILE_TEST_IS_EXECUTABLE)
         || !env_file_is ("WYREBOX_POSTFIX_PIPE_EXECUTABLE",
+        G_FILE_TEST_IS_EXECUTABLE)
+        || !env_file_is ("WYREBOX_POSTFIX_LMTP_DELIVERY_EXECUTABLE",
         G_FILE_TEST_IS_EXECUTABLE))
         return "the WyreBox daemon or delivery helpers were not built";
     if (geteuid () == 0)
@@ -801,6 +968,8 @@ main (int argc, char **argv)
         test_login_list_select, fixture_tear_down);
     g_test_add ("/e2e/fetch-pipe-delivery", E2eFixture, NULL, fixture_set_up,
         test_fetch_pipe_delivery, fixture_tear_down);
+    g_test_add ("/e2e/fetch-lmtp-delivery", E2eFixture, NULL, fixture_set_up,
+        test_fetch_lmtp_delivery, fixture_tear_down);
 
     return g_test_run ();
 }

@@ -109,7 +109,10 @@ if capnp_serialization_found
     dirs: ['/usr/lib/dovecot'],
     required: false,
   )
-  postfix_dovecot_imap_e2e_env = dovecot_imap_real_daemon_env
+  postfix_dovecot_imap_e2e_env = dovecot_imap_real_daemon_env + {
+    'WYREBOX_POSTFIX_LMTP_DELIVERY_EXECUTABLE':
+      wyrebox_postfix_lmtp_delivery.full_path(),
+  }
   if dovecot_master.found()
     postfix_dovecot_imap_e2e_env += {
       'DOVECOT_MASTER': dovecot_master.full_path(),
@@ -128,7 +131,9 @@ if capnp_serialization_found
   test(
     'postfix dovecot imap e2e',
     postfix_dovecot_imap_e2e_test,
-    depends: dovecot_imap_real_daemon_depends,
+    depends: dovecot_imap_real_daemon_depends + [
+      wyrebox_postfix_lmtp_delivery,
+    ],
     env: postfix_dovecot_imap_e2e_env,
     timeout: 120,
   )
