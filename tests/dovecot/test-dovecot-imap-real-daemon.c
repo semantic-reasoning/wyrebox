@@ -427,7 +427,117 @@ test_select_matches_daemon_state (ImapRealDaemonFixture *fixture,
     g_assert_nonnull (strstr (session.output, "* 1 EXISTS\r\n"));
     g_assert_nonnull (strstr (session.output, uidvalidity));
     g_assert_nonnull (strstr (session.output, uidnext));
+    g_assert_nonnull (strstr (session.output, "[UNSEEN 1]"));
     g_assert_nonnull (strstr (session.output, "\r\na OK [READ-ONLY]"));
+}
+
+static gint
+compare_strings (gconstpointer a, gconstpointer b)
+{
+    return g_strcmp0 (*(const char *const *)a, *(const char *const *)b);
+}
+
+/* Compares FETCH FLAGS as a set; \Recent depends on the session. */
+static void
+assert_fetch_flags (const char *output, guint uid,
+    const char *const *expected)
+{
+    g_autofree char *pattern = NULL;
+    g_autoptr (GRegex) regex = NULL;
+    g_autoptr (GMatchInfo) match = NULL;
+    g_autofree char *flags = NULL;
+    g_auto (GStrv) tokens = NULL;
+    g_autoptr (GPtrArray) actual = g_ptr_array_new ();
+    g_autoptr (GPtrArray) wanted = g_ptr_array_new ();
+
+    pattern = g_strdup_printf ("\\* \\d+ FETCH \\(UID %u FLAGS \\(([^)]*)\\)",
+            uid);
+    regex = g_regex_new (pattern, 0, 0, NULL);
+    g_assert_nonnull (regex);
+    g_assert_true (g_regex_match (regex, output, 0, &match));
+    flags = g_match_info_fetch (match, 1);
+    tokens = g_strsplit (flags, " ", -1);
+
+    for (guint i = 0; tokens[i] != NULL; i++) {
+        if (tokens[i][0] != '\0' && g_strcmp0 (tokens[i], "\\Recent") != 0)
+            g_ptr_array_add (actual, tokens[i]);
+    }
+    for (guint i = 0; expected[i] != NULL; i++)
+        g_ptr_array_add (wanted, (gpointer)expected[i]);
+    g_ptr_array_sort (actual, compare_strings);
+    g_ptr_array_sort (wanted, compare_strings);
+
+    g_assert_cmpuint (actual->len, ==, wanted->len);
+    for (guint i = 0; i < actual->len; i++) {
+        g_assert_cmpstr (g_ptr_array_index (actual, i), ==,
+            g_ptr_array_index (wanted, i));
+    }
+}
+
+static void
+test_select_reflects_daemon_flags (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    const char *const system_flags[] = { "\\Seen", "\\Flagged", NULL };
+    const char *const keywords[] = { "Project-X", NULL };
+    const char *const expected[] = { "\\Seen", "\\Flagged", "Project-X", NULL };
+    g_autofree char *config_path = NULL;
+    g_auto (WyreboxDaemonMailboxSelectResult) daemon_state = { 0 };
+    g_auto (ImapSession) session = { 0 };
+    g_autoptr (GError) error = NULL;
+    g_autofree char *flags_line = NULL;
+    const char *flags_start;
+
+    (void)user_data;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &daemon_state,
+        &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_dovecot_daemon_client_update_flags
+            (fixture->socket_path, TEST_ACCOUNT, daemon_state.mailbox_id,
+        daemon_state.uid_validity, 1,
+        WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET, system_flags, keywords,
+        NULL, &error));
+    g_assert_no_error (error);
+
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, "s STATUS INBOX (UNSEEN)\r\n"
+        "a SELECT INBOX\r\n"
+        "b UID FETCH 1 (FLAGS)\r\n"
+        "c SEARCH UNSEEN\r\nz LOGOUT\r\n", &session);
+
+    g_assert_nonnull (strstr (session.output, "* STATUS INBOX (UNSEEN 0)"));
+    g_assert_null (strstr (session.output, "[UNSEEN "));
+    flags_start = strstr (session.output, "* FLAGS (");
+    g_assert_nonnull (flags_start);
+    flags_line = g_strndup (flags_start, strcspn (flags_start, "\r\n"));
+    g_assert_nonnull (strstr (flags_line, "Project-X"));
+    assert_fetch_flags (session.output, 1, expected);
+    g_assert_nonnull (strstr (session.output, "* SEARCH\r\n"));
+    g_assert_nonnull (strstr (session.output, "\r\nc OK"));
+}
+
+static void
+test_fresh_delivery_is_unseen (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    const char *const expected[] = { NULL };
+    g_autofree char *config_path = NULL;
+    g_auto (ImapSession) session = { 0 };
+
+    (void)user_data;
+
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, "s STATUS INBOX (UNSEEN)\r\n"
+        "a SELECT INBOX\r\n"
+        "b UID FETCH 1 (FLAGS)\r\n"
+        "c SEARCH UNSEEN\r\nz LOGOUT\r\n", &session);
+
+    g_assert_nonnull (strstr (session.output, "* STATUS INBOX (UNSEEN 1)"));
+    assert_fetch_flags (session.output, 1, expected);
+    g_assert_nonnull (strstr (session.output, "* SEARCH 1\r\n"));
+    g_assert_nonnull (strstr (session.output, "\r\nc OK"));
 }
 
 static void
@@ -571,6 +681,12 @@ main (int argc, char **argv)
     g_test_add ("/dovecot/imap/select-matches-daemon-state",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_select_matches_daemon_state, fixture_tear_down);
+    g_test_add ("/dovecot/imap/select-reflects-daemon-flags",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_select_reflects_daemon_flags, fixture_tear_down);
+    g_test_add ("/dovecot/imap/fresh-delivery-is-unseen",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_fresh_delivery_is_unseen, fixture_tear_down);
     g_test_add ("/dovecot/imap/status-matches-daemon-state",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_status_matches_daemon_state, fixture_tear_down);

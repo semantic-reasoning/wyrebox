@@ -101,7 +101,10 @@ def main() -> None:
     assert_section_matches(sections, gaps, r"#314")
     assert_section_matches(sections, gaps, r"blocking")
     assert_section_matches(sections, gaps, r"compile coverage")
-    assert_section_matches(sections, gaps, r"unseen")
+    assert not re.search(r"unseen", sections[gaps], re.IGNORECASE), (
+        "Known Gaps must not claim every message appears unseen"
+    )
+    assert_section_matches(sections, decision, r"daemon flags and keywords")
     assert_section_matches(sections, gaps, r"INTERNALDATE")
     assert_section_matches(sections, gaps, r"LSUB")
     assert_section_matches(sections, gaps, r"timeout")
