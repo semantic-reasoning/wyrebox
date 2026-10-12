@@ -516,6 +516,7 @@ write_dovecot_config (E2eFixture *fixture)
             "mail_driver = wyrebox\n"
             "mailbox_list_layout = wyrebox\n"
             "mail_path =\n"
+            "mail_attachment_detection_options =\n"
             "mail_plugin_dir = %s\n"
             "mail_plugins {\n"
             "  wyrebox = yes\n"
@@ -1054,6 +1055,138 @@ test_restart_preserves_uid_state (E2eFixture *fixture,
     expect_fetch_matches_fixture (fixture, 2, LMTP_FIXTURE);
 }
 
+static gint
+compare_strings (gconstpointer a, gconstpointer b)
+{
+    return g_strcmp0 (*(const char *const *)a, *(const char *const *)b);
+}
+
+/* Returns @flags as a sorted, space-separated set. */
+static char *
+flag_set_string (const char *const *flags)
+{
+    g_autoptr (GPtrArray) sorted = g_ptr_array_new ();
+
+    for (guint i = 0; flags != NULL && flags[i] != NULL; i++) {
+        if (flags[i][0] != '\0' && g_strcmp0 (flags[i], "\\Recent") != 0)
+            g_ptr_array_add (sorted, (gpointer)flags[i]);
+    }
+    g_ptr_array_sort (sorted, compare_strings);
+    g_ptr_array_add (sorted, NULL);
+    return g_strjoinv (" ", (char **)sorted->pdata);
+}
+
+/* Fetches the flags of every message and compares them, as sets, with
+ * @expected, one entry per UID starting at UID 1. */
+static void
+expect_imap_flags (E2eFixture *fixture, const char *const *expected)
+{
+    g_auto (ImapClient) client = { 0 };
+    g_auto (ImapResponse) select = { 0 };
+    g_auto (ImapResponse) fetch = { 0 };
+    g_autoptr (GRegex) regex =
+        multiline_regex (
+        "^\\* \\d+ FETCH \\(UID (\\d+) FLAGS \\(([^)]*)\\)\\)\r$");
+    g_autoptr (GMatchInfo) match = NULL;
+    guint count = 0;
+
+    imap_login (&client, fixture);
+    imap_command (&client, "b", "SELECT INBOX", &select);
+    expect_tagged_ok (&select, "b");
+    g_assert_null (strstr (select.text->str, "$Has"));
+    imap_command (&client, "c", "UID FETCH 1:* (UID FLAGS)", &fetch);
+    expect_tagged_ok (&fetch, "c");
+
+    g_regex_match (regex, fetch.text->str, 0, &match);
+    while (g_match_info_matches (match)) {
+        g_autofree char *uid = g_match_info_fetch (match, 1);
+        g_autofree char *flags = g_match_info_fetch (match, 2);
+        g_auto (GStrv) tokens = g_strsplit (flags, " ", -1);
+        g_autofree char *actual = flag_set_string ((const char *const *)
+                tokens);
+        guint index = (guint)g_ascii_strtoull (uid, NULL, 10) - 1;
+
+        g_assert_cmpuint (index, <, g_strv_length ((char **)expected));
+        g_assert_cmpstr (actual, ==, expected[index]);
+        count++;
+        g_match_info_next (match, NULL);
+    }
+    g_assert_cmpuint (count, ==, g_strv_length ((char **)expected));
+    imap_logout (&client);
+}
+
+/* Compares the daemon flags of every INBOX message, as sets, with
+ * @expected, one entry per UID starting at UID 1. */
+static void
+expect_daemon_flags (E2eFixture *fixture, const char *const *expected)
+{
+    g_auto (WyreboxDaemonMailboxSelectResult) daemon_state = { 0 };
+    g_auto (WyreboxDovecotMailboxUidMapSnapshot) snapshot = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &daemon_state,
+        &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_dovecot_daemon_client_load_uid_map
+            (fixture->socket_path, TEST_ACCOUNT, daemon_state.mailbox_id,
+        daemon_state.kind, daemon_state.uid_validity, &snapshot, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (snapshot.rows->len, ==,
+        g_strv_length ((char **)expected));
+    for (guint i = 0; i < snapshot.rows->len; i++) {
+        const WyreboxDovecotMailboxUidMapRow *row =
+            g_ptr_array_index (snapshot.rows, i);
+        g_autofree char *actual =
+            flag_set_string ((const char *const *)row->flags);
+
+        g_assert_cmpuint (row->uid, >=, 1);
+        g_assert_cmpuint (row->uid, <=, snapshot.rows->len);
+        g_assert_cmpstr (actual, ==, expected[row->uid - 1]);
+    }
+}
+
+static void
+test_store_flags_survive_restart (E2eFixture *fixture,
+    gconstpointer user_data)
+{
+    const char *const expected[] = {
+        "Todo \\Flagged",
+        "\\Flagged \\Seen",
+        NULL
+    };
+    g_auto (ImapClient) client = { 0 };
+    g_auto (ImapResponse) select = { 0 };
+    g_auto (ImapResponse) store_both = { 0 };
+    g_auto (ImapResponse) store_one = { 0 };
+    g_auto (ImapResponse) fetch = { 0 };
+
+    (void)user_data;
+
+    imap_login (&client, fixture);
+    imap_command (&client, "b", "SELECT INBOX", &select);
+    expect_tagged_ok (&select, "b");
+    imap_command (&client, "c", "UID STORE 1:2 +FLAGS (\\Flagged Todo)",
+        &store_both);
+    expect_tagged_ok (&store_both, "c");
+    imap_command (&client, "d", "UID STORE 2 -FLAGS (Todo)", &store_one);
+    expect_tagged_ok (&store_one, "d");
+    imap_command (&client, "e", "UID FETCH 2 (BODY[])", &fetch);
+    expect_tagged_ok (&fetch, "e");
+    g_assert_null (strstr (fetch.text->str, "$Has"));
+    imap_logout (&client);
+
+    expect_daemon_flags (fixture, expected);
+    expect_imap_flags (fixture, expected);
+
+    restart_daemon_and_master (fixture);
+
+    expect_daemon_flags (fixture, expected);
+    expect_imap_flags (fixture, expected);
+    expect_fetch_matches_fixture (fixture, 1, PIPE_FIXTURE);
+    expect_fetch_matches_fixture (fixture, 2, LMTP_FIXTURE);
+}
+
 static gboolean
 env_file_is (const char *name, GFileTest test)
 {
@@ -1112,6 +1245,8 @@ main (int argc, char **argv)
         test_fetch_lmtp_delivery, fixture_tear_down);
     g_test_add ("/e2e/restart-preserves-uid-state", E2eFixture, NULL,
         fixture_set_up, test_restart_preserves_uid_state, fixture_tear_down);
+    g_test_add ("/e2e/store-flags-survive-restart", E2eFixture, NULL,
+        fixture_set_up, test_store_flags_survive_restart, fixture_tear_down);
 
     return g_test_run ();
 }

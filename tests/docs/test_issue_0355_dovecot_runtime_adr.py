@@ -96,8 +96,29 @@ def main() -> None:
         re.MULTILINE,
     ), "ADR must show the multi-line socket import_environment block"
 
+    assert_section_matches(sections, decision, r"\[READ-WRITE\]")
+    assert_section_matches(sections, decision, r"FlagKeywordUpdateRequest")
+    assert_section_matches(sections, decision, r"transaction_commit")
+    assert_section_matches(sections, decision, r"\[CANNOT\]")
+    assert_section_matches(sections, decision, r"Expunge ignored")
+    assert_section_matches(sections, decision, r"add-flags")
+    assert re.search(
+        r"^\s*mail_attachment_detection_options =\s*$",
+        sections[decision],
+        re.MULTILINE,
+    ), "ADR config example must disable attachment keywords"
+
     gaps = "## Consequences And Known Gaps"
-    assert_section_matches(sections, gaps, r"#313")
+    assert not re.search(r"until #313", sections[gaps]), (
+        "Known Gaps must not claim flag changes wait for #313"
+    )
+    assert_section_matches(sections, gaps, r"#374")
+    assert_section_matches(sections, gaps, r"PERMANENTFLAGS")
+    assert_section_matches(sections, gaps, r"round trip")
+    assert_section_matches(sections, gaps, r"#375")
+    assert_section_matches(sections, gaps, r"STORE on a view is untested")
+    assert_section_matches(sections, gaps, r"CONDSTORE")
+    assert_section_matches(sections, gaps, r"autoexpunge")
     assert_section_matches(sections, gaps, r"#314")
     assert_section_matches(sections, gaps, r"blocking")
     assert_section_matches(sections, gaps, r"compile coverage")

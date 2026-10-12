@@ -105,6 +105,8 @@ def check_index_mailbox(text: str) -> None:
             "flag changes sent through the daemon client")
     require(r"index_transaction_rollback\s*\(", text,
             "refused transactions rolled back")
+    require(r"parsed_mail_attachment_detection_add_flags", text,
+            "attachment $-keywords refused at storage creation")
     forbid(r"\b(malloc|calloc|realloc|strdup)\s*\(", text,
            "libc allocation outside Dovecot pools and GLib")
 
