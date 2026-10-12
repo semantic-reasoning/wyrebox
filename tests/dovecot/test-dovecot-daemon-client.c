@@ -979,7 +979,8 @@ test_dovecot_daemon_client_list_daemon_error_fails_cleanly (void)
     g_assert_false (wyrebox_dovecot_daemon_client_list_mailboxes (socket_path,
         "account-1", "", &result, &error));
 
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_error (error, WYREBOX_DOVECOT_DAEMON_CLIENT_ERROR,
+        WYREBOX_DAEMON_ERROR_NOT_FOUND);
     assert_mailbox_list_result_is_cleared (&result);
     fake_server_join (&server);
     remove_tree (root);
@@ -1266,7 +1267,8 @@ test_dovecot_daemon_client_fetch_message_bytes_returns_daemon_error (void)
             WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
             77, 42, "message-1", &error);
     g_assert_null (payload);
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_error (error, WYREBOX_DOVECOT_DAEMON_CLIENT_ERROR,
+        WYREBOX_DAEMON_ERROR_NOT_FOUND);
     g_assert_nonnull (g_strstr_len (error->message, -1, "mailbox not found"));
     fake_server_join (&server);
     remove_tree (root);
@@ -1592,7 +1594,8 @@ test_dovecot_daemon_client_daemon_error_fails_cleanly (void)
     g_assert_false (wyrebox_dovecot_daemon_client_select_mailbox (socket_path,
         "account-1", "Projects", &result, &error));
 
-    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_error (error, WYREBOX_DOVECOT_DAEMON_CLIENT_ERROR,
+        WYREBOX_DAEMON_ERROR_NOT_FOUND);
     assert_result_is_cleared (&result);
     fake_server_join (&server);
     remove_tree (root);

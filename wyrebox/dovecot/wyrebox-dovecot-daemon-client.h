@@ -1,5 +1,6 @@
 #pragma once
 
+#include "wyrebox-daemon-error.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
 #include <glib-object.h>
 
@@ -7,6 +8,14 @@
 
 /* *INDENT-OFF* */
 G_BEGIN_DECLS
+
+/* Errors the daemon reported in an error response use this domain, with the
+ * daemon's WyreboxDaemonErrorClass as the code. Transport and decoding
+ * failures stay in G_IO_ERROR. */
+#define WYREBOX_DOVECOT_DAEMON_CLIENT_ERROR \
+    (wyrebox_dovecot_daemon_client_error_quark ())
+
+GQuark wyrebox_dovecot_daemon_client_error_quark (void);
 
 typedef struct
 {

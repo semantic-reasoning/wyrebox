@@ -63,3 +63,40 @@ if have_dovecot_backend and dovecot_uses_system_headers
     depends: wyrebox_dovecot_plugin_module,
   )
 endif
+
+if capnp_serialization_found
+  dovecot_imap_real_daemon_env = {
+    'WYREBOXD_EXECUTABLE': wyreboxd.full_path(),
+    'WYREBOX_POSTFIX_PIPE_EXECUTABLE': wyrebox_postfix_pipe.full_path(),
+    'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() / 'tests' /
+      'object-store' / 'fixtures',
+  }
+  dovecot_imap_real_daemon_depends = [wyreboxd, wyrebox_postfix_pipe]
+  if have_dovecot_backend and dovecot_uses_system_headers
+    dovecot_imap_real_daemon_env += {
+      'WYREBOX_DOVECOT_PLUGIN': wyrebox_dovecot_plugin_module.full_path(),
+    }
+    dovecot_imap_real_daemon_depends += [wyrebox_dovecot_plugin_module]
+  endif
+  dovecot_imap = find_program(
+    'imap',
+    dirs: ['/usr/lib/dovecot'],
+    required: false,
+  )
+  if dovecot_imap.found()
+    dovecot_imap_real_daemon_env += {'DOVECOT_IMAP': dovecot_imap.full_path()}
+  endif
+
+  dovecot_imap_real_daemon_test = executable(
+    'test-dovecot-imap-real-daemon',
+    'test-dovecot-imap-real-daemon.c',
+    dependencies: [wyrebox_dep],
+  )
+  test(
+    'dovecot imap real daemon',
+    dovecot_imap_real_daemon_test,
+    depends: dovecot_imap_real_daemon_depends,
+    env: dovecot_imap_real_daemon_env,
+    timeout: 120,
+  )
+endif
