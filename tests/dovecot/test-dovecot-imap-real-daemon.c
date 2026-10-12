@@ -437,9 +437,33 @@ compare_strings (gconstpointer a, gconstpointer b)
     return g_strcmp0 (*(const char *const *)a, *(const char *const *)b);
 }
 
-/* Compares FETCH FLAGS as a set; \Recent depends on the session. */
 static void
-assert_fetch_flags (const char *output, guint uid,
+assert_flag_set (const char *const *actual, const char *const *expected)
+{
+    g_autoptr (GPtrArray) got = g_ptr_array_new ();
+    g_autoptr (GPtrArray) wanted = g_ptr_array_new ();
+
+    for (guint i = 0; actual[i] != NULL; i++)
+        g_ptr_array_add (got, (gpointer)actual[i]);
+    for (guint i = 0; expected[i] != NULL; i++)
+        g_ptr_array_add (wanted, (gpointer)expected[i]);
+    g_ptr_array_sort (got, compare_strings);
+    g_ptr_array_sort (wanted, compare_strings);
+
+    g_assert_cmpuint (got->len, ==, wanted->len);
+    for (guint i = 0; i < got->len; i++) {
+        g_assert_cmpstr (g_ptr_array_index (got, i), ==,
+            g_ptr_array_index (wanted, i));
+    }
+}
+
+/*
+ * Compares the last FLAGS reported for message @seq as a set. Pipelined
+ * commands may report flag changes before earlier tagged replies, and
+ * \Recent depends on the session.
+ */
+static void
+assert_fetch_flags (const char *output, guint seq,
     const char *const *expected)
 {
     g_autofree char *pattern = NULL;
@@ -448,30 +472,26 @@ assert_fetch_flags (const char *output, guint uid,
     g_autofree char *flags = NULL;
     g_auto (GStrv) tokens = NULL;
     g_autoptr (GPtrArray) actual = g_ptr_array_new ();
-    g_autoptr (GPtrArray) wanted = g_ptr_array_new ();
 
-    pattern = g_strdup_printf ("\\* \\d+ FETCH \\(UID %u FLAGS \\(([^)]*)\\)",
-            uid);
-    regex = g_regex_new (pattern, 0, 0, NULL);
+    pattern =
+        g_strdup_printf ("^\\* %u FETCH \\([^\\r\\n]*?FLAGS \\(([^)]*)\\)",
+            seq);
+    regex = g_regex_new (pattern, G_REGEX_MULTILINE, 0, NULL);
     g_assert_nonnull (regex);
     g_assert_true (g_regex_match (regex, output, 0, &match));
-    flags = g_match_info_fetch (match, 1);
+    while (g_match_info_matches (match)) {
+        g_free (flags);
+        flags = g_match_info_fetch (match, 1);
+        g_match_info_next (match, NULL);
+    }
     tokens = g_strsplit (flags, " ", -1);
 
     for (guint i = 0; tokens[i] != NULL; i++) {
         if (tokens[i][0] != '\0' && g_strcmp0 (tokens[i], "\\Recent") != 0)
             g_ptr_array_add (actual, tokens[i]);
     }
-    for (guint i = 0; expected[i] != NULL; i++)
-        g_ptr_array_add (wanted, (gpointer)expected[i]);
-    g_ptr_array_sort (actual, compare_strings);
-    g_ptr_array_sort (wanted, compare_strings);
-
-    g_assert_cmpuint (actual->len, ==, wanted->len);
-    for (guint i = 0; i < actual->len; i++) {
-        g_assert_cmpstr (g_ptr_array_index (actual, i), ==,
-            g_ptr_array_index (wanted, i));
-    }
+    g_ptr_array_add (actual, NULL);
+    assert_flag_set ((const char *const *)actual->pdata, expected);
 }
 
 static void
@@ -516,6 +536,81 @@ test_select_reflects_daemon_flags (ImapRealDaemonFixture *fixture,
     assert_fetch_flags (session.output, 1, expected);
     g_assert_nonnull (strstr (session.output, "* SEARCH\r\n"));
     g_assert_nonnull (strstr (session.output, "\r\nc OK"));
+}
+
+/* Reads UID 1's flags straight from the daemon, bypassing Dovecot. */
+static void
+assert_daemon_flags (ImapRealDaemonFixture *fixture,
+    const char *const *expected)
+{
+    g_auto (WyreboxDaemonMailboxSelectResult) daemon_state = { 0 };
+    g_auto (WyreboxDovecotMailboxUidMapSnapshot) snapshot = { 0 };
+    g_autoptr (GError) error = NULL;
+    const WyreboxDovecotMailboxUidMapRow *row;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &daemon_state,
+        &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_dovecot_daemon_client_load_uid_map
+            (fixture->socket_path, TEST_ACCOUNT, daemon_state.mailbox_id,
+        daemon_state.kind, daemon_state.uid_validity, &snapshot, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (snapshot.rows->len, ==, 1);
+    row = g_ptr_array_index (snapshot.rows, 0);
+    g_assert_cmpuint (row->uid, ==, 1);
+    assert_flag_set ((const char *const *)row->flags, expected);
+}
+
+static void
+test_store_updates_daemon_flags (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    const char *const expected[] = { "\\Flagged", "Project-X", "Todo", NULL };
+    g_autofree char *config_path = NULL;
+    g_auto (ImapSession) session = { 0 };
+
+    (void)user_data;
+
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b STORE 1 +FLAGS (\\Seen)\r\n"
+        "c STORE 1 -FLAGS (\\Seen)\r\n"
+        "d STORE 1 FLAGS (\\Seen \\Flagged Project-X)\r\n"
+        "e UID STORE 1 +FLAGS (Todo)\r\n"
+        "f STORE 1 -FLAGS (\\Seen)\r\n"
+        "g FETCH 1 (UID FLAGS)\r\nz LOGOUT\r\n", &session);
+
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+    g_assert_nonnull (strstr (session.output, "\r\nc OK"));
+    g_assert_nonnull (strstr (session.output, "\r\nd OK"));
+    g_assert_nonnull (strstr (session.output, "\r\ne OK"));
+    g_assert_nonnull (strstr (session.output, "\r\nf OK"));
+    g_assert_nonnull (strstr (session.output, "\r\ng OK"));
+    assert_fetch_flags (session.output, 1, expected);
+    assert_daemon_flags (fixture, expected);
+}
+
+static void
+test_store_rejected_keyword_reverts (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    const char *const expected[] = { NULL };
+    g_autofree char *config_path = NULL;
+    g_auto (ImapSession) session = { 0 };
+
+    (void)user_data;
+
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b STORE 1 +FLAGS (bad+kw)\r\n"
+        "c NOOP\r\n"
+        "d FETCH 1 (UID FLAGS)\r\nz LOGOUT\r\n", &session);
+
+    g_assert_nonnull (strstr (session.output, "\r\nb NO [CANNOT]"));
+    g_assert_nonnull (strstr (session.output, "\r\nc OK"));
+    assert_fetch_flags (session.output, 1, expected);
+    assert_daemon_flags (fixture, expected);
 }
 
 static void
@@ -687,6 +782,12 @@ main (int argc, char **argv)
     g_test_add ("/dovecot/imap/fresh-delivery-is-unseen",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_fresh_delivery_is_unseen, fixture_tear_down);
+    g_test_add ("/dovecot/imap/store-updates-daemon-flags",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_store_updates_daemon_flags, fixture_tear_down);
+    g_test_add ("/dovecot/imap/store-rejected-keyword-reverts",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_store_rejected_keyword_reverts, fixture_tear_down);
     g_test_add ("/dovecot/imap/status-matches-daemon-state",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_status_matches_daemon_state, fixture_tear_down);

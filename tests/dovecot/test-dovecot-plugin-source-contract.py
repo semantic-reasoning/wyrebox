@@ -93,6 +93,15 @@ def check_index_mailbox(text: str) -> None:
     require(r"\.save_begin\s*=\s*wyrebox_dovecot_save_begin,", text,
             "saving stays refused until the daemon owns writes")
     require(r"MAIL_ERROR_NOTPOSSIBLE", text, "read-only refusal")
+    require(r"\.transaction_begin\s*=\s*wyrebox_dovecot_transaction_begin", text,
+            "transaction tracking flag changes")
+    require(r"\.transaction_commit\s*=\s*wyrebox_dovecot_transaction_commit",
+            text, "flag changes pushed at transaction commit")
+    require(r"mail_index_sync_next\s*\(", text, "index flag records read")
+    require(r"wyrebox_dovecot_daemon_client_update_flags\s*\(", text,
+            "flag changes sent through the daemon client")
+    require(r"index_transaction_rollback\s*\(", text,
+            "refused transactions rolled back")
     forbid(r"\b(malloc|calloc|realloc|strdup)\s*\(", text,
            "libc allocation outside Dovecot pools and GLib")
 
