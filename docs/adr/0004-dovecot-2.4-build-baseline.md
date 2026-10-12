@@ -63,14 +63,12 @@ packaged there.
 
 ## Consequences And Known Gaps
 
-- Compiling against Dovecot `2.4.2` does not make the plugin work inside a real
-  `imap` process. The plugin still lacks lib-index integration; issue #355
-  ports it to the real storage runtime and migrates or retires the fixture
-  mailbox smoke test.
-- The loader smoke test still links against a Dovecot `liblib.a` archive,
-  which the distribution does not ship, so it is not available in system
-  mode. Loading the plugin through the installed Dovecot libraries belongs to
-  issue #355.
+- Resolved by ADR 0005 (issue #355): the plugin now runs inside a real `imap`
+  process on Dovecot's index runtime, and a scripted IMAP test replaces the
+  fixture mailbox smoke test.
+- Resolved by ADR 0005 (issue #355): the `liblib.a` loader smoke test is
+  retired. The real `imap` test loads the plugin through the installed
+  Dovecot libraries.
 - The existing `ubuntu-24.04` CI jobs never enabled the Dovecot backend, so
   they are not Dovecot baselines. They stay for the clang matrix and the arm64
   sanitizer until equivalent coverage exists on the `ubuntu-26.04` runner.
