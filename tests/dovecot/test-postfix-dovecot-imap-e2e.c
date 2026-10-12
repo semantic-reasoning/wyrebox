@@ -921,6 +921,139 @@ test_fetch_lmtp_delivery (E2eFixture *fixture, gconstpointer user_data)
     expect_fetch_matches_fixture (fixture, 2, LMTP_FIXTURE);
 }
 
+typedef struct
+{
+    guint uid_validity;
+    guint uid_next;
+    guint exists;
+    /* Space-separated UIDs from "UID FETCH 1:* (UID)", in response order. */
+    char *uids;
+} MailboxSnapshot;
+
+static void
+mailbox_snapshot_clear (MailboxSnapshot *snapshot)
+{
+    g_clear_pointer (&snapshot->uids, g_free);
+}
+
+/* *INDENT-OFF* */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (MailboxSnapshot, mailbox_snapshot_clear)
+/* *INDENT-ON* */
+
+static GRegex *
+multiline_regex (const char *pattern)
+{
+    g_autoptr (GError) error = NULL;
+    GRegex *regex = g_regex_new (pattern, G_REGEX_MULTILINE, 0, &error);
+
+    g_assert_no_error (error);
+    g_assert_nonnull (regex);
+    return regex;
+}
+
+/* Returns the number captured by the first group of @pattern in @text. */
+static guint
+match_uint (const char *text, const char *pattern)
+{
+    g_autoptr (GRegex) regex = multiline_regex (pattern);
+    g_autoptr (GMatchInfo) match = NULL;
+    g_autofree char *number = NULL;
+
+    if (!g_regex_match (regex, text, 0, &match))
+        g_test_message ("no match for %s in:\n%s", pattern, text);
+    g_assert_true (g_match_info_matches (match));
+    number = g_match_info_fetch (match, 1);
+    return (guint)g_ascii_strtoull (number, NULL, 10);
+}
+
+static void
+take_mailbox_snapshot (E2eFixture *fixture, MailboxSnapshot *snapshot)
+{
+    g_auto (ImapClient) client = { 0 };
+    g_auto (ImapResponse) select = { 0 };
+    g_auto (ImapResponse) fetch = { 0 };
+    g_autoptr (GRegex) uid_regex =
+        multiline_regex ("^\\* \\d+ FETCH \\(UID (\\d+)\\)\r$");
+    g_autoptr (GMatchInfo) match = NULL;
+    g_autoptr (GString) uids = g_string_new (NULL);
+
+    imap_login (&client, fixture);
+    imap_command (&client, "b", "SELECT INBOX", &select);
+    expect_tagged_ok (&select, "b");
+    snapshot->uid_validity = match_uint (select.text->str,
+            "\\[UIDVALIDITY (\\d+)\\]");
+    snapshot->uid_next = match_uint (select.text->str,
+            "\\[UIDNEXT (\\d+)\\]");
+    snapshot->exists = match_uint (select.text->str,
+            "^\\* (\\d+) EXISTS\r$");
+
+    imap_command (&client, "c", "UID FETCH 1:* (UID)", &fetch);
+    expect_tagged_ok (&fetch, "c");
+    g_regex_match (uid_regex, fetch.text->str, 0, &match);
+    while (g_match_info_matches (match)) {
+        g_autofree char *uid = g_match_info_fetch (match, 1);
+
+        g_string_append_printf (uids, "%s%s", uids->len > 0 ? " " : "", uid);
+        g_match_info_next (match, NULL);
+    }
+    snapshot->uids = g_string_free (g_steal_pointer (&uids), FALSE);
+    imap_logout (&client);
+}
+
+static void
+restart_daemon_and_master (E2eFixture *fixture)
+{
+    gboolean master_stopped = stop_process (&fixture->master);
+    gboolean daemon_stopped = stop_process (&fixture->daemon);
+
+    if (!master_stopped || !daemon_stopped)
+        dump_dovecot_logs ();
+    g_assert_true (master_stopped);
+    g_assert_true (daemon_stopped);
+    g_assert_false (g_file_test (fixture->socket_path, G_FILE_TEST_EXISTS));
+
+    start_daemon (fixture);
+    start_master (fixture);
+}
+
+static void
+test_restart_preserves_uid_state (E2eFixture *fixture,
+    gconstpointer user_data)
+{
+    g_auto (MailboxSnapshot) before = { 0 };
+    g_auto (MailboxSnapshot) after = { 0 };
+    g_auto (WyreboxDaemonMailboxSelectResult) daemon_state = { 0 };
+    g_autoptr (GError) error = NULL;
+    gboolean selected;
+
+    (void)user_data;
+
+    take_mailbox_snapshot (fixture, &before);
+    g_assert_cmpuint (before.exists, ==, 2);
+    g_assert_cmpuint (before.uid_next, ==, 3);
+    g_assert_cmpstr (before.uids, ==, "1 2");
+
+    restart_daemon_and_master (fixture);
+
+    take_mailbox_snapshot (fixture, &after);
+    g_assert_cmpuint (after.uid_validity, ==, before.uid_validity);
+    g_assert_cmpuint (after.uid_next, ==, before.uid_next);
+    g_assert_cmpuint (after.exists, ==, before.exists);
+    g_assert_cmpstr (after.uids, ==, before.uids);
+
+    selected = wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &daemon_state,
+            &error);
+    g_assert_no_error (error);
+    g_assert_true (selected);
+    g_assert_cmpuint (before.uid_validity, !=, 0);
+    g_assert_cmpuint (daemon_state.uid_validity, ==, before.uid_validity);
+    g_assert_cmpuint (daemon_state.uid_validity, ==, after.uid_validity);
+
+    expect_fetch_matches_fixture (fixture, 1, PIPE_FIXTURE);
+    expect_fetch_matches_fixture (fixture, 2, LMTP_FIXTURE);
+}
+
 static gboolean
 env_file_is (const char *name, GFileTest test)
 {
@@ -970,6 +1103,8 @@ main (int argc, char **argv)
         test_fetch_pipe_delivery, fixture_tear_down);
     g_test_add ("/e2e/fetch-lmtp-delivery", E2eFixture, NULL, fixture_set_up,
         test_fetch_lmtp_delivery, fixture_tear_down);
+    g_test_add ("/e2e/restart-preserves-uid-state", E2eFixture, NULL,
+        fixture_set_up, test_restart_preserves_uid_state, fixture_tear_down);
 
     return g_test_run ();
 }
