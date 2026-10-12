@@ -830,6 +830,12 @@ test(
 )
 
 test(
+  'docs ci action runtimes',
+  python,
+  args: files('tests/docs/test_ci_action_runtimes.py'),
+)
+
+test(
   'docs issue 0354 ubuntu 26.04 ci',
   python,
   args: files('tests/docs/test_issue_0354_ubuntu_26_04_ci.py'),

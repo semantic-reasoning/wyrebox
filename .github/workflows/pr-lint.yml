@@ -189,7 +189,7 @@ jobs:
       - name: Cache source-built DuckDB
         if: matrix.arch == 'arm64'
         id: duckdb-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.DUCKDB_ROOT }}
           key: duckdb-${{ env.DUCKDB_VERSION }}-${{ matrix.arch }}
