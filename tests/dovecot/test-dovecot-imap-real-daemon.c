@@ -11,6 +11,9 @@
 #include <unistd.h>
 
 #define MESON_TEST_SKIP 77
+#define WYREBOX_LIST_SETTINGS \
+        "mailbox_list_layout = wyrebox\nmail_path =\n" \
+        "mail_attachment_detection_options =\n"
 #define TEST_ACCOUNT "account-1"
 
 typedef struct
@@ -340,7 +343,7 @@ test_list_shows_daemon_inbox (ImapRealDaemonFixture *fixture,
     (void)user_data;
 
     config_path = write_dovecot_config (fixture, fixture->socket_path,
-            "mailbox_list_layout = wyrebox\nmail_path =\n");
+            WYREBOX_LIST_SETTINGS);
     run_imap (config_path, "a LIST \"\" \"*\"\r\nz LOGOUT\r\n", &session);
 
     g_assert_nonnull (strstr (session.output, "* PREAUTH"));
@@ -363,7 +366,7 @@ test_list_uses_configured_socket (ImapRealDaemonFixture *fixture,
     missing_socket = g_build_filename (fixture->root, "run", "missing.sock",
             NULL);
     config_path = write_dovecot_config (fixture, missing_socket,
-            "mailbox_list_layout = wyrebox\nmail_path =\n");
+            WYREBOX_LIST_SETTINGS);
     run_imap (config_path, "a LIST \"\" \"*\"\r\nz LOGOUT\r\n", &session);
 
     g_assert_nonnull (strstr (session.output, "\r\na NO [UNAVAILABLE]"));
@@ -392,11 +395,30 @@ test_storage_requires_wyrebox_layout (ImapRealDaemonFixture *fixture,
         "requires mailbox_list_layout = wyrebox"));
 }
 
+static void
+test_storage_refuses_attachment_flags (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_auto (ImapSession) session = { 0 };
+
+    (void)user_data;
+
+    config_path = write_dovecot_config (fixture, fixture->socket_path,
+            "mailbox_list_layout = wyrebox\nmail_path =\n"
+            "mail_attachment_detection_options = add-flags\n");
+    run_imap (config_path, "a LIST \"\" \"*\"\r\nz LOGOUT\r\n", &session);
+
+    g_assert_null (strstr (session.output, "\r\na OK"));
+    g_assert_nonnull (strstr (session.errors,
+        "requires mail_attachment_detection_options without add-flags"));
+}
+
 static char *
 write_wyrebox_config (ImapRealDaemonFixture *fixture, const char *socket_path)
 {
     return write_dovecot_config (fixture, socket_path,
-               "mailbox_list_layout = wyrebox\nmail_path =\n");
+               WYREBOX_LIST_SETTINGS);
 }
 
 static void
@@ -848,6 +870,9 @@ main (int argc, char **argv)
     g_test_add ("/dovecot/imap/storage-requires-wyrebox-layout",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_storage_requires_wyrebox_layout, fixture_tear_down);
+    g_test_add ("/dovecot/imap/storage-refuses-attachment-flags",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_storage_refuses_attachment_flags, fixture_tear_down);
     g_test_add ("/dovecot/imap/select-matches-daemon-state",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_select_matches_daemon_state, fixture_tear_down);

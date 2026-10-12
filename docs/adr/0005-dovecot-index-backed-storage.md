@@ -4,6 +4,7 @@
 
 Accepted for issue #355. Follow-up changes under issue #355 implement it. Until
 each lands, the plugin keeps the pre-port behavior that ADR 0004 describes.
+Issue #313 adds flag and keyword changes.
 
 ## Context
 
@@ -64,6 +65,7 @@ They model the old design and cannot exercise lib-index at all.
   mail_driver = wyrebox
   mailbox_list_layout = wyrebox
   mail_path =
+  mail_attachment_detection_options =
   mail_plugins {
     wyrebox = yes
   }
@@ -83,9 +85,34 @@ They model the old design and cannot exercise lib-index at all.
   variable, which `import_environment` passes into the `imap` process. It
   defaults to `/run/wyrebox/wyrebox.sock`. The account identity is the
   Dovecot user name.
-- Until flag and mutation support land, the storage is read-only. SELECT
-  answers `[READ-ONLY]`, and save, copy, and expunge fail with a
-  not-possible error.
+- Ordinary mailboxes answer SELECT with `[READ-WRITE]`. EXAMINE and virtual
+  mailbox views stay read-only, and a flag change committed on a read-only
+  mailbox fails with a not-possible error. Save and copy also fail with a
+  not-possible error until #314.
+- Flag and keyword changes reach `wyreboxd` when the Dovecot transaction
+  commits. The `transaction_commit` wrapper commits the index first, then
+  reads the pending flag records and sends at most one
+  `FlagKeywordUpdateRequest` SET and one CLEAR per changed message, in
+  ascending UID order. The daemon journals
+  each change, and the plugin updates its copy of the row only after the
+  daemon accepts it. This covers STORE and the implicit `\Seen` of a
+  `BODY[]` fetch.
+  - A keyword the daemon cannot represent, or an unavailable or conflicting
+    daemon, stops the push: that message and the remaining ones revert to
+    the daemon's values. A daemon rejection of a single message reverts only
+    that message. Rejections fail the command with `[CANNOT]`.
+  - A message the daemon no longer has is skipped and disappears at the
+    next sync.
+- The daemon has no expunge operation yet, so the storage refuses expunges
+  with a permission error. EXPUNGE and UID EXPUNGE answer
+  `OK Expunge ignored`, CLOSE answers `OK Closed without expunging`, and
+  messages keep their `\Deleted` flag.
+- Dovecot `2.4` adds `$HasAttachment` and `$HasNoAttachment` keywords by
+  default, and the daemon cannot store `$` keywords. The storage refuses to
+  start when `mail_attachment_detection_options` includes `add-flags`; the
+  example above sets `mail_attachment_detection_options =` empty. Tools
+  that set those keywords directly, such as `doveadm rebuild attachments`,
+  fail like any other `$` keyword.
 - Fixture mode no longer compiles the plugin. The real port needs
   lib-index headers that the simplified fixture does not and should not copy.
   Fixture mode keeps the source and build contract checks only.
@@ -98,6 +125,10 @@ They model the old design and cannot exercise lib-index at all.
     UIDVALIDITY, UIDNEXT and the message count with the daemon's own values,
     and compares the fetched bytes with the golden file.
   - It also covers the missing-mailbox and daemon-down error paths.
+  - It covers STORE, the implicit `\Seen`, EXAMINE, the refused expunge, and
+    a rejected keyword, checking both the IMAP replies and the daemon flags.
+    The Postfix-to-IMAP end-to-end test checks that stored flags survive a
+    daemon and Dovecot restart without changing the message bytes.
   - It runs `imap` as a non-root user, because `imap` refuses to run as root
     without `mail_uid`. When Dovecot is missing or the test runs as root, it
     reports a skip.
@@ -119,8 +150,18 @@ They model the old design and cannot exercise lib-index at all.
 
 ## Consequences And Known Gaps
 
-- Changing flags and keywords stays unsupported until #313. APPEND, COPY,
-  MOVE, and EXPUNGE stay unsupported until #314.
+- APPEND, COPY, MOVE, and EXPUNGE stay unsupported until #314. Because
+  refused expunges keep `\Deleted` messages, clients that hide deleted
+  messages diverge from the server. Do not enable autoexpunge or POP3 on
+  WyreBox namespaces until #314: their expunges log commit errors.
+- The daemon accepts only `[A-Za-z0-9_.-]` keywords, compared
+  case-sensitively. SELECT still advertises `\*` in `PERMANENTFLAGS`, so
+  client keywords such as `$Forwarded` or `$Junk` fail with `[CANNOT]`
+  until #374.
+- Every changed message costs up to two daemon round trips at commit. A
+  batched flag update is a follow-up under #375.
+- The index is rebuilt per session, so CONDSTORE and QRESYNC modification
+  sequences do not survive a reconnect.
 - Daemon calls are blocking and run on the `imap` ioloop, as `pop3c` does.
   Async daemon calls are a follow-up.
 - Builders without Dovecot `2.4.2` headers lose plugin compile coverage. Only
@@ -132,7 +173,8 @@ They model the old design and cannot exercise lib-index at all.
 - INTERNALDATE and the save date come from the message `Date:` header
   rather than the WyreBox delivery time.
 - Virtual mailbox views report no flags or keywords, because the daemon UID
-  map for a view carries none.
+  map for a view carries none. No scripted IMAP test selects a view yet, so
+  the read-only refusal of STORE on a view is untested at the IMAP level.
 - LSUB and `LIST (SUBSCRIBED)` return every mailbox, and subscribing is not
   supported. This must be settled before Thunderbird smoke testing.
 - The daemon client sets no socket timeout, so a stuck `wyreboxd` blocks the

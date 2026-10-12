@@ -1495,13 +1495,6 @@ static void
 wyrebox_dovecot_mail_update_keywords (struct mail *_mail,
     enum modify_type modify_type, struct mail_keywords *keywords)
 {
-    struct index_mail *imail = INDEX_MAIL (_mail);
-
-    /* Attachment keywords are derived by Dovecot on every body parse and
-     * are not WyreBox state. */
-    if (imail->data.attachment_flags_updating) {
-        return;
-    }
     wyrebox_dovecot_mail_transaction (_mail)->flags_changed = TRUE;
     index_mail_update_keywords (_mail, modify_type, keywords);
 }
@@ -1673,6 +1666,13 @@ wyrebox_dovecot_storage_create (struct mail_storage *storage,
         || strcmp (ns->list->name, WYREBOX_DOVECOT_LIST_NAME) != 0) {
         *error_r = "mail_driver = wyrebox requires mailbox_list_layout = "
             WYREBOX_DOVECOT_LIST_NAME;
+        return -1;
+    }
+
+    /* Attachment flags are $-keywords the daemon cannot store. */
+    if (storage->set->parsed_mail_attachment_detection_add_flags) {
+        *error_r = "mail_driver = wyrebox requires "
+            "mail_attachment_detection_options without add-flags";
         return -1;
     }
 
