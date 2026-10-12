@@ -89,7 +89,10 @@ def check_index_mailbox(text: str) -> None:
     require(r"index_mail_init_stream\s*\(", text,
             "message stream through index_mail")
     require(r"\.is_readonly\s*=\s*wyrebox_dovecot_mailbox_is_readonly", text,
-            "read-only mailboxes")
+            "views stay read-only")
+    require(r"\.expunge\s*=\s*wyrebox_dovecot_mail_expunge", text,
+            "expunge refused until the daemon owns expunges")
+    require(r"MAIL_ERROR_PERM", text, "expunge refusal keeps CLOSE working")
     require(r"\.save_begin\s*=\s*wyrebox_dovecot_save_begin,", text,
             "saving stays refused until the daemon owns writes")
     require(r"MAIL_ERROR_NOTPOSSIBLE", text, "read-only refusal")

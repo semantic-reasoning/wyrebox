@@ -428,7 +428,7 @@ test_select_matches_daemon_state (ImapRealDaemonFixture *fixture,
     g_assert_nonnull (strstr (session.output, uidvalidity));
     g_assert_nonnull (strstr (session.output, uidnext));
     g_assert_nonnull (strstr (session.output, "[UNSEEN 1]"));
-    g_assert_nonnull (strstr (session.output, "\r\na OK [READ-ONLY]"));
+    g_assert_nonnull (strstr (session.output, "\r\na OK [READ-WRITE]"));
 }
 
 static gint
@@ -614,6 +614,81 @@ test_store_rejected_keyword_reverts (ImapRealDaemonFixture *fixture,
 }
 
 static void
+test_fetch_body_marks_seen (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    const char *const none[] = { NULL };
+    const char *const seen[] = { "\\Seen", NULL };
+    g_autofree char *config_path = NULL;
+    g_auto (ImapSession) peek = { 0 };
+    g_auto (ImapSession) fetch = { 0 };
+
+    (void)user_data;
+
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b FETCH 1 (BODY.PEEK[])\r\nz LOGOUT\r\n", &peek);
+    g_assert_nonnull (strstr (peek.output, "\r\nb OK"));
+    assert_daemon_flags (fixture, none);
+
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b FETCH 1 (BODY[])\r\nz LOGOUT\r\n", &fetch);
+    g_assert_nonnull (strstr (fetch.output, "\r\nb OK"));
+    assert_fetch_flags (fetch.output, 1, seen);
+    assert_daemon_flags (fixture, seen);
+}
+
+static void
+test_examine_is_read_only (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    const char *const none[] = { NULL };
+    g_autofree char *config_path = NULL;
+    g_auto (ImapSession) session = { 0 };
+
+    (void)user_data;
+
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, "a EXAMINE INBOX\r\n"
+        "b FETCH 1 (BODY[])\r\n"
+        "c STORE 1 +FLAGS (\\Flagged)\r\nz LOGOUT\r\n", &session);
+
+    g_assert_nonnull (strstr (session.output, "\r\na OK [READ-ONLY]"));
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+    g_assert_nonnull (strstr (session.output, "\r\nc OK Store ignored"));
+    assert_daemon_flags (fixture, none);
+}
+
+static void
+test_expunge_is_refused (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    const char *const deleted[] = { "\\Deleted", NULL };
+    g_autofree char *config_path = NULL;
+    g_auto (ImapSession) session = { 0 };
+
+    (void)user_data;
+
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b STORE 1 +FLAGS (\\Deleted)\r\n"
+        "c EXPUNGE\r\n"
+        "d UID EXPUNGE 1\r\n"
+        "e FETCH 1 (UID FLAGS)\r\n"
+        "f CLOSE\r\nz LOGOUT\r\n", &session);
+
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+    g_assert_nonnull (strstr (session.output, "\r\nc OK Expunge ignored"));
+    g_assert_nonnull (strstr (session.output, "\r\nd OK Expunge ignored"));
+    g_assert_nonnull (strstr (session.output, "\r\ne OK"));
+    g_assert_nonnull (strstr (session.output,
+        "\r\nf OK Closed without expunging"));
+    g_assert_null (strstr (session.output, "* 1 EXPUNGE"));
+    assert_fetch_flags (session.output, 1, deleted);
+    assert_daemon_flags (fixture, deleted);
+}
+
+static void
 test_fresh_delivery_is_unseen (ImapRealDaemonFixture *fixture,
     gconstpointer user_data)
 {
@@ -788,6 +863,15 @@ main (int argc, char **argv)
     g_test_add ("/dovecot/imap/store-rejected-keyword-reverts",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_store_rejected_keyword_reverts, fixture_tear_down);
+    g_test_add ("/dovecot/imap/fetch-body-marks-seen",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_fetch_body_marks_seen, fixture_tear_down);
+    g_test_add ("/dovecot/imap/examine-is-read-only",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_examine_is_read_only, fixture_tear_down);
+    g_test_add ("/dovecot/imap/expunge-is-refused",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_expunge_is_refused, fixture_tear_down);
     g_test_add ("/dovecot/imap/status-matches-daemon-state",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_status_matches_daemon_state, fixture_tear_down);
