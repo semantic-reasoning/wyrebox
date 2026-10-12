@@ -4,7 +4,9 @@
 
 Accepted for issue #8 before any storage plugin implementation. Amended by
 issue #354: the baseline is Dovecot `2.4.2` (ADR 0004). Amended by issue
-#355: fixture mode no longer compiles the plugin (ADR 0005).
+#355: fixture mode no longer compiles the plugin (ADR 0005). Amended by issue
+#315: adds the real-daemon Postfix-to-Dovecot IMAP e2e test, which runs in
+system mode.
 
 ## Scope
 
@@ -38,6 +40,23 @@ System mode (issue #354) builds against an installed `dovecot-dev` instead:
   built (system mode), `imap` is installed, and the user is non-root. Fixture
   mode runs the contract checks only. The fixture-based mailbox and loader smoke tests and the
   `dovecot_loader_*` options are retired.
+- Issue #315: `postfix dovecot imap e2e`
+  (`tests/dovecot/test-postfix-dovecot-imap-e2e.c`) runs the whole delivery
+  path against real processes, under the same Cap'n Proto condition.
+  - It delivers one message with `wyrebox-postfix-pipe` and one through the
+    `wyrebox-postfix-lmtp-delivery` listener, using the argv and LMTP dialog
+    that Postfix `pipe(8)` and `lmtp(8)` use. The test does not start Postfix
+    `master(8)`, which must run as root.
+  - It starts a rootless Dovecot master (`dovecot -F`) with the WyreBox plugin,
+    logs in with `LOGIN` over an `imap-login` Unix listener, and checks LIST,
+    SELECT, and a byte-exact UID FETCH of both messages.
+  - It then restarts `wyreboxd` and the Dovecot master and requires the same
+    UIDVALIDITY, UIDNEXT, EXISTS, and UID list, and the same message bytes.
+  - It skips unless the plugin was built (system mode), `/usr/sbin/dovecot`,
+    `/usr/lib/dovecot/imap-login`, and `/usr/lib/dovecot/imap` are installed,
+    and the user is non-root.
+    With `WYREBOX_E2E_REQUIRE_RUNTIME=1` in the environment it fails instead
+    of skipping.
 
 In both modes Meson additionally requires `cc.get_define('DOVECOT_ABI_VERSION')`
 to equal `"2.4.ABIv2"`. The `dovecot system setup` test configures system mode
