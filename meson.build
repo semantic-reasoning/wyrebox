@@ -730,6 +730,12 @@ test(
   args: files('tests/docs/test_issue_0354_ubuntu_26_04_ci.py'),
 )
 
+test(
+  'docs issue 0377 ci core backtraces',
+  python,
+  args: files('tests/docs/test_issue_0377_ci_core_backtraces.py'),
+)
+
 # Activate the committed hook through a worktree-relative hooksPath. Source
 # archives and unpacked sources nested below another repository deliberately
 # skip this developer setup.

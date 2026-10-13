@@ -94,7 +94,17 @@ jobs:
 
       - name: Test
         run: |
+          ./tools/ci-core-backtraces.sh enable "$RUNNER_TEMP/cores" ||
+            echo "::warning::core dumps are not enabled"
+          ulimit -c unlimited || ulimit -S -c "$(ulimit -H -c)" || true
           meson test -C _build --print-errorlogs
+
+      - name: Print crash backtraces
+        if: failure()
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y --no-install-recommends gdb || true
+          ./tools/ci-core-backtraces.sh report "$RUNNER_TEMP/cores"
 
   pr-build-minimal:
     name: PR build (no Cap'n Proto)
@@ -136,7 +146,17 @@ jobs:
 
       - name: Test
         run: |
+          ./tools/ci-core-backtraces.sh enable "$RUNNER_TEMP/cores" ||
+            echo "::warning::core dumps are not enabled"
+          ulimit -c unlimited || ulimit -S -c "$(ulimit -H -c)" || true
           meson test -C _build --print-errorlogs
+
+      - name: Print crash backtraces
+        if: failure()
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y --no-install-recommends gdb || true
+          ./tools/ci-core-backtraces.sh report "$RUNNER_TEMP/cores"
 
   pr-sanitize:
     name: PR sanitize (${{ matrix.arch }})
