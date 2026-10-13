@@ -177,9 +177,10 @@ wait_with_deadline (GSubprocess *process, guint seconds)
 }
 
 /* Stops @process with SIGTERM, escalating to SIGKILL after the deadline.
- * Returns TRUE when it exited on SIGTERM with status 0. */
+ * Returns TRUE when it exited on SIGTERM with status 0; otherwise logs why,
+ * naming the process as @name. */
 static gboolean
-stop_process (GSubprocess **process)
+stop_process (GSubprocess **process, const char *name)
 {
     gboolean clean;
 
@@ -187,9 +188,21 @@ stop_process (GSubprocess **process)
         return TRUE;
 
     g_subprocess_send_signal (*process, SIGTERM);
-    clean = wait_with_deadline (*process, PROCESS_DEADLINE_SECONDS)
-        && g_subprocess_get_if_exited (*process)
-        && g_subprocess_get_exit_status (*process) == 0;
+    clean = FALSE;
+    if (!wait_with_deadline (*process, PROCESS_DEADLINE_SECONDS)) {
+        g_test_message ("%s ignored SIGTERM for %d s and was killed",
+            name, PROCESS_DEADLINE_SECONDS);
+    } else if (g_subprocess_get_if_signaled (*process)) {
+        int signal_number = g_subprocess_get_term_sig (*process);
+
+        g_test_message ("%s terminated by signal %d (%s)",
+            name, signal_number, g_strsignal (signal_number));
+    } else if (g_subprocess_get_exit_status (*process) != 0) {
+        g_test_message ("%s exited with status %d",
+            name, g_subprocess_get_exit_status (*process));
+    } else {
+        clean = TRUE;
+    }
     g_clear_object (process);
     return clean;
 }
@@ -818,8 +831,8 @@ fixture_tear_down (E2eFixture *fixture, gconstpointer user_data)
 {
     (void)user_data;
 
-    stop_process (&fixture->master);
-    g_assert_true (stop_process (&fixture->daemon));
+    stop_process (&fixture->master, "dovecot");
+    g_assert_true (stop_process (&fixture->daemon, "wyreboxd"));
 
     if (g_getenv ("WYREBOX_KEEP_TEST_ROOT") == NULL)
         remove_tree (fixture->root);
@@ -1004,8 +1017,8 @@ take_mailbox_snapshot (E2eFixture *fixture, MailboxSnapshot *snapshot)
 static void
 restart_daemon_and_master (E2eFixture *fixture)
 {
-    gboolean master_stopped = stop_process (&fixture->master);
-    gboolean daemon_stopped = stop_process (&fixture->daemon);
+    gboolean master_stopped = stop_process (&fixture->master, "dovecot");
+    gboolean daemon_stopped = stop_process (&fixture->daemon, "wyreboxd");
 
     if (!master_stopped || !daemon_stopped)
         dump_dovecot_logs ();

@@ -232,14 +232,37 @@ remove_tree (const char *path)
     g_remove (path);
 }
 
+/*
+ * Stops wyreboxd and fails the test unless it exited with status 0. This uses
+ * g_test_fail() rather than an assertion so the fixture teardown still removes
+ * the test root; wyreboxd inherits stderr, so a sanitizer report is already in
+ * the test log.
+ */
 static void
 stop_daemon (ImapRealDaemonFixture *fixture)
 {
-    if (fixture->daemon != NULL) {
-        g_subprocess_send_signal (fixture->daemon, SIGTERM);
-        g_subprocess_wait (fixture->daemon, NULL, NULL);
-        g_clear_object (&fixture->daemon);
+    g_autoptr (GError) error = NULL;
+
+    if (fixture->daemon == NULL)
+        return;
+
+    g_subprocess_send_signal (fixture->daemon, SIGTERM);
+    if (!g_subprocess_wait (fixture->daemon, NULL, &error)) {
+        g_test_message ("waiting for wyreboxd failed: %s", error->message);
+        g_test_fail ();
+    } else if (!g_subprocess_get_if_exited (fixture->daemon)) {
+        int signal_number = g_subprocess_get_if_signaled (fixture->daemon) ?
+            g_subprocess_get_term_sig (fixture->daemon) : 0;
+
+        g_test_message ("wyreboxd terminated by signal %d (%s)",
+            signal_number, g_strsignal (signal_number));
+        g_test_fail ();
+    } else if (g_subprocess_get_exit_status (fixture->daemon) != 0) {
+        g_test_message ("wyreboxd exited with status %d",
+            g_subprocess_get_exit_status (fixture->daemon));
+        g_test_fail ();
     }
+    g_clear_object (&fixture->daemon);
 }
 
 static void
