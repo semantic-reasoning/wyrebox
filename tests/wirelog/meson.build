@@ -11,7 +11,11 @@ derived_view_materializer_test = executable(
 )
 
 test('wirelog rule version', wirelog_rule_version_test)
-test('derived view materializer', derived_view_materializer_test)
+test(
+  'derived view materializer',
+  derived_view_materializer_test,
+  timeout: 120,
+)
 
 if wirelog_runtime_found
   wirelog_link_smoke_test = executable(

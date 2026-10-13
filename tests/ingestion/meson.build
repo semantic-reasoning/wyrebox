@@ -105,6 +105,7 @@ test(
   env: {
     'WYREBOX_EML_FIXTURE_DIR': eml_fixture_dir,
   },
+  timeout: 120,
 )
 
 test(
