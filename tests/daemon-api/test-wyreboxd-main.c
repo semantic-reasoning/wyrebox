@@ -96,15 +96,13 @@ daemon_root_clear (DaemonRoot *daemon_root)
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (DaemonRoot, daemon_root_clear)
 /* *INDENT-ON* */
 
+/* Points @daemon_root at the layout under @root, taking ownership of @root. */
 static void
-daemon_root_init_uninitialized (DaemonRoot *daemon_root)
+daemon_root_set_paths (DaemonRoot *daemon_root, char *root)
 {
     g_autofree char *run_dir = NULL;
-    g_autofree char *config_contents = NULL;
-    g_autoptr (GError) error = NULL;
 
-    daemon_root->root = g_dir_make_tmp ("wyreboxd-main-test-XXXXXX", NULL);
-    g_assert_nonnull (daemon_root->root);
+    daemon_root->root = root;
     run_dir = g_build_filename (daemon_root->root, "run", "wyrebox", NULL);
     daemon_root->journal_dir = g_build_filename (daemon_root->root, "journal",
             NULL);
@@ -116,6 +114,19 @@ daemon_root_init_uninitialized (DaemonRoot *daemon_root)
             NULL);
     daemon_root->config_path = g_build_filename (daemon_root->root,
             "wyrebox.conf", NULL);
+}
+
+static void
+daemon_root_init_uninitialized (DaemonRoot *daemon_root)
+{
+    g_autofree char *run_dir = NULL;
+    g_autofree char *config_contents = NULL;
+    g_autoptr (GError) error = NULL;
+    char *root = g_dir_make_tmp ("wyreboxd-main-test-XXXXXX", NULL);
+
+    g_assert_nonnull (root);
+    daemon_root_set_paths (daemon_root, root);
+    run_dir = g_path_get_dirname (daemon_root->socket_path);
 
     g_assert_cmpint (g_mkdir_with_parents (run_dir, 0750), ==, 0);
     g_assert_cmpint (g_mkdir_with_parents (daemon_root->journal_dir, 0750), ==,
@@ -375,25 +386,90 @@ wait_for_socket (GSubprocess *subprocess, const char *socket_path)
     return FALSE;
 }
 
+#define DAEMON_STDERR_PATH_KEY "wyreboxd-stderr-path"
+
+/*
+ * Starts wyreboxd with its stderr in a file under the test root, so a
+ * long-running daemon cannot block on an unread pipe and a sanitizer report
+ * survives a crash. Every start uses a new file because tests restart the
+ * daemon in the same root.
+ */
 static GSubprocess *
 start_daemon (const DaemonRoot *daemon_root)
 {
-    GSubprocess *subprocess = spawn_daemon (daemon_root,
-            G_SUBPROCESS_FLAGS_STDERR_SILENCE);
+    static guint start_count;
+    g_autoptr (GSubprocessLauncher) launcher = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autofree char *stderr_name = NULL;
+    char *stderr_path = NULL;
+    GSubprocess *subprocess = NULL;
+    const char *argv[] = {
+        wyreboxd_executable (),
+        "--config",
+        daemon_root->config_path,
+        NULL
+    };
+
+    stderr_name = g_strdup_printf ("wyreboxd-%u.stderr", ++start_count);
+    stderr_path = g_build_filename (daemon_root->root, stderr_name, NULL);
+    launcher = g_subprocess_launcher_new (G_SUBPROCESS_FLAGS_STDOUT_SILENCE);
+    g_subprocess_launcher_set_stderr_file_path (launcher, stderr_path);
+
+    (void)g_remove (daemon_root->socket_path);
+    subprocess = g_subprocess_launcher_spawnv (launcher, argv, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (subprocess);
+    g_object_set_data_full (G_OBJECT (subprocess), DAEMON_STDERR_PATH_KEY,
+        stderr_path, g_free);
 
     g_assert_true (wait_for_socket (subprocess, daemon_root->socket_path));
     return subprocess;
+}
+
+/*
+ * Fails the test unless the waited-for @subprocess exited with status 0,
+ * naming the signal when wyreboxd was killed. @stderr_text, which may be NULL,
+ * goes to stderr verbatim first: TAP folds a g_error() message onto one line,
+ * which would make a sanitizer report unreadable.
+ */
+static void
+assert_daemon_exited_cleanly (GSubprocess *subprocess, const char *stderr_text)
+{
+    int status = 0;
+
+    if (g_subprocess_get_if_exited (subprocess)
+        && g_subprocess_get_exit_status (subprocess) == 0)
+        return;
+
+    g_printerr ("--- wyreboxd stderr ---\n%s\n--- end wyreboxd stderr ---\n",
+        stderr_text != NULL ? stderr_text : "(unavailable)");
+
+    if (!g_subprocess_get_if_exited (subprocess)) {
+        int signal_number = g_subprocess_get_if_signaled (subprocess) ?
+            g_subprocess_get_term_sig (subprocess) : 0;
+
+        g_error ("wyreboxd terminated by signal %d (%s)", signal_number,
+            g_strsignal (signal_number));
+    }
+
+    status = g_subprocess_get_exit_status (subprocess);
+    g_error ("wyreboxd exited with status %d", status);
 }
 
 static void
 stop_daemon (GSubprocess *subprocess)
 {
     g_autoptr (GError) error = NULL;
+    g_autofree char *stderr_text = NULL;
+    const char *stderr_path = g_object_get_data (G_OBJECT (subprocess),
+            DAEMON_STDERR_PATH_KEY);
 
     g_subprocess_send_signal (subprocess, SIGTERM);
     g_assert_true (g_subprocess_wait (subprocess, NULL, &error));
     g_assert_no_error (error);
-    g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==, 0);
+    if (stderr_path != NULL)
+        (void)g_file_get_contents (stderr_path, &stderr_text, NULL, NULL);
+    assert_daemon_exited_cleanly (subprocess, stderr_text);
 }
 
 static void
@@ -1576,6 +1652,37 @@ seed_unselectable_inbox (const DaemonRoot *daemon_root)
         "('mailbox-inbox', 'account-1', 'INBOX', FALSE, TRUE);");
 }
 
+#define SIGNALLED_EXIT_ROOT_ENV "WYREBOXD_MAIN_TEST_SIGNALLED_EXIT_ROOT"
+
+static void
+test_wyreboxd_stop_reports_signalled_exit (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+
+    if (g_test_subprocess ()) {
+        DaemonRoot child_root = { 0 };
+        GSubprocess *subprocess = NULL;
+        const char *root = g_getenv (SIGNALLED_EXIT_ROOT_ENV);
+
+        g_assert_nonnull (root);
+        daemon_root_set_paths (&child_root, g_strdup (root));
+        subprocess = start_daemon (&child_root);
+        g_subprocess_force_exit (subprocess);
+        stop_daemon (subprocess);
+        return;
+    }
+
+    daemon_root_init (&daemon_root);
+    g_setenv (SIGNALLED_EXIT_ROOT_ENV, daemon_root.root, TRUE);
+    g_test_trap_subprocess (NULL, 60 * G_USEC_PER_SEC,
+        G_TEST_SUBPROCESS_DEFAULT);
+    g_unsetenv (SIGNALLED_EXIT_ROOT_ENV);
+    g_test_trap_assert_failed ();
+    g_test_trap_assert_stderr ("*terminated by signal 9*");
+    g_test_trap_assert_stderr ("*--- wyreboxd stderr ---*storage ID*"
+        "--- end wyreboxd stderr ---*");
+}
+
 static void
 test_wyreboxd_starts_with_held_account (void)
 {
@@ -2414,6 +2521,8 @@ main (int argc, char **argv)
         test_wyreboxd_exits_dataerr_on_corrupt_journal_record);
     g_test_add_func ("/daemon-api/wyreboxd/starts-with-held-account",
         test_wyreboxd_starts_with_held_account);
+    g_test_add_func ("/daemon-api/wyreboxd/stop-reports-signalled-exit",
+        test_wyreboxd_stop_reports_signalled_exit);
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \
     WYREBOX_HAVE_CAPNP_SERIALIZATION
     g_test_add_func
