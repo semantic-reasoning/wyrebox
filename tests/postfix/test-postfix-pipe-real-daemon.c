@@ -237,6 +237,36 @@ count_message_delivered_records (const char *journal_root_dir,
     return count;
 }
 
+/*
+ * Fails the test unless the waited-for @subprocess exited with status 0,
+ * naming the signal when wyreboxd was killed. @stderr_text, which may be NULL,
+ * goes to stderr verbatim first: TAP folds a g_error() message onto one line,
+ * which would make a sanitizer report unreadable.
+ */
+static void
+assert_daemon_exited_cleanly (GSubprocess *subprocess, const char *stderr_text)
+{
+    int status = 0;
+
+    if (g_subprocess_get_if_exited (subprocess)
+        && g_subprocess_get_exit_status (subprocess) == 0)
+        return;
+
+    g_printerr ("--- wyreboxd stderr ---\n%s\n--- end wyreboxd stderr ---\n",
+        stderr_text != NULL ? stderr_text : "(unavailable)");
+
+    if (!g_subprocess_get_if_exited (subprocess)) {
+        int signal_number = g_subprocess_get_if_signaled (subprocess) ?
+            g_subprocess_get_term_sig (subprocess) : 0;
+
+        g_error ("wyreboxd terminated by signal %d (%s)", signal_number,
+            g_strsignal (signal_number));
+    }
+
+    status = g_subprocess_get_exit_status (subprocess);
+    g_error ("wyreboxd exited with status %d", status);
+}
+
 static void
 test_pipe_helper_delivers_through_wyreboxd_and_persists_journal (void)
 {
@@ -255,6 +285,7 @@ test_pipe_helper_delivers_through_wyreboxd_and_persists_journal (void)
     g_autofree char *socket_path = g_build_filename (run_dir, "wyrebox.sock",
             NULL);
     g_autoptr (GSubprocess) daemon = NULL;
+    g_autofree char *daemon_stderr = NULL;
     g_autoptr (GError) error = NULL;
     g_auto (ProcessResult) helper_result = { 0 };
     g_auto (WyreboxMessageDeliveredPayload) payload = { 0 };
@@ -282,7 +313,7 @@ test_pipe_helper_delivers_through_wyreboxd_and_persists_journal (void)
     };
 
     daemon = g_subprocess_newv (daemon_argv,
-            (GSubprocessFlags)(G_SUBPROCESS_FLAGS_STDOUT_PIPE |
+            (GSubprocessFlags)(G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
             G_SUBPROCESS_FLAGS_STDERR_PIPE), &error);
     g_assert_no_error (error);
     g_assert_nonnull (daemon);
@@ -324,9 +355,10 @@ test_pipe_helper_delivers_through_wyreboxd_and_persists_journal (void)
     g_assert_cmpmem (object_data, object_size, message, sizeof (message) - 1);
 
     g_subprocess_send_signal (daemon, SIGTERM);
-    g_assert_true (g_subprocess_wait (daemon, NULL, &error));
+    g_assert_true (g_subprocess_communicate_utf8 (daemon, NULL, NULL, NULL,
+        &daemon_stderr, &error));
     g_assert_no_error (error);
-    g_assert_cmpint (g_subprocess_get_exit_status (daemon), ==, 0);
+    assert_daemon_exited_cleanly (daemon, daemon_stderr);
 }
 
 int

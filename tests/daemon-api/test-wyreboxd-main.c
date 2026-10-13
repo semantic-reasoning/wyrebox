@@ -344,7 +344,8 @@ write_segment (const DaemonRoot *daemon_root, const char *contents,
 }
 
 static GSubprocess *
-spawn_daemon (const DaemonRoot *daemon_root, GSubprocessFlags stderr_flag)
+spawn_daemon_with_launcher (const DaemonRoot *daemon_root,
+    GSubprocessLauncher *launcher)
 {
     g_autoptr (GError) error = NULL;
     GSubprocess *subprocess = NULL;
@@ -356,13 +357,20 @@ spawn_daemon (const DaemonRoot *daemon_root, GSubprocessFlags stderr_flag)
     };
 
     (void)g_remove (daemon_root->socket_path);
-    subprocess = g_subprocess_newv (argv,
-            (GSubprocessFlags)(G_SUBPROCESS_FLAGS_STDOUT_SILENCE | stderr_flag),
-            &error);
+    subprocess = g_subprocess_launcher_spawnv (launcher, argv, &error);
     g_assert_no_error (error);
     g_assert_nonnull (subprocess);
 
     return subprocess;
+}
+
+static GSubprocess *
+spawn_daemon (const DaemonRoot *daemon_root, GSubprocessFlags stderr_flag)
+{
+    g_autoptr (GSubprocessLauncher) launcher = g_subprocess_launcher_new (
+        (GSubprocessFlags)(G_SUBPROCESS_FLAGS_STDOUT_SILENCE | stderr_flag));
+
+    return spawn_daemon_with_launcher (daemon_root, launcher);
 }
 
 /*
@@ -399,31 +407,30 @@ start_daemon (const DaemonRoot *daemon_root)
 {
     static guint start_count;
     g_autoptr (GSubprocessLauncher) launcher = NULL;
-    g_autoptr (GError) error = NULL;
     g_autofree char *stderr_name = NULL;
+    g_autofree char *stderr_text = NULL;
     char *stderr_path = NULL;
     GSubprocess *subprocess = NULL;
-    const char *argv[] = {
-        wyreboxd_executable (),
-        "--config",
-        daemon_root->config_path,
-        NULL
-    };
 
     stderr_name = g_strdup_printf ("wyreboxd-%u.stderr", ++start_count);
     stderr_path = g_build_filename (daemon_root->root, stderr_name, NULL);
     launcher = g_subprocess_launcher_new (G_SUBPROCESS_FLAGS_STDOUT_SILENCE);
     g_subprocess_launcher_set_stderr_file_path (launcher, stderr_path);
 
-    (void)g_remove (daemon_root->socket_path);
-    subprocess = g_subprocess_launcher_spawnv (launcher, argv, &error);
-    g_assert_no_error (error);
-    g_assert_nonnull (subprocess);
+    subprocess = spawn_daemon_with_launcher (daemon_root, launcher);
     g_object_set_data_full (G_OBJECT (subprocess), DAEMON_STDERR_PATH_KEY,
         stderr_path, g_free);
 
-    g_assert_true (wait_for_socket (subprocess, daemon_root->socket_path));
-    return subprocess;
+    if (wait_for_socket (subprocess, daemon_root->socket_path))
+        return subprocess;
+
+    /* Reap a daemon that is still starting so it does not outlive the test. */
+    g_subprocess_force_exit (subprocess);
+    (void)g_subprocess_wait (subprocess, NULL, NULL);
+    (void)g_file_get_contents (stderr_path, &stderr_text, NULL, NULL);
+    g_printerr ("--- wyreboxd stderr ---\n%s\n--- end wyreboxd stderr ---\n",
+        stderr_text != NULL ? stderr_text : "(unavailable)");
+    g_error ("wyreboxd did not create its socket");
 }
 
 /*
@@ -1579,7 +1586,7 @@ test_wyreboxd_starts_with_missing_raw_object (void)
     g_assert_true (g_subprocess_communicate_utf8 (subprocess, NULL, NULL, NULL,
         &stderr_text, &error));
     g_assert_no_error (error);
-    g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==, 0);
+    assert_daemon_exited_cleanly (subprocess, stderr_text);
     g_assert_nonnull (strstr (stderr_text,
         "journaled deliveries with missing or corrupt raw objects: 1, first "
         "at journal sequence 1"));
@@ -1683,6 +1690,34 @@ test_wyreboxd_stop_reports_signalled_exit (void)
         "--- end wyreboxd stderr ---*");
 }
 
+#define FAILED_START_ROOT_ENV "WYREBOXD_MAIN_TEST_FAILED_START_ROOT"
+
+static void
+test_wyreboxd_start_reports_startup_failure (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+
+    if (g_test_subprocess ()) {
+        DaemonRoot child_root = { 0 };
+        const char *root = g_getenv (FAILED_START_ROOT_ENV);
+
+        g_assert_nonnull (root);
+        daemon_root_set_paths (&child_root, g_strdup (root));
+        (void)start_daemon (&child_root);
+        return;
+    }
+
+    daemon_root_init_uninitialized (&daemon_root);
+    g_setenv (FAILED_START_ROOT_ENV, daemon_root.root, TRUE);
+    g_test_trap_subprocess (NULL, 60 * G_USEC_PER_SEC,
+        G_TEST_SUBPROCESS_DEFAULT);
+    g_unsetenv (FAILED_START_ROOT_ENV);
+    g_test_trap_assert_failed ();
+    g_test_trap_assert_stderr ("*wyreboxd did not create its socket*");
+    g_test_trap_assert_stderr ("*--- wyreboxd stderr ---*"
+        "storage is not initialized*--- end wyreboxd stderr ---*");
+}
+
 static void
 test_wyreboxd_starts_with_held_account (void)
 {
@@ -1701,7 +1736,7 @@ test_wyreboxd_starts_with_held_account (void)
     g_assert_true (g_subprocess_communicate_utf8 (subprocess, NULL, NULL, NULL,
         &stderr_text, &error));
     g_assert_no_error (error);
-    g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==, 0);
+    assert_daemon_exited_cleanly (subprocess, stderr_text);
     g_assert_nonnull (strstr (stderr_text,
         "delivery materialization held account account-1"));
     g_assert_nonnull (strstr (stderr_text, "retry in 5000 ms"));
@@ -2101,7 +2136,7 @@ test_wyreboxd_acknowledges_delivery_when_materialization_fails (void)
     g_assert_true (g_subprocess_communicate_utf8 (failing, NULL, NULL, NULL,
         &stderr_text, &error));
     g_assert_no_error (error);
-    g_assert_cmpint (g_subprocess_get_exit_status (failing), ==, 0);
+    assert_daemon_exited_cleanly (failing, stderr_text);
     g_assert_nonnull (strstr (stderr_text,
         "delivery materialization held account account-1"));
     g_assert_nonnull (strstr (stderr_text, "retry in 5000 ms"));
@@ -2523,6 +2558,8 @@ main (int argc, char **argv)
         test_wyreboxd_starts_with_held_account);
     g_test_add_func ("/daemon-api/wyreboxd/stop-reports-signalled-exit",
         test_wyreboxd_stop_reports_signalled_exit);
+    g_test_add_func ("/daemon-api/wyreboxd/start-reports-startup-failure",
+        test_wyreboxd_start_reports_startup_failure);
 #if defined(WYREBOX_HAVE_CAPNP_SERIALIZATION) && \
     WYREBOX_HAVE_CAPNP_SERIALIZATION
     g_test_add_func
