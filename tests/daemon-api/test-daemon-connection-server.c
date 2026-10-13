@@ -40,8 +40,16 @@ typedef struct
     GCond query_release_cond;
     gboolean query_started;
     gboolean query_release;
+    gboolean query_completed;
     gboolean delivery_called;
 } BlockingRouteState;
+
+typedef struct
+{
+    GMutex mutex;
+    gboolean finalized;
+    GThread *thread;
+} FinalizeRecord;
 
 typedef struct
 {
@@ -420,6 +428,7 @@ blocking_route_query_wirelog (const WyreboxDaemonRequestIdentity *identity,
             return FALSE;
         }
     }
+    state->query_completed = TRUE;
     g_mutex_unlock (&state->mutex);
 
     bytes = g_bytes_new_static (payload, strlen (payload));
@@ -486,6 +495,68 @@ release_blocking_query (BlockingRouteState *state)
     state->query_release = TRUE;
     g_cond_signal (&state->query_release_cond);
     g_mutex_unlock (&state->mutex);
+}
+
+static gpointer
+release_blocking_query_later (gpointer user_data)
+{
+    g_usleep (200 * G_TIME_SPAN_MILLISECOND);
+    release_blocking_query (user_data);
+    return NULL;
+}
+
+static gboolean
+blocking_query_completed (BlockingRouteState *state)
+{
+    gboolean completed = FALSE;
+
+    g_mutex_lock (&state->mutex);
+    completed = state->query_completed;
+    g_mutex_unlock (&state->mutex);
+    return completed;
+}
+
+static void
+record_finalize (gpointer user_data, GObject *where_the_object_was)
+{
+    FinalizeRecord *record = user_data;
+
+    (void)where_the_object_was;
+
+    g_mutex_lock (&record->mutex);
+    record->finalized = TRUE;
+    record->thread = g_thread_self ();
+    g_mutex_unlock (&record->mutex);
+}
+
+/*
+ * Returns: (transfer full): an adapter whose wirelog query blocks on @state
+ * until release_blocking_query().
+ */
+static WyreboxDaemonRequestAdapter *
+create_blocking_query_adapter (BlockingRouteState *state)
+{
+    g_autoptr (WyreboxDaemonWirelogPredicateQueryService) wirelog_service =
+        wyrebox_daemon_wirelog_predicate_query_service_new
+            (blocking_route_query_wirelog, state, NULL);
+
+    return wyrebox_daemon_request_adapter_new (NULL, NULL, NULL, NULL, NULL,
+               NULL, wirelog_service, NULL, blocking_route_decode, state, NULL,
+               blocking_route_encode, state, NULL);
+}
+
+/* Sends a wirelog query and returns once the adapter is blocked in it. */
+static GSocketConnection *
+start_blocking_query (const char *socket_path, BlockingRouteState *state)
+{
+    GSocketConnection *connection = connect_with_socket_client (socket_path);
+
+    g_assert_nonnull (connection);
+    write_framed_payload (g_io_stream_get_output_stream (G_IO_STREAM
+            (connection)), (const guint8 *)"wirelog-query",
+        strlen ("wirelog-query"));
+    wait_until_query_started (state);
+    return connection;
 }
 
 static gboolean
@@ -927,6 +998,94 @@ test_connection_server_blocking_query_does_not_block_delivery_ingestion
     remove_tree (root);
 }
 
+static void
+test_connection_server_stop_waits_for_in_flight_session (void)
+{
+    BlockingRouteState state = { 0 };
+    FinalizeRecord record = { 0 };
+    g_autofree char *root = NULL;
+    g_autofree char *socket_path = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GSocketConnection) query_connection = NULL;
+    g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
+    WyreboxDaemonRequestAdapter *adapter = NULL;
+    GThread *releaser = NULL;
+
+    blocking_route_state_init (&state);
+    g_mutex_init (&record.mutex);
+    socket_path = make_socket_path (&root);
+    adapter = create_blocking_query_adapter (&state);
+    g_object_weak_ref (G_OBJECT (adapter), record_finalize, &record);
+    server = wyrebox_daemon_connection_server_new (socket_path, adapter);
+    g_object_unref (adapter);
+    g_assert_true (wyrebox_daemon_connection_server_start (server, &error));
+    g_assert_no_error (error);
+
+    query_connection = start_blocking_query (socket_path, &state);
+    releaser = g_thread_new ("release-query", release_blocking_query_later,
+            &state);
+
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+    g_assert_no_error (error);
+    g_assert_true (blocking_query_completed (&state));
+
+    g_clear_object (&server);
+    g_mutex_lock (&record.mutex);
+    g_assert_true (record.finalized);
+    g_assert_true (record.thread == g_thread_self ());
+    g_mutex_unlock (&record.mutex);
+
+    g_thread_join (releaser);
+    g_mutex_clear (&record.mutex);
+    blocking_route_state_clear (&state);
+    remove_tree (root);
+}
+
+static void
+test_connection_server_stop_abandons_session_after_drain_timeout (void)
+{
+    BlockingRouteState state = { 0 };
+    g_autofree char *root = NULL;
+    g_autofree char *socket_path = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GSocketConnection) query_connection = NULL;
+    g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+    g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
+    gint64 stop_started = 0;
+
+    blocking_route_state_init (&state);
+    socket_path = make_socket_path (&root);
+    adapter = create_blocking_query_adapter (&state);
+    server = wyrebox_daemon_connection_server_new (socket_path, adapter);
+    wyrebox_daemon_connection_server_set_drain_timeout (server, 100);
+    g_assert_true (wyrebox_daemon_connection_server_start (server, &error));
+    g_assert_no_error (error);
+
+    query_connection = start_blocking_query (socket_path, &state);
+
+    g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
+        "1 in-flight daemon session(s) abandoned after 100 ms drain timeout");
+    stop_started = g_get_monotonic_time ();
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (g_get_monotonic_time () - stop_started, <,
+        2 * G_TIME_SPAN_SECOND);
+    g_test_assert_expected_messages ();
+    g_assert_false (blocking_query_completed (&state));
+
+    /* Join the abandoned worker before @state leaves scope. */
+    release_blocking_query (&state);
+    wyrebox_daemon_connection_server_set_drain_timeout (server, 5000);
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+    g_assert_no_error (error);
+    g_assert_true (blocking_query_completed (&state));
+
+    g_clear_object (&server);
+    g_clear_object (&adapter);
+    blocking_route_state_clear (&state);
+    remove_tree (root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -948,6 +1107,12 @@ main (int argc, char **argv)
     g_test_add_func
         ("/daemon-api/connection-server/blocking-query-does-not-block-delivery",
         test_connection_server_blocking_query_does_not_block_delivery_ingestion);
+    g_test_add_func
+        ("/daemon-api/connection-server/stop-waits-for-in-flight-session",
+        test_connection_server_stop_waits_for_in_flight_session);
+    g_test_add_func
+        ("/daemon-api/connection-server/stop-abandons-after-drain-timeout",
+        test_connection_server_stop_abandons_session_after_drain_timeout);
 
     return g_test_run ();
 }
