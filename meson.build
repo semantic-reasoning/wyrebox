@@ -695,6 +695,12 @@ test(
 )
 
 test(
+  'docs issue 0314 mailbox write adr',
+  python,
+  args: files('tests/docs/test_issue_0314_mailbox_write_adr.py'),
+)
+
+test(
   'docs issue 0315 postfix dovecot imap e2e docs',
   python,
   args: files('tests/docs/test_issue_0315_postfix_dovecot_imap_e2e_docs.py'),
