@@ -17,6 +17,7 @@ REQUIRED_SECTIONS = [
     "## Object Message And Membership Model",
     "## Immutable Object Fetch Contract",
     "## Membership Mutation Contract",
+    "## Virtual Mailbox Write Semantics",
     "## Canonical State And Rebuildable Support State",
     "## Deferred Schema Details",
     "## Follow-Up Decisions",
@@ -176,6 +177,97 @@ def main() -> None:
         sections,
         "## Membership Mutation Contract",
         r"membership mutation changes membership-owned state",
+    )
+    assert_section_matches(
+        sections,
+        "## Membership Mutation Contract",
+        r"APPEND, COPY, MOVE, and EXPUNGE are also membership mutations",
+    )
+    assert_section_matches(
+        sections,
+        "## Membership Mutation Contract",
+        r"never duplicate or rewrite the raw RFC 5322 object",
+    )
+    assert_section_matches(
+        sections,
+        "## Membership Mutation Contract",
+        r"tombstone \(`is_visible` becomes false\)",
+    )
+    assert_section_matches(
+        sections,
+        "## Membership Mutation Contract",
+        r"Tombstoned UIDs are never reused",
+    )
+    assert_section_matches(
+        sections,
+        "## Membership Mutation Contract",
+        r"EXPUNGE leaves UIDNEXT and UIDVALIDITY unchanged",
+    )
+    assert_section_matches(
+        sections,
+        "## Membership Mutation Contract",
+        r"reserved under the daemon mutation lock",
+    )
+    assert_section_matches(
+        sections,
+        "## Membership Mutation Contract",
+        r"materialization applies those payload UIDs in journal order",
+    )
+    assert_section_matches(
+        sections,
+        "## Membership Mutation Contract",
+        r"references the existing message and object",
+    )
+    assert_section_matches(
+        sections,
+        "## Membership Mutation Contract",
+        r"UIDNEXT advances only when a new UID is assigned",
+    )
+    assert_section_matches(
+        sections,
+        "## Membership Mutation Contract",
+        r"re-applying a delivery after a later tombstone",
+    )
+    assert_section_matches(
+        sections,
+        "## Membership Mutation Contract",
+        r"re-applying COPY, MOVE, or APPEND when the destination membership id already exists",
+    )
+
+    assert_section_matches(
+        sections,
+        "## Virtual Mailbox Write Semantics",
+        r"read-only for mailbox-write operations",
+    )
+    assert_section_matches(
+        sections,
+        "## Virtual Mailbox Write Semantics",
+        r"Flag and keyword STORE on a selected virtual mailbox",
+    )
+    assert_section_matches(
+        sections,
+        "## Virtual Mailbox Write Semantics",
+        r"COPY may use a virtual mailbox as a source",
+    )
+    assert_section_matches(
+        sections,
+        "## Virtual Mailbox Write Semantics",
+        r"MOVE and EXPUNGE that name a virtual mailbox as a source are refused",
+    )
+    assert_section_matches(
+        sections,
+        "## Virtual Mailbox Write Semantics",
+        r"at least one visible ordinary membership",
+    )
+    assert_section_matches(
+        sections,
+        "## Virtual Mailbox Write Semantics",
+        r"garbage-collection candidate",
+    )
+    assert_section_matches(
+        sections,
+        "## Virtual Mailbox Write Semantics",
+        r"former virtual UID is not reassigned",
     )
 
     assert_section_matches(
