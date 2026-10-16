@@ -21,6 +21,7 @@ REQUIRED_SECTIONS = [
     "## Message Fetch Operation Contract",
     "## Message Search Operation Contract",
     "## Flag Keyword Update Operation Contract",
+    "## Mailbox Write Operation Contract",
     "## Fact Insert Retract Mutation Operation Contract",
     "## Wirelog Predicate Query Operation Contract",
     "## DuckDB Query Template Operation Contract",
@@ -572,6 +573,11 @@ def main() -> None:
         sections,
         "## Scope",
         r"Flag/keyword update operation contract",
+    )
+    assert_section_matches(
+        sections,
+        "## Scope",
+        r"Mailbox write operation contract",
     )
     assert_section_matches(
         sections,
@@ -1277,6 +1283,124 @@ def main() -> None:
 
     assert_section_matches(
         sections,
+        "## Mailbox Write Operation Contract",
+        r"Dovecot-facing.*APPEND.*COPY.*MOVE.*EXPUNGE",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"same durability guarantee as delivery",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"does not duplicate or rewrite the raw object",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"never rewrites or deletes the raw RFC 5322 object",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"virtual mailboxes are read-only",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"COPY may use a virtual mailbox as a source",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"MOVE or EXPUNGE that names a virtual mailbox as a source.*permission denied",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"tombstone \(`is_visible` becomes false\)",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"UIDNEXT and UIDVALIDITY are unchanged",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"tombstoned UIDs are never reused",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"MOVE is one journaled mutation",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"reserved under the daemon mutation lock",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"carried in the durable journal payload",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"Only the MOVE record removes MOVE source memberships, including same-mailbox MOVE",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"There is no APPEND idempotency key",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"`journal_offset` or an equivalent durable marker",
+    )
+    for write_error in [
+        r"`not found`",
+        r"`permission denied`",
+        r"`conflict`",
+        r"`temporary backend failure`",
+        r"`permanent failure`",
+    ]:
+        assert_section_matches(
+            sections,
+            "## Mailbox Write Operation Contract",
+            write_error,
+        )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"MULTIAPPEND.*is not atomic",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"each message is its own durable request",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"daemon frame limit \(4 MiB\)",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"Dovecot `\[LIMIT\]`",
+    )
+    assert_section_matches(
+        sections,
+        "## Mailbox Write Operation Contract",
+        r"does not expose arbitrary SQL",
+    )
+
+    assert_section_matches(
+        sections,
         "## Fact Insert Retract Mutation Operation Contract",
         r"authorized local tools/skills",
     )
@@ -1816,6 +1940,11 @@ def main() -> None:
         sections,
         "## Deferred Operation Payloads",
         r"Concrete flag/keyword `.capnp` schemas and field layouts are deferred",
+    )
+    assert_section_matches(
+        sections,
+        "## Deferred Operation Payloads",
+        r"Concrete mailbox-write `.capnp` schemas and field layouts are deferred",
     )
     assert_section_matches(
         sections,
