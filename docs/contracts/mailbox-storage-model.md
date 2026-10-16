@@ -107,6 +107,42 @@ mailbox-scoped UID visibility, internal date, RFC 822 size metadata when
 validated from the object, and possibly MODSEQ. It does not change the
 immutable object's bytes.
 
+APPEND, COPY, MOVE, and EXPUNGE are also membership mutations. They append
+WyreBox journal records and never duplicate or rewrite the raw RFC 5322 object.
+COPY and MOVE add a destination membership that references the existing
+message and object; MOVE and EXPUNGE hide a source membership with a tombstone
+(`is_visible` becomes false) rather than deleting the row. Tombstoned UIDs are
+never reused. UIDNEXT advances only when a new UID is assigned; EXPUNGE leaves
+UIDNEXT and UIDVALIDITY unchanged. Destination UIDs for APPEND, COPY, and MOVE
+are reserved under the daemon mutation lock and carried in the durable payload;
+materialization applies those payload UIDs in journal order so replay restores
+the same UIDs.
+
+Journal replay must keep delivery and membership records idempotent across
+held-account catch-up passes: re-applying a delivery after a later tombstone
+must not invent a new UID, and re-applying COPY, MOVE, or APPEND when the
+destination membership id already exists must accept the existing row when its
+UID, message, item index, and journal position match.
+
+## Virtual Mailbox Write Semantics
+
+Virtual mailboxes are read-only for mailbox-write operations (APPEND, COPY,
+MOVE, and EXPUNGE). Naming a virtual mailbox as a write destination is refused.
+MOVE and EXPUNGE that name a virtual mailbox as a source are refused. COPY may
+use a virtual mailbox as a source when the virtual UID resolves to a message;
+the destination must be an ordinary mailbox. Flag and keyword STORE on a
+selected virtual mailbox remains governed by the Flag Keyword Update operation
+contract and is outside this section. Mapping mailbox-write operations to fact
+mutations is out of scope.
+
+A virtual mailbox shows a message only while that message has at least one
+visible ordinary membership. Ordinary EXPUNGE or MOVE that leaves no visible
+ordinary membership must remove the message from virtual views on the next
+view refresh. This matches object reachability: a message with no visible
+ordinary membership is a garbage-collection candidate. When a message leaves a
+view, its former virtual UID is not reassigned to a different message;
+UIDVALIDITY for that view is unchanged by the leave.
+
 ## Canonical State And Rebuildable Support State
 
 `wyreboxd` is the only writer of the canonical mutation journal, DuckDB
