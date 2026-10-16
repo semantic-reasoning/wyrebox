@@ -18,6 +18,7 @@ This contract defines:
 - Message FETCH operation contract.
 - Message SEARCH operation contract.
 - Flag/keyword update operation contract.
+- Mailbox write operation contract.
 - Fact insert/retract mutation operation contract.
 - Wirelog predicate query operation contract.
 - DuckDB query-template operation contract.
@@ -421,6 +422,116 @@ metadata mutation, raw object rewrite, direct journal append, direct journal
 write, or direct object-store/journal mutation surfaces to Dovecot plugins or
 local callers. It accepts flag/keyword update inputs only.
 
+## Mailbox Write Operation Contract
+
+Mailbox write covers Dovecot-facing APPEND, COPY, MOVE, and EXPUNGE over the
+Cap'n Proto-over-UDS daemon API. This section defines operation behavior only;
+it does not define concrete `.capnp` schemas, field layouts, generated code, or
+Dovecot backend implementation. Membership, UID, and object immutability rules
+are owned by `docs/contracts/mailbox-storage-model.md`.
+
+Every mailbox-write request carries request and caller identity sufficient for
+`wyreboxd` to authorize and correlate the operation:
+
+- required `request_id`;
+- Dovecot/IMAP operation correlation ID where the caller stack can supply one;
+- caller/account identity matching the Dovecot session account;
+- for each ordinary mailbox the operation reads or writes, that mailbox's
+  ordinary identity and `UIDVALIDITY`; and
+- for COPY that reads a virtual mailbox as source, that virtual mailbox's
+  identity, kind, and `UIDVALIDITY`, plus the destination ordinary mailbox
+  identity and `UIDVALIDITY`.
+
+Caller identity must be the Dovecot plugin path. Other callers receive
+`permission denied`. Virtual mailboxes are read-only for mailbox write: APPEND,
+COPY, MOVE, or EXPUNGE that names a virtual mailbox as a write destination, and
+MOVE or EXPUNGE that names a virtual mailbox as a source, are
+`permission denied`. COPY may use a virtual mailbox as a source when the view
+UID resolves to an existing message; the destination must still be an ordinary
+mailbox.
+
+### EXPUNGE
+
+EXPUNGE removes listed mailbox-scoped UIDs from an ordinary mailbox by
+membership change only. It never rewrites or deletes the raw RFC 5322 object.
+Visibility is recorded with a tombstone (`is_visible` becomes false) so journal
+replay of membership records stays idempotent across held-account catch-up
+passes. UIDNEXT and UIDVALIDITY are unchanged; tombstoned UIDs are never reused.
+
+The daemon API takes an explicit ascending UID list and does not inspect
+`\Deleted`. IMAP EXPUNGE and CLOSE select `\Deleted` messages in Dovecot before
+calling the daemon; UID EXPUNGE and MOVE pass explicit UIDs. Requested UIDs that
+are already absent are omitted from the durable record; when every requested UID
+is already absent, the call succeeds without appending a journal record.
+
+### COPY and MOVE
+
+COPY adds an existing message to a destination ordinary mailbox with a newly
+assigned UID and does not duplicate or rewrite the raw object. MOVE is one
+journaled mutation that performs COPY and then tombstones the source
+memberships. Destination UIDs are reserved under the daemon mutation lock after
+a fresh catch-up, are carried in the durable journal payload, and are returned
+in the success response for APPENDUID/COPYUID. Materialization must apply those
+payload UIDs in journal order; a mismatch holds the account.
+
+A multi-UID COPY or MOVE is one journaled record with an item index. Item count
+is bounded so the request fits the Cap'n Proto frame; oversized sets are
+`permanent failure` (Dovecot `[LIMIT]`). Source UIDs that are not visible are
+`not found` and nothing is journaled. Only the MOVE record removes MOVE source
+memberships, including same-mailbox MOVE; a following Dovecot source-side
+EXPUNGE must not independently expunge those UIDs if the MOVE failed.
+
+### APPEND
+
+APPEND ingests client-supplied RFC 5322 bytes into an ordinary mailbox with
+optional flags, keywords, and internal date. It has the same durability
+guarantee as delivery: the content-addressed raw object is durable before the
+journal append is durable, and caller-observed success requires both. APPEND
+does not reuse the delivery event shape; it is a distinct journaled mutation
+with an assigned destination UID. There is no APPEND idempotency key; a
+retried ambiguous transport outcome may create a second membership. The object
+store still content-address deduplicates identical bytes.
+
+APPEND size is bounded by the daemon frame limit (4 MiB) minus a fixed
+envelope reserve. Oversized messages are `permanent failure` and map to
+Dovecot `[LIMIT]`. Chunked upload is out of scope for this contract. Invalid
+RFC 5322 that cannot be parsed for required metadata is `permanent failure`.
+APPEND to an account INBOX that has not yet been materialized resolves the
+INBOX identity the same way delivery materialization does; it does not require
+a prior CREATE.
+
+MULTIAPPEND (several messages in one IMAP APPEND) is not atomic: each message
+is its own durable request. A partial commit-time failure may leave earlier
+messages durable while later ones fail.
+
+### Success, errors, and mediation
+
+Dovecot-visible success is valid only after the corresponding mutation has
+reached the durable mutation-journal boundary. A success response includes
+`journal_offset` or an equivalent durable marker, destination `UIDVALIDITY`,
+and any assigned or expunged UIDs the caller needs for APPENDUID, COPYUID, or
+EXPUNGE reporting.
+
+Mailbox-write error behavior is governed by `docs/contracts/error-model.md`:
+
+- an absent ordinary mailbox, or a COPY/MOVE source UID that is not visible, is
+  `not found` (EXPUNGE of already-absent UIDs remains success as above);
+- account mismatch, wrong caller, or a virtual-mailbox write path is
+  `permission denied`;
+- stale `UIDVALIDITY` or selected-mailbox epoch is `conflict`;
+- held materialization, journal I/O, or object-store I/O is
+  `temporary backend failure`;
+- bad UID lists, flags, keywords, size, or RFC 5322 input is
+  `permanent failure`; and
+- ambiguous transport outcomes are not success.
+
+Mailbox write is daemon-mediated. It may cause daemon-owned journaled
+membership and append mutations only through these operations. It does not
+expose arbitrary SQL, write SQL, DuckDB mutation, Wirelog mutation,
+object-store metadata mutation, raw object rewrite, direct journal append,
+direct journal write, or direct object-store/journal mutation surfaces to
+Dovecot plugins or local callers. It accepts mailbox-write inputs only.
+
 ## Fact Insert Retract Mutation Operation Contract
 
 Fact insert/retract mutation is an explicit daemon operation for authorized
@@ -716,6 +827,7 @@ issue-0004 units:
 - template catalog implementation
 
 Concrete flag/keyword `.capnp` schemas and field layouts are
+deferred. Concrete mailbox-write `.capnp` schemas and field layouts are
 deferred. Concrete fact mutation `.capnp` schemas and field layouts are
 deferred. Concrete Wirelog predicate query `.capnp` schemas and field layouts
 are deferred. Concrete DuckDB query-template `.capnp` schemas and field layouts
