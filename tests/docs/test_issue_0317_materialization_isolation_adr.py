@@ -68,6 +68,18 @@ def main() -> None:
     assert_section_matches(sections, decision,
         r"existing membership consumes no UID")
     assert_section_matches(sections, decision,
+        r"tombstone")
+    assert_section_matches(sections, decision,
+        r"`is_visible` false")
+    assert_section_matches(sections, decision,
+        r"`expunged_journal_sequence`")
+    assert_section_matches(sections, decision,
+        r"later than the delivery")
+    assert_section_matches(sections, decision,
+        r"`MembershipsExpunged` and `MembershipsMoved`")
+    assert_section_matches(sections, decision,
+        r"`MessageAppended`, `MembershipsCopied`, and `MembershipsMoved`")
+    assert_section_matches(sections, decision,
         r"first interval is 5 s, each retry doubles it, and it is capped at 5 minutes")
     assert_section_matches(sections, decision,
         r"held account at startup is not fatal")

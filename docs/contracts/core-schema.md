@@ -81,7 +81,10 @@ and views:
   behavior.
 - `mailbox_memberships`: message-to-ordinary-mailbox links referencing
   `messages.message_id` and `mailboxes.mailbox_id`, carrying mailbox-scoped
-  state such as UID, internal date, and fetch visibility.
+  state such as UID, internal date, fetch visibility (`is_visible`),
+  `journal_item` for multi-item COPY/MOVE records, and optional tombstone
+  fields (`expunged_journal_offset`, `expunged_journal_sequence`) set when
+  `MembershipsExpunged` or `MembershipsMoved` hides the membership.
 - `mailbox_uid_state`: per-mailbox and per-view UID namespace state, including
   `uidnext` and `uidvalidity`, referencing either `mailboxes.mailbox_id` or
   `derived_views.view_id`.
@@ -182,8 +185,16 @@ may lag behind records that are already materialized: when an account's INBOX
 cannot be materialized, the checkpoint stops before that account's earliest
 held record while other accounts keep materializing
 (`docs/adr/0003-delivery-materialization-isolation.md`). Re-applying an already
-materialized delivery is therefore required to be idempotent, and
-delivery-created `mailbox_memberships` rows must not be deleted or hidden.
+materialized delivery is therefore required to be idempotent.
+Delivery-created `mailbox_memberships` rows must not be hard-deleted: EXPUNGE
+and MOVE hide them with a tombstone (`is_visible` becomes false and the
+expunge journal position is recorded) so a later catch-up pass can still match
+the delivery row exactly when the tombstone's `expunged_journal_sequence` is
+later than the delivery. Re-applying COPY, MOVE, or APPEND when the
+destination membership id already exists must accept the existing row when its
+UID, message, `journal_item`, and journal position match. Re-applying
+`MembershipsExpunged` against a row already tombstoned by that same record is
+a no-op.
 
 ## Query And API Safety Boundary
 

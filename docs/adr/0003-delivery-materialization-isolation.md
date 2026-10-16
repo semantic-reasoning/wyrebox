@@ -118,9 +118,14 @@ an unapplied record, and never moves backwards.
 Healthy accounts' records after a hold are re-read on later passes. Applying
 an already materialized record is idempotent: the object, message, header, and
 membership rows must match exactly, and an existing membership consumes no
-UID. This relies on delivery-created `mailbox_memberships` rows never being
-deleted or hidden. Any later EXPUNGE or MOVE design must keep that property,
-for example with tombstone rows, before it lands.
+UID. Delivery-created `mailbox_memberships` rows are never hard-deleted.
+`MembershipsExpunged` and `MembershipsMoved` hide them with a tombstone
+(`is_visible` false plus `expunged_journal_offset` /
+`expunged_journal_sequence`) so a delivery re-apply can still match the row
+exactly when the tombstone's journal sequence is later than the delivery.
+`MessageAppended`, `MembershipsCopied`, and `MembershipsMoved` destination
+rows follow the same accept-existing-row rule when their membership id,
+UID, message, item index, and journal position match.
 
 ### UID determinism
 

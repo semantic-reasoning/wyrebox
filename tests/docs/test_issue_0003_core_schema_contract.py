@@ -184,6 +184,26 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Required Materialized Schema Objects",
+        r"`is_visible`",
+    )
+    assert_section_matches(
+        sections,
+        "## Required Materialized Schema Objects",
+        r"`journal_item`",
+    )
+    assert_section_matches(
+        sections,
+        "## Required Materialized Schema Objects",
+        r"`expunged_journal_offset`",
+    )
+    assert_section_matches(
+        sections,
+        "## Required Materialized Schema Objects",
+        r"`expunged_journal_sequence`",
+    )
+    assert_section_matches(
+        sections,
+        "## Required Materialized Schema Objects",
         r"`derived_view_memberships`.*referencing `derived_views\.view_id` and `messages\.message_id`",
     )
 
@@ -264,6 +284,21 @@ def main() -> None:
         sections,
         "## Restart And Replay Regeneration Expectations",
         r"materialization_checkpoint.*durable replay position",
+    )
+    assert_section_matches(
+        sections,
+        "## Restart And Replay Regeneration Expectations",
+        r"tombstone \(`is_visible` becomes false",
+    )
+    assert_section_matches(
+        sections,
+        "## Restart And Replay Regeneration Expectations",
+        r"`expunged_journal_sequence` is\s+later than the delivery",
+    )
+    assert_section_matches(
+        sections,
+        "## Restart And Replay Regeneration Expectations",
+        r"Re-applying COPY, MOVE, or APPEND when the\s+destination membership id already exists",
     )
 
     assert_section_matches(

@@ -91,17 +91,32 @@ than silently accepting partial bytes as a valid mutation.
 The required canonical event names are:
 
 - `MessageDelivered`
+- `MessageAppended`
 - `FlagChanged`
 - `KeywordChanged`
 - `FactInserted`
 - `FactRetracted`
 - `DerivedViewMembershipChanged`
 - `FactsExtracted`
+- `MembershipsCopied`
+- `MembershipsMoved`
+- `MembershipsExpunged`
 
 `FactsExtracted` records the facts `wyreboxd` extracted from one delivered
 message's headers. It carries the account, the message, and the extracted
 facts, and it marks the message as extracted even when no fact matched. Replay
 applies the first `FactsExtracted` record of a message and ignores later ones.
+
+`MessageAppended` records a Dovecot APPEND into an ordinary mailbox. It carries
+the account, destination mailbox, reserved UID and UIDVALIDITY, object key,
+size, internal date, header metadata, system flags, and user keywords.
+`MembershipsCopied` and `MembershipsMoved` share one payload shape that lists
+source and destination mailbox identity, UIDVALIDITY, and per-item source UID,
+message id, destination UID, internal date, flags, and keywords. The event
+type selects whether source memberships are tombstoned. `MembershipsExpunged`
+lists ordinary-mailbox UIDs to tombstone. Operation behavior for these events
+is defined in `docs/contracts/core-daemon-api.md` and
+`docs/contracts/mailbox-storage-model.md`.
 
 Additional event names require an update to this contract or a follow-up
 contract before implementation.
@@ -129,6 +144,12 @@ caller does not receive durable success until the grouped records are durable.
 Deferred acknowledgement of flag or keyword success is allowed; acknowledging
 success before durable journal append is not allowed.
 
+`MessageAppended` has the same durability guarantee as delivery: the
+content-addressed raw object must be durable before the journal record is
+durable, and caller-observed success requires both. `MembershipsCopied`,
+`MembershipsMoved`, and `MembershipsExpunged` are canonical only after their
+journal records are durably appended; they do not write object-store bytes.
+
 ## Replay Behavior
 
 Replay processes valid records in journal order from the beginning of the
@@ -153,17 +174,21 @@ the earliest held record and re-applies later deliveries idempotently
 ## Object Store Consistency Boundary
 
 The raw object for a `MessageDelivered` event must exist durably in the object
-store before the `MessageDelivered` journal record is durably committed.
+store before the `MessageDelivered` journal record is durably committed. The
+same rule applies to `MessageAppended`: its raw object must be durable before
+the `MessageAppended` journal record is committed.
 
 An orphaned durable object without a committed `MessageDelivered` event is
 recoverable garbage, not delivered mail. Recovery may keep it for later
 deduplication or remove it during cleanup, but mailbox-visible delivery is
-derived from the committed journal event, not from object presence alone.
+derived from the committed journal event, not from object presence alone. An
+orphaned object left by a failed APPEND is likewise recoverable garbage, not
+mailbox-visible mail.
 
-If a `MessageDelivered` record references a missing raw object during replay,
-replay must treat the condition as journal/object-store inconsistency requiring
-repair or operator-visible failure. It must not synthesize delivered mail from
-missing raw bytes.
+If a `MessageDelivered` or `MessageAppended` record references a missing raw
+object during replay, replay must treat the condition as journal/object-store
+inconsistency requiring repair or operator-visible failure. It must not
+synthesize delivered or appended mail from missing raw bytes.
 
 ## Delivery Occurrence Identity Boundary
 
