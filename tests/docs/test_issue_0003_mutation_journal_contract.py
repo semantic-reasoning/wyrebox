@@ -25,11 +25,16 @@ REQUIRED_SECTIONS = [
 
 REQUIRED_EVENTS = [
     "MessageDelivered",
+    "MessageAppended",
     "FlagChanged",
     "KeywordChanged",
     "FactInserted",
     "FactRetracted",
     "DerivedViewMembershipChanged",
+    "FactsExtracted",
+    "MembershipsCopied",
+    "MembershipsMoved",
+    "MembershipsExpunged",
 ]
 
 
@@ -212,6 +217,16 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Durability Semantics",
+        r"`MessageAppended`.*same durability|same durability.*`MessageAppended`",
+    )
+    assert_section_matches(
+        sections,
+        "## Durability Semantics",
+        r"`MembershipsCopied`, `MembershipsMoved`, and `MembershipsExpunged`",
+    )
+    assert_section_matches(
+        sections,
+        "## Durability Semantics",
         r"acknowledging success before durable journal\s+append is not allowed",
     )
 
@@ -249,12 +264,17 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Object Store Consistency Boundary",
+        r"`MessageAppended`.*raw object.*durable|raw object.*`MessageAppended`",
+    )
+    assert_section_matches(
+        sections,
+        "## Object Store Consistency Boundary",
         r"orphaned durable object without a committed `MessageDelivered` event is\s+recoverable garbage, not delivered mail",
     )
     assert_section_matches(
         sections,
         "## Object Store Consistency Boundary",
-        r"must not synthesize delivered mail from\s+missing raw bytes",
+        r"must not\s+synthesize delivered or appended mail from missing raw bytes",
     )
 
     assert_section_matches(
