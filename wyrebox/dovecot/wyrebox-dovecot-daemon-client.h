@@ -2,6 +2,7 @@
 
 #include "wyrebox-daemon-error.h"
 #include "wyrebox-daemon-flag-keyword-update-request.h"
+#include "wyrebox-daemon-memberships-expunge-request.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
 #include <glib-object.h>
 
@@ -107,6 +108,16 @@ gboolean wyrebox_dovecot_daemon_client_update_flags (
     WyreboxDaemonFlagKeywordUpdateMode mode,
     const char *const *system_flags,
     const char *const *user_keywords,
+    guint64 *out_journal_offset,
+    GError **error);
+
+gboolean wyrebox_dovecot_daemon_client_expunge (
+    const char *socket_path,
+    const char *account_identity,
+    const char *mailbox_id,
+    guint64 uid_validity,
+    const guint64 *uids,
+    gsize n_uids,
     guint64 *out_journal_offset,
     GError **error);
 

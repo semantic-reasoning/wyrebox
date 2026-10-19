@@ -325,6 +325,7 @@ blocking_route_decode (const WyreboxDaemonPeerCredentials *peer_credentials,
     out_request->message_search = NULL;
     out_request->delivery_ingestion = NULL;
     out_request->flag_keyword_update = NULL;
+    out_request->memberships_expunge = NULL;
     out_request->wirelog_predicate_query = NULL;
     out_request->duckdb_query_template = NULL;
 

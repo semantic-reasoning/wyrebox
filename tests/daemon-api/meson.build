@@ -299,6 +299,24 @@ daemon_flag_keyword_update_dispatcher_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_memberships_expunge_request_test = executable(
+  'test-daemon-memberships-expunge-request',
+  'test-daemon-memberships-expunge-request.c',
+  dependencies: [wyrebox_dep],
+)
+
+daemon_memberships_expunge_dispatcher_test = executable(
+  'test-daemon-memberships-expunge-dispatcher',
+  'test-daemon-memberships-expunge-dispatcher.c',
+  dependencies: [wyrebox_dep],
+)
+
+daemon_memberships_expunge_journal_test = executable(
+  'test-daemon-memberships-expunge-journal',
+  'test-daemon-memberships-expunge-journal.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_config_test = executable(
   'test-daemon-config',
   'test-daemon-config.c',
@@ -529,6 +547,17 @@ test(
 test('daemon flag keyword update request', daemon_flag_keyword_update_request_test)
 test('daemon flag keyword update dispatcher',
   daemon_flag_keyword_update_dispatcher_test)
+test('daemon memberships expunge request', daemon_memberships_expunge_request_test)
+test('daemon memberships expunge dispatcher',
+  daemon_memberships_expunge_dispatcher_test)
+test(
+  'daemon memberships expunge journal',
+  daemon_memberships_expunge_journal_test,
+  env: {
+    'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() / 'tests'
+    / 'object-store' / 'fixtures',
+  },
+)
 test('daemon config', daemon_config_test)
 if capnp_serialization_found
   test(

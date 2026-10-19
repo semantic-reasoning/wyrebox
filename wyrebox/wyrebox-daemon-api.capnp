@@ -16,6 +16,7 @@ struct RequestFrame {
     duckDBQueryTemplate @9 :DuckDBQueryTemplateRequest;
     factBatchImport @10 :FactBatchImportRequest;
     mailEventStream @12 :MailEventStreamRequest;
+    membershipsExpunge @13 :MembershipsExpungeRequest;
   }
 }
 
@@ -177,6 +178,13 @@ enum FlagKeywordUpdateMode {
   set @0;
   clear @1;
   replace @2;
+}
+
+struct MembershipsExpungeRequest {
+  accountIdentity @0 :Text;
+  mailboxId @1 :Text;
+  uidValidity @2 :UInt64;
+  uids @3 :List(UInt64);
 }
 
 struct FactMutationRequest {

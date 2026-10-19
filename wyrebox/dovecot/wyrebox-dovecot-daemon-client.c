@@ -1369,6 +1369,84 @@ wyrebox_dovecot_daemon_client_update_flags (const char *socket_path,
     }
 }
 
+gboolean
+wyrebox_dovecot_daemon_client_expunge (const char *socket_path,
+    const char *account_identity,
+    const char *mailbox_id,
+    guint64 uid_validity,
+    const guint64 *uids,
+    gsize n_uids,
+    guint64 *out_journal_offset, GError **error)
+{
+    g_autofree char *request_id = NULL;
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonMembershipsExpungeRequest) request = { 0 };
+    g_auto (WyreboxDaemonResponseFrame) response = { 0 };
+    g_autoptr (GBytes) request_payload = NULL;
+    g_autoptr (GBytes) response_payload = NULL;
+
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (out_journal_offset != NULL)
+        *out_journal_offset = 0;
+
+    if (is_empty_string (socket_path)) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT,
+            "Dovecot daemon client requires a socket path");
+        return FALSE;
+    }
+
+    if (!wyrebox_daemon_memberships_expunge_request_init (&request,
+        account_identity, mailbox_id, uid_validity, uids, n_uids, error))
+        return FALSE;
+
+    request_id = g_uuid_string_random ();
+    if (!wyrebox_daemon_request_identity_init (&identity,
+        request_id,
+        WYREBOX_DOVECOT_CALLER_IDENTITY,
+        account_identity, WYREBOX_DOVECOT_TOOL_IDENTITY, NULL, error))
+        return FALSE;
+
+    request_payload =
+        wyrebox_daemon_capnp_codec_encode_memberships_expunge_request
+            (&identity, &request, NULL, error);
+    if (request_payload == NULL)
+        return FALSE;
+
+    response_payload =
+        wyrebox_daemon_uds_client_send_request (socket_path, request_payload,
+            error);
+    if (response_payload == NULL)
+        return FALSE;
+
+    if (!wyrebox_daemon_capnp_codec_decode_response_frame (response_payload,
+        &response, error))
+        return FALSE;
+
+    if (!validate_response_request_id (&response, request_id,
+        "memberships expunge", error))
+        return FALSE;
+
+    switch (response.kind) {
+    case WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS:
+        if (out_journal_offset != NULL)
+            *out_journal_offset = response.success.journal_offset;
+        return TRUE;
+    case WYREBOX_DAEMON_RESPONSE_FRAME_ERROR:
+        return set_daemon_error_response (&response, "memberships expunge",
+                   error);
+    default:
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon returned unexpected response kind %d for memberships "
+            "expunge", response.kind);
+        return FALSE;
+    }
+}
+
 #else
 
 gboolean
@@ -1503,6 +1581,34 @@ wyrebox_dovecot_daemon_client_update_flags (const char *socket_path,
     (void)mode;
     (void)system_flags;
     (void)user_keywords;
+
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (out_journal_offset != NULL)
+        *out_journal_offset = 0;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_NOT_SUPPORTED,
+        "Dovecot daemon client requires Cap'n Proto serialization support");
+    return FALSE;
+}
+
+gboolean
+wyrebox_dovecot_daemon_client_expunge (const char *socket_path,
+    const char *account_identity,
+    const char *mailbox_id,
+    guint64 uid_validity,
+    const guint64 *uids,
+    gsize n_uids,
+    guint64 *out_journal_offset, GError **error)
+{
+    (void)socket_path;
+    (void)account_identity;
+    (void)mailbox_id;
+    (void)uid_validity;
+    (void)uids;
+    (void)n_uids;
 
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 

@@ -10,6 +10,7 @@
 #include "wyrebox-daemon-duckdb-query-template-dispatcher.h"
 #include "wyrebox-daemon-wirelog-predicate-query-dispatcher.h"
 #include "wyrebox-daemon-flag-keyword-update-dispatcher.h"
+#include "wyrebox-daemon-memberships-expunge-dispatcher.h"
 #include "wyrebox-daemon-message-search-dispatcher.h"
 
 #include <glib-object.h>
@@ -29,6 +30,7 @@ typedef enum {
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_MUTATION,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_BATCH_IMPORT,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FLAG_KEYWORD_UPDATE,
+  WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MEMBERSHIPS_EXPUNGE,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_WIRELOG_PREDICATE_QUERY,
   WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DUCKDB_QUERY_TEMPLATE,
 } WyreboxDaemonRequestFrameOperation;
@@ -52,6 +54,7 @@ typedef struct
   const WyreboxDaemonMailEventStreamRequest *mail_event_stream;
   const WyreboxDaemonDeliveryIngestionRequest *delivery_ingestion;
   const WyreboxDaemonFlagKeywordUpdateRequest *flag_keyword_update;
+  const WyreboxDaemonMembershipsExpungeRequest *memberships_expunge;
   const WyreboxDaemonWirelogPredicateQueryRequest *wirelog_predicate_query;
   const WyreboxDaemonDuckDBQueryTemplateRequest *duckdb_query_template;
 } WyreboxDaemonDecodedRequestFrame;
@@ -67,6 +70,7 @@ gboolean wyrebox_daemon_request_router_route (
     WyreboxDaemonWirelogPredicateQueryService *wirelog_predicate_query_service,
     WyreboxDaemonDuckDBQueryTemplateService *duckdb_query_template_service,
     WyreboxDaemonFlagKeywordUpdateService *flag_keyword_update_service,
+    WyreboxDaemonMembershipsExpungeService *memberships_expunge_service,
     const WyreboxDaemonDecodedRequestFrame *request_frame,
     WyreboxDaemonResponseFrame *out_frame,
     GError **error);
