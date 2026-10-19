@@ -3,6 +3,7 @@
 #include "wyrebox-journal-reader.h"
 #include "wyrebox-journal-writer.h"
 #include "wyrebox-local-object-store.h"
+#include "wyrebox-message-appended-payload.h"
 #include "wyrebox-message-delivered-payload.h"
 
 #include <gio/gio.h>
@@ -14,6 +15,8 @@
 static const char *missing_object_key =
     "sha256:"
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+static char *append_seen_flags[] = { (char *)"\\Seen", NULL };
 
 static void
 remove_tree (const char *path)
@@ -182,6 +185,70 @@ test_message_delivered_missing_object_fails_validation (void)
     g_assert_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
         WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_MISSING_OBJECT);
     g_clear_error (&error);
+
+    remove_tree (object_root);
+    remove_tree (journal_root);
+}
+
+static void
+test_message_appended_missing_object_fails_validation (void)
+{
+    g_autofree char *object_root =
+        g_dir_make_tmp ("wyrebox-replay-validator-objects-XXXXXX", NULL);
+    g_autofree char *journal_root =
+        g_dir_make_tmp ("wyrebox-replay-validator-journal-XXXXXX", NULL);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) payload = NULL;
+    g_autoptr (WyreboxLocalObjectStore) store = NULL;
+    g_autoptr (WyreboxJournalWriter) writer = NULL;
+    g_autoptr (WyreboxJournalReader) reader = NULL;
+    g_autoptr (WyreboxDeliveryReplayValidator) validator = NULL;
+    WyreboxMessageAppendedPayload appended = {
+        .account_id = (char *)"account-1",
+        .mailbox_id = (char *)"inbox:account-1",
+        .uidvalidity = 1,
+        .uid = 7,
+        .object_key = (char *)missing_object_key,
+        .size_bytes = 123,
+        .internal_date_unix_us = 8001,
+        .system_flags = append_seen_flags,
+    };
+    guint64 offset = 0;
+    guint64 sequence = 0;
+
+    g_assert_nonnull (object_root);
+    g_assert_nonnull (journal_root);
+
+    store = wyrebox_local_object_store_new (object_root, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (store);
+
+    writer = wyrebox_journal_writer_new (journal_root, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (writer);
+
+    payload = wyrebox_message_appended_payload_encode (&appended, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (payload);
+
+    g_assert_true (wyrebox_journal_writer_append (writer,
+        WYREBOX_JOURNAL_EVENT_MESSAGE_APPENDED,
+        payload, &offset, &sequence, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (sequence, ==, 1);
+
+    reader = wyrebox_journal_reader_new (journal_root, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (reader);
+
+    validator = wyrebox_delivery_replay_validator_new (reader, store);
+    g_assert_nonnull (validator);
+
+    g_assert_false (wyrebox_delivery_replay_validator_validate_all (validator,
+        &error));
+    g_assert_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+        WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_MISSING_OBJECT);
+    g_assert_nonnull (strstr (error->message, "MessageAppended"));
 
     remove_tree (object_root);
     remove_tree (journal_root);
@@ -613,6 +680,9 @@ main (int argc, char **argv)
     g_test_add_func ("/ingestion/delivery-replay-validator/"
         "message-delivered-missing-object-fails-validation",
         test_message_delivered_missing_object_fails_validation);
+    g_test_add_func ("/ingestion/delivery-replay-validator/"
+        "message-appended-missing-object-fails-validation",
+        test_message_appended_missing_object_fails_validation);
     g_test_add_func ("/ingestion/delivery-replay-validator/"
         "message-delivered-size-mismatch-fails-validation",
         test_message_delivered_size_mismatch_fails_validation);

@@ -1,6 +1,7 @@
 #include "wyrebox-delivery-replay-validator.h"
 
 #include "wyrebox-delivery-object-check.h"
+#include "wyrebox-message-appended-payload.h"
 #include "wyrebox-message-delivered-payload.h"
 
 #include <gio/gio.h>
@@ -76,6 +77,56 @@ is_counted_object_failure (const GError *error)
 }
 
 static gboolean
+validate_object_reference (WyreboxDeliveryReplayValidator *self,
+    const gchar *event_name, guint64 sequence, const gchar *object_key,
+    guint64 size_bytes, GError **error)
+{
+    g_autoptr (GError) local_error = NULL;
+
+    switch (wyrebox_delivery_object_check (self->object_store, object_key,
+        size_bytes, &local_error)) {
+    case WYREBOX_DELIVERY_OBJECT_CHECK_OK:
+        return TRUE;
+    case WYREBOX_DELIVERY_OBJECT_CHECK_MISSING:
+        g_set_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+            WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_MISSING_OBJECT,
+            "%s journal record at sequence %" G_GUINT64_FORMAT
+            " references unavailable raw object %s: %s",
+            event_name, sequence, object_key, local_error->message);
+        return FALSE;
+    case WYREBOX_DELIVERY_OBJECT_CHECK_SIZE_MISMATCH:
+        g_set_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+            WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_SIZE_MISMATCH,
+            "%s journal record at sequence %" G_GUINT64_FORMAT ": %s",
+            event_name, sequence, local_error->message);
+        return FALSE;
+    case WYREBOX_DELIVERY_OBJECT_CHECK_HASH_MISMATCH:
+        g_set_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+            WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_HASH_MISMATCH,
+            "%s journal record at sequence %" G_GUINT64_FORMAT
+            " references raw object %s with SHA-256 mismatch",
+            event_name, sequence, object_key);
+        return FALSE;
+    case WYREBOX_DELIVERY_OBJECT_CHECK_INVALID_KEY:
+        g_set_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+            WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_INVALID_RECORD,
+            "%s journal record at sequence %" G_GUINT64_FORMAT
+            " references invalid raw object key %s: %s",
+            event_name, sequence, object_key, local_error->message);
+        return FALSE;
+    case WYREBOX_DELIVERY_OBJECT_CHECK_UNREADABLE:
+    default:
+        g_set_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
+            WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_OBJECT_UNREADABLE,
+            "%s journal record at sequence %" G_GUINT64_FORMAT
+            " failed to read raw object %s: %s",
+            event_name, sequence, object_key,
+            local_error != NULL ? local_error->message : "unknown error");
+        return FALSE;
+    }
+}
+
+static gboolean
 validate_message_delivered_record (WyreboxDeliveryReplayValidator *self,
     WyreboxJournalRecord *record, GError **error)
 {
@@ -94,47 +145,33 @@ validate_message_delivered_record (WyreboxDeliveryReplayValidator *self,
         return FALSE;
     }
 
-    switch (wyrebox_delivery_object_check (self->object_store,
-        decoded.object_key, decoded.size_bytes, &local_error)) {
-    case WYREBOX_DELIVERY_OBJECT_CHECK_OK:
-        return TRUE;
-    case WYREBOX_DELIVERY_OBJECT_CHECK_MISSING:
-        g_set_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
-            WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_MISSING_OBJECT,
-            "MessageDelivered journal record at sequence %" G_GUINT64_FORMAT
-            " references unavailable raw object %s: %s",
-            record->sequence, decoded.object_key, local_error->message);
-        return FALSE;
-    case WYREBOX_DELIVERY_OBJECT_CHECK_SIZE_MISMATCH:
-        g_set_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
-            WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_SIZE_MISMATCH,
-            "MessageDelivered journal record at sequence %" G_GUINT64_FORMAT
-            ": %s", record->sequence, local_error->message);
-        return FALSE;
-    case WYREBOX_DELIVERY_OBJECT_CHECK_HASH_MISMATCH:
-        g_set_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
-            WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_HASH_MISMATCH,
-            "MessageDelivered journal record at sequence %" G_GUINT64_FORMAT
-            " references raw object %s with SHA-256 mismatch",
-            record->sequence, decoded.object_key);
-        return FALSE;
-    case WYREBOX_DELIVERY_OBJECT_CHECK_INVALID_KEY:
-        g_set_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
-            WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_INVALID_RECORD,
-            "MessageDelivered journal record at sequence %" G_GUINT64_FORMAT
-            " references invalid raw object key %s: %s",
-            record->sequence, decoded.object_key, local_error->message);
-        return FALSE;
-    case WYREBOX_DELIVERY_OBJECT_CHECK_UNREADABLE:
-    default:
-        g_set_error (error, WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR,
-            WYREBOX_DELIVERY_REPLAY_VALIDATOR_ERROR_OBJECT_UNREADABLE,
-            "MessageDelivered journal record at sequence %" G_GUINT64_FORMAT
-            " failed to read raw object %s: %s",
-            record->sequence, decoded.object_key,
+    return validate_object_reference (self, "MessageDelivered",
+               record->sequence, decoded.object_key, decoded.size_bytes,
+               error);
+}
+
+static gboolean
+validate_message_appended_record (WyreboxDeliveryReplayValidator *self,
+    WyreboxJournalRecord *record, GError **error)
+{
+    g_autoptr (GError) local_error = NULL;
+    g_auto (WyreboxMessageAppendedPayload) decoded = { 0 };
+
+    if (!wyrebox_message_appended_payload_decode (record->payload, &decoded,
+        &local_error)) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "failed to decode MessageAppended journal record at sequence %"
+            G_GUINT64_FORMAT ": %s",
+            record->sequence,
             local_error != NULL ? local_error->message : "unknown error");
         return FALSE;
     }
+
+    return validate_object_reference (self, "MessageAppended",
+               record->sequence, decoded.object_key, decoded.size_bytes,
+               error);
 }
 
 static gboolean
@@ -146,6 +183,7 @@ validate_records (WyreboxDeliveryReplayValidator *self,
 
     while (TRUE) {
         g_autoptr (GError) record_error = NULL;
+        gboolean ok = TRUE;
 
         if (!wyrebox_journal_reader_read_next (self->journal_reader,
             &record, &eof, error)) {
@@ -155,8 +193,16 @@ validate_records (WyreboxDeliveryReplayValidator *self,
             return FALSE;
         }
 
-        if (record.event_type != WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED ||
-            validate_message_delivered_record (self, &record, &record_error))
+        if (record.event_type == WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED)
+            ok = validate_message_delivered_record (self, &record,
+                    &record_error);
+        else if (record.event_type == WYREBOX_JOURNAL_EVENT_MESSAGE_APPENDED)
+            ok = validate_message_appended_record (self, &record,
+                    &record_error);
+        else
+            continue;
+
+        if (ok)
             continue;
 
         if (report == NULL || !is_counted_object_failure (record_error)) {
