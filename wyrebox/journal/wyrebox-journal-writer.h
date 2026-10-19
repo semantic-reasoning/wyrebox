@@ -19,6 +19,7 @@ typedef enum
     WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_EXPUNGED,
     WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_COPIED,
     WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_MOVED,
+    WYREBOX_JOURNAL_EVENT_MESSAGE_APPENDED,
 } WyreboxJournalEventType;
 
 const char *wyrebox_journal_event_type_to_string (WyreboxJournalEventType

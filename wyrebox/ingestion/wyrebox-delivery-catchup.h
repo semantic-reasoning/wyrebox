@@ -104,13 +104,14 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDeliveryCatchupReport,
  * wyrebox_delivery_materializer_apply_to_inbox_full().
  *
  * FlagChanged, MembershipsExpunged, MembershipsCopied, MembershipsMoved,
- * FactInserted, FactRetracted, FactsExtracted, and
+ * MessageAppended, FactInserted, FactRetracted, FactsExtracted, and
  * DerivedViewMembershipChanged records are replayed in journal order with the
  * deliveries. Each is applied on its own with
  * wyrebox_delivery_materializer_apply_flag_change(),
  * wyrebox_delivery_materializer_apply_memberships_expunged(),
  * wyrebox_delivery_materializer_apply_memberships_copied(),
  * wyrebox_delivery_materializer_apply_memberships_moved(),
+ * wyrebox_delivery_materializer_apply_message_appended(),
  * wyrebox_delivery_materializer_apply_fact_mutation(),
  * wyrebox_delivery_materializer_apply_facts_extracted(), or
  * wyrebox_delivery_materializer_apply_membership_change() and follows the
@@ -120,6 +121,9 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDeliveryCatchupReport,
  * materialized, holds the account. Membership changes only restore what the
  * derived view materializer already wrote, so they do not count their account
  * as materialized.
+ *
+ * A MessageAppended record is never batched with deliveries. Like a delivery
+ * run, its raw object is checked first and a failed check holds its account.
  *
  * Consecutive deliveries for the same account are applied in one materializer
  * transaction, in journal order. Before a run is applied, the raw object of

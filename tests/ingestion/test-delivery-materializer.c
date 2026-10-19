@@ -1,6 +1,7 @@
 #include "wyrebox-delivery-materializer.h"
 #include "wyrebox-delivery-projection.h"
 #include "wyrebox-duckdb-shared.h"
+#include "wyrebox-message-appended-payload.h"
 #include "wyrebox-schema-metadata-store.h"
 #include "wyrebox-schema-migration.h"
 
@@ -2241,6 +2242,210 @@ test_memberships_copied_destination_uid_collision_is_invalid_data (void)
     remove_catalog (path);
 }
 
+static char *append_seen_flags[] = { (char *)"\\Seen", NULL };
+
+static WyreboxMessageAppendedPayload
+message_appended_payload (const gchar *mailbox_id, guint64 uid,
+    guint64 uidvalidity, const gchar *object_key, guint64 size_bytes)
+{
+    return (WyreboxMessageAppendedPayload) {
+               .account_id = (char *)"account-1",
+               .mailbox_id = (char *)mailbox_id,
+               .uidvalidity = uidvalidity,
+               .uid = uid,
+               .object_key = (char *)object_key,
+               .size_bytes = size_bytes,
+               .internal_date_unix_us = 8001,
+               .system_flags = append_seen_flags,
+    };
+}
+
+static gboolean
+apply_message_appended (const gchar *path,
+    const WyreboxMessageAppendedPayload *payload, guint64 journal_offset,
+    guint64 journal_sequence, gboolean advance_checkpoint, GError **error)
+{
+    g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+
+    materializer = wyrebox_delivery_materializer_new_duckdb (path, error);
+    if (materializer == NULL)
+        return FALSE;
+
+    return wyrebox_delivery_materializer_apply_message_appended (materializer,
+               payload, journal_offset, journal_sequence, advance_checkpoint,
+               error);
+}
+
+#define APPEND_ARCHIVE_ROW_5 \
+        "mailbox:archive:account-1:journal:30:3:0|journal:30:3|8001|30:3:0|true"
+
+static void
+test_message_appended_adds_destination_membership (void)
+{
+    g_autofree gchar *path = create_catalog_with_two_messages_and_archive ();
+    g_autoptr (GError) error = NULL;
+    WyreboxMessageAppendedPayload payload;
+    TestDuckdbFixture duckdb = { 0 };
+
+    payload = message_appended_payload ("archive:account-1", 5, 1,
+            "sha256:third", 303);
+    g_assert_true (apply_message_appended (path, &payload, 30, 3, TRUE,
+        &error));
+    g_assert_no_error (error);
+
+    assert_mailbox_row (path, "archive:account-1", 5, APPEND_ARCHIVE_ROW_5);
+    assert_archive_state (path, 1, 1, 0, 0);
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_materialization_checkpoint (duckdb.connection, 30, 3);
+    g_assert_cmpuint (query_uint64 (duckdb.connection,
+        "SELECT COUNT(*) FROM message_flags WHERE membership_id = "
+        "'mailbox:archive:account-1:journal:30:3:0' AND "
+        "flag_name = '\\Seen';"), ==, 1);
+    close_duckdb_fixture (&duckdb);
+    remove_catalog (path);
+}
+
+static void
+test_message_appended_creates_unmaterialized_inbox (void)
+{
+    g_autofree gchar *path = create_bootstrap_catalog ();
+    g_autoptr (GError) error = NULL;
+    WyreboxMessageAppendedPayload payload;
+    TestDuckdbFixture duckdb = { 0 };
+
+    payload = message_appended_payload ("inbox:account-1", 1, 1,
+            "sha256:first", 101);
+    g_assert_true (apply_message_appended (path, &payload, 11, 1, TRUE,
+        &error));
+    g_assert_no_error (error);
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_query_string (duckdb.connection,
+        "SELECT mailbox_id FROM mailboxes WHERE account_id = 'account-1' "
+        "AND imap_name = 'INBOX';", "inbox:account-1");
+    assert_query_string (duckdb.connection,
+        "SELECT membership_id || '|' || CAST(uid AS VARCHAR) || '|' || "
+        "CAST(journal_item AS VARCHAR) FROM mailbox_memberships "
+        "WHERE mailbox_id = 'inbox:account-1';",
+        "mailbox:inbox:account-1:journal:11:1:0|1|0");
+    close_duckdb_fixture (&duckdb);
+    remove_catalog (path);
+}
+
+static void
+test_message_appended_reapply_is_idempotent (void)
+{
+    g_autofree gchar *path = create_catalog_with_two_messages_and_archive ();
+    g_autoptr (GError) error = NULL;
+    WyreboxMessageAppendedPayload payload;
+
+    payload = message_appended_payload ("archive:account-1", 5, 1,
+            "sha256:third", 303);
+    g_assert_true (apply_message_appended (path, &payload, 30, 3, TRUE,
+        &error));
+    g_assert_no_error (error);
+    g_assert_true (apply_message_appended (path, &payload, 30, 3, TRUE,
+        &error));
+    g_assert_no_error (error);
+
+    assert_mailbox_row (path, "archive:account-1", 5, APPEND_ARCHIVE_ROW_5);
+    assert_archive_state (path, 1, 1, 0, 0);
+    remove_catalog (path);
+}
+
+static void
+test_message_appended_reapply_after_later_tombstone (void)
+{
+    g_autofree gchar *path = create_catalog_with_two_messages_and_archive ();
+    g_autoptr (GError) error = NULL;
+    WyreboxMessageAppendedPayload payload;
+    TestDuckdbFixture duckdb = { 0 };
+
+    payload = message_appended_payload ("archive:account-1", 5, 1,
+            "sha256:third", 303);
+    g_assert_true (apply_message_appended (path, &payload, 30, 3, TRUE,
+        &error));
+    g_assert_no_error (error);
+
+    open_duckdb_fixture (path, &duckdb);
+    execute_sql (duckdb.connection,
+        "UPDATE mailbox_memberships SET is_visible = FALSE, "
+        "expunged_journal_offset = 40, expunged_journal_sequence = 4 "
+        "WHERE mailbox_id = 'archive:account-1' AND uid = 5;");
+    close_duckdb_fixture (&duckdb);
+
+    g_assert_true (apply_message_appended (path, &payload, 30, 3, TRUE,
+        &error));
+    g_assert_no_error (error);
+    assert_archive_state (path, 1, 1, 0, 0);
+
+    open_duckdb_fixture (path, &duckdb);
+    execute_sql (duckdb.connection,
+        "UPDATE mailbox_memberships SET expunged_journal_sequence = 3 "
+        "WHERE mailbox_id = 'archive:account-1' AND uid = 5;");
+    close_duckdb_fixture (&duckdb);
+
+    g_assert_false (apply_message_appended (path, &payload, 30, 3, TRUE,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    remove_catalog (path);
+}
+
+static void
+test_message_appended_reapply_mismatch_is_invalid_data (void)
+{
+    g_autofree gchar *path = create_catalog_with_two_messages_and_archive ();
+    g_autoptr (GError) error = NULL;
+    WyreboxMessageAppendedPayload payload;
+
+    payload = message_appended_payload ("archive:account-1", 5, 1,
+            "sha256:third", 303);
+    g_assert_true (apply_message_appended (path, &payload, 30, 3, TRUE,
+        &error));
+    g_assert_no_error (error);
+
+    payload.uid = 6;
+    g_assert_false (apply_message_appended (path, &payload, 30, 3, TRUE,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+    assert_mailbox_row (path, "archive:account-1", 5, APPEND_ARCHIVE_ROW_5);
+    remove_catalog (path);
+}
+
+static void
+test_message_appended_missing_mailbox_fails_invalid_data (void)
+{
+    g_autofree gchar *path = create_catalog_with_two_messages_and_archive ();
+    g_autoptr (GError) error = NULL;
+    WyreboxMessageAppendedPayload payload;
+
+    payload = message_appended_payload ("missing:account-1", 5, 1,
+            "sha256:third", 303);
+    g_assert_false (apply_message_appended (path, &payload, 30, 3, TRUE,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    assert_archive_state (path, 0, 0, 0, 0);
+    remove_catalog (path);
+}
+
+static void
+test_message_appended_wrong_uidvalidity_fails_invalid_data (void)
+{
+    g_autofree gchar *path = create_catalog_with_one_inbox_message ();
+    g_autoptr (GError) error = NULL;
+    WyreboxMessageAppendedPayload payload;
+
+    payload = message_appended_payload ("inbox:account-1", 2, 2,
+            "sha256:second", 202);
+    g_assert_false (apply_message_appended (path, &payload, 30, 3, TRUE,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    assert_membership_visibility (path, 1, TRUE, 0, 0);
+    remove_catalog (path);
+}
+
 static gboolean
 apply_fact_mutation (const gchar *path, WyreboxDaemonFactMutationKind kind,
     const gchar *scope_id, const gchar *const *arguments,
@@ -2827,6 +3032,27 @@ main (int argc, char **argv)
     g_test_add_func (
         "/ingestion/delivery-materializer/memberships-copied-uid-collision",
         test_memberships_copied_destination_uid_collision_is_invalid_data);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/message-appended",
+        test_message_appended_adds_destination_membership);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/message-appended-inbox-created",
+        test_message_appended_creates_unmaterialized_inbox);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/message-appended-reapply",
+        test_message_appended_reapply_is_idempotent);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/message-appended-reapply-tombstone",
+        test_message_appended_reapply_after_later_tombstone);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/message-appended-reapply-mismatch",
+        test_message_appended_reapply_mismatch_is_invalid_data);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/message-appended-invalid",
+        test_message_appended_missing_mailbox_fails_invalid_data);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/message-appended-wrong-uidvalidity",
+        test_message_appended_wrong_uidvalidity_fails_invalid_data);
     g_test_add_func ("/ingestion/delivery-materializer/fact-mutation",
         test_fact_mutation_insert_retract_reinsert);
     g_test_add_func ("/ingestion/delivery-materializer/fact-mutation-suffix",

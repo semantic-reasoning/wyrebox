@@ -7,6 +7,7 @@
 #include "wyrebox-flag-changed-payload.h"
 #include "wyrebox-memberships-copied-payload.h"
 #include "wyrebox-memberships-expunged-payload.h"
+#include "wyrebox-message-appended-payload.h"
 
 #include <glib-object.h>
 
@@ -273,6 +274,45 @@ gboolean wyrebox_delivery_materializer_apply_memberships_copied (
 gboolean wyrebox_delivery_materializer_apply_memberships_moved (
     WyreboxDeliveryMaterializer *self,
     const WyreboxMembershipsCopiedPayload *payload,
+    guint64 journal_offset,
+    guint64 journal_sequence,
+    gboolean advance_checkpoint,
+    GError **error);
+
+/*
+ * Apply the MessageAppended record at @journal_offset/@journal_sequence, in
+ * one transaction. The checkpoint is moved forward to the record when
+ * @advance_checkpoint is TRUE.
+ *
+ * The raw object is recorded like a delivery's: the object, the message
+ * "journal:<offset>:<sequence>" and its headers are inserted when absent and
+ * must match when present. The payload's destination mailbox gets one visible
+ * membership "mailbox:<mailbox>:journal:<offset>:<sequence>:0" with the
+ * payload's UID, internal date and journal_item 0, plus the payload's system
+ * flags and user keywords. The mailbox's UIDNEXT becomes at least UID + 1 and
+ * its UIDVALIDITY must match the payload.
+ *
+ * The destination must be an ordinary mailbox that is already materialized,
+ * except that an account's never-materialized INBOX, "inbox:<account>", is
+ * created like a delivery would create it. Any other missing mailbox is not
+ * created.
+ *
+ * Re-applying is a no-op when the membership id already exists with the same
+ * account, mailbox, UID, message id, journal_item, and journal position and
+ * is either visible or tombstoned by a later record; flag inserts are skipped
+ * for it. Anything else that does not match, including a UID owned by another
+ * membership, a UIDVALIDITY mismatch, and a mailbox name owned by another
+ * mailbox, fails with G_IO_ERROR_INVALID_DATA. Other failures use other
+ * codes. On failure nothing is committed.
+ *
+ * The caller checks that the raw object exists before applying, as it does
+ * for deliveries.
+ *
+ * @payload: (transfer none): decoded MessageAppended payload.
+ */
+gboolean wyrebox_delivery_materializer_apply_message_appended (
+    WyreboxDeliveryMaterializer *self,
+    const WyreboxMessageAppendedPayload *payload,
     guint64 journal_offset,
     guint64 journal_sequence,
     gboolean advance_checkpoint,

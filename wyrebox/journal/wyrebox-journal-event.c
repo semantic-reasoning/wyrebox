@@ -69,6 +69,12 @@ static const WyreboxJournalEventTypeDescriptor catalog[] = {
         "journal.payload.memberships-copied.v1",
         "Destination memberships added by MOVE with source tombstones",
     },
+    {
+        WYREBOX_JOURNAL_EVENT_MESSAGE_APPENDED,
+        "MessageAppended",
+        "journal.payload.message-appended.v1",
+        "Message appended to an ordinary mailbox by APPEND",
+    },
 };
 
 void

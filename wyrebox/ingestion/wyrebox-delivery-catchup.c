@@ -213,7 +213,8 @@ has_delivery_record (const WyreboxDeliveryProjectionList *list)
         const WyreboxDeliveryProjectionRecord *record =
             g_ptr_array_index (list->records, i);
 
-        if (wyrebox_delivery_projection_record_is_delivery (record))
+        if (wyrebox_delivery_projection_record_is_delivery (record) ||
+            record->message_appended != NULL)
             return TRUE;
     }
 
@@ -403,6 +404,17 @@ wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
                     from_checkpoint && holds->len == 0, &run_error) :
                 wyrebox_delivery_materializer_apply_memberships_copied
                     (materializer, first->memberships_copied,
+                    first->journal_offset, first->journal_sequence,
+                    from_checkpoint && holds->len == 0, &run_error);
+        } else if (first->message_appended != NULL) {
+            if (!wyrebox_delivery_projection_check_record_object (
+                    object_store, first, &run_error)) {
+                add_hold (holds, first, g_steal_pointer (&run_error));
+                continue;
+            }
+
+            applied = wyrebox_delivery_materializer_apply_message_appended
+                    (materializer, first->message_appended,
                     first->journal_offset, first->journal_sequence,
                     from_checkpoint && holds->len == 0, &run_error);
         } else if (first->fact_mutation != NULL) {
