@@ -1,5 +1,6 @@
 #include "wyrebox-daemon-request-router.h"
 #include "wyrebox-daemon-flag-keyword-update-request.h"
+#include "wyrebox-daemon-memberships-expunge-request.h"
 #include "wyrebox-daemon-delivery-ingestion-request.h"
 #include "wyrebox-daemon-mailbox-status-request.h"
 #include "wyrebox-journal-reader.h"
@@ -21,7 +22,7 @@ route_without_wirelog (WyreboxDaemonDeliveryIngestionService *delivery,
     WyreboxDaemonResponseFrame *out, GError **error)
 {
     return wyrebox_daemon_request_router_route (delivery, fact, list, select,
-               fetch, search, NULL, NULL, NULL, flag, frame, out, error);
+               fetch, search, NULL, NULL, NULL, flag, NULL, frame, out, error);
 }
 
 static gboolean
@@ -30,7 +31,7 @@ route_with_wirelog (WyreboxDaemonWirelogPredicateQueryService *wirelog,
     WyreboxDaemonResponseFrame *out, GError **error)
 {
     return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
-               NULL, NULL, wirelog, NULL, NULL, frame, out, error);
+               NULL, NULL, wirelog, NULL, NULL, NULL, frame, out, error);
 }
 
 static gboolean
@@ -39,7 +40,7 @@ route_with_duckdb_query_template (WyreboxDaemonDuckDBQueryTemplateService
     WyreboxDaemonResponseFrame *out, GError **error)
 {
     return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
-               NULL, NULL, NULL, duckdb, NULL, frame, out, error);
+               NULL, NULL, NULL, duckdb, NULL, NULL, frame, out, error);
 }
 
 static gboolean
@@ -48,7 +49,17 @@ route_with_mail_event_stream (WyreboxDaemonMailEventStreamService
     WyreboxDaemonResponseFrame *out, GError **error)
 {
     return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
-               NULL, mail_event_stream, NULL, NULL, NULL, frame, out, error);
+               NULL, mail_event_stream, NULL, NULL, NULL, NULL, frame, out,
+               error);
+}
+
+static gboolean
+route_with_memberships_expunge (WyreboxDaemonMembershipsExpungeService *service,
+    const WyreboxDaemonDecodedRequestFrame *frame,
+    WyreboxDaemonResponseFrame *out, GError **error)
+{
+    return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
+               NULL, NULL, NULL, NULL, NULL, service, frame, out, error);
 }
 
 #define wyrebox_daemon_request_router_route route_without_wirelog
@@ -156,6 +167,31 @@ update_flag_keyword_fixture (const WyreboxDaemonRequestIdentity *identity,
     out_receipt->journal_offset = 10;
     out_receipt->journal_sequence = 20;
     out_receipt->summary = g_strdup ("flag_keyword_update mode=set");
+    return TRUE;
+}
+
+static gboolean
+expunge_memberships_fixture (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMembershipsExpungeRequest *request,
+    WyreboxDaemonSuccessReceipt *out_receipt, gpointer user_data,
+    GError **error)
+{
+    gboolean *was_called = user_data;
+
+    (void)error;
+
+    g_assert_cmpstr (identity->request_id, ==, "request-expunge");
+    g_assert_cmpuint (request->n_uids, ==, 2);
+    g_assert_cmpuint (request->uids[0], ==, 1);
+
+    if (was_called != NULL)
+        *was_called = TRUE;
+
+    out_receipt->request_id = g_strdup (identity->request_id);
+    out_receipt->durable_marker = g_strdup ("journal:10:20");
+    out_receipt->journal_offset = 10;
+    out_receipt->journal_sequence = 20;
+    out_receipt->summary = g_strdup ("memberships_expunge mailbox_id=mbox");
     return TRUE;
 }
 
@@ -1960,6 +1996,41 @@ test_request_router_rejects_missing_flag_keyword_update_service (void)
         WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE);
 }
 
+static void
+test_request_router_routes_memberships_expunge (void)
+{
+    guint64 uids[] = { 1, 2 };
+    gboolean was_called = FALSE;
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDaemonMembershipsExpungeService) service = NULL;
+    g_auto (WyreboxDaemonMembershipsExpungeRequest) request = { 0 };
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+    WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+    g_assert_true (wyrebox_daemon_memberships_expunge_request_init (&request,
+        "account-1", "mbox", 77, uids, G_N_ELEMENTS (uids), &error));
+    g_assert_no_error (error);
+
+    request_frame.request_id = "request-expunge";
+    request_frame.caller_identity = "dovecot";
+    request_frame.account_identity = "account-1";
+    request_frame.tool_identity = "dovecot-storage";
+    request_frame.correlation_id = "imap-expunge-1";
+    request_frame.operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MEMBERSHIPS_EXPUNGE;
+    request_frame.memberships_expunge = &request;
+
+    service = wyrebox_daemon_memberships_expunge_service_new
+            (expunge_memberships_fixture, &was_called, NULL);
+    g_assert_nonnull (service);
+
+    g_assert_true (route_with_memberships_expunge (service, &request_frame,
+        &frame, &error));
+    g_assert_no_error (error);
+    g_assert_true (was_called);
+    g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -2075,6 +2146,8 @@ main (int argc, char **argv)
         test_request_router_rejects_missing_duckdb_query_template_service);
     g_test_add_func ("/daemon-api/request-router/routes-flag-keyword-update",
         test_request_router_routes_flag_keyword_update);
+    g_test_add_func ("/daemon-api/request-router/routes-memberships-expunge",
+        test_request_router_routes_memberships_expunge);
     g_test_add_func ("/daemon-api/request-router/"
         "rejects-missing-flag-keyword-update-payload",
         test_request_router_rejects_missing_flag_keyword_update_payload);

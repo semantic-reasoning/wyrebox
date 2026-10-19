@@ -12,6 +12,7 @@
 #include "wyrebox-daemon-fact-extraction.h"
 #include "wyrebox-daemon-fact-mutation-service.h"
 #include "wyrebox-daemon-flag-keyword-update-journal.h"
+#include "wyrebox-daemon-memberships-expunge-journal.h"
 #include "wyrebox-daemon-mail-event-stream-service.h"
 #include "wyrebox-daemon-mailbox-catalog-duckdb.h"
 #include "wyrebox-daemon-message-fetch-service.h"
@@ -319,6 +320,8 @@ run_daemon (int argc, char **argv)
     g_autoptr (
         WyreboxDaemonFlagKeywordUpdateService) flag_keyword_update_service
         = NULL;
+    g_autoptr (WyreboxDaemonMembershipsExpungeService)
+    memberships_expunge_service = NULL;
     g_autoptr (WyreboxDaemonMailEventStreamService) mail_event_stream_service =
         NULL;
     g_autoptr (WyreboxDaemonWirelogViews) wirelog_views = NULL;
@@ -497,6 +500,14 @@ run_daemon (int argc, char **argv)
         return EX_OSERR;
     }
 
+    memberships_expunge_service =
+        wyrebox_daemon_memberships_expunge_service_new_journaled (catalog_path,
+            journal_writer, materialization, &error);
+    if (memberships_expunge_service == NULL) {
+        g_printerr ("wyreboxd: %s\n", error->message);
+        return EX_OSERR;
+    }
+
     ingestor = wyrebox_eml_ingestor_new_with_journal (object_store,
             journal_writer);
     delivery_service =
@@ -527,6 +538,8 @@ run_daemon (int argc, char **argv)
         (request_adapter, query_template_service);
     wyrebox_daemon_request_adapter_set_mail_event_stream_service
         (request_adapter, mail_event_stream_service);
+    wyrebox_daemon_request_adapter_set_memberships_expunge_service
+        (request_adapter, memberships_expunge_service);
     server = wyrebox_daemon_connection_server_new (socket_path,
             request_adapter);
 

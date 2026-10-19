@@ -17,6 +17,7 @@ struct _WyreboxDaemonRequestAdapter
     WyreboxDaemonWirelogPredicateQueryService *wirelog_predicate_query_service;
     WyreboxDaemonDuckDBQueryTemplateService *duckdb_query_template_service;
     WyreboxDaemonFlagKeywordUpdateService *flag_keyword_update_service;
+    WyreboxDaemonMembershipsExpungeService *memberships_expunge_service;
 
     GMutex mutation_route_mutex;
 
@@ -80,6 +81,7 @@ static void wyrebox_daemon_request_adapter_finalize (GObject *object)
     g_clear_object (&self->wirelog_predicate_query_service);
     g_clear_object (&self->duckdb_query_template_service);
     g_clear_object (&self->flag_keyword_update_service);
+    g_clear_object (&self->memberships_expunge_service);
     g_mutex_clear (&self->mutation_route_mutex);
 
     G_OBJECT_CLASS (wyrebox_daemon_request_adapter_parent_class)->finalize
@@ -110,6 +112,7 @@ operation_requires_mutation_route_lock (WyreboxDaemonRequestFrameOperation
     case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_MUTATION:
     case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FACT_BATCH_IMPORT:
     case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_FLAG_KEYWORD_UPDATE:
+    case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MEMBERSHIPS_EXPUNGE:
         return TRUE;
     default:
         return FALSE;
@@ -132,6 +135,7 @@ route_decoded_request (WyreboxDaemonRequestAdapter *self,
         self->wirelog_predicate_query_service,
         self->duckdb_query_template_service,
         self->flag_keyword_update_service,
+        self->memberships_expunge_service,
         decoded_request, response_frame, error);
 }
 
@@ -246,6 +250,19 @@ void wyrebox_daemon_request_adapter_set_duckdb_query_template_service
 
     g_set_object (&self->duckdb_query_template_service,
         duckdb_query_template_service);
+}
+
+void wyrebox_daemon_request_adapter_set_memberships_expunge_service
+    (WyreboxDaemonRequestAdapter *self,
+    WyreboxDaemonMembershipsExpungeService *memberships_expunge_service)
+{
+    g_return_if_fail (WYREBOX_IS_DAEMON_REQUEST_ADAPTER (self));
+    g_return_if_fail (memberships_expunge_service == NULL
+        || WYREBOX_IS_DAEMON_MEMBERSHIPS_EXPUNGE_SERVICE
+            (memberships_expunge_service));
+
+    g_set_object (&self->memberships_expunge_service,
+        memberships_expunge_service);
 }
 
 void wyrebox_daemon_request_adapter_set_mail_event_stream_service
