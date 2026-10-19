@@ -5,6 +5,7 @@
 #include "wyrebox-derived-view-membership-changed-payload.h"
 #include "wyrebox-facts-extracted-payload.h"
 #include "wyrebox-flag-changed-payload.h"
+#include "wyrebox-memberships-expunged-payload.h"
 
 #include <glib-object.h>
 
@@ -195,6 +196,29 @@ gboolean wyrebox_delivery_materializer_apply_facts_extracted (
 gboolean wyrebox_delivery_materializer_apply_membership_change (
     WyreboxDeliveryMaterializer *self,
     const WyreboxDerivedViewMembershipChangedPayload *payload,
+    guint64 journal_offset,
+    guint64 journal_sequence,
+    gboolean advance_checkpoint,
+    GError **error);
+
+/*
+ * Apply the MembershipsExpunged record at @journal_offset/@journal_sequence
+ * by tombstoning each listed ordinary membership, in one transaction. The
+ * checkpoint is moved forward to the record when @advance_checkpoint is TRUE.
+ *
+ * Each UID must already exist under the payload mailbox and UIDVALIDITY.
+ * Visible rows become invisible with the record's journal position stored in
+ * the tombstone columns. Re-applying the same record against a row already
+ * tombstoned by that record is a no-op. A missing UID, a UIDVALIDITY
+ * mismatch, and a row tombstoned by a different journal record fail with
+ * G_IO_ERROR_INVALID_DATA. Other failures use other codes. On failure nothing
+ * is committed.
+ *
+ * @payload: (transfer none): decoded MembershipsExpunged payload.
+ */
+gboolean wyrebox_delivery_materializer_apply_memberships_expunged (
+    WyreboxDeliveryMaterializer *self,
+    const WyreboxMembershipsExpungedPayload *payload,
     guint64 journal_offset,
     guint64 journal_sequence,
     gboolean advance_checkpoint,

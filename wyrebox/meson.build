@@ -109,6 +109,7 @@ wyrebox_sources = files(
   'journal/wyrebox-derived-view-membership-changed-payload.c',
   'journal/wyrebox-facts-extracted-payload.c',
   'journal/wyrebox-flag-changed-payload.c',
+  'journal/wyrebox-memberships-expunged-payload.c',
   'journal/wyrebox-journal-event.c',
   'journal/wyrebox-journal-writer.c',
   'journal/wyrebox-journal-reader.c',

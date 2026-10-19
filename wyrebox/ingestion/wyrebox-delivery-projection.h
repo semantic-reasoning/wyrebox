@@ -6,6 +6,7 @@
 #include "wyrebox-flag-changed-payload.h"
 #include "wyrebox-journal-reader.h"
 #include "wyrebox-local-object-store.h"
+#include "wyrebox-memberships-expunged-payload.h"
 
 #include <glib-object.h>
 
@@ -24,7 +25,8 @@ typedef struct
 {
   /*
    * Journal location of the MessageDelivered, FlagChanged, FactInserted,
-   * FactRetracted, FactsExtracted, or DerivedViewMembershipChanged record.
+   * FactRetracted, FactsExtracted, DerivedViewMembershipChanged, or
+   * MembershipsExpunged record.
    */
   guint64 journal_offset;
   guint64 journal_sequence;
@@ -107,6 +109,15 @@ typedef struct
    * wyrebox_delivery_projection_record_clear().
    */
   WyreboxDerivedViewMembershipChangedPayload *membership_change;
+
+  /*
+   * Decoded payload when the entry is a MembershipsExpunged record, or NULL
+   * otherwise. @account_identity is its payload's account.
+   *
+   * Ownership: owned by this record and cleared by
+   * wyrebox_delivery_projection_record_clear().
+   */
+  WyreboxMembershipsExpungedPayload *memberships_expunged;
 } WyreboxDeliveryProjectionRecord;
 
 /*

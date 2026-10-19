@@ -103,10 +103,11 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (WyreboxDeliveryCatchupReport,
  * of the account recorded in its payload, as resolved by
  * wyrebox_delivery_materializer_apply_to_inbox_full().
  *
- * FlagChanged, FactInserted, FactRetracted, FactsExtracted, and
- * DerivedViewMembershipChanged records are replayed in journal order with the
- * deliveries. Each is applied on its own with
+ * FlagChanged, MembershipsExpunged, FactInserted, FactRetracted,
+ * FactsExtracted, and DerivedViewMembershipChanged records are replayed in
+ * journal order with the deliveries. Each is applied on its own with
  * wyrebox_delivery_materializer_apply_flag_change(),
+ * wyrebox_delivery_materializer_apply_memberships_expunged(),
  * wyrebox_delivery_materializer_apply_fact_mutation(),
  * wyrebox_delivery_materializer_apply_facts_extracted(), or
  * wyrebox_delivery_materializer_apply_membership_change() and follows the

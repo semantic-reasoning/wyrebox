@@ -42,6 +42,7 @@ static const char *event_type_names[] = {
     "DerivedViewMembershipChanged",
     "DaemonAuditRecorded",
     "FactsExtracted",
+    "MembershipsExpunged",
 };
 
 typedef struct
@@ -84,7 +85,7 @@ static gboolean
 validate_event_type (WyreboxJournalEventType event_type)
 {
     return event_type >= WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED &&
-           event_type <= WYREBOX_JOURNAL_EVENT_FACTS_EXTRACTED;
+           event_type <= WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_EXPUNGED;
 }
 
 const char *

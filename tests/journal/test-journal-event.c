@@ -5,10 +5,10 @@
 static void
 test_event_type_catalog_is_enumerable (void)
 {
-    g_assert_cmpuint (wyrebox_journal_event_type_catalog_size (), ==, 8);
+    g_assert_cmpuint (wyrebox_journal_event_type_catalog_size (), ==, 9);
     g_assert_nonnull (wyrebox_journal_event_type_catalog_at (0));
-    g_assert_nonnull (wyrebox_journal_event_type_catalog_at (7));
-    g_assert_null (wyrebox_journal_event_type_catalog_at (8));
+    g_assert_nonnull (wyrebox_journal_event_type_catalog_at (8));
+    g_assert_null (wyrebox_journal_event_type_catalog_at (9));
 }
 
 static void
@@ -34,6 +34,13 @@ test_event_type_catalog_resolves_known_event_types (void)
     g_assert_cmpstr (descriptor->event_type_name, ==, "FactsExtracted");
     g_assert_cmpstr (descriptor->payload_schema_version, ==,
         "journal.payload.facts-extracted.v1");
+
+    descriptor = wyrebox_journal_event_type_catalog_lookup
+            (WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_EXPUNGED);
+    g_assert_nonnull (descriptor);
+    g_assert_cmpstr (descriptor->event_type_name, ==, "MembershipsExpunged");
+    g_assert_cmpstr (descriptor->payload_schema_version, ==,
+        "journal.payload.memberships-expunged.v1");
 }
 
 static void

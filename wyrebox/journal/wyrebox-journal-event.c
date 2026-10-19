@@ -51,6 +51,12 @@ static const WyreboxJournalEventTypeDescriptor catalog[] = {
         "journal.payload.facts-extracted.v1",
         "Header facts extracted from one delivered message",
     },
+    {
+        WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_EXPUNGED,
+        "MembershipsExpunged",
+        "journal.payload.memberships-expunged.v1",
+        "Ordinary mailbox memberships hidden by EXPUNGE",
+    },
 };
 
 void
