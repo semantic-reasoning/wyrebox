@@ -395,6 +395,16 @@ wyrebox_delivery_catchup_materialize_account_inboxes_resumed (
                     (materializer, first->memberships_expunged,
                     first->journal_offset, first->journal_sequence,
                     from_checkpoint && holds->len == 0, &run_error);
+        } else if (first->memberships_copied != NULL) {
+            applied = first->memberships_move ?
+                wyrebox_delivery_materializer_apply_memberships_moved
+                    (materializer, first->memberships_copied,
+                    first->journal_offset, first->journal_sequence,
+                    from_checkpoint && holds->len == 0, &run_error) :
+                wyrebox_delivery_materializer_apply_memberships_copied
+                    (materializer, first->memberships_copied,
+                    first->journal_offset, first->journal_sequence,
+                    from_checkpoint && holds->len == 0, &run_error);
         } else if (first->fact_mutation != NULL) {
             applied = wyrebox_delivery_materializer_apply_fact_mutation
                     (materializer, first->fact_mutation, first->journal_offset,

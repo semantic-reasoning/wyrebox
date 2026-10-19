@@ -1788,6 +1788,35 @@ test_memberships_expunged_reapply_same_record_is_noop (void)
 }
 
 static void
+test_delivery_reapply_after_later_tombstone_is_accepted (void)
+{
+    g_autofree gchar *path = create_catalog_with_one_inbox_message ();
+    g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+    guint64 uids[] = { 1 };
+    TestDuckdbFixture duckdb = { 0 };
+
+    g_assert_true (apply_memberships_expunged (path, uids, 1, 1, 30, 2, TRUE,
+        &error));
+    g_assert_no_error (error);
+
+    /* The delivery at sequence 1 was tombstoned by the later sequence 2. */
+    append_projection_record (&projection, "sha256:first", 101, 1001, 11, 1);
+    materializer = wyrebox_delivery_materializer_new_duckdb (path, &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_delivery_materializer_apply_to_inbox (materializer,
+        "account-1", &projection, &error));
+    g_assert_no_error (error);
+
+    assert_membership_visibility (path, 1, FALSE, 30, 2);
+    open_duckdb_fixture (path, &duckdb);
+    assert_table_count (duckdb.connection, "mailbox_memberships", 1);
+    close_duckdb_fixture (&duckdb);
+    remove_catalog (path);
+}
+
+static void
 test_memberships_expunged_unknown_target_is_invalid_data (void)
 {
     g_autofree gchar *path = create_catalog_with_one_inbox_message ();
@@ -1805,6 +1834,410 @@ test_memberships_expunged_unknown_target_is_invalid_data (void)
     g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
 
     assert_membership_visibility (path, 1, TRUE, 0, 0);
+    remove_catalog (path);
+}
+
+static gchar *
+create_catalog_with_two_messages_and_archive (void)
+{
+    g_autofree gchar *path = create_bootstrap_catalog ();
+    g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+    TestDuckdbFixture duckdb = { 0 };
+
+    append_projection_record (&projection, "sha256:first", 101, 1001, 11, 1);
+    append_projection_record (&projection, "sha256:second", 102, 1002, 21, 2);
+    apply_projection_to_account_inbox (path, "account-1", &projection);
+
+    open_duckdb_fixture (path, &duckdb);
+    execute_sql (duckdb.connection,
+        "INSERT INTO mailboxes (mailbox_id, account_id, imap_name, "
+        "is_selectable, is_visible) VALUES "
+        "('archive:account-1', 'account-1', 'Archive', TRUE, TRUE);");
+    close_duckdb_fixture (&duckdb);
+    return g_steal_pointer (&path);
+}
+
+static char *copy_seen_flags[] = { (char *)"\\Seen", NULL };
+static char *copy_keywords[] = { (char *)"project-x", NULL };
+
+static void
+fill_copy_items (WyreboxMembershipsCopiedItem items[2])
+{
+    items[0] = (WyreboxMembershipsCopiedItem) {
+        .src_uid = 1,
+        .dst_uid = 5,
+        .internal_date_unix_us = 7001,
+        .message_id = (char *)"journal:11:1",
+        .system_flags = copy_seen_flags,
+        .user_keywords = copy_keywords,
+    };
+    items[1] = (WyreboxMembershipsCopiedItem) {
+        .src_uid = 2,
+        .dst_uid = 6,
+        .internal_date_unix_us = 7002,
+        .message_id = (char *)"journal:21:2",
+    };
+}
+
+static WyreboxMembershipsCopiedPayload
+copy_payload (WyreboxMembershipsCopiedItem *items, gsize n_items)
+{
+    return (WyreboxMembershipsCopiedPayload) {
+               .account_id = (char *)"account-1",
+               .source_mailbox_id = (char *)"inbox:account-1",
+               .dest_mailbox_id = (char *)"archive:account-1",
+               .source_uidvalidity = 1,
+               .dest_uidvalidity = 1,
+               .items = items,
+               .n_items = n_items,
+    };
+}
+
+static gboolean
+apply_memberships_copied (const gchar *path,
+    const WyreboxMembershipsCopiedPayload *payload, gboolean is_move,
+    guint64 journal_offset, guint64 journal_sequence, GError **error)
+{
+    g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+
+    materializer = wyrebox_delivery_materializer_new_duckdb (path, error);
+    if (materializer == NULL)
+        return FALSE;
+
+    if (is_move)
+        return wyrebox_delivery_materializer_apply_memberships_moved (
+            materializer, payload, journal_offset, journal_sequence, TRUE,
+            error);
+
+    return wyrebox_delivery_materializer_apply_memberships_copied (
+        materializer, payload, journal_offset, journal_sequence, TRUE, error);
+}
+
+static void
+assert_mailbox_row (const gchar *path, const gchar *mailbox_id, guint64 uid,
+    const gchar *expected)
+{
+    TestDuckdbFixture duckdb = { 0 };
+    g_autofree gchar *sql = NULL;
+
+    open_duckdb_fixture (path, &duckdb);
+    sql = g_strdup_printf (
+        "SELECT membership_id || '|' || message_id || '|' || "
+        "CAST(internal_date_unix_us AS VARCHAR) || '|' || "
+        "CAST(journal_offset AS VARCHAR) || ':' || "
+        "CAST(journal_sequence AS VARCHAR) || ':' || "
+        "CAST(journal_item AS VARCHAR) || '|' || "
+        "CAST(is_visible AS VARCHAR) FROM mailbox_memberships "
+        "WHERE mailbox_id = '%s' AND uid = %" G_GUINT64_FORMAT ";",
+        mailbox_id, uid);
+    assert_query_string (duckdb.connection, sql, expected);
+    close_duckdb_fixture (&duckdb);
+}
+
+static void
+assert_archive_state (const gchar *path, guint64 n_memberships,
+    guint64 n_flags, guint64 n_keywords, guint64 uidnext)
+{
+    TestDuckdbFixture duckdb = { 0 };
+    g_autofree gchar *sql = NULL;
+
+    open_duckdb_fixture (path, &duckdb);
+    g_assert_cmpuint (query_uint64 (duckdb.connection,
+        "SELECT COUNT(*) FROM mailbox_memberships "
+        "WHERE mailbox_id = 'archive:account-1';"), ==, n_memberships);
+    g_assert_cmpuint (query_uint64 (duckdb.connection,
+        "SELECT COUNT(*) FROM message_flags "
+        "WHERE mailbox_id = 'archive:account-1';"), ==, n_flags);
+    g_assert_cmpuint (query_uint64 (duckdb.connection,
+        "SELECT COUNT(*) FROM message_keywords "
+        "WHERE mailbox_id = 'archive:account-1';"), ==, n_keywords);
+    if (uidnext != 0) {
+        sql = g_strdup_printf (
+            "SELECT COUNT(*) FROM mailbox_uid_state WHERE "
+            "namespace_kind = 'mailbox' AND "
+            "namespace_id = 'archive:account-1' AND uidnext = %"
+            G_GUINT64_FORMAT " AND uidvalidity = 1;", uidnext);
+        g_assert_cmpuint (query_uint64 (duckdb.connection, sql), ==, 1);
+    }
+    close_duckdb_fixture (&duckdb);
+}
+
+#define ARCHIVE_ROW_5 \
+        "mailbox:archive:account-1:journal:30:3:0|journal:11:1|7001|30:3:0|true"
+#define ARCHIVE_ROW_6 \
+        "mailbox:archive:account-1:journal:30:3:1|journal:21:2|7002|30:3:1|true"
+
+static void
+test_memberships_copied_adds_destination_rows (void)
+{
+    g_autofree gchar *path = create_catalog_with_two_messages_and_archive ();
+    g_autoptr (GError) error = NULL;
+    WyreboxMembershipsCopiedItem items[2];
+    WyreboxMembershipsCopiedPayload payload;
+    TestDuckdbFixture duckdb = { 0 };
+
+    fill_copy_items (items);
+    payload = copy_payload (items, G_N_ELEMENTS (items));
+
+    g_assert_true (apply_memberships_copied (path, &payload, FALSE, 30, 3,
+        &error));
+    g_assert_no_error (error);
+
+    assert_mailbox_row (path, "archive:account-1", 5, ARCHIVE_ROW_5);
+    assert_mailbox_row (path, "archive:account-1", 6, ARCHIVE_ROW_6);
+    assert_archive_state (path, 2, 1, 1, 7);
+    assert_membership_visibility (path, 1, TRUE, 0, 0);
+    assert_membership_visibility (path, 2, TRUE, 0, 0);
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_materialization_checkpoint (duckdb.connection, 30, 3);
+    g_assert_cmpuint (query_uint64 (duckdb.connection,
+        "SELECT COUNT(*) FROM message_flags WHERE membership_id = "
+        "'mailbox:archive:account-1:journal:30:3:0' AND "
+        "flag_name = '\\Seen' AND journal_offset = 30 AND "
+        "journal_sequence = 3;"), ==, 1);
+    g_assert_cmpuint (query_uint64 (duckdb.connection,
+        "SELECT COUNT(*) FROM message_keywords WHERE membership_id = "
+        "'mailbox:archive:account-1:journal:30:3:0' AND "
+        "keyword_name = 'project-x';"), ==, 1);
+    close_duckdb_fixture (&duckdb);
+
+    remove_catalog (path);
+}
+
+static void
+test_memberships_moved_tombs_sources (void)
+{
+    g_autofree gchar *path = create_catalog_with_two_messages_and_archive ();
+    g_autoptr (GError) error = NULL;
+    WyreboxMembershipsCopiedItem items[2];
+    WyreboxMembershipsCopiedPayload payload;
+
+    fill_copy_items (items);
+    payload = copy_payload (items, G_N_ELEMENTS (items));
+
+    g_assert_true (apply_memberships_copied (path, &payload, TRUE, 30, 3,
+        &error));
+    g_assert_no_error (error);
+
+    assert_mailbox_row (path, "archive:account-1", 5, ARCHIVE_ROW_5);
+    assert_mailbox_row (path, "archive:account-1", 6, ARCHIVE_ROW_6);
+    assert_archive_state (path, 2, 1, 1, 7);
+    assert_membership_visibility (path, 1, FALSE, 30, 3);
+    assert_membership_visibility (path, 2, FALSE, 30, 3);
+    remove_catalog (path);
+}
+
+static void
+test_memberships_copied_reapply_is_idempotent (void)
+{
+    g_autofree gchar *path = create_catalog_with_two_messages_and_archive ();
+    g_autoptr (GError) error = NULL;
+    WyreboxMembershipsCopiedItem items[2];
+    WyreboxMembershipsCopiedPayload payload;
+
+    fill_copy_items (items);
+    payload = copy_payload (items, G_N_ELEMENTS (items));
+
+    g_assert_true (apply_memberships_copied (path, &payload, FALSE, 30, 3,
+        &error));
+    g_assert_no_error (error);
+    g_assert_true (apply_memberships_copied (path, &payload, FALSE, 30, 3,
+        &error));
+    g_assert_no_error (error);
+
+    assert_mailbox_row (path, "archive:account-1", 5, ARCHIVE_ROW_5);
+    assert_archive_state (path, 2, 1, 1, 7);
+    remove_catalog (path);
+}
+
+static void
+test_memberships_moved_reapply_is_idempotent (void)
+{
+    g_autofree gchar *path = create_catalog_with_two_messages_and_archive ();
+    g_autoptr (GError) error = NULL;
+    WyreboxMembershipsCopiedItem items[2];
+    WyreboxMembershipsCopiedPayload payload;
+
+    fill_copy_items (items);
+    payload = copy_payload (items, G_N_ELEMENTS (items));
+
+    g_assert_true (apply_memberships_copied (path, &payload, TRUE, 30, 3,
+        &error));
+    g_assert_no_error (error);
+    g_assert_true (apply_memberships_copied (path, &payload, TRUE, 30, 3,
+        &error));
+    g_assert_no_error (error);
+
+    assert_archive_state (path, 2, 1, 1, 7);
+    assert_membership_visibility (path, 1, FALSE, 30, 3);
+    assert_membership_visibility (path, 2, FALSE, 30, 3);
+    remove_catalog (path);
+}
+
+static void
+test_memberships_copied_reapply_after_later_tombstone (void)
+{
+    g_autofree gchar *path = create_catalog_with_two_messages_and_archive ();
+    g_autoptr (GError) error = NULL;
+    WyreboxMembershipsCopiedItem items[2];
+    WyreboxMembershipsCopiedPayload payload;
+    TestDuckdbFixture duckdb = { 0 };
+
+    fill_copy_items (items);
+    payload = copy_payload (items, G_N_ELEMENTS (items));
+    g_assert_true (apply_memberships_copied (path, &payload, FALSE, 30, 3,
+        &error));
+    g_assert_no_error (error);
+
+    open_duckdb_fixture (path, &duckdb);
+    execute_sql (duckdb.connection,
+        "UPDATE mailbox_memberships SET is_visible = FALSE, "
+        "expunged_journal_offset = 40, expunged_journal_sequence = 4 "
+        "WHERE mailbox_id = 'archive:account-1' AND uid = 5;");
+    close_duckdb_fixture (&duckdb);
+
+    g_assert_true (apply_memberships_copied (path, &payload, FALSE, 30, 3,
+        &error));
+    g_assert_no_error (error);
+    assert_archive_state (path, 2, 1, 1, 7);
+    assert_membership_visibility (path, 1, TRUE, 0, 0);
+
+    open_duckdb_fixture (path, &duckdb);
+    execute_sql (duckdb.connection,
+        "UPDATE mailbox_memberships SET expunged_journal_sequence = 3 "
+        "WHERE mailbox_id = 'archive:account-1' AND uid = 5;");
+    close_duckdb_fixture (&duckdb);
+
+    g_assert_false (apply_memberships_copied (path, &payload, FALSE, 30, 3,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    remove_catalog (path);
+}
+
+static void
+test_memberships_copied_reapply_mismatch_is_invalid_data (void)
+{
+    g_autofree gchar *path = create_catalog_with_two_messages_and_archive ();
+    g_autoptr (GError) error = NULL;
+    WyreboxMembershipsCopiedItem items[2];
+    WyreboxMembershipsCopiedPayload payload;
+
+    fill_copy_items (items);
+    payload = copy_payload (items, G_N_ELEMENTS (items));
+    g_assert_true (apply_memberships_copied (path, &payload, FALSE, 30, 3,
+        &error));
+    g_assert_no_error (error);
+
+    items[0].dst_uid = 9;
+    g_assert_false (apply_memberships_copied (path, &payload, FALSE, 30, 3,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_clear_error (&error);
+
+    items[0].dst_uid = 5;
+    items[0].message_id = (char *)"journal:21:2";
+    g_assert_false (apply_memberships_copied (path, &payload, FALSE, 30, 3,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+    assert_mailbox_row (path, "archive:account-1", 5, ARCHIVE_ROW_5);
+    remove_catalog (path);
+}
+
+static void
+assert_copy_fails_invalid_data_without_changes (const gchar *path,
+    const WyreboxMembershipsCopiedPayload *payload, gboolean is_move)
+{
+    g_autoptr (GError) error = NULL;
+
+    g_assert_false (apply_memberships_copied (path, payload, is_move, 30, 3,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    assert_archive_state (path, 0, 0, 0, 0);
+    assert_membership_visibility (path, 1, TRUE, 0, 0);
+    assert_membership_visibility (path, 2, TRUE, 0, 0);
+}
+
+static void
+test_memberships_copied_invalid_targets_fail_invalid_data (void)
+{
+    g_autofree gchar *path = create_catalog_with_two_messages_and_archive ();
+    g_autoptr (GError) error = NULL;
+    WyreboxMembershipsCopiedItem items[2];
+    WyreboxMembershipsCopiedPayload payload;
+    TestDuckdbFixture duckdb = { 0 };
+
+    fill_copy_items (items);
+
+    /* Unknown source UID in the second item rolls back the first item. */
+    items[1].src_uid = 9;
+    payload = copy_payload (items, G_N_ELEMENTS (items));
+    assert_copy_fails_invalid_data_without_changes (path, &payload, FALSE);
+    assert_copy_fails_invalid_data_without_changes (path, &payload, TRUE);
+
+    fill_copy_items (items);
+    payload = copy_payload (items, G_N_ELEMENTS (items));
+    payload.source_uidvalidity = 2;
+    assert_copy_fails_invalid_data_without_changes (path, &payload, FALSE);
+
+    payload = copy_payload (items, G_N_ELEMENTS (items));
+    items[1].message_id = (char *)"journal:11:1";
+    assert_copy_fails_invalid_data_without_changes (path, &payload, FALSE);
+
+    fill_copy_items (items);
+    payload = copy_payload (items, G_N_ELEMENTS (items));
+    payload.dest_mailbox_id = (char *)"missing:account-1";
+    assert_copy_fails_invalid_data_without_changes (path, &payload, FALSE);
+
+    payload = copy_payload (items, G_N_ELEMENTS (items));
+    items[1].dst_uid = G_MAXUINT64;
+    assert_copy_fails_invalid_data_without_changes (path, &payload, FALSE);
+
+    /* A source tombstoned earlier cannot be copied or moved. */
+    fill_copy_items (items);
+    payload = copy_payload (items, G_N_ELEMENTS (items));
+    open_duckdb_fixture (path, &duckdb);
+    execute_sql (duckdb.connection,
+        "UPDATE mailbox_memberships SET is_visible = FALSE, "
+        "expunged_journal_offset = 25, expunged_journal_sequence = 2 "
+        "WHERE mailbox_id = 'inbox:account-1' AND uid = 2;");
+    close_duckdb_fixture (&duckdb);
+    g_assert_false (apply_memberships_copied (path, &payload, FALSE, 30, 3,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_clear_error (&error);
+    g_assert_false (apply_memberships_copied (path, &payload, TRUE, 30, 3,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    assert_archive_state (path, 0, 0, 0, 0);
+    assert_membership_visibility (path, 1, TRUE, 0, 0);
+    assert_membership_visibility (path, 2, FALSE, 25, 2);
+
+    remove_catalog (path);
+}
+
+static void
+test_memberships_copied_destination_uid_collision_is_invalid_data (void)
+{
+    g_autofree gchar *path = create_catalog_with_two_messages_and_archive ();
+    g_autoptr (GError) error = NULL;
+    WyreboxMembershipsCopiedItem items[2];
+    WyreboxMembershipsCopiedPayload payload;
+
+    fill_copy_items (items);
+    payload = copy_payload (items, G_N_ELEMENTS (items));
+    g_assert_true (apply_memberships_copied (path, &payload, FALSE, 30, 3,
+        &error));
+    g_assert_no_error (error);
+
+    /* A different record may not reuse destination UID 5. */
+    items[0].dst_uid = 5;
+    items[1].dst_uid = 7;
+    g_assert_false (apply_memberships_copied (path, &payload, FALSE, 50, 5,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    assert_archive_state (path, 2, 1, 1, 7);
     remove_catalog (path);
 }
 
@@ -2365,8 +2798,35 @@ main (int argc, char **argv)
         "/ingestion/delivery-materializer/memberships-expunged-reapply",
         test_memberships_expunged_reapply_same_record_is_noop);
     g_test_add_func (
+        "/ingestion/delivery-materializer/delivery-reapply-after-tombstone",
+        test_delivery_reapply_after_later_tombstone_is_accepted);
+    g_test_add_func (
         "/ingestion/delivery-materializer/memberships-expunged-unknown",
         test_memberships_expunged_unknown_target_is_invalid_data);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/memberships-copied",
+        test_memberships_copied_adds_destination_rows);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/memberships-moved",
+        test_memberships_moved_tombs_sources);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/memberships-copied-reapply",
+        test_memberships_copied_reapply_is_idempotent);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/memberships-moved-reapply",
+        test_memberships_moved_reapply_is_idempotent);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/memberships-copied-reapply-tombstone",
+        test_memberships_copied_reapply_after_later_tombstone);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/memberships-copied-reapply-mismatch",
+        test_memberships_copied_reapply_mismatch_is_invalid_data);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/memberships-copied-invalid",
+        test_memberships_copied_invalid_targets_fail_invalid_data);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/memberships-copied-uid-collision",
+        test_memberships_copied_destination_uid_collision_is_invalid_data);
     g_test_add_func ("/ingestion/delivery-materializer/fact-mutation",
         test_fact_mutation_insert_retract_reinsert);
     g_test_add_func ("/ingestion/delivery-materializer/fact-mutation-suffix",

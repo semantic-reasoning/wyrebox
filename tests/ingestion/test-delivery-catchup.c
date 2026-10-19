@@ -8,6 +8,7 @@
 #include "wyrebox-journal-reader.h"
 #include "wyrebox-journal-writer.h"
 #include "wyrebox-local-object-store.h"
+#include "wyrebox-memberships-copied-payload.h"
 #include "wyrebox-message-delivered-payload.h"
 #include "wyrebox-schema-metadata-store.h"
 
@@ -2167,6 +2168,139 @@ test_account_catchup_flag_changes_follow_holds (InterleavedFixture *fixture,
 }
 
 static JournalPosition
+append_memberships_copied (WyreboxJournalWriter *writer,
+    WyreboxJournalEventType event_type, guint64 src_uid, guint64 dst_uid,
+    const WyreboxEmlIngestResult *message, guint64 src_uid2, guint64 dst_uid2,
+    const WyreboxEmlIngestResult *message2)
+{
+    g_autofree gchar *message_id = g_strdup_printf ("journal:%"
+            G_GUINT64_FORMAT ":%" G_GUINT64_FORMAT, message->journal_offset,
+            message->journal_sequence);
+    g_autofree gchar *message_id2 = NULL;
+    WyreboxMembershipsCopiedItem items[2] = {
+        {
+            .src_uid = src_uid,
+            .dst_uid = dst_uid,
+            .internal_date_unix_us = 1,
+            .message_id = message_id,
+        },
+    };
+    WyreboxMembershipsCopiedPayload payload = {
+        .account_id = (char *)"account-a",
+        .source_mailbox_id = (char *)"inbox:account-a",
+        .dest_mailbox_id = (char *)"archive:account-a",
+        .source_uidvalidity = 1,
+        .dest_uidvalidity = 1,
+        .items = items,
+        .n_items = 1,
+    };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    JournalPosition position = { 0 };
+
+    if (message2 != NULL) {
+        message_id2 = g_strdup_printf ("journal:%" G_GUINT64_FORMAT ":%"
+                G_GUINT64_FORMAT, message2->journal_offset,
+                message2->journal_sequence);
+        items[1] = (WyreboxMembershipsCopiedItem) {
+            .src_uid = src_uid2,
+            .dst_uid = dst_uid2,
+            .internal_date_unix_us = 2,
+            .message_id = message_id2,
+        };
+        payload.n_items = 2;
+    }
+
+    bytes = wyrebox_memberships_copied_payload_encode (&payload, &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_journal_writer_append (writer, event_type, bytes,
+        &position.journal_offset, &position.journal_sequence, &error));
+    g_assert_no_error (error);
+    return position;
+}
+
+static gchar *
+account_a_membership_rows (const gchar *catalog_path)
+{
+    TestDuckdbFixture duckdb = { 0 };
+    gchar *rows = NULL;
+
+    open_duckdb_fixture (catalog_path, &duckdb);
+    rows = query_string (duckdb.connection,
+            "SELECT COALESCE(string_agg(mailbox_id || ':' || uid || '=' || "
+            "message_id || '#' || journal_item || '/' || is_visible, ' ' "
+            "ORDER BY mailbox_id, uid), '') FROM mailbox_memberships "
+            "WHERE account_id = 'account-a';");
+    close_duckdb_fixture (&duckdb);
+    return rows;
+}
+
+static void
+test_account_catchup_copy_move_follow_holds (InterleavedFixture *fixture,
+    gconstpointer user_data)
+{
+    g_auto (WyreboxDeliveryCatchupReport) held = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) recovered = { 0 };
+    g_autofree gchar *expected = NULL;
+    g_autofree gchar *held_rows = NULL;
+    g_autofree gchar *recovered_rows = NULL;
+    g_autoptr (GError) error = NULL;
+    JournalPosition copied = { 0 };
+    JournalPosition moved = { 0 };
+
+    execute_catalog_sql (fixture->catalog_path,
+        "INSERT INTO mailboxes (mailbox_id, account_id, imap_name, "
+        "is_selectable, is_visible) VALUES "
+        "('archive:account-a', 'account-a', 'Archive', TRUE, TRUE);");
+
+    copied = append_memberships_copied (fixture->writer,
+            WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_COPIED, 1, 10, &fixture->a1, 3,
+            11, &fixture->a3);
+    moved = append_memberships_copied (fixture->writer,
+            WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_MOVED, 2, 12, &fixture->a2, 0,
+            0, NULL);
+
+    expected = g_strdup_printf (
+        "archive:account-a:10=journal:%" G_GUINT64_FORMAT ":%"
+        G_GUINT64_FORMAT "#0/true "
+        "archive:account-a:11=journal:%" G_GUINT64_FORMAT ":%"
+        G_GUINT64_FORMAT "#1/true "
+        "archive:account-a:12=journal:%" G_GUINT64_FORMAT ":%"
+        G_GUINT64_FORMAT "#0/true "
+        "inbox:account-a:1=journal:%" G_GUINT64_FORMAT ":%"
+        G_GUINT64_FORMAT "#0/true "
+        "inbox:account-a:2=journal:%" G_GUINT64_FORMAT ":%"
+        G_GUINT64_FORMAT "#0/false "
+        "inbox:account-a:3=journal:%" G_GUINT64_FORMAT ":%"
+        G_GUINT64_FORMAT "#0/true",
+        fixture->a1.journal_offset, fixture->a1.journal_sequence,
+        fixture->a3.journal_offset, fixture->a3.journal_sequence,
+        fixture->a2.journal_offset, fixture->a2.journal_sequence,
+        fixture->a1.journal_offset, fixture->a1.journal_sequence,
+        fixture->a2.journal_offset, fixture->a2.journal_sequence,
+        fixture->a3.journal_offset, fixture->a3.journal_sequence);
+
+    g_assert_true (run_isolated_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &held, &error));
+    g_assert_no_error (error);
+    assert_single_hold (&held, "account-b", &fixture->b1);
+    assert_catalog_checkpoint (fixture->catalog_path, &fixture->a1);
+    held_rows = account_a_membership_rows (fixture->catalog_path);
+    g_assert_cmpstr (held_rows, ==, expected);
+
+    /* The resumed pass re-applies COPY and MOVE from the held checkpoint. */
+    make_account_b_inbox_selectable_in (fixture->catalog_path);
+    g_assert_true (run_isolated_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &recovered, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (recovered.holds->len, ==, 0);
+    assert_catalog_checkpoint_at (fixture->catalog_path, moved);
+    recovered_rows = account_a_membership_rows (fixture->catalog_path);
+    g_assert_cmpstr (recovered_rows, ==, expected);
+    g_assert_cmpuint (copied.journal_sequence, <, moved.journal_sequence);
+}
+
+static JournalPosition
 append_fact_mutation (WyreboxJournalWriter *writer,
     WyreboxDaemonFactMutationKind kind, const gchar *account_id,
     const WyreboxEmlIngestResult *message, const gchar *view_id)
@@ -2578,6 +2712,14 @@ main (int argc, char **argv)
         (void (*)(InterleavedFixture *, gconstpointer))
         interleaved_fixture_set_up,
         test_account_catchup_flag_changes_follow_holds,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_tear_down);
+    g_test_add (
+        "/ingestion/delivery-catchup/accounts/copy-move-follow-holds",
+        InterleavedFixture, NULL,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_set_up,
+        test_account_catchup_copy_move_follow_holds,
         (void (*)(InterleavedFixture *, gconstpointer))
         interleaved_fixture_tear_down);
     g_test_add (
