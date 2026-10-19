@@ -57,6 +57,18 @@ static const WyreboxJournalEventTypeDescriptor catalog[] = {
         "journal.payload.memberships-expunged.v1",
         "Ordinary mailbox memberships hidden by EXPUNGE",
     },
+    {
+        WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_COPIED,
+        "MembershipsCopied",
+        "journal.payload.memberships-copied.v1",
+        "Destination memberships added by COPY",
+    },
+    {
+        WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_MOVED,
+        "MembershipsMoved",
+        "journal.payload.memberships-copied.v1",
+        "Destination memberships added by MOVE with source tombstones",
+    },
 };
 
 void

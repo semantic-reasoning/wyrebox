@@ -41,6 +41,12 @@ memberships_expunged_payload_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+memberships_copied_payload_test = executable(
+  'test-memberships-copied-payload',
+  'test-memberships-copied-payload.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_audit_payload_test = executable(
   'test-daemon-audit-payload',
   'test-daemon-audit-payload.c',
@@ -73,6 +79,7 @@ test('derived view membership changed payload',
 test('facts extracted payload', facts_extracted_payload_test)
 test('flag changed payload', flag_changed_payload_test)
 test('memberships expunged payload', memberships_expunged_payload_test)
+test('memberships copied payload', memberships_copied_payload_test)
 test('daemon audit payload', daemon_audit_payload_test)
 test('journal event', journal_event_test)
 test('message delivered journal', message_delivered_journal_test)

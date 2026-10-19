@@ -5,6 +5,7 @@
 #include "wyrebox-derived-view-membership-changed-payload.h"
 #include "wyrebox-facts-extracted-payload.h"
 #include "wyrebox-flag-changed-payload.h"
+#include "wyrebox-memberships-copied-payload.h"
 #include "wyrebox-memberships-expunged-payload.h"
 
 #include <glib-object.h>
@@ -219,6 +220,59 @@ gboolean wyrebox_delivery_materializer_apply_membership_change (
 gboolean wyrebox_delivery_materializer_apply_memberships_expunged (
     WyreboxDeliveryMaterializer *self,
     const WyreboxMembershipsExpungedPayload *payload,
+    guint64 journal_offset,
+    guint64 journal_sequence,
+    gboolean advance_checkpoint,
+    GError **error);
+
+/*
+ * Apply the MembershipsCopied record at @journal_offset/@journal_sequence by
+ * adding one destination membership per payload item, in one transaction.
+ * The checkpoint is moved forward to the record when @advance_checkpoint is
+ * TRUE.
+ *
+ * Item i is stored with journal_item i, the payload's destination UID,
+ * message id and internal date, and the membership id
+ * "mailbox:<dest mailbox>:journal:<offset>:<sequence>:<item>". Its flags and
+ * keywords are the payload's. The destination mailbox must be materialized
+ * and its UIDVALIDITY must match the payload; its UIDNEXT becomes at least
+ * the destination UID + 1. Source memberships stay visible.
+ *
+ * A first apply requires each source UID to exist, be visible, and reference
+ * the payload message id under the payload source mailbox and UIDVALIDITY.
+ * Re-applying is a no-op for an item whose destination membership id already
+ * exists with the same account, mailbox, UID, message id, journal_item, and
+ * journal position and is either visible or tombstoned by a later record;
+ * source checks and flag inserts are skipped for it. Anything else that does
+ * not match, including a destination UID owned by another membership, fails
+ * with G_IO_ERROR_INVALID_DATA. Other failures use other codes. On failure
+ * nothing is committed.
+ *
+ * @payload: (transfer none): decoded MembershipsCopied payload.
+ */
+gboolean wyrebox_delivery_materializer_apply_memberships_copied (
+    WyreboxDeliveryMaterializer *self,
+    const WyreboxMembershipsCopiedPayload *payload,
+    guint64 journal_offset,
+    guint64 journal_sequence,
+    gboolean advance_checkpoint,
+    GError **error);
+
+/*
+ * Apply the MembershipsMoved record at @journal_offset/@journal_sequence.
+ * Behaves like wyrebox_delivery_materializer_apply_memberships_copied() and
+ * additionally tombstones each source membership with the record's journal
+ * position, like wyrebox_delivery_materializer_apply_memberships_expunged().
+ * Re-applying against a source already tombstoned by this record is a no-op;
+ * a source tombstoned by a different record fails with
+ * G_IO_ERROR_INVALID_DATA.
+ *
+ * @payload: (transfer none): decoded MembershipsMoved payload (same shape as
+ *   MembershipsCopied).
+ */
+gboolean wyrebox_delivery_materializer_apply_memberships_moved (
+    WyreboxDeliveryMaterializer *self,
+    const WyreboxMembershipsCopiedPayload *payload,
     guint64 journal_offset,
     guint64 journal_sequence,
     gboolean advance_checkpoint,

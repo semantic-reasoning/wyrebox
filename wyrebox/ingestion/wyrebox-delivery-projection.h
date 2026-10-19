@@ -6,6 +6,7 @@
 #include "wyrebox-flag-changed-payload.h"
 #include "wyrebox-journal-reader.h"
 #include "wyrebox-local-object-store.h"
+#include "wyrebox-memberships-copied-payload.h"
 #include "wyrebox-memberships-expunged-payload.h"
 
 #include <glib-object.h>
@@ -25,8 +26,8 @@ typedef struct
 {
   /*
    * Journal location of the MessageDelivered, FlagChanged, FactInserted,
-   * FactRetracted, FactsExtracted, DerivedViewMembershipChanged, or
-   * MembershipsExpunged record.
+   * FactRetracted, FactsExtracted, DerivedViewMembershipChanged,
+   * MembershipsExpunged, MembershipsCopied, or MembershipsMoved record.
    */
   guint64 journal_offset;
   guint64 journal_sequence;
@@ -118,6 +119,18 @@ typedef struct
    * wyrebox_delivery_projection_record_clear().
    */
   WyreboxMembershipsExpungedPayload *memberships_expunged;
+
+  /*
+   * Decoded payload when the entry is a MembershipsCopied or MembershipsMoved
+   * record, or NULL otherwise. @account_identity is its payload's account.
+   * @memberships_move is TRUE for MembershipsMoved (source memberships are
+   * tombstoned) and FALSE for MembershipsCopied.
+   *
+   * Ownership: owned by this record and cleared by
+   * wyrebox_delivery_projection_record_clear().
+   */
+  WyreboxMembershipsCopiedPayload *memberships_copied;
+  gboolean memberships_move;
 } WyreboxDeliveryProjectionRecord;
 
 /*
@@ -192,7 +205,9 @@ gboolean wyrebox_delivery_projection_replay_records (
  * @flag_change is set, FactInserted/FactRetracted records as entries whose
  * @fact_mutation is set, FactsExtracted records as entries whose
  * @facts_extracted is set, and DerivedViewMembershipChanged records as entries
- * whose @membership_change is set. A payload that fails to decode, or a fact
+ * whose @membership_change is set, MembershipsExpunged records as entries
+ * whose @memberships_expunged is set, and MembershipsCopied/MembershipsMoved
+ * records as entries whose @memberships_copied is set. A payload that fails to decode, or a fact
  * payload whose mutation does not match its event type, fails the replay with
  * G_IO_ERROR_INVALID_DATA.
  */

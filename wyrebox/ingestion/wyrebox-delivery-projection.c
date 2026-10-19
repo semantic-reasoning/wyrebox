@@ -104,6 +104,11 @@ wyrebox_delivery_projection_record_clear (WyreboxDeliveryProjectionRecord
             (record->memberships_expunged);
         g_clear_pointer (&record->memberships_expunged, g_free);
     }
+    if (record->memberships_copied != NULL) {
+        wyrebox_memberships_copied_payload_clear (record->memberships_copied);
+        g_clear_pointer (&record->memberships_copied, g_free);
+    }
+    record->memberships_move = FALSE;
 }
 
 void
@@ -321,6 +326,38 @@ append_memberships_expunged_record (WyreboxDeliveryProjectionList
     return TRUE;
 }
 
+static gboolean
+append_memberships_copied_record (WyreboxDeliveryProjectionList
+    *out_projection, WyreboxJournalRecord *record, gboolean is_move,
+    GError **error)
+{
+    g_autoptr (GError) local_error = NULL;
+    WyreboxDeliveryProjectionRecord *entry = NULL;
+    WyreboxMembershipsCopiedPayload *payload =
+        g_new0 (WyreboxMembershipsCopiedPayload, 1);
+
+    if (!wyrebox_memberships_copied_payload_decode (record->payload, payload,
+        &local_error)) {
+        g_free (payload);
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "failed to decode %s payload at sequence %" G_GUINT64_FORMAT
+            ": %s", is_move ? "MembershipsMoved" : "MembershipsCopied",
+            record->sequence, local_error->message);
+        return FALSE;
+    }
+
+    entry = g_new0 (WyreboxDeliveryProjectionRecord, 1);
+    entry->journal_offset = record->offset;
+    entry->journal_sequence = record->sequence;
+    entry->account_identity = g_strdup (payload->account_id);
+    entry->memberships_copied = payload;
+    entry->memberships_move = is_move;
+    g_ptr_array_add (out_projection->records, entry);
+    return TRUE;
+}
+
 gboolean
 wyrebox_delivery_projection_record_is_delivery (const
     WyreboxDeliveryProjectionRecord *record)
@@ -330,7 +367,8 @@ wyrebox_delivery_projection_record_is_delivery (const
     return record->flag_change == NULL && record->fact_mutation == NULL &&
            record->facts_extracted == NULL &&
            record->membership_change == NULL &&
-           record->memberships_expunged == NULL;
+           record->memberships_expunged == NULL &&
+           record->memberships_copied == NULL;
 }
 
 gboolean
@@ -473,6 +511,18 @@ projection_replay (WyreboxDeliveryProjection *self,
         if (include_mutations &&
             record.event_type == WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_EXPUNGED) {
             if (!append_memberships_expunged_record (out_projection, &record,
+                error)) {
+                wyrebox_delivery_projection_list_clear (out_projection);
+                return FALSE;
+            }
+            continue;
+        }
+
+        if (include_mutations &&
+            (record.event_type == WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_COPIED ||
+            record.event_type == WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_MOVED)) {
+            if (!append_memberships_copied_record (out_projection, &record,
+                record.event_type == WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_MOVED,
                 error)) {
                 wyrebox_delivery_projection_list_clear (out_projection);
                 return FALSE;

@@ -43,6 +43,8 @@ static const char *event_type_names[] = {
     "DaemonAuditRecorded",
     "FactsExtracted",
     "MembershipsExpunged",
+    "MembershipsCopied",
+    "MembershipsMoved",
 };
 
 typedef struct
@@ -85,7 +87,7 @@ static gboolean
 validate_event_type (WyreboxJournalEventType event_type)
 {
     return event_type >= WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED &&
-           event_type <= WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_EXPUNGED;
+           event_type <= WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_MOVED;
 }
 
 const char *
