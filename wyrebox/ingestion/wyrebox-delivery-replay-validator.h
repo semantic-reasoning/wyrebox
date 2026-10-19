@@ -29,8 +29,9 @@ typedef enum {
  * Raw object failures found by
  * wyrebox_delivery_replay_validator_validate_all_report().
  *
- * @object_failure_count: MessageDelivered records whose raw object is
- *   missing or does not match the journaled size or SHA-256 key.
+ * @object_failure_count: MessageDelivered or MessageAppended records whose
+ *   raw object is missing or does not match the journaled size or SHA-256
+ *   key.
  * @first_object_failure_offset, @first_object_failure_sequence: the journal
  *   position of the first such record; zero when @object_failure_count is 0.
  * @first_object_failure_code: MISSING_OBJECT, SIZE_MISMATCH, or HASH_MISMATCH
@@ -52,7 +53,7 @@ GQuark wyrebox_delivery_replay_validator_error_quark (void);
  * @journal_reader: (transfer none): replay reader to consume from its current
  *   position through EOF.
  * @object_store: (transfer none): immutable raw object store used to verify
- *   MessageDelivered object references.
+ *   MessageDelivered and MessageAppended object references.
  *
  * Returns: (transfer full): a replay validator holding references to both
  * dependencies.
@@ -62,8 +63,8 @@ WyreboxDeliveryReplayValidator *wyrebox_delivery_replay_validator_new (
     WyreboxLocalObjectStore *object_store);
 
 /*
- * Reads records to EOF. For this replay validation phase, only
- * MessageDelivered records are decoded and checked; all other event types are
+ * Reads records to EOF. MessageDelivered and MessageAppended records are
+ * decoded and checked against the object store; all other event types are
  * skipped.
  *
  * Fails on the first invalid record. A payload that does not decode fails
