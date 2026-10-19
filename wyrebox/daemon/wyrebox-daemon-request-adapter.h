@@ -6,6 +6,7 @@
 #include "wyrebox-daemon-mailbox-list-service.h"
 #include "wyrebox-daemon-message-fetch-service.h"
 #include "wyrebox-daemon-flag-keyword-update-service.h"
+#include "wyrebox-daemon-memberships-copy-move-service.h"
 #include "wyrebox-daemon-memberships-expunge-service.h"
 #include "wyrebox-daemon-message-search-service.h"
 #include "wyrebox-daemon-wirelog-predicate-query-service.h"
@@ -69,6 +70,10 @@ void wyrebox_daemon_request_adapter_set_mail_event_stream_service (
 void wyrebox_daemon_request_adapter_set_memberships_expunge_service (
     WyreboxDaemonRequestAdapter *self,
     WyreboxDaemonMembershipsExpungeService *memberships_expunge_service);
+
+void wyrebox_daemon_request_adapter_set_memberships_copy_move_service (
+    WyreboxDaemonRequestAdapter *self,
+    WyreboxDaemonMembershipsCopyMoveService *memberships_copy_move_service);
 
 GBytes *wyrebox_daemon_request_adapter_handle_payload (
     const WyreboxDaemonPeerCredentials *peer_credentials,

@@ -2,6 +2,7 @@
 
 #include "wyrebox-daemon-error.h"
 #include "wyrebox-daemon-flag-keyword-update-request.h"
+#include "wyrebox-daemon-memberships-copy-move-request.h"
 #include "wyrebox-daemon-memberships-expunge-request.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
 #include <glib-object.h>
@@ -118,6 +119,33 @@ gboolean wyrebox_dovecot_daemon_client_expunge (
     guint64 uid_validity,
     const guint64 *uids,
     gsize n_uids,
+    guint64 *out_journal_offset,
+    GError **error);
+
+gboolean wyrebox_dovecot_daemon_client_copy (
+    const char *socket_path,
+    const char *account_identity,
+    const char *source_mailbox_id,
+    WyreboxDaemonMailboxListEntryKind source_namespace_kind,
+    guint64 source_uid_validity,
+    const char *dest_mailbox_id,
+    guint64 dest_uid_validity,
+    const guint64 *source_uids,
+    gsize n_source_uids,
+    char **out_success_summary,
+    guint64 *out_journal_offset,
+    GError **error);
+
+gboolean wyrebox_dovecot_daemon_client_move (
+    const char *socket_path,
+    const char *account_identity,
+    const char *source_mailbox_id,
+    guint64 source_uid_validity,
+    const char *dest_mailbox_id,
+    guint64 dest_uid_validity,
+    const guint64 *source_uids,
+    gsize n_source_uids,
+    char **out_success_summary,
     guint64 *out_journal_offset,
     GError **error);
 

@@ -1,5 +1,7 @@
 #include "wyrebox-daemon-request-router.h"
 #include "wyrebox-daemon-flag-keyword-update-request.h"
+#include "wyrebox-daemon-memberships-copy-move-request.h"
+#include "wyrebox-daemon-memberships-copy-move-service.h"
 #include "wyrebox-daemon-memberships-expunge-request.h"
 #include "wyrebox-daemon-delivery-ingestion-request.h"
 #include "wyrebox-daemon-mailbox-status-request.h"
@@ -22,7 +24,8 @@ route_without_wirelog (WyreboxDaemonDeliveryIngestionService *delivery,
     WyreboxDaemonResponseFrame *out, GError **error)
 {
     return wyrebox_daemon_request_router_route (delivery, fact, list, select,
-               fetch, search, NULL, NULL, NULL, flag, NULL, frame, out, error);
+               fetch, search, NULL, NULL, NULL, flag, NULL, NULL, frame, out,
+               error);
 }
 
 static gboolean
@@ -31,7 +34,7 @@ route_with_wirelog (WyreboxDaemonWirelogPredicateQueryService *wirelog,
     WyreboxDaemonResponseFrame *out, GError **error)
 {
     return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
-               NULL, NULL, wirelog, NULL, NULL, NULL, frame, out, error);
+               NULL, NULL, wirelog, NULL, NULL, NULL, NULL, frame, out, error);
 }
 
 static gboolean
@@ -40,7 +43,7 @@ route_with_duckdb_query_template (WyreboxDaemonDuckDBQueryTemplateService
     WyreboxDaemonResponseFrame *out, GError **error)
 {
     return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
-               NULL, NULL, NULL, duckdb, NULL, NULL, frame, out, error);
+               NULL, NULL, NULL, duckdb, NULL, NULL, NULL, frame, out, error);
 }
 
 static gboolean
@@ -49,8 +52,8 @@ route_with_mail_event_stream (WyreboxDaemonMailEventStreamService
     WyreboxDaemonResponseFrame *out, GError **error)
 {
     return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
-               NULL, mail_event_stream, NULL, NULL, NULL, NULL, frame, out,
-               error);
+               NULL, mail_event_stream, NULL, NULL, NULL, NULL, NULL, frame,
+               out, error);
 }
 
 static gboolean
@@ -59,7 +62,16 @@ route_with_memberships_expunge (WyreboxDaemonMembershipsExpungeService *service,
     WyreboxDaemonResponseFrame *out, GError **error)
 {
     return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
-               NULL, NULL, NULL, NULL, NULL, service, frame, out, error);
+               NULL, NULL, NULL, NULL, NULL, service, NULL, frame, out, error);
+}
+
+static gboolean
+route_with_memberships_copy (WyreboxDaemonMembershipsCopyMoveService *service,
+    const WyreboxDaemonDecodedRequestFrame *frame,
+    WyreboxDaemonResponseFrame *out, GError **error)
+{
+    return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
+               NULL, NULL, NULL, NULL, NULL, NULL, service, frame, out, error);
 }
 
 #define wyrebox_daemon_request_router_route route_without_wirelog
@@ -167,6 +179,32 @@ update_flag_keyword_fixture (const WyreboxDaemonRequestIdentity *identity,
     out_receipt->journal_offset = 10;
     out_receipt->journal_sequence = 20;
     out_receipt->summary = g_strdup ("flag_keyword_update mode=set");
+    return TRUE;
+}
+
+static gboolean
+copy_move_memberships_fixture (const WyreboxDaemonRequestIdentity *identity,
+    gboolean is_move, const WyreboxDaemonMembershipsCopyMoveRequest *request,
+    WyreboxDaemonSuccessReceipt *out_receipt, gpointer user_data,
+    GError **error)
+{
+    gboolean *was_called = user_data;
+
+    (void)is_move;
+    (void)request;
+    (void)error;
+
+    g_assert_cmpstr (identity->request_id, ==, "request-copy");
+
+    if (was_called != NULL)
+        *was_called = TRUE;
+
+    wyrebox_daemon_success_receipt_clear (out_receipt);
+    out_receipt->request_id = g_strdup ("request-copy");
+    out_receipt->durable_marker = g_strdup ("journal:10:20");
+    out_receipt->journal_offset = 10;
+    out_receipt->journal_sequence = 20;
+    out_receipt->summary = g_strdup ("memberships_copied pairs=1:3");
     return TRUE;
 }
 
@@ -2031,6 +2069,39 @@ test_request_router_routes_memberships_expunge (void)
     g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
 }
 
+static void
+test_request_router_routes_memberships_copy (void)
+{
+    guint64 uids[] = { 1 };
+    gboolean was_called = FALSE;
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDaemonMembershipsCopyMoveService) service = NULL;
+    g_auto (WyreboxDaemonMembershipsCopyMoveRequest) request = { 0 };
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+    WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+    g_assert_true (wyrebox_daemon_memberships_copy_move_request_init (&request,
+        "account-1", "inbox:account-1",
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 1, "inbox:account-1", 1,
+        uids, G_N_ELEMENTS (uids), &error));
+
+    request_frame.request_id = "request-copy";
+    request_frame.caller_identity = "dovecot";
+    request_frame.account_identity = "account-1";
+    request_frame.tool_identity = "dovecot-storage";
+    request_frame.correlation_id = "imap-copy-1";
+    request_frame.operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MEMBERSHIPS_COPY;
+    request_frame.memberships_copy_move = &request;
+
+    service = wyrebox_daemon_memberships_copy_move_service_new
+            (copy_move_memberships_fixture, &was_called, NULL);
+    g_assert_true (route_with_memberships_copy (service, &request_frame, &frame,
+        &error));
+    g_assert_true (was_called);
+    g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -2148,6 +2219,8 @@ main (int argc, char **argv)
         test_request_router_routes_flag_keyword_update);
     g_test_add_func ("/daemon-api/request-router/routes-memberships-expunge",
         test_request_router_routes_memberships_expunge);
+    g_test_add_func ("/daemon-api/request-router/routes-memberships-copy",
+        test_request_router_routes_memberships_copy);
     g_test_add_func ("/daemon-api/request-router/"
         "rejects-missing-flag-keyword-update-payload",
         test_request_router_rejects_missing_flag_keyword_update_payload);

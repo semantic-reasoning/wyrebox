@@ -340,6 +340,84 @@ route_memberships_expunge (WyreboxDaemonMembershipsExpungeService *service,
 }
 
 static gboolean
+route_memberships_copy (WyreboxDaemonMembershipsCopyMoveService *service,
+    const WyreboxDaemonDecodedRequestFrame *request_frame,
+    WyreboxDaemonResponseFrame *out_frame, GError **error)
+{
+    g_autoptr (GError) local_error = NULL;
+
+    if (!WYREBOX_IS_DAEMON_MEMBERSHIPS_COPY_MOVE_SERVICE (service)) {
+        g_set_error (&local_error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT,
+            "memberships copy request frame cannot be routed without "
+            "service");
+        return init_error_response (out_frame,
+                   request_frame->request_id, request_frame->correlation_id,
+                   local_error,
+                   error);
+    }
+
+    if (request_frame->memberships_copy_move == NULL) {
+        g_set_error (&local_error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT,
+            "memberships copy request frame is missing payload");
+        return init_error_response (out_frame,
+                   request_frame->request_id, request_frame->correlation_id,
+                   local_error,
+                   error);
+    }
+
+    return wyrebox_daemon_memberships_copy_dispatch (service,
+               request_frame->request_id,
+               request_frame->caller_identity,
+               request_frame->account_identity,
+               request_frame->tool_identity,
+               request_frame->correlation_id,
+               request_frame->memberships_copy_move, out_frame, error);
+}
+
+static gboolean
+route_memberships_move (WyreboxDaemonMembershipsCopyMoveService *service,
+    const WyreboxDaemonDecodedRequestFrame *request_frame,
+    WyreboxDaemonResponseFrame *out_frame, GError **error)
+{
+    g_autoptr (GError) local_error = NULL;
+
+    if (!WYREBOX_IS_DAEMON_MEMBERSHIPS_COPY_MOVE_SERVICE (service)) {
+        g_set_error (&local_error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT,
+            "memberships move request frame cannot be routed without "
+            "service");
+        return init_error_response (out_frame,
+                   request_frame->request_id, request_frame->correlation_id,
+                   local_error,
+                   error);
+    }
+
+    if (request_frame->memberships_copy_move == NULL) {
+        g_set_error (&local_error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT,
+            "memberships move request frame is missing payload");
+        return init_error_response (out_frame,
+                   request_frame->request_id, request_frame->correlation_id,
+                   local_error,
+                   error);
+    }
+
+    return wyrebox_daemon_memberships_move_dispatch (service,
+               request_frame->request_id,
+               request_frame->caller_identity,
+               request_frame->account_identity,
+               request_frame->tool_identity,
+               request_frame->correlation_id,
+               request_frame->memberships_copy_move, out_frame, error);
+}
+
+static gboolean
 route_fact_mutation (WyreboxDaemonFactMutationService *service,
     const WyreboxDaemonDecodedRequestFrame *request_frame,
     WyreboxDaemonResponseFrame *out_frame, GError **error)
@@ -553,6 +631,7 @@ wyrebox_daemon_request_router_route (WyreboxDaemonDeliveryIngestionService
     WyreboxDaemonDuckDBQueryTemplateService *duckdb_query_template_service,
     WyreboxDaemonFlagKeywordUpdateService *flag_keyword_update_service,
     WyreboxDaemonMembershipsExpungeService *memberships_expunge_service,
+    WyreboxDaemonMembershipsCopyMoveService *memberships_copy_move_service,
     const WyreboxDaemonDecodedRequestFrame *request_frame,
     WyreboxDaemonResponseFrame *out_frame, GError **error)
 {
@@ -601,6 +680,12 @@ wyrebox_daemon_request_router_route (WyreboxDaemonDeliveryIngestionService
                    request_frame, out_frame, error);
     case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MEMBERSHIPS_EXPUNGE:
         return route_memberships_expunge (memberships_expunge_service,
+                   request_frame, out_frame, error);
+    case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MEMBERSHIPS_COPY:
+        return route_memberships_copy (memberships_copy_move_service,
+                   request_frame, out_frame, error);
+    case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MEMBERSHIPS_MOVE:
+        return route_memberships_move (memberships_copy_move_service,
                    request_frame, out_frame, error);
     default:
         g_set_error (&local_error,
