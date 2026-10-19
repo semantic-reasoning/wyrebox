@@ -9,6 +9,7 @@
 #include "wyrebox-journal-writer.h"
 #include "wyrebox-local-object-store.h"
 #include "wyrebox-memberships-copied-payload.h"
+#include "wyrebox-message-appended-payload.h"
 #include "wyrebox-message-delivered-payload.h"
 #include "wyrebox-schema-metadata-store.h"
 
@@ -2301,6 +2302,168 @@ test_account_catchup_copy_move_follow_holds (InterleavedFixture *fixture,
 }
 
 static JournalPosition
+append_message_appended (WyreboxJournalWriter *writer,
+    const gchar *account_id, const gchar *mailbox_id, guint64 uid,
+    guint64 uidvalidity, const WyreboxEmlIngestResult *message)
+{
+    WyreboxMessageAppendedPayload payload = {
+        .account_id = (char *)account_id,
+        .mailbox_id = (char *)mailbox_id,
+        .uidvalidity = uidvalidity,
+        .uid = uid,
+        .object_key = message->object_key,
+        .size_bytes = message->size_bytes,
+        .internal_date_unix_us = 9001,
+    };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) bytes = NULL;
+    JournalPosition position = { 0 };
+
+    bytes = wyrebox_message_appended_payload_encode (&payload, &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_journal_writer_append (writer,
+        WYREBOX_JOURNAL_EVENT_MESSAGE_APPENDED, bytes,
+        &position.journal_offset, &position.journal_sequence, &error));
+    g_assert_no_error (error);
+    return position;
+}
+
+static void
+test_account_catchup_message_appended_follow_holds (InterleavedFixture
+    *fixture, gconstpointer user_data)
+{
+    g_auto (WyreboxDeliveryCatchupReport) held = { 0 };
+    g_auto (WyreboxDeliveryCatchupReport) recovered = { 0 };
+    g_autofree gchar *expected = NULL;
+    g_autofree gchar *held_rows = NULL;
+    g_autofree gchar *recovered_rows = NULL;
+    g_autoptr (GError) error = NULL;
+    JournalPosition archived = { 0 };
+    JournalPosition appended_b = { 0 };
+
+    execute_catalog_sql (fixture->catalog_path,
+        "INSERT INTO mailboxes (mailbox_id, account_id, imap_name, "
+        "is_selectable, is_visible) VALUES "
+        "('archive:account-a', 'account-a', 'Archive', TRUE, TRUE);");
+
+    archived = append_message_appended (fixture->writer, "account-a",
+            "archive:account-a", 20, 1, &fixture->a2);
+    appended_b = append_message_appended (fixture->writer, "account-b",
+            "inbox-b", 10, 1, &fixture->b2);
+
+    expected = g_strdup_printf (
+        "archive:account-a:20=journal:%" G_GUINT64_FORMAT ":%"
+        G_GUINT64_FORMAT "#0/true "
+        "inbox:account-a:1=journal:%" G_GUINT64_FORMAT ":%"
+        G_GUINT64_FORMAT "#0/true "
+        "inbox:account-a:2=journal:%" G_GUINT64_FORMAT ":%"
+        G_GUINT64_FORMAT "#0/true "
+        "inbox:account-a:3=journal:%" G_GUINT64_FORMAT ":%"
+        G_GUINT64_FORMAT "#0/true",
+        archived.journal_offset, archived.journal_sequence,
+        fixture->a1.journal_offset, fixture->a1.journal_sequence,
+        fixture->a2.journal_offset, fixture->a2.journal_sequence,
+        fixture->a3.journal_offset, fixture->a3.journal_sequence);
+
+    g_assert_true (run_isolated_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &held, &error));
+    g_assert_no_error (error);
+    assert_single_hold (&held, "account-b", &fixture->b1);
+    assert_catalog_checkpoint (fixture->catalog_path, &fixture->a1);
+    held_rows = account_a_membership_rows (fixture->catalog_path);
+    g_assert_cmpstr (held_rows, ==, expected);
+
+    make_account_b_inbox_selectable_in (fixture->catalog_path);
+    g_assert_true (run_isolated_catchup (fixture->catalog_path,
+        fixture->object_root, fixture->journal_root, &recovered, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (recovered.holds->len, ==, 0);
+    assert_catalog_checkpoint_at (fixture->catalog_path, appended_b);
+    recovered_rows = account_a_membership_rows (fixture->catalog_path);
+    g_assert_cmpstr (recovered_rows, ==, expected);
+    {
+        TestDuckdbFixture duckdb = { 0 };
+        g_autofree gchar *sql = NULL;
+
+        open_duckdb_fixture (fixture->catalog_path, &duckdb);
+        sql = g_strdup_printf (
+            "SELECT COUNT(*) FROM mailbox_memberships "
+            "WHERE mailbox_id = 'inbox-b' AND uid = 10 AND message_id = "
+            "'journal:%" G_GUINT64_FORMAT ":%" G_GUINT64_FORMAT "';",
+            appended_b.journal_offset, appended_b.journal_sequence);
+        g_assert_cmpuint (query_uint64 (duckdb.connection, sql), ==, 1);
+        close_duckdb_fixture (&duckdb);
+    }
+}
+
+static void
+test_account_catchup_message_appended_missing_object_holds_account (void)
+{
+    g_autofree gchar *object_root =
+        g_dir_make_tmp ("wyrebox-delivery-catchup-objects-XXXXXX", NULL);
+    g_autofree gchar *journal_root =
+        g_dir_make_tmp ("wyrebox-delivery-catchup-journal-XXXXXX", NULL);
+    g_autofree gchar *catalog_path = create_bootstrap_catalog ();
+    g_auto (WyreboxDeliveryCatchupReport) report = { 0 };
+    g_auto (WyreboxEmlIngestResult) delivery = { 0 };
+    g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
+    g_autoptr (WyreboxJournalWriter) writer = NULL;
+    g_autoptr (WyreboxEmlIngestor) ingestor = NULL;
+    g_autoptr (GError) error = NULL;
+    JournalPosition appended = { 0 };
+    static const char missing_object_key[] =
+        "sha256:"
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    ingestor = create_ingestor (object_root, journal_root, &object_store,
+            &writer);
+    ingest_delivery_fixture (ingestor, "simple-crlf.eml", "delivery-a1",
+        "account-a", &delivery);
+    {
+        WyreboxMessageAppendedPayload payload = {
+            .account_id = (char *)"account-a",
+            .mailbox_id = (char *)"inbox:account-a",
+            .uidvalidity = 1,
+            .uid = 5,
+            .object_key = (char *)missing_object_key,
+            .size_bytes = delivery.size_bytes,
+        };
+        g_autoptr (GBytes) bytes = NULL;
+
+        bytes = wyrebox_message_appended_payload_encode (&payload, &error);
+        g_assert_no_error (error);
+        g_assert_true (wyrebox_journal_writer_append (writer,
+            WYREBOX_JOURNAL_EVENT_MESSAGE_APPENDED, bytes,
+            &appended.journal_offset, &appended.journal_sequence, &error));
+        g_assert_no_error (error);
+    }
+
+    g_assert_true (run_isolated_catchup (catalog_path, object_root,
+        journal_root, &report, &error));
+    g_assert_no_error (error);
+
+    {
+        const WyreboxDeliveryCatchupHold *hold =
+            g_ptr_array_index (report.holds, 0);
+
+        g_assert_cmpuint (report.holds->len, ==, 1);
+        g_assert_cmpstr (hold->account_id, ==, "account-a");
+        g_assert_cmpuint (hold->journal_offset, ==, appended.journal_offset);
+        g_assert_cmpuint (hold->journal_sequence, ==,
+            appended.journal_sequence);
+        g_assert_nonnull (strstr (hold->error->message, missing_object_key));
+        g_assert_nonnull (strstr (hold->error->message, "MessageAppended"));
+    }
+
+    g_clear_object (&ingestor);
+    g_clear_object (&writer);
+    g_clear_object (&object_store);
+    remove_tree (object_root);
+    remove_tree (journal_root);
+    remove_catalog (catalog_path);
+}
+
+static JournalPosition
 append_fact_mutation (WyreboxJournalWriter *writer,
     WyreboxDaemonFactMutationKind kind, const gchar *account_id,
     const WyreboxEmlIngestResult *message, const gchar *view_id)
@@ -2722,6 +2885,17 @@ main (int argc, char **argv)
         test_account_catchup_copy_move_follow_holds,
         (void (*)(InterleavedFixture *, gconstpointer))
         interleaved_fixture_tear_down);
+    g_test_add (
+        "/ingestion/delivery-catchup/accounts/message-appended-follow-holds",
+        InterleavedFixture, NULL,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_set_up,
+        test_account_catchup_message_appended_follow_holds,
+        (void (*)(InterleavedFixture *, gconstpointer))
+        interleaved_fixture_tear_down);
+    g_test_add_func ("/ingestion/delivery-catchup/accounts/"
+        "message-appended-missing-object-holds",
+        test_account_catchup_message_appended_missing_object_holds_account);
     g_test_add (
         "/ingestion/delivery-catchup/accounts/fact-mutations-follow-holds",
         InterleavedFixture, NULL,

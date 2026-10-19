@@ -1393,6 +1393,52 @@ wyrebox_delivery_materializer_apply_memberships_expunged (
     return TRUE;
 }
 
+/*
+ * Creates the UID state of @mailbox_id with @uidvalidity when it has none and
+ * requires it to have exactly @uidvalidity. @what names the mailbox role in
+ * the error message.
+ */
+static gboolean
+materializer_ensure_uid_state_validity (WyreboxDeliveryMaterializer *self,
+    const gchar *account_id, const gchar *mailbox_id, guint64 uidvalidity,
+    const gchar *what, GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    guint64 count = 0;
+
+    if (!materializer_prepare (self,
+        "INSERT OR IGNORE INTO mailbox_uid_state ("
+        "account_id, namespace_kind, namespace_id, uidnext, uidvalidity"
+        ") VALUES (?, 'mailbox', ?, 1, ?);", &statement, error) ||
+        !bind_varchar (statement, 1, account_id, error) ||
+        !bind_varchar (statement, 2, mailbox_id, error) ||
+        !bind_uint64 (statement, 3, uidvalidity, error) ||
+        !materializer_execute_prepared (statement, error))
+        return FALSE;
+
+    duckdb_destroy_prepare (&statement);
+    if (!materializer_prepare (self,
+        "SELECT COUNT(*) FROM mailbox_uid_state "
+        "WHERE account_id = ? AND namespace_kind = 'mailbox' "
+        "AND namespace_id = ? AND uidvalidity = ?;", &statement, error) ||
+        !bind_varchar (statement, 1, account_id, error) ||
+        !bind_varchar (statement, 2, mailbox_id, error) ||
+        !bind_uint64 (statement, 3, uidvalidity, error) ||
+        !materializer_count_prepared (statement, &count, error))
+        return FALSE;
+
+    if (count != 1) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "%s %s/%s does not have UIDVALIDITY %" G_GUINT64_FORMAT, what,
+            account_id, mailbox_id, uidvalidity);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 static gboolean
 materializer_ensure_copy_destination (WyreboxDeliveryMaterializer *self,
     const WyreboxMembershipsCopiedPayload *payload, GError **error)
@@ -1418,52 +1464,23 @@ materializer_ensure_copy_destination (WyreboxDeliveryMaterializer *self,
         return FALSE;
     }
 
-    duckdb_destroy_prepare (&statement);
-    if (!materializer_prepare (self,
-        "INSERT OR IGNORE INTO mailbox_uid_state ("
-        "account_id, namespace_kind, namespace_id, uidnext, uidvalidity"
-        ") VALUES (?, 'mailbox', ?, 1, ?);", &statement, error) ||
-        !bind_varchar (statement, 1, payload->account_id, error) ||
-        !bind_varchar (statement, 2, payload->dest_mailbox_id, error) ||
-        !bind_uint64 (statement, 3, payload->dest_uidvalidity, error) ||
-        !materializer_execute_prepared (statement, error))
-        return FALSE;
-
-    duckdb_destroy_prepare (&statement);
-    if (!materializer_prepare (self,
-        "SELECT COUNT(*) FROM mailbox_uid_state "
-        "WHERE account_id = ? AND namespace_kind = 'mailbox' "
-        "AND namespace_id = ? AND uidvalidity = ?;", &statement, error) ||
-        !bind_varchar (statement, 1, payload->account_id, error) ||
-        !bind_varchar (statement, 2, payload->dest_mailbox_id, error) ||
-        !bind_uint64 (statement, 3, payload->dest_uidvalidity, error) ||
-        !materializer_count_prepared (statement, &count, error))
-        return FALSE;
-
-    if (count != 1) {
-        g_set_error (error,
-            G_IO_ERROR,
-            G_IO_ERROR_INVALID_DATA,
-            "copy destination %s/%s does not have UIDVALIDITY %"
-            G_GUINT64_FORMAT, payload->account_id, payload->dest_mailbox_id,
-            payload->dest_uidvalidity);
-        return FALSE;
-    }
-
-    return TRUE;
+    return materializer_ensure_uid_state_validity (self, payload->account_id,
+               payload->dest_mailbox_id, payload->dest_uidvalidity,
+               "copy destination", error);
 }
 
 /*
- * Returns in @out_exists whether the destination membership of @item already
- * exists. An existing row must match the record exactly and be visible or
+ * Returns in @out_exists whether the destination membership @membership_id
+ * already exists. An existing row must match the account, mailbox, message,
+ * UID, journal item and journal position exactly and be visible or
  * tombstoned by a later record; any other row fails with INVALID_DATA.
  */
 static gboolean
-materializer_copy_destination_exists (WyreboxDeliveryMaterializer *self,
-    const WyreboxMembershipsCopiedPayload *payload,
-    const WyreboxMembershipsCopiedItem *item, guint64 journal_item,
-    const gchar *membership_id, guint64 journal_offset,
-    guint64 journal_sequence, gboolean *out_exists, GError **error)
+materializer_destination_membership_exists (WyreboxDeliveryMaterializer *self,
+    const gchar *account_id, const gchar *mailbox_id, const gchar *message_id,
+    guint64 uid, guint64 journal_item, const gchar *membership_id,
+    guint64 journal_offset, guint64 journal_sequence, gboolean *out_exists,
+    GError **error)
 {
     g_auto (duckdb_prepared_statement) statement = NULL;
     guint64 count = 0;
@@ -1489,10 +1506,10 @@ materializer_copy_destination_exists (WyreboxDeliveryMaterializer *self,
         "AND (is_visible = TRUE OR expunged_journal_sequence > ?);",
         &statement, error) ||
         !bind_varchar (statement, 1, membership_id, error) ||
-        !bind_varchar (statement, 2, payload->account_id, error) ||
-        !bind_varchar (statement, 3, payload->dest_mailbox_id, error) ||
-        !bind_varchar (statement, 4, item->message_id, error) ||
-        !bind_uint64 (statement, 5, item->dst_uid, error) ||
+        !bind_varchar (statement, 2, account_id, error) ||
+        !bind_varchar (statement, 3, mailbox_id, error) ||
+        !bind_varchar (statement, 4, message_id, error) ||
+        !bind_uint64 (statement, 5, uid, error) ||
         !bind_uint64 (statement, 6, journal_item, error) ||
         !bind_uint64 (statement, 7, journal_offset, error) ||
         !bind_uint64 (statement, 8, journal_sequence, error) ||
@@ -1578,30 +1595,34 @@ materializer_check_copy_source (WyreboxDeliveryMaterializer *self,
     return TRUE;
 }
 
+/*
+ * Inserts the visible destination membership of a COPY, MOVE or APPEND with
+ * the reserved @uid and raises the mailbox's UIDNEXT to at least @uid + 1. A
+ * UID already owned by another membership fails with INVALID_DATA.
+ */
 static gboolean
-materializer_insert_copy_membership (WyreboxDeliveryMaterializer *self,
-    const WyreboxMembershipsCopiedPayload *payload,
-    const WyreboxMembershipsCopiedItem *item, guint64 journal_item,
+materializer_insert_destination_membership (WyreboxDeliveryMaterializer *self,
+    const gchar *account_id, const gchar *mailbox_id, const gchar *message_id,
+    guint64 uid, guint64 internal_date_unix_us, guint64 journal_item,
     const gchar *membership_id, guint64 journal_offset,
     guint64 journal_sequence, GError **error)
 {
     g_auto (duckdb_prepared_statement) statement = NULL;
     guint64 count = 0;
 
-    if (item->dst_uid == G_MAXUINT64) {
+    if (uid == G_MAXUINT64) {
         g_set_error (error,
             G_IO_ERROR,
             G_IO_ERROR_INVALID_DATA,
-            "copy destination UID %" G_GUINT64_FORMAT " leaves no UIDNEXT",
-            item->dst_uid);
+            "destination UID %" G_GUINT64_FORMAT " leaves no UIDNEXT", uid);
         return FALSE;
     }
 
     if (!materializer_prepare (self,
         "SELECT COUNT(*) FROM mailbox_memberships "
         "WHERE mailbox_id = ? AND uid = ?;", &statement, error) ||
-        !bind_varchar (statement, 1, payload->dest_mailbox_id, error) ||
-        !bind_uint64 (statement, 2, item->dst_uid, error) ||
+        !bind_varchar (statement, 1, mailbox_id, error) ||
+        !bind_uint64 (statement, 2, uid, error) ||
         !materializer_count_prepared (statement, &count, error))
         return FALSE;
 
@@ -1609,9 +1630,8 @@ materializer_insert_copy_membership (WyreboxDeliveryMaterializer *self,
         g_set_error (error,
             G_IO_ERROR,
             G_IO_ERROR_INVALID_DATA,
-            "copy destination %s UID %" G_GUINT64_FORMAT
-            " is already owned by another membership",
-            payload->dest_mailbox_id, item->dst_uid);
+            "destination %s UID %" G_GUINT64_FORMAT
+            " is already owned by another membership", mailbox_id, uid);
         return FALSE;
     }
 
@@ -1623,11 +1643,11 @@ materializer_insert_copy_membership (WyreboxDeliveryMaterializer *self,
         "journal_item, is_visible"
         ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE);", &statement, error) ||
         !bind_varchar (statement, 1, membership_id, error) ||
-        !bind_varchar (statement, 2, payload->account_id, error) ||
-        !bind_varchar (statement, 3, payload->dest_mailbox_id, error) ||
-        !bind_varchar (statement, 4, item->message_id, error) ||
-        !bind_uint64 (statement, 5, item->dst_uid, error) ||
-        !bind_uint64 (statement, 6, item->internal_date_unix_us, error) ||
+        !bind_varchar (statement, 2, account_id, error) ||
+        !bind_varchar (statement, 3, mailbox_id, error) ||
+        !bind_varchar (statement, 4, message_id, error) ||
+        !bind_uint64 (statement, 5, uid, error) ||
+        !bind_uint64 (statement, 6, internal_date_unix_us, error) ||
         !bind_uint64 (statement, 7, journal_offset, error) ||
         !bind_uint64 (statement, 8, journal_sequence, error) ||
         !bind_uint64 (statement, 9, journal_item, error) ||
@@ -1639,10 +1659,24 @@ materializer_insert_copy_membership (WyreboxDeliveryMaterializer *self,
                "UPDATE mailbox_uid_state SET uidnext = GREATEST(uidnext, ?) "
                "WHERE account_id = ? AND namespace_kind = 'mailbox' "
                "AND namespace_id = ?;", &statement, error)
-           && bind_uint64 (statement, 1, item->dst_uid + 1, error)
-           && bind_varchar (statement, 2, payload->account_id, error)
-           && bind_varchar (statement, 3, payload->dest_mailbox_id, error)
+           && bind_uint64 (statement, 1, uid + 1, error)
+           && bind_varchar (statement, 2, account_id, error)
+           && bind_varchar (statement, 3, mailbox_id, error)
            && materializer_execute_prepared (statement, error);
+}
+
+static gboolean
+materializer_insert_copy_membership (WyreboxDeliveryMaterializer *self,
+    const WyreboxMembershipsCopiedPayload *payload,
+    const WyreboxMembershipsCopiedItem *item, guint64 journal_item,
+    const gchar *membership_id, guint64 journal_offset,
+    guint64 journal_sequence, GError **error)
+{
+    return materializer_insert_destination_membership (self,
+               payload->account_id, payload->dest_mailbox_id,
+               item->message_id, item->dst_uid, item->internal_date_unix_us,
+               journal_item, membership_id, journal_offset, journal_sequence,
+               error);
 }
 
 static gboolean
@@ -1680,9 +1714,10 @@ materializer_apply_copy_item (WyreboxDeliveryMaterializer *self,
             payload->dest_mailbox_id, journal_offset, journal_sequence,
             journal_item);
 
-    if (!materializer_copy_destination_exists (self, payload, item,
-        journal_item, membership_id, journal_offset, journal_sequence,
-        &exists, error))
+    if (!materializer_destination_membership_exists (self,
+        payload->account_id, payload->dest_mailbox_id, item->message_id,
+        item->dst_uid, journal_item, membership_id, journal_offset,
+        journal_sequence, &exists, error))
         return FALSE;
 
     if (!exists &&
@@ -1759,6 +1794,158 @@ wyrebox_delivery_materializer_apply_memberships_moved (
 {
     return materializer_apply_memberships_copied (self, payload, TRUE,
                journal_offset, journal_sequence, advance_checkpoint, error);
+}
+
+/*
+ * Makes sure the ordinary destination mailbox of an APPEND exists. An
+ * unmaterialized INBOX ("inbox:<account>") is created like a delivery would
+ * create it. Any other missing mailbox fails; an APPEND never creates one.
+ */
+static gboolean
+materializer_ensure_append_destination (WyreboxDeliveryMaterializer *self,
+    const WyreboxMessageAppendedPayload *payload, GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    g_autofree gchar *inbox_id = NULL;
+    guint64 count = 0;
+
+    if (!materializer_insert_account (self, payload->account_id, error))
+        return FALSE;
+
+    if (!materializer_prepare (self,
+        "SELECT COUNT(*) FROM mailboxes WHERE mailbox_id = ? "
+        "AND account_id = ? AND is_selectable = TRUE AND is_visible = TRUE;",
+        &statement, error) ||
+        !bind_varchar (statement, 1, payload->mailbox_id, error) ||
+        !bind_varchar (statement, 2, payload->account_id, error) ||
+        !materializer_count_prepared (statement, &count, error))
+        return FALSE;
+
+    if (count != 1) {
+        inbox_id = g_strdup_printf ("inbox:%s", payload->account_id);
+        if (strcmp (payload->mailbox_id, inbox_id) != 0) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "append destination mailbox %s/%s is not materialized",
+                payload->account_id, payload->mailbox_id);
+            return FALSE;
+        }
+
+        if (!materializer_ensure_mailbox (self, payload->account_id,
+            payload->mailbox_id, "INBOX", error))
+            return FALSE;
+    }
+
+    return materializer_ensure_uid_state_validity (self, payload->account_id,
+               payload->mailbox_id, payload->uidvalidity, "append destination",
+               error);
+}
+
+static gboolean
+materializer_insert_append_flags (WyreboxDeliveryMaterializer *self,
+    const WyreboxMessageAppendedPayload *payload, const gchar *membership_id,
+    guint64 journal_offset, guint64 journal_sequence, GError **error)
+{
+    char **const names[] = { payload->system_flags, payload->user_keywords };
+
+    for (gsize t = 0; t < G_N_ELEMENTS (flag_tables); t++) {
+        for (gsize i = 0; names[t] != NULL && names[t][i] != NULL; i++) {
+            if (!materializer_insert_flag_name (self, &flag_tables[t],
+                payload->account_id, payload->mailbox_id, membership_id,
+                names[t][i], journal_offset, journal_sequence, error))
+                return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+static gboolean
+materializer_apply_append (WyreboxDeliveryMaterializer *self,
+    const WyreboxMessageAppendedPayload *payload, guint64 journal_offset,
+    guint64 journal_sequence, GError **error)
+{
+    /* Borrowed views of @payload; never cleared. */
+    WyreboxDeliveryProjectionRecord record = {
+        .journal_offset = journal_offset,
+        .journal_sequence = journal_sequence,
+        .object_key = payload->object_key,
+        .size_bytes = payload->size_bytes,
+        .internal_date_unix_us = payload->internal_date_unix_us,
+        .duplicate_message_id_count = payload->duplicate_message_id_count,
+        .rfc_message_id = payload->message_id,
+        .subject = payload->subject,
+        .from = payload->from,
+        .to = payload->to,
+        .cc = payload->cc,
+        .bcc = payload->bcc,
+        .date_raw = payload->date,
+        .message_id_span_valid = payload->message_id_span_valid,
+        .message_id_span_start = payload->message_id_span_start,
+        .message_id_span_end = payload->message_id_span_end,
+        .subject_span_valid = payload->subject_span_valid,
+        .subject_span_start = payload->subject_span_start,
+        .subject_span_end = payload->subject_span_end,
+    };
+    g_autofree gchar *message_id = NULL;
+    g_autofree gchar *membership_id = NULL;
+    gboolean exists = FALSE;
+
+    message_id = g_strdup_printf ("journal:%" G_GUINT64_FORMAT ":%"
+            G_GUINT64_FORMAT, journal_offset, journal_sequence);
+    membership_id = g_strdup_printf ("mailbox:%s:journal:%" G_GUINT64_FORMAT
+            ":%" G_GUINT64_FORMAT ":0",
+            payload->mailbox_id, journal_offset, journal_sequence);
+
+    if (!materializer_ensure_append_destination (self, payload, error) ||
+        !materializer_ensure_object (self, &record, error) ||
+        !materializer_ensure_message (self, payload->account_id, message_id,
+        &record, error) ||
+        !materializer_ensure_message_headers (self, message_id, &record,
+        error) ||
+        !materializer_destination_membership_exists (self,
+        payload->account_id, payload->mailbox_id, message_id, payload->uid, 0,
+        membership_id, journal_offset, journal_sequence, &exists, error))
+        return FALSE;
+
+    if (exists)
+        return TRUE;
+
+    return materializer_insert_destination_membership (self,
+               payload->account_id, payload->mailbox_id, message_id,
+               payload->uid, payload->internal_date_unix_us, 0, membership_id,
+               journal_offset, journal_sequence, error) &&
+           materializer_insert_append_flags (self, payload, membership_id,
+               journal_offset, journal_sequence, error);
+}
+
+gboolean
+wyrebox_delivery_materializer_apply_message_appended (
+    WyreboxDeliveryMaterializer *self,
+    const WyreboxMessageAppendedPayload *payload, guint64 journal_offset,
+    guint64 journal_sequence, gboolean advance_checkpoint, GError **error)
+{
+    g_return_val_if_fail (WYREBOX_IS_DELIVERY_MATERIALIZER (self), FALSE);
+    g_return_val_if_fail (payload != NULL, FALSE);
+    g_return_val_if_fail (payload->account_id != NULL, FALSE);
+    g_return_val_if_fail (payload->mailbox_id != NULL, FALSE);
+    g_return_val_if_fail (payload->object_key != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (!materializer_query (self, "BEGIN TRANSACTION;", error))
+        return FALSE;
+
+    if (!materializer_apply_append (self, payload, journal_offset,
+        journal_sequence, error) ||
+        (advance_checkpoint && !materializer_save_checkpoint (self,
+        journal_offset, journal_sequence, error)) ||
+        !materializer_query (self, "COMMIT;", error)) {
+        materializer_rollback_quietly (self);
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 static void

@@ -109,6 +109,10 @@ wyrebox_delivery_projection_record_clear (WyreboxDeliveryProjectionRecord
         g_clear_pointer (&record->memberships_copied, g_free);
     }
     record->memberships_move = FALSE;
+    if (record->message_appended != NULL) {
+        wyrebox_message_appended_payload_clear (record->message_appended);
+        g_clear_pointer (&record->message_appended, g_free);
+    }
 }
 
 void
@@ -358,6 +362,52 @@ append_memberships_copied_record (WyreboxDeliveryProjectionList
     return TRUE;
 }
 
+static gboolean
+append_message_appended_record (WyreboxDeliveryProjectionList
+    *out_projection, WyreboxJournalRecord *record, GError **error)
+{
+    g_autoptr (GError) local_error = NULL;
+    WyreboxDeliveryProjectionRecord *entry = NULL;
+    WyreboxMessageAppendedPayload *payload =
+        g_new0 (WyreboxMessageAppendedPayload, 1);
+
+    if (!wyrebox_message_appended_payload_decode (record->payload, payload,
+        &local_error)) {
+        g_free (payload);
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "failed to decode MessageAppended payload at sequence %"
+            G_GUINT64_FORMAT ": %s", record->sequence, local_error->message);
+        return FALSE;
+    }
+
+    entry = g_new0 (WyreboxDeliveryProjectionRecord, 1);
+    entry->journal_offset = record->offset;
+    entry->journal_sequence = record->sequence;
+    entry->object_key = g_strdup (payload->object_key);
+    entry->account_identity = g_strdup (payload->account_id);
+    entry->size_bytes = payload->size_bytes;
+    entry->internal_date_unix_us = payload->internal_date_unix_us;
+    entry->duplicate_message_id_count = payload->duplicate_message_id_count;
+    entry->rfc_message_id = g_strdup (payload->message_id);
+    entry->subject = g_strdup (payload->subject);
+    entry->from = g_strdup (payload->from);
+    entry->to = g_strdup (payload->to);
+    entry->cc = g_strdup (payload->cc);
+    entry->bcc = g_strdup (payload->bcc);
+    entry->date_raw = g_strdup (payload->date);
+    entry->message_id_span_valid = payload->message_id_span_valid;
+    entry->message_id_span_start = payload->message_id_span_start;
+    entry->message_id_span_end = payload->message_id_span_end;
+    entry->subject_span_valid = payload->subject_span_valid;
+    entry->subject_span_start = payload->subject_span_start;
+    entry->subject_span_end = payload->subject_span_end;
+    entry->message_appended = payload;
+    g_ptr_array_add (out_projection->records, entry);
+    return TRUE;
+}
+
 gboolean
 wyrebox_delivery_projection_record_is_delivery (const
     WyreboxDeliveryProjectionRecord *record)
@@ -368,7 +418,8 @@ wyrebox_delivery_projection_record_is_delivery (const
            record->facts_extracted == NULL &&
            record->membership_change == NULL &&
            record->memberships_expunged == NULL &&
-           record->memberships_copied == NULL;
+           record->memberships_copied == NULL &&
+           record->message_appended == NULL;
 }
 
 gboolean
@@ -377,6 +428,8 @@ wyrebox_delivery_projection_check_record_object (WyreboxLocalObjectStore
     GError **error)
 {
     g_autoptr (GError) local_error = NULL;
+    const char *label = record != NULL && record->message_appended != NULL ?
+        "MessageAppended" : "MessageDelivered";
 
     g_return_val_if_fail (WYREBOX_IS_LOCAL_OBJECT_STORE (object_store), FALSE);
     g_return_val_if_fail (record != NULL, FALSE);
@@ -390,40 +443,40 @@ wyrebox_delivery_projection_check_record_object (WyreboxLocalObjectStore
         g_set_error (error,
             G_IO_ERROR,
             G_IO_ERROR_INVALID_DATA,
-            "MessageDelivered record at sequence %" G_GUINT64_FORMAT
+            "%s record at sequence %" G_GUINT64_FORMAT
             " references unavailable raw object %s: %s",
-            record->journal_sequence, record->object_key,
+            label, record->journal_sequence, record->object_key,
             local_error->message);
         return FALSE;
     case WYREBOX_DELIVERY_OBJECT_CHECK_SIZE_MISMATCH:
         g_set_error (error,
             G_IO_ERROR,
             G_IO_ERROR_INVALID_DATA,
-            "MessageDelivered record at sequence %" G_GUINT64_FORMAT ": %s",
-            record->journal_sequence, local_error->message);
+            "%s record at sequence %" G_GUINT64_FORMAT ": %s",
+            label, record->journal_sequence, local_error->message);
         return FALSE;
     case WYREBOX_DELIVERY_OBJECT_CHECK_HASH_MISMATCH:
         g_set_error (error,
             G_IO_ERROR,
             G_IO_ERROR_INVALID_DATA,
-            "MessageDelivered record at sequence %" G_GUINT64_FORMAT
+            "%s record at sequence %" G_GUINT64_FORMAT
             " references raw object %s with SHA-256 mismatch",
-            record->journal_sequence, record->object_key);
+            label, record->journal_sequence, record->object_key);
         return FALSE;
     case WYREBOX_DELIVERY_OBJECT_CHECK_INVALID_KEY:
         g_set_error (error,
             G_IO_ERROR,
             G_IO_ERROR_INVALID_DATA,
-            "MessageDelivered record at sequence %" G_GUINT64_FORMAT
+            "%s record at sequence %" G_GUINT64_FORMAT
             " references invalid raw object key %s: %s",
-            record->journal_sequence, record->object_key,
+            label, record->journal_sequence, record->object_key,
             local_error->message);
         return FALSE;
     case WYREBOX_DELIVERY_OBJECT_CHECK_UNREADABLE:
     default:
         g_propagate_prefixed_error (error, g_steal_pointer (&local_error),
-            "MessageDelivered record at sequence %" G_GUINT64_FORMAT
-            ": failed to read raw object %s: ", record->journal_sequence,
+            "%s record at sequence %" G_GUINT64_FORMAT
+            ": failed to read raw object %s: ", label, record->journal_sequence,
             record->object_key);
         return FALSE;
     }
@@ -523,6 +576,16 @@ projection_replay (WyreboxDeliveryProjection *self,
             record.event_type == WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_MOVED)) {
             if (!append_memberships_copied_record (out_projection, &record,
                 record.event_type == WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_MOVED,
+                error)) {
+                wyrebox_delivery_projection_list_clear (out_projection);
+                return FALSE;
+            }
+            continue;
+        }
+
+        if (include_mutations &&
+            record.event_type == WYREBOX_JOURNAL_EVENT_MESSAGE_APPENDED) {
+            if (!append_message_appended_record (out_projection, &record,
                 error)) {
                 wyrebox_delivery_projection_list_clear (out_projection);
                 return FALSE;

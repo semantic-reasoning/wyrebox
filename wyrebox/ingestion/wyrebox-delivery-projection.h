@@ -8,6 +8,7 @@
 #include "wyrebox-local-object-store.h"
 #include "wyrebox-memberships-copied-payload.h"
 #include "wyrebox-memberships-expunged-payload.h"
+#include "wyrebox-message-appended-payload.h"
 
 #include <glib-object.h>
 
@@ -27,7 +28,8 @@ typedef struct
   /*
    * Journal location of the MessageDelivered, FlagChanged, FactInserted,
    * FactRetracted, FactsExtracted, DerivedViewMembershipChanged,
-   * MembershipsExpunged, MembershipsCopied, or MembershipsMoved record.
+   * MembershipsExpunged, MembershipsCopied, MembershipsMoved, or
+   * MessageAppended record.
    */
   guint64 journal_offset;
   guint64 journal_sequence;
@@ -131,6 +133,19 @@ typedef struct
    */
   WyreboxMembershipsCopiedPayload *memberships_copied;
   gboolean memberships_move;
+
+  /*
+   * Decoded payload when the entry is a MessageAppended record, or NULL
+   * otherwise. Unlike the other mutations an append has a raw object, so
+   * @object_key, @account_identity, @size_bytes, @internal_date_unix_us and
+   * the header fields above are copied from the payload and
+   * wyrebox_delivery_projection_check_record_object() works on it. It is not
+   * a delivery: wyrebox_delivery_projection_record_is_delivery() is FALSE.
+   *
+   * Ownership: owned by this record and cleared by
+   * wyrebox_delivery_projection_record_clear().
+   */
+  WyreboxMessageAppendedPayload *message_appended;
 } WyreboxDeliveryProjectionRecord;
 
 /*
@@ -207,9 +222,10 @@ gboolean wyrebox_delivery_projection_replay_records (
  * @facts_extracted is set, and DerivedViewMembershipChanged records as entries
  * whose @membership_change is set, MembershipsExpunged records as entries
  * whose @memberships_expunged is set, and MembershipsCopied/MembershipsMoved
- * records as entries whose @memberships_copied is set. A payload that fails to decode, or a fact
- * payload whose mutation does not match its event type, fails the replay with
- * G_IO_ERROR_INVALID_DATA.
+ * records as entries whose @memberships_copied is set, and MessageAppended
+ * records as entries whose @message_appended is set. A payload that fails to
+ * decode, or a fact payload whose mutation does not match its event type,
+ * fails the replay with G_IO_ERROR_INVALID_DATA.
  */
 gboolean wyrebox_delivery_projection_replay_records_with_mutations (
     WyreboxDeliveryProjection *self,
@@ -218,8 +234,8 @@ gboolean wyrebox_delivery_projection_replay_records_with_mutations (
 
 /*
  * Returns TRUE when @record projects a MessageDelivered record, which has a
- * raw object, rather than a flag change, fact mutation, fact extraction, or
- * derived view membership change.
+ * raw object, rather than a flag change, fact mutation, fact extraction,
+ * derived view membership change, membership move, or MessageAppended record.
  */
 gboolean wyrebox_delivery_projection_record_is_delivery (
     const WyreboxDeliveryProjectionRecord *record);

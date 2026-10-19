@@ -111,6 +111,7 @@ wyrebox_sources = files(
   'journal/wyrebox-flag-changed-payload.c',
   'journal/wyrebox-memberships-expunged-payload.c',
   'journal/wyrebox-memberships-copied-payload.c',
+  'journal/wyrebox-message-appended-payload.c',
   'journal/wyrebox-journal-event.c',
   'journal/wyrebox-journal-writer.c',
   'journal/wyrebox-journal-reader.c',

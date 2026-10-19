@@ -5,10 +5,10 @@
 static void
 test_event_type_catalog_is_enumerable (void)
 {
-    g_assert_cmpuint (wyrebox_journal_event_type_catalog_size (), ==, 11);
+    g_assert_cmpuint (wyrebox_journal_event_type_catalog_size (), ==, 12);
     g_assert_nonnull (wyrebox_journal_event_type_catalog_at (0));
-    g_assert_nonnull (wyrebox_journal_event_type_catalog_at (10));
-    g_assert_null (wyrebox_journal_event_type_catalog_at (11));
+    g_assert_nonnull (wyrebox_journal_event_type_catalog_at (11));
+    g_assert_null (wyrebox_journal_event_type_catalog_at (12));
 }
 
 static void
@@ -55,6 +55,13 @@ test_event_type_catalog_resolves_known_event_types (void)
     g_assert_cmpstr (descriptor->event_type_name, ==, "MembershipsMoved");
     g_assert_cmpstr (descriptor->payload_schema_version, ==,
         "journal.payload.memberships-copied.v1");
+
+    descriptor = wyrebox_journal_event_type_catalog_lookup
+            (WYREBOX_JOURNAL_EVENT_MESSAGE_APPENDED);
+    g_assert_nonnull (descriptor);
+    g_assert_cmpstr (descriptor->event_type_name, ==, "MessageAppended");
+    g_assert_cmpstr (descriptor->payload_schema_version, ==,
+        "journal.payload.message-appended.v1");
 }
 
 static void
