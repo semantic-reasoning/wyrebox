@@ -3,6 +3,8 @@
 #include "wyrebox-daemon-memberships-copy-move-request.h"
 #include "wyrebox-daemon-memberships-copy-move-service.h"
 #include "wyrebox-daemon-memberships-expunge-request.h"
+#include "wyrebox-daemon-message-append-request.h"
+#include "wyrebox-daemon-message-append-service.h"
 #include "wyrebox-daemon-delivery-ingestion-request.h"
 #include "wyrebox-daemon-mailbox-status-request.h"
 #include "wyrebox-journal-reader.h"
@@ -24,8 +26,8 @@ route_without_wirelog (WyreboxDaemonDeliveryIngestionService *delivery,
     WyreboxDaemonResponseFrame *out, GError **error)
 {
     return wyrebox_daemon_request_router_route (delivery, fact, list, select,
-               fetch, search, NULL, NULL, NULL, flag, NULL, NULL, frame, out,
-               error);
+               fetch, search, NULL, NULL, NULL, flag, NULL, NULL, NULL, frame,
+               out, error);
 }
 
 static gboolean
@@ -34,7 +36,8 @@ route_with_wirelog (WyreboxDaemonWirelogPredicateQueryService *wirelog,
     WyreboxDaemonResponseFrame *out, GError **error)
 {
     return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
-               NULL, NULL, wirelog, NULL, NULL, NULL, NULL, frame, out, error);
+               NULL, NULL, wirelog, NULL, NULL, NULL, NULL, NULL, frame, out,
+               error);
 }
 
 static gboolean
@@ -43,7 +46,8 @@ route_with_duckdb_query_template (WyreboxDaemonDuckDBQueryTemplateService
     WyreboxDaemonResponseFrame *out, GError **error)
 {
     return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
-               NULL, NULL, NULL, duckdb, NULL, NULL, NULL, frame, out, error);
+               NULL, NULL, NULL, duckdb, NULL, NULL, NULL, NULL, frame, out,
+               error);
 }
 
 static gboolean
@@ -52,8 +56,8 @@ route_with_mail_event_stream (WyreboxDaemonMailEventStreamService
     WyreboxDaemonResponseFrame *out, GError **error)
 {
     return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
-               NULL, mail_event_stream, NULL, NULL, NULL, NULL, NULL, frame,
-               out, error);
+               NULL, mail_event_stream, NULL, NULL, NULL, NULL, NULL, NULL,
+               frame, out, error);
 }
 
 static gboolean
@@ -62,7 +66,8 @@ route_with_memberships_expunge (WyreboxDaemonMembershipsExpungeService *service,
     WyreboxDaemonResponseFrame *out, GError **error)
 {
     return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
-               NULL, NULL, NULL, NULL, NULL, service, NULL, frame, out, error);
+               NULL, NULL, NULL, NULL, NULL, service, NULL, NULL, frame, out,
+               error);
 }
 
 static gboolean
@@ -71,7 +76,18 @@ route_with_memberships_copy (WyreboxDaemonMembershipsCopyMoveService *service,
     WyreboxDaemonResponseFrame *out, GError **error)
 {
     return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
-               NULL, NULL, NULL, NULL, NULL, NULL, service, frame, out, error);
+               NULL, NULL, NULL, NULL, NULL, NULL, service, NULL, frame, out,
+               error);
+}
+
+static gboolean
+route_with_message_append (WyreboxDaemonMessageAppendService *service,
+    const WyreboxDaemonDecodedRequestFrame *frame,
+    WyreboxDaemonResponseFrame *out, GError **error)
+{
+    return wyrebox_daemon_request_router_route (NULL, NULL, NULL, NULL, NULL,
+               NULL, NULL, NULL, NULL, NULL, NULL, NULL, service, frame, out,
+               error);
 }
 
 #define wyrebox_daemon_request_router_route route_without_wirelog
@@ -230,6 +246,28 @@ expunge_memberships_fixture (const WyreboxDaemonRequestIdentity *identity,
     out_receipt->journal_offset = 10;
     out_receipt->journal_sequence = 20;
     out_receipt->summary = g_strdup ("memberships_expunge mailbox_id=mbox");
+    return TRUE;
+}
+
+static gboolean
+append_message_fixture (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMessageAppendRequest *request,
+    WyreboxDaemonSuccessReceipt *out_receipt, gpointer user_data,
+    GError **error)
+{
+    gboolean *was_called = user_data;
+
+    (void)request;
+    (void)error;
+
+    if (was_called != NULL)
+        *was_called = TRUE;
+
+    out_receipt->request_id = g_strdup (identity->request_id);
+    out_receipt->durable_marker = g_strdup ("journal:10:20");
+    out_receipt->journal_offset = 10;
+    out_receipt->journal_sequence = 20;
+    out_receipt->summary = g_strdup ("message_appended pairs=1:3");
     return TRUE;
 }
 
@@ -2102,6 +2140,37 @@ test_request_router_routes_memberships_copy (void)
     g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
 }
 
+static void
+test_request_router_routes_message_append (void)
+{
+    gboolean was_called = FALSE;
+    g_autoptr (GBytes) message = g_bytes_new_static ("a", 1);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDaemonMessageAppendService) service = NULL;
+    g_auto (WyreboxDaemonMessageAppendRequest) request = { 0 };
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+    WyreboxDaemonDecodedRequestFrame request_frame = { 0 };
+
+    g_assert_true (wyrebox_daemon_message_append_request_init (&request,
+        "account-1", "inbox:account-1", 1, message, 0, NULL, NULL, &error));
+
+    request_frame.request_id = "request-append";
+    request_frame.caller_identity = "dovecot";
+    request_frame.account_identity = "account-1";
+    request_frame.tool_identity = "dovecot-storage";
+    request_frame.correlation_id = "imap-append-1";
+    request_frame.operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_APPEND;
+    request_frame.message_append = &request;
+
+    service = wyrebox_daemon_message_append_service_new (append_message_fixture,
+            &was_called, NULL);
+    g_assert_true (route_with_message_append (service, &request_frame, &frame,
+        &error));
+    g_assert_true (was_called);
+    g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -2221,6 +2290,8 @@ main (int argc, char **argv)
         test_request_router_routes_memberships_expunge);
     g_test_add_func ("/daemon-api/request-router/routes-memberships-copy",
         test_request_router_routes_memberships_copy);
+    g_test_add_func ("/daemon-api/request-router/routes-message-append",
+        test_request_router_routes_message_append);
     g_test_add_func ("/daemon-api/request-router/"
         "rejects-missing-flag-keyword-update-payload",
         test_request_router_rejects_missing_flag_keyword_update_payload);

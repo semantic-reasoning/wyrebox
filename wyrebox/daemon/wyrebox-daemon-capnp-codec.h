@@ -7,6 +7,7 @@
 #include "wyrebox-daemon-flag-keyword-update-request.h"
 #include "wyrebox-daemon-memberships-copy-move-request.h"
 #include "wyrebox-daemon-memberships-expunge-request.h"
+#include "wyrebox-daemon-message-append-request.h"
 #include "wyrebox-daemon-mail-event-stream-request.h"
 #include "wyrebox-daemon-mailbox-list-request.h"
 #include "wyrebox-daemon-mailbox-select-request.h"
@@ -89,6 +90,12 @@ GBytes *wyrebox_daemon_capnp_codec_encode_memberships_copy_request (
 GBytes *wyrebox_daemon_capnp_codec_encode_memberships_move_request (
     const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonMembershipsCopyMoveRequest *request,
+    gpointer user_data,
+    GError **error);
+
+GBytes *wyrebox_daemon_capnp_codec_encode_message_append_request (
+    const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMessageAppendRequest *request,
     gpointer user_data,
     GError **error);
 

@@ -335,6 +335,24 @@ daemon_memberships_copy_move_journal_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_message_append_request_test = executable(
+  'test-daemon-message-append-request',
+  'test-daemon-message-append-request.c',
+  dependencies: [wyrebox_dep],
+)
+
+daemon_message_append_dispatcher_test = executable(
+  'test-daemon-message-append-dispatcher',
+  'test-daemon-message-append-dispatcher.c',
+  dependencies: [wyrebox_dep],
+)
+
+daemon_message_append_journal_test = executable(
+  'test-daemon-message-append-journal',
+  'test-daemon-message-append-journal.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_config_test = executable(
   'test-daemon-config',
   'test-daemon-config.c',
@@ -583,6 +601,16 @@ test('daemon memberships copy move dispatcher',
 test(
   'daemon memberships copy move journal',
   daemon_memberships_copy_move_journal_test,
+  env: {
+    'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() / 'tests'
+    / 'object-store' / 'fixtures',
+  },
+)
+test('daemon message append request', daemon_message_append_request_test)
+test('daemon message append dispatcher', daemon_message_append_dispatcher_test)
+test(
+  'daemon message append journal',
+  daemon_message_append_journal_test,
   env: {
     'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() / 'tests'
     / 'object-store' / 'fixtures',

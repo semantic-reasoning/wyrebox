@@ -21,6 +21,7 @@
 #include "wyrebox-daemon-flag-keyword-update-service.h"
 #include "wyrebox-daemon-memberships-copy-move-request.h"
 #include "wyrebox-daemon-memberships-expunge-request.h"
+#include "wyrebox-daemon-message-append-request.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-audit-payload.h"
 #include "wyrebox-journal-reader.h"
@@ -1466,9 +1467,9 @@ assert_flag_keyword_update_request_encoder_round_trip (void)
     g_assert_cmpint (decoded.flag_keyword_update->mode, ==,
         WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_REPLACE);
     g_assert_true (g_strv_equal ((const char *const *)
-            decoded.flag_keyword_update->system_flags, system_flags));
+        decoded.flag_keyword_update->system_flags, system_flags));
     g_assert_true (g_strv_equal ((const char *const *)
-            decoded.flag_keyword_update->user_keywords, user_keywords));
+        decoded.flag_keyword_update->user_keywords, user_keywords));
 
     decoded_state_clear (decoded_state);
     g_clear_pointer (&encoded, g_bytes_unref);
@@ -1514,6 +1515,47 @@ assert_memberships_expunge_request_encoder_round_trip (void)
     g_assert_nonnull (decoded.memberships_expunge);
     g_assert_cmpuint (decoded.memberships_expunge->n_uids, ==, 3);
     g_assert_cmpuint (decoded.memberships_expunge->uids[1], ==, 3);
+
+    decoded_state_clear (decoded_state);
+}
+
+static void
+assert_message_append_request_encoder_round_trip (void)
+{
+    const char *system_flags[] = { "\\Seen", NULL };
+    g_autoptr (GBytes) message = g_bytes_new_static ("Subject: hi\r\n\r\nx",
+            sizeof ("Subject: hi\r\n\r\nx") - 1);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) encoded = NULL;
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonMessageAppendRequest) request = { 0 };
+    WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+    gpointer decoded_state = NULL;
+    GDestroyNotify decoded_state_clear = NULL;
+
+    g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+        "request-encode-append", "dovecot", "account-1",
+        "dovecot-storage", "corr-append", &error));
+    g_assert_true (wyrebox_daemon_message_append_request_init (&request,
+        "account-1", "inbox:account-1", 1, message, 99, system_flags, NULL,
+        &error));
+    g_assert_no_error (error);
+
+    encoded = wyrebox_daemon_capnp_codec_encode_message_append_request
+            (&identity, &request, NULL, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (encoded);
+
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+        encoded, &decoded, &decoded_state, &decoded_state_clear, NULL,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (decoded.operation, ==,
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_APPEND);
+    g_assert_nonnull (decoded.message_append);
+    g_assert_cmpuint (decoded.message_append->uid_validity, ==, 1);
+    g_assert_cmpuint (decoded.message_append->internal_date_unix_us, ==, 99);
+    g_assert_cmpstr (decoded.message_append->system_flags[0], ==, "\\Seen");
 
     decoded_state_clear (decoded_state);
 }
@@ -1643,7 +1685,7 @@ assert_fact_mutation_request_encoder_round_trip (void)
     g_assert_cmpstr (decoded.fact_mutation->predicate_id, ==, "has_keyword");
     g_assert_cmpstr (decoded.fact_mutation->scope_id, ==, "account-1");
     g_assert_true (g_strv_equal ((const gchar * const *)
-            decoded.fact_mutation->arguments, arguments));
+        decoded.fact_mutation->arguments, arguments));
 
     decoded_state_clear (decoded_state);
     g_clear_pointer (&encoded, g_bytes_unref);
@@ -1695,7 +1737,7 @@ assert_wirelog_predicate_query_request_encoder_round_trip (void)
     g_assert_cmpstr (decoded.wirelog_predicate_query->scope_id, ==,
         "account-1");
     g_assert_cmpuint (g_strv_length
-        (decoded.wirelog_predicate_query->bindings), ==, 0);
+            (decoded.wirelog_predicate_query->bindings), ==, 0);
 
     decoded_state_clear (decoded_state);
     g_clear_pointer (&encoded, g_bytes_unref);
@@ -4906,6 +4948,9 @@ main (int argc, char **argv)
     g_test_add_func (
         "/daemon-api/capnp/codec/memberships-expunge-encoder-round-trip",
         assert_memberships_expunge_request_encoder_round_trip);
+    g_test_add_func ("/daemon-api/capnp-codec/"
+        "message-append-request-encoder-round-trip",
+        assert_message_append_request_encoder_round_trip);
     g_test_add_func (
         "/daemon-api/capnp/codec/memberships-copy-encoder-round-trip",
         assert_memberships_copy_request_encoder_round_trip);

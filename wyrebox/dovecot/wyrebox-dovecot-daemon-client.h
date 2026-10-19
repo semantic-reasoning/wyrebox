@@ -149,5 +149,18 @@ gboolean wyrebox_dovecot_daemon_client_move (
     guint64 *out_journal_offset,
     GError **error);
 
+gboolean wyrebox_dovecot_daemon_client_append (
+    const char *socket_path,
+    const char *account_identity,
+    const char *mailbox_id,
+    guint64 uid_validity,
+    GBytes *message_bytes,
+    guint64 internal_date_unix_us,
+    const char *const *system_flags,
+    const char *const *user_keywords,
+    char **out_success_summary,
+    guint64 *out_journal_offset,
+    GError **error);
+
 G_END_DECLS
 /* *INDENT-ON* */
