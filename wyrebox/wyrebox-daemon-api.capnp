@@ -17,6 +17,8 @@ struct RequestFrame {
     factBatchImport @10 :FactBatchImportRequest;
     mailEventStream @12 :MailEventStreamRequest;
     membershipsExpunge @13 :MembershipsExpungeRequest;
+    membershipsCopy @14 :MembershipsCopyMoveRequest;
+    membershipsMove @15 :MembershipsCopyMoveRequest;
   }
 }
 
@@ -185,6 +187,16 @@ struct MembershipsExpungeRequest {
   mailboxId @1 :Text;
   uidValidity @2 :UInt64;
   uids @3 :List(UInt64);
+}
+
+struct MembershipsCopyMoveRequest {
+  accountIdentity @0 :Text;
+  sourceMailboxId @1 :Text;
+  sourceUidValidity @2 :UInt64;
+  sourceNamespaceKind @3 :MailboxListEntryKind;
+  destMailboxId @4 :Text;
+  destUidValidity @5 :UInt64;
+  sourceUids @6 :List(UInt64);
 }
 
 struct FactMutationRequest {

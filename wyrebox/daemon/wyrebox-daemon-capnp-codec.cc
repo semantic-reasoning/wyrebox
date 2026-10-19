@@ -6,6 +6,7 @@
 #include "wyrebox-daemon-fact-batch-import-request.h"
 #include "wyrebox-daemon-fact-mutation-request.h"
 #include "wyrebox-daemon-flag-keyword-update-request.h"
+#include "wyrebox-daemon-memberships-copy-move-request.h"
 #include "wyrebox-daemon-memberships-expunge-request.h"
 #include "wyrebox-daemon-mail-event-stream-request.h"
 #include "wyrebox-daemon-mailbox-list-request.h"
@@ -46,6 +47,7 @@ typedef struct
     WyreboxDaemonDeliveryIngestionRequest delivery_ingestion;
     WyreboxDaemonFlagKeywordUpdateRequest flag_keyword_update;
     WyreboxDaemonMembershipsExpungeRequest memberships_expunge;
+    WyreboxDaemonMembershipsCopyMoveRequest memberships_copy_move;
     WyreboxDaemonMailEventStreamRequest mail_event_stream;
 } WyreboxDaemonCapnpDecodedRequestState;
 
@@ -94,6 +96,8 @@ wyrebox_daemon_capnp_codec_decoded_state_clear (gpointer decoded_state)
         (&state->flag_keyword_update);
     wyrebox_daemon_memberships_expunge_request_clear
         (&state->memberships_expunge);
+    wyrebox_daemon_memberships_copy_move_request_clear
+        (&state->memberships_copy_move);
     wyrebox_daemon_mail_event_stream_request_clear (&state->mail_event_stream);
 
     g_free (state);
@@ -944,8 +948,87 @@ decode_memberships_expunge_request (const RequestFrame::Reader & request_frame,
     out_request_frame->delivery_ingestion = NULL;
     out_request_frame->flag_keyword_update = NULL;
     out_request_frame->memberships_expunge = &state->memberships_expunge;
+    out_request_frame->memberships_copy_move = NULL;
 
     return TRUE;
+}
+
+static gboolean
+decode_memberships_copy_move_body (const MembershipsCopyMoveRequest::Reader
+    & body, WyreboxDaemonCapnpDecodedRequestState *state,
+    WyreboxDaemonDecodedRequestFrame *out_request_frame, gboolean is_move,
+    GError **error)
+{
+    g_autofree guint64 *source_uids = NULL;
+    gsize n_source_uids = 0;
+    WyreboxDaemonMailboxListEntryKind source_namespace_kind =
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
+
+    if (!decode_uint64_list (body.getSourceUids (), &source_uids,
+        &n_source_uids))
+        return set_invalid_argument (error,
+                   "memberships copy/move source uid list is malformed");
+
+    if (!decode_mailbox_list_entry_kind (body.getSourceNamespaceKind (),
+        &source_namespace_kind))
+        return set_invalid_argument (error,
+                   "memberships copy/move source_namespace_kind is unknown");
+
+    if (!wyrebox_daemon_memberships_copy_move_request_init
+            (&state->memberships_copy_move,
+        body.getAccountIdentity ().cStr (),
+        body.getSourceMailboxId ().cStr (),
+        source_namespace_kind,
+        body.getSourceUidValidity (),
+        body.getDestMailboxId ().cStr (),
+        body.getDestUidValidity (), source_uids, n_source_uids, error))
+        return FALSE;
+
+    out_request_frame->request_id = state->request_id;
+    out_request_frame->caller_identity = state->caller_identity;
+    out_request_frame->account_identity = state->account_identity;
+    out_request_frame->tool_identity = state->tool_identity;
+    out_request_frame->correlation_id = state->correlation_id;
+    out_request_frame->operation = is_move ?
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MEMBERSHIPS_MOVE :
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MEMBERSHIPS_COPY;
+    out_request_frame->mailbox_list = NULL;
+    out_request_frame->mailbox_select = NULL;
+    out_request_frame->fact_mutation = NULL;
+    out_request_frame->message_fetch = NULL;
+    out_request_frame->message_search = NULL;
+    out_request_frame->wirelog_predicate_query = NULL;
+    out_request_frame->duckdb_query_template = NULL;
+    out_request_frame->delivery_ingestion = NULL;
+    out_request_frame->flag_keyword_update = NULL;
+    out_request_frame->memberships_expunge = NULL;
+    out_request_frame->memberships_copy_move = &state->memberships_copy_move;
+
+    return TRUE;
+}
+
+static gboolean
+decode_memberships_copy_request (const RequestFrame::Reader & request_frame,
+    WyreboxDaemonCapnpDecodedRequestState *state,
+    WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
+{
+    if (!decode_request_identity (request_frame, state, error))
+        return FALSE;
+
+    return decode_memberships_copy_move_body (request_frame.getMembershipsCopy
+            (), state, out_request_frame, FALSE, error);
+}
+
+static gboolean
+decode_memberships_move_request (const RequestFrame::Reader & request_frame,
+    WyreboxDaemonCapnpDecodedRequestState *state,
+    WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
+{
+    if (!decode_request_identity (request_frame, state, error))
+        return FALSE;
+
+    return decode_memberships_copy_move_body (request_frame.getMembershipsMove
+            (), state, out_request_frame, TRUE, error);
 }
 
 static gboolean
@@ -1012,6 +1095,12 @@ decode_request_frame (const capnp::word *words,
                        state, out_request_frame, error);
         case RequestFrame::MEMBERSHIPS_EXPUNGE:
             return decode_memberships_expunge_request (request_frame,
+                       state, out_request_frame, error);
+        case RequestFrame::MEMBERSHIPS_COPY:
+            return decode_memberships_copy_request (request_frame,
+                       state, out_request_frame, error);
+        case RequestFrame::MEMBERSHIPS_MOVE:
+            return decode_memberships_move_request (request_frame,
                        state, out_request_frame, error);
         case RequestFrame::FACT_MUTATION:
             return decode_fact_mutation_request (request_frame,
@@ -1944,6 +2033,112 @@ encode_memberships_expunge_request (const WyreboxDaemonRequestIdentity
             G_IO_ERROR,
             G_IO_ERROR_INVALID_DATA,
             "memberships expunge request encode failed: %s", e.what ());
+    }
+
+    return FALSE;
+}
+
+static gboolean
+validate_memberships_copy_move_encode_input (const WyreboxDaemonRequestIdentity
+    *identity, const WyreboxDaemonMembershipsCopyMoveRequest *request,
+    GError **error)
+{
+    g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
+    g_auto (WyreboxDaemonMembershipsCopyMoveRequest) validated_request = { 0 };
+
+    if (identity == NULL)
+        return set_invalid_argument (error, "request identity is null");
+
+    if (request == NULL)
+        return set_invalid_argument (error,
+                   "memberships copy/move request is null");
+
+    if (!wyrebox_daemon_request_identity_init (&validated_identity,
+        identity->request_id,
+        identity->caller_identity,
+        identity->account_identity,
+        identity->tool_identity, identity->correlation_id, error))
+        return FALSE;
+
+    return wyrebox_daemon_memberships_copy_move_request_init (&validated_request,
+        request->account_identity,
+        request->source_mailbox_id,
+        request->source_namespace_kind,
+        request->source_uid_validity,
+        request->dest_mailbox_id,
+        request->dest_uid_validity,
+        request->source_uids, request->n_source_uids, error);
+}
+
+static gboolean
+encode_memberships_copy_move_request (const WyreboxDaemonRequestIdentity
+    *identity, const WyreboxDaemonMembershipsCopyMoveRequest *request,
+    gboolean is_move, GBytes **out_bytes, GError **error)
+{
+    try {
+        MailboxListEntryKind encoded_source_kind =
+            MailboxListEntryKind::ORDINARY;
+
+        if (!validate_memberships_copy_move_encode_input (identity, request,
+            error))
+            return FALSE;
+
+        if (!map_mailbox_list_entry_kind (request->source_namespace_kind,
+            &encoded_source_kind))
+            return set_invalid_argument (error,
+                       "memberships copy/move source_namespace_kind is "
+                       "unknown");
+
+        capnp::MallocMessageBuilder request_builder;
+        auto request_frame = request_builder.initRoot < RequestFrame > ();
+
+        auto request_identity = request_frame.initIdentity ();
+        request_identity.setRequestId (identity->request_id);
+        request_identity.setCallerIdentity (identity->caller_identity != NULL
+        ? identity->caller_identity : "");
+        request_identity.setAccountIdentity (identity->account_identity != NULL
+        ? identity->account_identity : "");
+        request_identity.setToolIdentity (identity->tool_identity != NULL
+        ? identity->tool_identity : "");
+        request_identity.setCorrelationId (identity->correlation_id != NULL
+        ? identity->correlation_id : "");
+
+        if (is_move) {
+            auto body = request_frame.initMembershipsMove ();
+
+            body.setAccountIdentity (request->account_identity);
+            body.setSourceMailboxId (request->source_mailbox_id);
+            body.setSourceUidValidity (request->source_uid_validity);
+            body.setSourceNamespaceKind (encoded_source_kind);
+            body.setDestMailboxId (request->dest_mailbox_id);
+            body.setDestUidValidity (request->dest_uid_validity);
+            encode_uint64_list (body.initSourceUids (request->n_source_uids),
+                request->source_uids, request->n_source_uids);
+        } else {
+            auto body = request_frame.initMembershipsCopy ();
+
+            body.setAccountIdentity (request->account_identity);
+            body.setSourceMailboxId (request->source_mailbox_id);
+            body.setSourceUidValidity (request->source_uid_validity);
+            body.setSourceNamespaceKind (encoded_source_kind);
+            body.setDestMailboxId (request->dest_mailbox_id);
+            body.setDestUidValidity (request->dest_uid_validity);
+            encode_uint64_list (body.initSourceUids (request->n_source_uids),
+                request->source_uids, request->n_source_uids);
+        }
+
+        auto words = capnp::messageToFlatArray (request_builder);
+        auto bytes = words.asBytes ();
+        *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "memberships copy/move request encode failed: %s", e.what ());
     }
 
     return FALSE;
@@ -2924,6 +3119,44 @@ wyrebox_daemon_capnp_codec_encode_memberships_expunge_request (const
 
     if (!encode_memberships_expunge_request (identity, request, &out_bytes,
         error))
+        return NULL;
+
+    return g_steal_pointer (&out_bytes);
+}
+
+GBytes *
+wyrebox_daemon_capnp_codec_encode_memberships_copy_request (const
+    WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMembershipsCopyMoveRequest *request, gpointer user_data,
+    GError **error)
+{
+    g_autoptr (GBytes) out_bytes = NULL;
+
+    (void)user_data;
+
+    g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+    if (!encode_memberships_copy_move_request (identity, request, FALSE,
+        &out_bytes, error))
+        return NULL;
+
+    return g_steal_pointer (&out_bytes);
+}
+
+GBytes *
+wyrebox_daemon_capnp_codec_encode_memberships_move_request (const
+    WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMembershipsCopyMoveRequest *request, gpointer user_data,
+    GError **error)
+{
+    g_autoptr (GBytes) out_bytes = NULL;
+
+    (void)user_data;
+
+    g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+    if (!encode_memberships_copy_move_request (identity, request, TRUE,
+        &out_bytes, error))
         return NULL;
 
     return g_steal_pointer (&out_bytes);

@@ -317,6 +317,24 @@ daemon_memberships_expunge_journal_test = executable(
   dependencies: [wyrebox_dep],
 )
 
+daemon_memberships_copy_move_request_test = executable(
+  'test-daemon-memberships-copy-move-request',
+  'test-daemon-memberships-copy-move-request.c',
+  dependencies: [wyrebox_dep],
+)
+
+daemon_memberships_copy_move_dispatcher_test = executable(
+  'test-daemon-memberships-copy-move-dispatcher',
+  'test-daemon-memberships-copy-move-dispatcher.c',
+  dependencies: [wyrebox_dep],
+)
+
+daemon_memberships_copy_move_journal_test = executable(
+  'test-daemon-memberships-copy-move-journal',
+  'test-daemon-memberships-copy-move-journal.c',
+  dependencies: [wyrebox_dep],
+)
+
 daemon_config_test = executable(
   'test-daemon-config',
   'test-daemon-config.c',
@@ -553,6 +571,18 @@ test('daemon memberships expunge dispatcher',
 test(
   'daemon memberships expunge journal',
   daemon_memberships_expunge_journal_test,
+  env: {
+    'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() / 'tests'
+    / 'object-store' / 'fixtures',
+  },
+)
+test('daemon memberships copy move request',
+  daemon_memberships_copy_move_request_test)
+test('daemon memberships copy move dispatcher',
+  daemon_memberships_copy_move_dispatcher_test)
+test(
+  'daemon memberships copy move journal',
+  daemon_memberships_copy_move_journal_test,
   env: {
     'WYREBOX_EML_FIXTURE_DIR': meson.project_source_root() / 'tests'
     / 'object-store' / 'fixtures',

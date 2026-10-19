@@ -1447,6 +1447,126 @@ wyrebox_dovecot_daemon_client_expunge (const char *socket_path,
     }
 }
 
+static gboolean
+daemon_client_copy_move (gboolean is_move, const char *socket_path,
+    const char *account_identity, const char *source_mailbox_id,
+    WyreboxDaemonMailboxListEntryKind source_namespace_kind,
+    guint64 source_uid_validity, const char *dest_mailbox_id,
+    guint64 dest_uid_validity, const guint64 *source_uids, gsize n_source_uids,
+    char **out_success_summary, guint64 *out_journal_offset, GError **error)
+{
+    g_autofree char *request_id = NULL;
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonMembershipsCopyMoveRequest) request = { 0 };
+    g_auto (WyreboxDaemonResponseFrame) response = { 0 };
+    g_autoptr (GBytes) request_payload = NULL;
+    g_autoptr (GBytes) response_payload = NULL;
+    const char *operation = is_move ? "memberships move" :
+        "memberships copy";
+
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (out_journal_offset != NULL)
+        *out_journal_offset = 0;
+    if (out_success_summary != NULL)
+        *out_success_summary = NULL;
+
+    if (is_empty_string (socket_path)) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT,
+            "Dovecot daemon client requires a socket path");
+        return FALSE;
+    }
+
+    if (!wyrebox_daemon_memberships_copy_move_request_init (&request,
+        account_identity, source_mailbox_id, source_namespace_kind,
+        source_uid_validity, dest_mailbox_id, dest_uid_validity, source_uids,
+        n_source_uids, error))
+        return FALSE;
+
+    request_id = g_uuid_string_random ();
+    if (!wyrebox_daemon_request_identity_init (&identity,
+        request_id,
+        WYREBOX_DOVECOT_CALLER_IDENTITY,
+        account_identity, WYREBOX_DOVECOT_TOOL_IDENTITY, NULL, error))
+        return FALSE;
+
+    if (is_move) {
+        request_payload =
+            wyrebox_daemon_capnp_codec_encode_memberships_move_request
+                (&identity, &request, NULL, error);
+    } else {
+        request_payload =
+            wyrebox_daemon_capnp_codec_encode_memberships_copy_request
+                (&identity, &request, NULL, error);
+    }
+    if (request_payload == NULL)
+        return FALSE;
+
+    response_payload =
+        wyrebox_daemon_uds_client_send_request (socket_path, request_payload,
+            error);
+    if (response_payload == NULL)
+        return FALSE;
+
+    if (!wyrebox_daemon_capnp_codec_decode_response_frame (response_payload,
+        &response, error))
+        return FALSE;
+
+    if (!validate_response_request_id (&response, request_id, operation,
+        error))
+        return FALSE;
+
+    switch (response.kind) {
+    case WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS:
+        if (out_journal_offset != NULL)
+            *out_journal_offset = response.success.journal_offset;
+        if (out_success_summary != NULL &&
+            response.success.summary != NULL) {
+            *out_success_summary = g_strdup (response.success.summary);
+        }
+        return TRUE;
+    case WYREBOX_DAEMON_RESPONSE_FRAME_ERROR:
+        return set_daemon_error_response (&response, operation, error);
+    default:
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon returned unexpected response kind %d for %s",
+            response.kind, operation);
+        return FALSE;
+    }
+}
+
+gboolean
+wyrebox_dovecot_daemon_client_copy (const char *socket_path,
+    const char *account_identity, const char *source_mailbox_id,
+    WyreboxDaemonMailboxListEntryKind source_namespace_kind,
+    guint64 source_uid_validity, const char *dest_mailbox_id,
+    guint64 dest_uid_validity, const guint64 *source_uids, gsize n_source_uids,
+    char **out_success_summary, guint64 *out_journal_offset, GError **error)
+{
+    return daemon_client_copy_move (FALSE, socket_path, account_identity,
+               source_mailbox_id, source_namespace_kind, source_uid_validity,
+               dest_mailbox_id, dest_uid_validity, source_uids, n_source_uids,
+               out_success_summary, out_journal_offset, error);
+}
+
+gboolean
+wyrebox_dovecot_daemon_client_move (const char *socket_path,
+    const char *account_identity, const char *source_mailbox_id,
+    guint64 source_uid_validity, const char *dest_mailbox_id,
+    guint64 dest_uid_validity, const guint64 *source_uids, gsize n_source_uids,
+    char **out_success_summary, guint64 *out_journal_offset, GError **error)
+{
+    return daemon_client_copy_move (TRUE, socket_path, account_identity,
+               source_mailbox_id, WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY,
+               source_uid_validity, dest_mailbox_id, dest_uid_validity,
+               source_uids, n_source_uids, out_success_summary,
+               out_journal_offset, error);
+}
+
 #else
 
 gboolean
@@ -1614,6 +1734,68 @@ wyrebox_dovecot_daemon_client_expunge (const char *socket_path,
 
     if (out_journal_offset != NULL)
         *out_journal_offset = 0;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_NOT_SUPPORTED,
+        "Dovecot daemon client requires Cap'n Proto serialization support");
+    return FALSE;
+}
+
+gboolean
+wyrebox_dovecot_daemon_client_copy (const char *socket_path,
+    const char *account_identity, const char *source_mailbox_id,
+    WyreboxDaemonMailboxListEntryKind source_namespace_kind,
+    guint64 source_uid_validity, const char *dest_mailbox_id,
+    guint64 dest_uid_validity, const guint64 *source_uids, gsize n_source_uids,
+    char **out_success_summary, guint64 *out_journal_offset, GError **error)
+{
+    (void)socket_path;
+    (void)account_identity;
+    (void)source_mailbox_id;
+    (void)source_namespace_kind;
+    (void)source_uid_validity;
+    (void)dest_mailbox_id;
+    (void)dest_uid_validity;
+    (void)source_uids;
+    (void)n_source_uids;
+
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (out_journal_offset != NULL)
+        *out_journal_offset = 0;
+    if (out_success_summary != NULL)
+        *out_success_summary = NULL;
+
+    g_set_error (error,
+        G_IO_ERROR,
+        G_IO_ERROR_NOT_SUPPORTED,
+        "Dovecot daemon client requires Cap'n Proto serialization support");
+    return FALSE;
+}
+
+gboolean
+wyrebox_dovecot_daemon_client_move (const char *socket_path,
+    const char *account_identity, const char *source_mailbox_id,
+    guint64 source_uid_validity, const char *dest_mailbox_id,
+    guint64 dest_uid_validity, const guint64 *source_uids, gsize n_source_uids,
+    char **out_success_summary, guint64 *out_journal_offset, GError **error)
+{
+    (void)socket_path;
+    (void)account_identity;
+    (void)source_mailbox_id;
+    (void)source_uid_validity;
+    (void)dest_mailbox_id;
+    (void)dest_uid_validity;
+    (void)source_uids;
+    (void)n_source_uids;
+
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (out_journal_offset != NULL)
+        *out_journal_offset = 0;
+    if (out_success_summary != NULL)
+        *out_success_summary = NULL;
 
     g_set_error (error,
         G_IO_ERROR,

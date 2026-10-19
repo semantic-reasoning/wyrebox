@@ -19,6 +19,7 @@
 #include "wyrebox-daemon-wirelog-predicate-query-service.h"
 #include "wyrebox-daemon-flag-keyword-update-request.h"
 #include "wyrebox-daemon-flag-keyword-update-service.h"
+#include "wyrebox-daemon-memberships-copy-move-request.h"
 #include "wyrebox-daemon-memberships-expunge-request.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-audit-payload.h"
@@ -1513,6 +1514,42 @@ assert_memberships_expunge_request_encoder_round_trip (void)
     g_assert_nonnull (decoded.memberships_expunge);
     g_assert_cmpuint (decoded.memberships_expunge->n_uids, ==, 3);
     g_assert_cmpuint (decoded.memberships_expunge->uids[1], ==, 3);
+
+    decoded_state_clear (decoded_state);
+}
+
+static void
+assert_memberships_copy_request_encoder_round_trip (void)
+{
+    guint64 uids[] = { 1, 2 };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) encoded = NULL;
+    g_auto (WyreboxDaemonRequestIdentity) identity = { 0 };
+    g_auto (WyreboxDaemonMembershipsCopyMoveRequest) request = { 0 };
+    WyreboxDaemonDecodedRequestFrame decoded = { 0 };
+    gpointer decoded_state = NULL;
+    GDestroyNotify decoded_state_clear = NULL;
+
+    g_assert_true (wyrebox_daemon_request_identity_init (&identity,
+        "request-encode-copy", "dovecot", "account-1", "dovecot-storage",
+        "corr-copy", &error));
+    g_assert_true (wyrebox_daemon_memberships_copy_move_request_init (&request,
+        "account-1", "inbox:account-1",
+        WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY, 77, "archive:account-1",
+        88, uids, G_N_ELEMENTS (uids), &error));
+
+    encoded = wyrebox_daemon_capnp_codec_encode_memberships_copy_request
+            (&identity, &request, NULL, &error);
+    g_assert_nonnull (encoded);
+
+    g_assert_true (wyrebox_daemon_capnp_codec_decode_request_frame (NULL,
+        encoded, &decoded, &decoded_state, &decoded_state_clear, NULL,
+        &error));
+    g_assert_cmpint (decoded.operation, ==,
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MEMBERSHIPS_COPY);
+    g_assert_nonnull (decoded.memberships_copy_move);
+    g_assert_cmpstr (decoded.memberships_copy_move->dest_mailbox_id, ==,
+        "archive:account-1");
 
     decoded_state_clear (decoded_state);
 }
@@ -4869,6 +4906,9 @@ main (int argc, char **argv)
     g_test_add_func (
         "/daemon-api/capnp/codec/memberships-expunge-encoder-round-trip",
         assert_memberships_expunge_request_encoder_round_trip);
+    g_test_add_func (
+        "/daemon-api/capnp/codec/memberships-copy-encoder-round-trip",
+        assert_memberships_copy_request_encoder_round_trip);
     g_test_add_func (
         "/daemon-api/capnp/codec/mail-event-stream-encoder-round-trip",
         assert_mail_event_stream_request_encoder_round_trip);
