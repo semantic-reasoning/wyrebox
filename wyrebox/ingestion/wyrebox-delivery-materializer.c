@@ -1256,6 +1256,141 @@ wyrebox_delivery_materializer_apply_flag_change (WyreboxDeliveryMaterializer
     return TRUE;
 }
 
+static gboolean
+materializer_tombstone_membership_uid (WyreboxDeliveryMaterializer *self,
+    const WyreboxMembershipsExpungedPayload *payload, guint64 uid,
+    guint64 journal_offset, guint64 journal_sequence, GError **error)
+{
+    g_auto (duckdb_prepared_statement) select_statement = NULL;
+    g_auto (duckdb_prepared_statement) update_statement = NULL;
+    g_auto (duckdb_result) result = { 0 };
+    g_autofree gchar *membership_id = NULL;
+    char *value = NULL;
+    gboolean is_visible = FALSE;
+    guint64 expunged_offset = 0;
+    guint64 expunged_sequence = 0;
+    gboolean has_tombstone = FALSE;
+
+    if (!materializer_prepare (self,
+        "SELECT mm.membership_id, mm.is_visible, mm.expunged_journal_offset, "
+        "mm.expunged_journal_sequence "
+        "FROM mailbox_memberships mm "
+        "JOIN mailbox_uid_state mus ON mus.account_id = mm.account_id "
+        "AND mus.namespace_kind = 'mailbox' "
+        "AND mus.namespace_id = mm.mailbox_id "
+        "WHERE mm.account_id = ? AND mm.mailbox_id = ? AND mm.uid = ? "
+        "AND mus.uidvalidity = ?;", &select_statement, error) ||
+        !bind_varchar (select_statement, 1, payload->account_id, error) ||
+        !bind_varchar (select_statement, 2, payload->mailbox_id, error) ||
+        !bind_uint64 (select_statement, 3, uid, error) ||
+        !bind_uint64 (select_statement, 4, payload->uidvalidity, error))
+        return FALSE;
+
+    if (duckdb_execute_prepared (select_statement, &result) != DuckDBSuccess) {
+        const char *detail = duckdb_result_error (&result);
+
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_FAILED,
+            "DuckDB delivery materializer expunge lookup failed: %s",
+            detail != NULL ? detail : "unknown DuckDB error");
+        return FALSE;
+    }
+
+    if (duckdb_row_count (&result) != 1) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "expunge target %s/%s UIDVALIDITY %" G_GUINT64_FORMAT
+            " UID %" G_GUINT64_FORMAT " is not materialized",
+            payload->account_id, payload->mailbox_id, payload->uidvalidity,
+            uid);
+        return FALSE;
+    }
+
+    value = duckdb_value_varchar (&result, 0, 0);
+    if (value == NULL) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "expunge target %s/%s UID %" G_GUINT64_FORMAT
+            " has a NULL membership_id",
+            payload->account_id, payload->mailbox_id, uid);
+        return FALSE;
+    }
+    membership_id = g_strdup (value);
+    duckdb_free (value);
+
+    is_visible = duckdb_value_boolean (&result, 1, 0);
+    has_tombstone = !duckdb_value_is_null (&result, 2, 0) &&
+        !duckdb_value_is_null (&result, 3, 0);
+    if (has_tombstone) {
+        expunged_offset = duckdb_value_uint64 (&result, 2, 0);
+        expunged_sequence = duckdb_value_uint64 (&result, 3, 0);
+    }
+
+    if (!is_visible) {
+        if (has_tombstone && expunged_offset == journal_offset &&
+            expunged_sequence == journal_sequence)
+            return TRUE;
+
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "expunge target %s/%s UID %" G_GUINT64_FORMAT
+            " is already tombstoned by a different journal record",
+            payload->account_id, payload->mailbox_id, uid);
+        return FALSE;
+    }
+
+    if (!materializer_prepare (self,
+        "UPDATE mailbox_memberships SET is_visible = FALSE, "
+        "expunged_journal_offset = ?, expunged_journal_sequence = ? "
+        "WHERE membership_id = ?;", &update_statement, error) ||
+        !bind_uint64 (update_statement, 1, journal_offset, error) ||
+        !bind_uint64 (update_statement, 2, journal_sequence, error) ||
+        !bind_varchar (update_statement, 3, membership_id, error) ||
+        !materializer_execute_prepared (update_statement, error))
+        return FALSE;
+
+    return TRUE;
+}
+
+gboolean
+wyrebox_delivery_materializer_apply_memberships_expunged (
+    WyreboxDeliveryMaterializer *self,
+    const WyreboxMembershipsExpungedPayload *payload, guint64 journal_offset,
+    guint64 journal_sequence, gboolean advance_checkpoint, GError **error)
+{
+    g_return_val_if_fail (WYREBOX_IS_DELIVERY_MATERIALIZER (self), FALSE);
+    g_return_val_if_fail (payload != NULL, FALSE);
+    g_return_val_if_fail (payload->account_id != NULL, FALSE);
+    g_return_val_if_fail (payload->mailbox_id != NULL, FALSE);
+    g_return_val_if_fail (payload->uids != NULL, FALSE);
+    g_return_val_if_fail (payload->n_uids > 0, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (!materializer_query (self, "BEGIN TRANSACTION;", error))
+        return FALSE;
+
+    for (gsize i = 0; i < payload->n_uids; i++) {
+        if (!materializer_tombstone_membership_uid (self, payload,
+            payload->uids[i], journal_offset, journal_sequence, error)) {
+            materializer_rollback_quietly (self);
+            return FALSE;
+        }
+    }
+
+    if ((advance_checkpoint && !materializer_save_checkpoint (self,
+        journal_offset, journal_sequence, error)) ||
+        !materializer_query (self, "COMMIT;", error)) {
+        materializer_rollback_quietly (self);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 static void
 append_json_string (GString *json, const gchar *value)
 {

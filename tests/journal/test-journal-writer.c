@@ -23,6 +23,7 @@ static const char *canonical_event_types[] = {
     "DerivedViewMembershipChanged",
     "DaemonAuditRecorded",
     "FactsExtracted",
+    "MembershipsExpunged",
 };
 
 static gboolean track_fd_scoped_scan_calls = FALSE;
@@ -571,7 +572,7 @@ test_supports_all_canonical_event_names (void)
     g_assert_no_error (error);
 
     for (guint index = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
-        index <= WYREBOX_JOURNAL_EVENT_FACTS_EXTRACTED;
+        index <= WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_EXPUNGED;
         index++) {
         const gchar *event_type = wyrebox_journal_event_type_to_string (index);
 
@@ -591,7 +592,7 @@ test_supports_all_canonical_event_names (void)
     g_assert_cmpuint (segment_size, ==, offset);
 
     for (guint index = WYREBOX_JOURNAL_EVENT_MESSAGE_DELIVERED;
-        index <= WYREBOX_JOURNAL_EVENT_FACTS_EXTRACTED;
+        index <= WYREBOX_JOURNAL_EVENT_MEMBERSHIPS_EXPUNGED;
         index++) {
         const gchar *event_type = wyrebox_journal_event_type_to_string (index);
 

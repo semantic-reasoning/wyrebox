@@ -1688,6 +1688,127 @@ test_flag_change_without_checkpoint_keeps_checkpoint (void)
 }
 
 static gboolean
+apply_memberships_expunged (const gchar *path, guint64 *uids, gsize n_uids,
+    guint64 uidvalidity, guint64 journal_offset, guint64 journal_sequence,
+    gboolean advance_checkpoint, GError **error)
+{
+    WyreboxMembershipsExpungedPayload payload = {
+        .account_id = (char *)"account-1",
+        .mailbox_id = (char *)"inbox:account-1",
+        .uidvalidity = uidvalidity,
+        .uids = uids,
+        .n_uids = n_uids,
+    };
+    g_autoptr (WyreboxDeliveryMaterializer) materializer = NULL;
+
+    materializer = wyrebox_delivery_materializer_new_duckdb (path, error);
+    if (materializer == NULL)
+        return FALSE;
+
+    return wyrebox_delivery_materializer_apply_memberships_expunged (
+        materializer, &payload, journal_offset, journal_sequence,
+        advance_checkpoint, error);
+}
+
+static void
+assert_membership_visibility (const gchar *path, guint64 uid,
+    gboolean expected_visible, guint64 expected_expunged_offset,
+    guint64 expected_expunged_sequence)
+{
+    TestDuckdbFixture duckdb = { 0 };
+    g_autofree gchar *visible_sql = NULL;
+    g_autofree gchar *offset_sql = NULL;
+    g_autofree gchar *sequence_sql = NULL;
+
+    open_duckdb_fixture (path, &duckdb);
+    visible_sql = g_strdup_printf (
+        "SELECT CAST(is_visible AS UBIGINT) FROM mailbox_memberships "
+        "WHERE mailbox_id = 'inbox:account-1' AND uid = %"
+        G_GUINT64_FORMAT ";", uid);
+    offset_sql = g_strdup_printf (
+        "SELECT COALESCE(expunged_journal_offset, 0) FROM "
+        "mailbox_memberships WHERE mailbox_id = 'inbox:account-1' AND "
+        "uid = %" G_GUINT64_FORMAT ";", uid);
+    sequence_sql = g_strdup_printf (
+        "SELECT COALESCE(expunged_journal_sequence, 0) FROM "
+        "mailbox_memberships WHERE mailbox_id = 'inbox:account-1' AND "
+        "uid = %" G_GUINT64_FORMAT ";", uid);
+    g_assert_cmpuint (query_uint64 (duckdb.connection, visible_sql), ==,
+        expected_visible ? 1 : 0);
+    g_assert_cmpuint (query_uint64 (duckdb.connection, offset_sql), ==,
+        expected_expunged_offset);
+    g_assert_cmpuint (query_uint64 (duckdb.connection, sequence_sql), ==,
+        expected_expunged_sequence);
+    close_duckdb_fixture (&duckdb);
+}
+
+static void
+test_memberships_expunged_tombs_visible_uids (void)
+{
+    g_autofree gchar *path = create_bootstrap_catalog ();
+    g_auto (WyreboxDeliveryProjectionList) projection = { 0 };
+    g_autoptr (GError) error = NULL;
+    guint64 uids[] = { 1, 2 };
+    TestDuckdbFixture duckdb = { 0 };
+
+    append_projection_record (&projection, "sha256:first", 101, 1001, 11, 1);
+    append_projection_record (&projection, "sha256:second", 102, 1002, 21, 2);
+    apply_projection_to_account_inbox (path, "account-1", &projection);
+
+    g_assert_true (apply_memberships_expunged (path, uids, G_N_ELEMENTS (uids),
+        1, 30, 3, TRUE, &error));
+    g_assert_no_error (error);
+
+    assert_membership_visibility (path, 1, FALSE, 30, 3);
+    assert_membership_visibility (path, 2, FALSE, 30, 3);
+
+    open_duckdb_fixture (path, &duckdb);
+    assert_materialization_checkpoint (duckdb.connection, 30, 3);
+    close_duckdb_fixture (&duckdb);
+
+    remove_catalog (path);
+}
+
+static void
+test_memberships_expunged_reapply_same_record_is_noop (void)
+{
+    g_autofree gchar *path = create_catalog_with_one_inbox_message ();
+    g_autoptr (GError) error = NULL;
+    guint64 uids[] = { 1 };
+
+    g_assert_true (apply_memberships_expunged (path, uids, 1, 1, 30, 2, TRUE,
+        &error));
+    g_assert_no_error (error);
+    g_assert_true (apply_memberships_expunged (path, uids, 1, 1, 30, 2, TRUE,
+        &error));
+    g_assert_no_error (error);
+
+    assert_membership_visibility (path, 1, FALSE, 30, 2);
+    remove_catalog (path);
+}
+
+static void
+test_memberships_expunged_unknown_target_is_invalid_data (void)
+{
+    g_autofree gchar *path = create_catalog_with_one_inbox_message ();
+    g_autoptr (GError) error = NULL;
+    guint64 missing_uid[] = { 2 };
+    guint64 wrong_uidvalidity[] = { 1 };
+
+    g_assert_false (apply_memberships_expunged (path, missing_uid, 1, 1, 30, 2,
+        TRUE, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_clear_error (&error);
+
+    g_assert_false (apply_memberships_expunged (path, wrong_uidvalidity, 1, 2,
+        30, 2, TRUE, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+
+    assert_membership_visibility (path, 1, TRUE, 0, 0);
+    remove_catalog (path);
+}
+
+static gboolean
 apply_fact_mutation (const gchar *path, WyreboxDaemonFactMutationKind kind,
     const gchar *scope_id, const gchar *const *arguments,
     guint64 journal_offset, guint64 journal_sequence,
@@ -2237,6 +2358,15 @@ main (int argc, char **argv)
     g_test_add_func (
         "/ingestion/delivery-materializer/flag-change-without-checkpoint",
         test_flag_change_without_checkpoint_keeps_checkpoint);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/memberships-expunged",
+        test_memberships_expunged_tombs_visible_uids);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/memberships-expunged-reapply",
+        test_memberships_expunged_reapply_same_record_is_noop);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/memberships-expunged-unknown",
+        test_memberships_expunged_unknown_target_is_invalid_data);
     g_test_add_func ("/ingestion/delivery-materializer/fact-mutation",
         test_fact_mutation_insert_retract_reinsert);
     g_test_add_func ("/ingestion/delivery-materializer/fact-mutation-suffix",
