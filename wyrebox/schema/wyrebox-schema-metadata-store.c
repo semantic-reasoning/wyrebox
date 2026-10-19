@@ -1197,7 +1197,9 @@ wyrebox_schema_metadata_store_memory_apply_migration_operation
         || operation ==
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MESSAGE_FACT_EXTRACTIONS
         || operation ==
-        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_REFRESH_STATE)
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_REFRESH_STATE
+        || operation ==
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MAILBOX_MEMBERSHIP_JOURNAL_ITEM_AND_TOMBSTONES)
 
 
         return TRUE;
@@ -2018,6 +2020,80 @@ duckdb_store_create_object_reachability_view (WyreboxSchemaMetadataStoreDuckdb
 }
 
 static gboolean
+duckdb_store_validate_mailbox_memberships_v12
+    (WyreboxSchemaMetadataStoreDuckdb *self, GError **error)
+{
+    static const WyreboxDuckdbColumnSpec mailbox_memberships_columns[] = {
+        {"membership_id", "VARCHAR", TRUE},
+        {"account_id", "VARCHAR", TRUE},
+        {"mailbox_id", "VARCHAR", TRUE},
+        {"message_id", "VARCHAR", TRUE},
+        {"uid", "UBIGINT", TRUE},
+        {"internal_date_unix_us", "UBIGINT", TRUE},
+        {"journal_offset", "UBIGINT", TRUE},
+        {"journal_sequence", "UBIGINT", TRUE},
+        {"journal_item", "UBIGINT", TRUE},
+        {"is_visible", "BOOLEAN", TRUE},
+        {"expunged_journal_offset", "UBIGINT", FALSE},
+        {"expunged_journal_sequence", "UBIGINT", FALSE},
+    };
+
+    return duckdb_store_validate_table_columns (self, "mailbox_memberships",
+               mailbox_memberships_columns,
+               G_N_ELEMENTS (mailbox_memberships_columns), error);
+}
+
+/*
+ * Rebuild mailbox_memberships with journal_item and EXPUNGE/MOVE tombstone
+ * columns, then recreate object_reachability (it depends on the table).
+ */
+static gboolean
+duckdb_store_add_mailbox_membership_journal_item_and_tombstones
+    (WyreboxSchemaMetadataStoreDuckdb *self, GError **error)
+{
+    g_autoptr (GError) current_error = NULL;
+
+    if (duckdb_store_validate_mailbox_memberships_v12 (self, &current_error))
+        return duckdb_store_create_object_reachability_view (self, error);
+
+    return duckdb_store_query (self,
+               "DROP VIEW IF EXISTS object_reachability;", error)
+           && duckdb_store_query (self,
+               "CREATE TABLE mailbox_memberships_replacement ("
+               "membership_id VARCHAR PRIMARY KEY,"
+               "account_id VARCHAR NOT NULL,"
+               "mailbox_id VARCHAR NOT NULL,"
+               "message_id VARCHAR NOT NULL,"
+               "uid UBIGINT NOT NULL CHECK(uid >= 1),"
+               "internal_date_unix_us UBIGINT NOT NULL,"
+               "journal_offset UBIGINT NOT NULL,"
+               "journal_sequence UBIGINT NOT NULL,"
+               "journal_item UBIGINT NOT NULL DEFAULT 0,"
+               "is_visible BOOLEAN NOT NULL,"
+               "expunged_journal_offset UBIGINT,"
+               "expunged_journal_sequence UBIGINT,"
+               "UNIQUE(mailbox_id, uid),"
+               "UNIQUE(journal_offset, journal_sequence, journal_item, "
+               "mailbox_id)" ");", error)
+           && duckdb_store_query (self,
+               "INSERT INTO mailbox_memberships_replacement ("
+               "membership_id, account_id, mailbox_id, message_id, uid, "
+               "internal_date_unix_us, journal_offset, journal_sequence, "
+               "journal_item, is_visible, expunged_journal_offset, "
+               "expunged_journal_sequence"
+               ") SELECT membership_id, account_id, mailbox_id, message_id, "
+               "uid, internal_date_unix_us, journal_offset, journal_sequence, "
+               "0, is_visible, NULL, NULL FROM mailbox_memberships;", error)
+           && duckdb_store_query (self, "DROP TABLE mailbox_memberships;",
+               error)
+           && duckdb_store_query (self,
+               "ALTER TABLE mailbox_memberships_replacement "
+               "RENAME TO mailbox_memberships;", error)
+           && duckdb_store_create_object_reachability_view (self, error)
+           && duckdb_store_validate_mailbox_memberships_v12 (self, error);
+}
+
+static gboolean
 duckdb_store_create_bootstrap_catalog (WyreboxSchemaMetadataStoreDuckdb *self,
     GError **error)
 {
@@ -2068,9 +2144,13 @@ duckdb_store_create_bootstrap_catalog (WyreboxSchemaMetadataStoreDuckdb *self,
                "internal_date_unix_us UBIGINT NOT NULL,"
                "journal_offset UBIGINT NOT NULL,"
                "journal_sequence UBIGINT NOT NULL,"
+               "journal_item UBIGINT NOT NULL DEFAULT 0,"
                "is_visible BOOLEAN NOT NULL,"
+               "expunged_journal_offset UBIGINT,"
+               "expunged_journal_sequence UBIGINT,"
                "UNIQUE(mailbox_id, uid),"
-               "UNIQUE(journal_offset, journal_sequence, mailbox_id)" ");",
+               "UNIQUE(journal_offset, journal_sequence, journal_item, "
+               "mailbox_id)" ");",
                error)
            && duckdb_store_query (self,
                "CREATE TABLE IF NOT EXISTS derived_views ("
@@ -2915,6 +2995,9 @@ wyrebox_schema_metadata_store_duckdb_apply_migration_operation
     case
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_REFRESH_STATE
         :
+    case
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MAILBOX_MEMBERSHIP_JOURNAL_ITEM_AND_TOMBSTONES
+        :
         break;
     default:
         goto unsupported;
@@ -2965,7 +3048,11 @@ wyrebox_schema_metadata_store_duckdb_apply_migration_operation
         || (operation ==
         WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_REFRESH_STATE
         && duckdb_store_create_derived_view_refresh_state (duckdb_store,
-        error))) ||
+        error))
+        || (operation ==
+        WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MAILBOX_MEMBERSHIP_JOURNAL_ITEM_AND_TOMBSTONES
+        && duckdb_store_add_mailbox_membership_journal_item_and_tombstones (
+            duckdb_store, error))) ||
         !duckdb_store_query (duckdb_store, "COMMIT;", error)) {
         duckdb_store_rollback_quietly (duckdb_store);
         return FALSE;

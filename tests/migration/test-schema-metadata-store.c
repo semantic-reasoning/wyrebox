@@ -143,7 +143,10 @@ assert_bootstrap_catalog_schema (const gchar *path)
         {"internal_date_unix_us", "UBIGINT", TRUE},
         {"journal_offset", "UBIGINT", TRUE},
         {"journal_sequence", "UBIGINT", TRUE},
+        {"journal_item", "UBIGINT", TRUE},
         {"is_visible", "BOOLEAN", TRUE},
+        {"expunged_journal_offset", "UBIGINT", FALSE},
+        {"expunged_journal_sequence", "UBIGINT", FALSE},
     };
     static const TestDuckdbBootstrapColumn derived_views_columns[] = {
         {"view_id", "VARCHAR", TRUE},
@@ -419,6 +422,22 @@ assert_mailbox_membership_constraints (const gchar *path)
         ") VALUES ("
         "'membership-duplicate-uid', 'account-1', 'mailbox-1', 'message-2', 1, "
         "1005, 2003, 1, TRUE" ");");
+    assert_bootstrap_query_succeeds (connection,
+        "INSERT INTO mailbox_memberships ("
+        "membership_id, account_id, mailbox_id, message_id, uid, "
+        "internal_date_unix_us, journal_offset, journal_sequence, "
+        "journal_item, is_visible"
+        ") VALUES ("
+        "'membership-multi-item', 'account-1', 'mailbox-2', 'message-5', 3, "
+        "1006, 2000, 1, 1, TRUE" ");");
+    assert_bootstrap_query_fails (connection,
+        "INSERT INTO mailbox_memberships ("
+        "membership_id, account_id, mailbox_id, message_id, uid, "
+        "internal_date_unix_us, journal_offset, journal_sequence, "
+        "journal_item, is_visible"
+        ") VALUES ("
+        "'membership-duplicate-item', 'account-1', 'mailbox-2', 'message-6', "
+        "4, 1007, 2000, 1, 1, TRUE" ");");
 
     (void)duckdb_disconnect (&connection);
     (void)duckdb_close (&database);
@@ -1477,6 +1496,24 @@ test_memory_store_accepts_add_derived_view_refresh_state_migration_operation
 }
 
 static void
+test_memory_store_accepts_add_mailbox_membership_journal_item_and_tombstones_migration_operation
+    (void)
+{
+    g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+    g_autoptr (GError) error = NULL;
+    guint64 target_version = 0;
+
+    store = wyrebox_schema_metadata_store_new_memory ();
+    target_version = wyrebox_schema_migration_get_current_schema_version ();
+
+    g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (
+            store,
+            WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MAILBOX_MEMBERSHIP_JOURNAL_ITEM_AND_TOMBSTONES,
+            target_version - 1, target_version, &error));
+    g_assert_no_error (error);
+}
+
+static void
 test_memory_store_rejects_unknown_migration_operation (void)
 {
     g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
@@ -1966,6 +2003,117 @@ test_duckdb_store_add_derived_view_refresh_state_migration_operation (void)
 }
 
 static void
+test_duckdb_store_add_mailbox_membership_journal_item_and_tombstones_migration_operation
+    (void)
+{
+    g_autofree char *root = NULL;
+    g_autofree char *path = make_duckdb_path (&root);
+    g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
+    g_autoptr (GError) error = NULL;
+    duckdb_database database = NULL;
+    duckdb_connection connection = NULL;
+    guint64 target_version =
+        wyrebox_schema_migration_get_current_schema_version ();
+    static const TestDuckdbBootstrapColumn mailbox_memberships_columns[] = {
+        {"membership_id", "VARCHAR", TRUE},
+        {"account_id", "VARCHAR", TRUE},
+        {"mailbox_id", "VARCHAR", TRUE},
+        {"message_id", "VARCHAR", TRUE},
+        {"uid", "UBIGINT", TRUE},
+        {"internal_date_unix_us", "UBIGINT", TRUE},
+        {"journal_offset", "UBIGINT", TRUE},
+        {"journal_sequence", "UBIGINT", TRUE},
+        {"journal_item", "UBIGINT", TRUE},
+        {"is_visible", "BOOLEAN", TRUE},
+        {"expunged_journal_offset", "UBIGINT", FALSE},
+        {"expunged_journal_sequence", "UBIGINT", FALSE},
+    };
+
+    store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation (
+            store,
+            WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_LEGACY_BOOTSTRAP,
+            0,
+            wyrebox_schema_migration_get_first_supported_schema_version (),
+            &error));
+    g_assert_no_error (error);
+    g_clear_object (&store);
+
+    g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+    g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+    assert_bootstrap_query_succeeds (connection,
+        "DROP VIEW IF EXISTS object_reachability;");
+    assert_bootstrap_query_succeeds (connection,
+        "DROP TABLE mailbox_memberships;");
+    assert_bootstrap_query_succeeds (connection,
+        "CREATE TABLE mailbox_memberships ("
+        "membership_id VARCHAR PRIMARY KEY,"
+        "account_id VARCHAR NOT NULL,"
+        "mailbox_id VARCHAR NOT NULL,"
+        "message_id VARCHAR NOT NULL,"
+        "uid UBIGINT NOT NULL CHECK(uid >= 1),"
+        "internal_date_unix_us UBIGINT NOT NULL,"
+        "journal_offset UBIGINT NOT NULL,"
+        "journal_sequence UBIGINT NOT NULL,"
+        "is_visible BOOLEAN NOT NULL,"
+        "UNIQUE(mailbox_id, uid),"
+        "UNIQUE(journal_offset, journal_sequence, mailbox_id)" ");");
+    seed_object_reachability_fixture (connection);
+    (void)duckdb_disconnect (&connection);
+    (void)duckdb_close (&database);
+
+    store = wyrebox_schema_metadata_store_new_duckdb (path, &error);
+    g_assert_no_error (error);
+    for (guint i = 0; i < 2; i++) {
+        g_assert_true (wyrebox_schema_metadata_store_apply_migration_operation
+                (store,
+            WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MAILBOX_MEMBERSHIP_JOURNAL_ITEM_AND_TOMBSTONES,
+            target_version - 1, target_version, &error));
+        g_assert_no_error (error);
+    }
+    g_clear_object (&store);
+
+    g_assert_cmpint (duckdb_open (path, &database), ==, DuckDBSuccess);
+    g_assert_cmpint (duckdb_connect (database, &connection), ==, DuckDBSuccess);
+    assert_bootstrap_table_schema (connection, "mailbox_memberships",
+        mailbox_memberships_columns,
+        G_N_ELEMENTS (mailbox_memberships_columns));
+    g_assert_cmpint (query_int64 (connection,
+        "SELECT journal_item FROM mailbox_memberships "
+        "WHERE membership_id = 'membership-visible';"), ==, 0);
+    g_assert_true (query_is_null (connection,
+        "SELECT expunged_journal_offset FROM mailbox_memberships "
+        "WHERE membership_id = 'membership-visible';"));
+    assert_bootstrap_query_succeeds (connection,
+        "UPDATE mailbox_memberships SET is_visible = FALSE, "
+        "expunged_journal_offset = 99, expunged_journal_sequence = 9 "
+        "WHERE membership_id = 'membership-visible';");
+    g_assert_true (duckdb_view_exists (connection, "object_reachability"));
+    assert_object_reachability_row (connection, "sha256:visible", 1, 0, 0,
+        FALSE, TRUE);
+    assert_bootstrap_query_succeeds (connection,
+        "INSERT INTO mailbox_memberships ("
+        "membership_id, account_id, mailbox_id, message_id, uid, "
+        "internal_date_unix_us, journal_offset, journal_sequence, "
+        "journal_item, is_visible"
+        ") VALUES ("
+        "'membership-item-1', 'account-1', 'mailbox-inbox', "
+        "'message-orphan', 5, 1004, 15, 5, 1, TRUE" ");");
+    assert_bootstrap_query_fails (connection,
+        "INSERT INTO mailbox_memberships ("
+        "membership_id, account_id, mailbox_id, message_id, uid, "
+        "internal_date_unix_us, journal_offset, journal_sequence, "
+        "journal_item, is_visible"
+        ") VALUES ("
+        "'membership-item-dup', 'account-1', 'mailbox-inbox', "
+        "'message-orphan', 6, 1005, 15, 5, 1, TRUE" ");");
+    (void)duckdb_disconnect (&connection);
+    (void)duckdb_close (&database);
+    remove_directory_tree (root);
+}
+
+static void
 test_duckdb_store_legacy_bootstrap_creates_catalog_tables (void)
 {
     g_autofree char *root = NULL;
@@ -2286,6 +2434,9 @@ main (int argc, char **argv)
         "memory-store-accepts-add-derived-view-refresh-state-operation",
         test_memory_store_accepts_add_derived_view_refresh_state_migration_operation);
     g_test_add_func ("/migration/schema-metadata-store/"
+        "memory-store-accepts-add-mailbox-membership-journal-item-and-tombstones-operation",
+        test_memory_store_accepts_add_mailbox_membership_journal_item_and_tombstones_migration_operation);
+    g_test_add_func ("/migration/schema-metadata-store/"
         "memory-store-rejects-unknown-operation",
         test_memory_store_rejects_unknown_migration_operation);
     g_test_add_func
@@ -2315,6 +2466,9 @@ main (int argc, char **argv)
     g_test_add_func ("/migration/schema-metadata-store/duckdb-store/"
         "add-derived-view-refresh-state-operation",
         test_duckdb_store_add_derived_view_refresh_state_migration_operation);
+    g_test_add_func ("/migration/schema-metadata-store/duckdb-store/"
+        "add-mailbox-membership-journal-item-and-tombstones-operation",
+        test_duckdb_store_add_mailbox_membership_journal_item_and_tombstones_migration_operation);
     g_test_add_func
         ("/migration/schema-metadata-store/duckdb-store/"
         "legacy-bootstrap-creates-catalog-tables",

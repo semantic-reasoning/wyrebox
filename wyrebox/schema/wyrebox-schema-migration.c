@@ -13,7 +13,7 @@
  * Keep these small and explicit for fixture-backed deterministic transitions.
  */
 #define WYREBOX_SCHEMA_VERSION_FIRST 1
-#define WYREBOX_SCHEMA_VERSION_CURRENT 11
+#define WYREBOX_SCHEMA_VERSION_CURRENT 12
 #define WYREBOX_SCHEMA_VERSION_LEGACY_0 0
 
 typedef struct
@@ -186,9 +186,17 @@ static const WyreboxSchemaMigrationStep wyrebox_schema_migration_steps[] = {
      FALSE,
      WYREBOX_SCHEMA_MIGRATION_MATERIALIZATION_CHECKPOINT_PRESERVE},
     {10,
-     WYREBOX_SCHEMA_VERSION_CURRENT,
+     11,
      "add-derived-view-refresh-state",
      WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_DERIVED_VIEW_REFRESH_STATE,
+     wyrebox_schema_migration_default_step_operation,
+     wyrebox_schema_migration_default_step_validation,
+     FALSE,
+     WYREBOX_SCHEMA_MIGRATION_MATERIALIZATION_CHECKPOINT_PRESERVE},
+    {11,
+     WYREBOX_SCHEMA_VERSION_CURRENT,
+     "add-mailbox-membership-journal-item-and-tombstones",
+     WYREBOX_SCHEMA_METADATA_STORE_MIGRATION_OPERATION_ADD_MAILBOX_MEMBERSHIP_JOURNAL_ITEM_AND_TOMBSTONES,
      wyrebox_schema_migration_default_step_operation,
      wyrebox_schema_migration_default_step_validation,
      FALSE,
