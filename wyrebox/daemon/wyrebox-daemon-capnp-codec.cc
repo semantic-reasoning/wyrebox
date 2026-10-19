@@ -8,6 +8,7 @@
 #include "wyrebox-daemon-flag-keyword-update-request.h"
 #include "wyrebox-daemon-memberships-copy-move-request.h"
 #include "wyrebox-daemon-memberships-expunge-request.h"
+#include "wyrebox-daemon-message-append-request.h"
 #include "wyrebox-daemon-mail-event-stream-request.h"
 #include "wyrebox-daemon-mailbox-list-request.h"
 #include "wyrebox-daemon-mailbox-list-result.h"
@@ -48,6 +49,7 @@ typedef struct
     WyreboxDaemonFlagKeywordUpdateRequest flag_keyword_update;
     WyreboxDaemonMembershipsExpungeRequest memberships_expunge;
     WyreboxDaemonMembershipsCopyMoveRequest memberships_copy_move;
+    WyreboxDaemonMessageAppendRequest message_append;
     WyreboxDaemonMailEventStreamRequest mail_event_stream;
 } WyreboxDaemonCapnpDecodedRequestState;
 
@@ -98,6 +100,7 @@ wyrebox_daemon_capnp_codec_decoded_state_clear (gpointer decoded_state)
         (&state->memberships_expunge);
     wyrebox_daemon_memberships_copy_move_request_clear
         (&state->memberships_copy_move);
+    wyrebox_daemon_message_append_request_clear (&state->message_append);
     wyrebox_daemon_mail_event_stream_request_clear (&state->mail_event_stream);
 
     g_free (state);
@@ -1016,7 +1019,7 @@ decode_memberships_copy_request (const RequestFrame::Reader & request_frame,
         return FALSE;
 
     return decode_memberships_copy_move_body (request_frame.getMembershipsCopy
-            (), state, out_request_frame, FALSE, error);
+                   (), state, out_request_frame, FALSE, error);
 }
 
 static gboolean
@@ -1028,7 +1031,62 @@ decode_memberships_move_request (const RequestFrame::Reader & request_frame,
         return FALSE;
 
     return decode_memberships_copy_move_body (request_frame.getMembershipsMove
-            (), state, out_request_frame, TRUE, error);
+                   (), state, out_request_frame, TRUE, error);
+}
+
+static gboolean
+decode_message_append_request (const RequestFrame::Reader & request_frame,
+    WyreboxDaemonCapnpDecodedRequestState *state,
+    WyreboxDaemonDecodedRequestFrame *out_request_frame, GError **error)
+{
+    auto message_append = request_frame.getMessageAppend ();
+    g_auto (GStrv) system_flags = NULL;
+    g_auto (GStrv) user_keywords = NULL;
+    g_autoptr (GBytes) message_bytes = NULL;
+    auto raw_bytes = message_append.getMessageBytes ();
+
+    if (!decode_request_identity (request_frame, state, error))
+        return FALSE;
+
+    if (!decode_strv (message_append.getSystemFlags (), &system_flags))
+        return FALSE;
+
+    if (!decode_strv (message_append.getUserKeywords (), &user_keywords))
+        return FALSE;
+
+    message_bytes =
+        g_bytes_new (raw_bytes.begin (), raw_bytes.size ());
+
+    if (!wyrebox_daemon_message_append_request_init (&state->message_append,
+        message_append.getAccountIdentity ().cStr (),
+        message_append.getMailboxId ().cStr (),
+        message_append.getUidValidity (), message_bytes,
+        message_append.getInternalDateUnixUs (),
+        (const char *const *)system_flags,
+        (const char *const *)user_keywords, error))
+        return FALSE;
+
+    out_request_frame->request_id = state->request_id;
+    out_request_frame->caller_identity = state->caller_identity;
+    out_request_frame->account_identity = state->account_identity;
+    out_request_frame->tool_identity = state->tool_identity;
+    out_request_frame->correlation_id = state->correlation_id;
+    out_request_frame->operation =
+        WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_APPEND;
+    out_request_frame->mailbox_list = NULL;
+    out_request_frame->mailbox_select = NULL;
+    out_request_frame->fact_mutation = NULL;
+    out_request_frame->message_fetch = NULL;
+    out_request_frame->message_search = NULL;
+    out_request_frame->wirelog_predicate_query = NULL;
+    out_request_frame->duckdb_query_template = NULL;
+    out_request_frame->delivery_ingestion = NULL;
+    out_request_frame->flag_keyword_update = NULL;
+    out_request_frame->memberships_expunge = NULL;
+    out_request_frame->memberships_copy_move = NULL;
+    out_request_frame->message_append = &state->message_append;
+
+    return TRUE;
 }
 
 static gboolean
@@ -1101,6 +1159,9 @@ decode_request_frame (const capnp::word *words,
                        state, out_request_frame, error);
         case RequestFrame::MEMBERSHIPS_MOVE:
             return decode_memberships_move_request (request_frame,
+                       state, out_request_frame, error);
+        case RequestFrame::MESSAGE_APPEND:
+            return decode_message_append_request (request_frame,
                        state, out_request_frame, error);
         case RequestFrame::FACT_MUTATION:
             return decode_fact_mutation_request (request_frame,
@@ -1860,17 +1921,17 @@ validate_flag_keyword_update_encode_input (const WyreboxDaemonRequestIdentity
         return FALSE;
 
     return wyrebox_daemon_flag_keyword_update_request_init (&validated_request,
-        request->account_identity,
-        request->mailbox_id,
-        request->uid_validity,
-        request->mailbox_uid,
-        request->mode,
-        (const char *const *)request->system_flags,
-        (const char *const *)request->user_keywords, error);
+               request->account_identity,
+               request->mailbox_id,
+               request->uid_validity,
+               request->mailbox_uid,
+               request->mode,
+               (const char *const *)request->system_flags,
+               (const char *const *)request->user_keywords, error);
 }
 
 static void
-encode_strv (capnp::List < capnp::Text >::Builder values,
+encode_strv (capnp::List < capnp::Text > ::Builder values,
     const char *const *strv)
 {
     for (guint i = 0; strv != NULL && strv[i] != NULL; i++)
@@ -1954,7 +2015,7 @@ encode_flag_keyword_update_request (const WyreboxDaemonRequestIdentity
 }
 
 static void
-encode_uint64_list (capnp::List < uint64_t, capnp::Kind::PRIMITIVE >::Builder
+encode_uint64_list (capnp::List < uint64_t, capnp::Kind::PRIMITIVE > ::Builder
     values, const guint64 *uids, gsize n_uids)
 {
     for (gsize i = 0; i < n_uids; i++)
@@ -1984,10 +2045,10 @@ validate_memberships_expunge_encode_input (const WyreboxDaemonRequestIdentity
         return FALSE;
 
     return wyrebox_daemon_memberships_expunge_request_init (&validated_request,
-        request->account_identity,
-        request->mailbox_id,
-        request->uid_validity,
-        request->uids, request->n_uids, error);
+               request->account_identity,
+               request->mailbox_id,
+               request->uid_validity,
+               request->uids, request->n_uids, error);
 }
 
 static gboolean
@@ -2060,7 +2121,8 @@ validate_memberships_copy_move_encode_input (const WyreboxDaemonRequestIdentity
         identity->tool_identity, identity->correlation_id, error))
         return FALSE;
 
-    return wyrebox_daemon_memberships_copy_move_request_init (&validated_request,
+    return wyrebox_daemon_memberships_copy_move_request_init (
+        &validated_request,
         request->account_identity,
         request->source_mailbox_id,
         request->source_namespace_kind,
@@ -2139,6 +2201,100 @@ encode_memberships_copy_move_request (const WyreboxDaemonRequestIdentity
             G_IO_ERROR,
             G_IO_ERROR_INVALID_DATA,
             "memberships copy/move request encode failed: %s", e.what ());
+    }
+
+    return FALSE;
+}
+
+static gboolean
+validate_message_append_encode_input (const WyreboxDaemonRequestIdentity
+    *identity, const WyreboxDaemonMessageAppendRequest *request,
+    GError **error)
+{
+    g_auto (WyreboxDaemonRequestIdentity) validated_identity = { 0 };
+    g_auto (WyreboxDaemonMessageAppendRequest) validated_request = { 0 };
+
+    if (identity == NULL)
+        return set_invalid_argument (error, "request identity is null");
+
+    if (request == NULL)
+        return set_invalid_argument (error, "message append request is null");
+
+    if (!wyrebox_daemon_request_identity_init (&validated_identity,
+        identity->request_id,
+        identity->caller_identity,
+        identity->account_identity,
+        identity->tool_identity, identity->correlation_id, error))
+        return FALSE;
+
+    return wyrebox_daemon_message_append_request_init (&validated_request,
+               request->account_identity, request->mailbox_id,
+               request->uid_validity,
+               request->message_bytes, request->internal_date_unix_us,
+               (const char *const *)request->system_flags,
+               (const char *const *)request->user_keywords, error);
+}
+
+static gboolean
+encode_message_append_request (const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMessageAppendRequest *request, GBytes **out_bytes,
+    GError **error)
+{
+    try {
+        gsize message_size = 0;
+        const guint8 *message_data = NULL;
+        guint n_system_flags = 0;
+        guint n_user_keywords = 0;
+
+        if (!validate_message_append_encode_input (identity, request, error))
+            return FALSE;
+
+        message_data = static_cast < const guint8 * > (g_bytes_get_data
+                (request->message_bytes, &message_size));
+        if (request->system_flags != NULL)
+            n_system_flags = g_strv_length (request->system_flags);
+        if (request->user_keywords != NULL)
+            n_user_keywords = g_strv_length (request->user_keywords);
+
+        capnp::MallocMessageBuilder request_builder;
+        auto request_frame = request_builder.initRoot < RequestFrame > ();
+
+        auto request_identity = request_frame.initIdentity ();
+        request_identity.setRequestId (identity->request_id);
+        request_identity.setCallerIdentity (identity->caller_identity != NULL
+        ? identity->caller_identity : "");
+        request_identity.setAccountIdentity (identity->account_identity != NULL
+        ? identity->account_identity : "");
+        request_identity.setToolIdentity (identity->tool_identity != NULL
+        ? identity->tool_identity : "");
+        request_identity.setCorrelationId (identity->correlation_id != NULL
+        ? identity->correlation_id : "");
+
+        auto message_append = request_frame.initMessageAppend ();
+        message_append.setAccountIdentity (request->account_identity);
+        message_append.setMailboxId (request->mailbox_id);
+        message_append.setUidValidity (request->uid_validity);
+        message_append.setMessageBytes (kj::ArrayPtr <
+            const capnp::byte > (reinterpret_cast <
+            const capnp::byte * > (message_data), message_size));
+        message_append.setInternalDateUnixUs (request->internal_date_unix_us);
+        encode_strv (message_append.initSystemFlags (n_system_flags),
+            (const char *const *)request->system_flags);
+        encode_strv (message_append.initUserKeywords (n_user_keywords),
+            (const char *const *)request->user_keywords);
+
+        auto words = capnp::messageToFlatArray (request_builder);
+        auto bytes = words.asBytes ();
+        *out_bytes = g_bytes_new (bytes.begin (), bytes.size ());
+
+        return TRUE;
+    }
+    catch (const std::exception & e)
+    {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "message append request encode failed: %s", e.what ());
     }
 
     return FALSE;
@@ -2264,7 +2420,8 @@ encode_fact_mutation_request (const WyreboxDaemonRequestIdentity *identity,
             return FALSE;
 
         if (request == NULL)
-            return set_invalid_argument (error, "fact mutation request is null");
+            return set_invalid_argument (error,
+                       "fact mutation request is null");
 
         if (!wyrebox_daemon_fact_mutation_request_init (&validated_request,
             request->mutation, request->predicate_id, request->scope_id,
@@ -3157,6 +3314,24 @@ wyrebox_daemon_capnp_codec_encode_memberships_move_request (const
 
     if (!encode_memberships_copy_move_request (identity, request, TRUE,
         &out_bytes, error))
+        return NULL;
+
+    return g_steal_pointer (&out_bytes);
+}
+
+GBytes *
+wyrebox_daemon_capnp_codec_encode_message_append_request (const
+    WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonMessageAppendRequest *request, gpointer user_data,
+    GError **error)
+{
+    g_autoptr (GBytes) out_bytes = NULL;
+
+    (void)user_data;
+
+    g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+    if (!encode_message_append_request (identity, request, &out_bytes, error))
         return NULL;
 
     return g_steal_pointer (&out_bytes);

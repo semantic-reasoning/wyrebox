@@ -19,6 +19,7 @@ struct RequestFrame {
     membershipsExpunge @13 :MembershipsExpungeRequest;
     membershipsCopy @14 :MembershipsCopyMoveRequest;
     membershipsMove @15 :MembershipsCopyMoveRequest;
+    messageAppend @16 :MessageAppendRequest;
   }
 }
 
@@ -197,6 +198,16 @@ struct MembershipsCopyMoveRequest {
   destMailboxId @4 :Text;
   destUidValidity @5 :UInt64;
   sourceUids @6 :List(UInt64);
+}
+
+struct MessageAppendRequest {
+  accountIdentity @0 :Text;
+  mailboxId @1 :Text;
+  uidValidity @2 :UInt64;
+  messageBytes @3 :Data;
+  internalDateUnixUs @4 :UInt64;
+  systemFlags @5 :List(Text);
+  userKeywords @6 :List(Text);
 }
 
 struct FactMutationRequest {

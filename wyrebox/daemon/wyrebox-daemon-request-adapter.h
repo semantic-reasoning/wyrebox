@@ -8,6 +8,7 @@
 #include "wyrebox-daemon-flag-keyword-update-service.h"
 #include "wyrebox-daemon-memberships-copy-move-service.h"
 #include "wyrebox-daemon-memberships-expunge-service.h"
+#include "wyrebox-daemon-message-append-service.h"
 #include "wyrebox-daemon-message-search-service.h"
 #include "wyrebox-daemon-wirelog-predicate-query-service.h"
 #include "wyrebox-daemon-peer-credentials.h"
@@ -74,6 +75,10 @@ void wyrebox_daemon_request_adapter_set_memberships_expunge_service (
 void wyrebox_daemon_request_adapter_set_memberships_copy_move_service (
     WyreboxDaemonRequestAdapter *self,
     WyreboxDaemonMembershipsCopyMoveService *memberships_copy_move_service);
+
+void wyrebox_daemon_request_adapter_set_message_append_service (
+    WyreboxDaemonRequestAdapter *self,
+    WyreboxDaemonMessageAppendService *message_append_service);
 
 GBytes *wyrebox_daemon_request_adapter_handle_payload (
     const WyreboxDaemonPeerCredentials *peer_credentials,

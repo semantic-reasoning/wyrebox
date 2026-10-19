@@ -19,6 +19,7 @@ struct _WyreboxDaemonRequestAdapter
     WyreboxDaemonFlagKeywordUpdateService *flag_keyword_update_service;
     WyreboxDaemonMembershipsExpungeService *memberships_expunge_service;
     WyreboxDaemonMembershipsCopyMoveService *memberships_copy_move_service;
+    WyreboxDaemonMessageAppendService *message_append_service;
 
     GMutex mutation_route_mutex;
 
@@ -84,6 +85,7 @@ static void wyrebox_daemon_request_adapter_finalize (GObject *object)
     g_clear_object (&self->flag_keyword_update_service);
     g_clear_object (&self->memberships_expunge_service);
     g_clear_object (&self->memberships_copy_move_service);
+    g_clear_object (&self->message_append_service);
     g_mutex_clear (&self->mutation_route_mutex);
 
     G_OBJECT_CLASS (wyrebox_daemon_request_adapter_parent_class)->finalize
@@ -117,6 +119,7 @@ operation_requires_mutation_route_lock (WyreboxDaemonRequestFrameOperation
     case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MEMBERSHIPS_EXPUNGE:
     case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MEMBERSHIPS_COPY:
     case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MEMBERSHIPS_MOVE:
+    case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_MESSAGE_APPEND:
         return TRUE;
     default:
         return FALSE;
@@ -141,6 +144,7 @@ route_decoded_request (WyreboxDaemonRequestAdapter *self,
         self->flag_keyword_update_service,
         self->memberships_expunge_service,
         self->memberships_copy_move_service,
+        self->message_append_service,
         decoded_request, response_frame, error);
 }
 
@@ -281,6 +285,17 @@ void wyrebox_daemon_request_adapter_set_memberships_copy_move_service
 
     g_set_object (&self->memberships_copy_move_service,
         memberships_copy_move_service);
+}
+
+void wyrebox_daemon_request_adapter_set_message_append_service
+    (WyreboxDaemonRequestAdapter *self,
+    WyreboxDaemonMessageAppendService *message_append_service)
+{
+    g_return_if_fail (WYREBOX_IS_DAEMON_REQUEST_ADAPTER (self));
+    g_return_if_fail (message_append_service == NULL
+        || WYREBOX_IS_DAEMON_MESSAGE_APPEND_SERVICE (message_append_service));
+
+    g_set_object (&self->message_append_service, message_append_service);
 }
 
 void wyrebox_daemon_request_adapter_set_mail_event_stream_service
