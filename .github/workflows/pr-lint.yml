@@ -254,7 +254,14 @@ jobs:
           # build; on the arm64 runner the derived-view-materializer suite
           # exceeds Meson's default 30s per-test limit. Scale all test timeouts
           # so slow-but-progressing tests are not killed prematurely.
-          meson test -C _build --timeout-multiplier 6 --print-errorlogs
+          # DuckDB 2.0 sizes each database to most of host RAM. Four ASan
+          # suites at once exhaust this 16 GiB arm64 runner, so run one there.
+          num_processes="$(nproc)"
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            num_processes=1
+          fi
+          meson test -C _build --timeout-multiplier 6 \
+            --num-processes "$num_processes" --print-errorlogs
 
   ubuntu-26-04-dovecot:
     name: Ubuntu 26.04 Dovecot 2.4.2
