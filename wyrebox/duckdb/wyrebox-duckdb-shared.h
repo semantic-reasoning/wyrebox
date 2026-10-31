@@ -37,8 +37,9 @@ gboolean wyrebox_duckdb_open_shared (const char *path,
  * an unsupported storage version is G_IO_ERROR_NOT_SUPPORTED, and anything
  * else, including NULL, is G_IO_ERROR_FAILED.
  *
- * The matched texts are those of the pinned DuckDB release; an unrecognised
- * message deliberately falls back to G_IO_ERROR_FAILED.
+ * The matched texts cover the pinned DuckDB 2.0.0 release and the previous
+ * 1.5.6 wording. DuckDB 2.0.0 says "storage version number"; 1.5.6 said
+ * "version number". An unrecognised message falls back to G_IO_ERROR_FAILED.
  */
 GIOErrorEnum wyrebox_duckdb_open_error_code (const char *message);
 

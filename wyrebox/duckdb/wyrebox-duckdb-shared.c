@@ -37,8 +37,7 @@ wyrebox_duckdb_open_error_code (const char *message)
         strstr (message, "Corrupt database file") != NULL)
         return G_IO_ERROR_INVALID_DATA;
 
-    if (strstr (message,
-        "Trying to read a database file with version number") != NULL)
+    if (strstr (message, "Trying to read a database file with") != NULL)
         return G_IO_ERROR_NOT_SUPPORTED;
 
     return G_IO_ERROR_FAILED;

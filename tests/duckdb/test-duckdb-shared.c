@@ -146,6 +146,10 @@ test_open_error_code_classifies_messages (void)
     g_assert_cmpint (wyrebox_duckdb_open_error_code ("IO Error: Trying to "
         "read a database file with version number 99, but we can only "
         "read versions between 1 and 67."), ==, G_IO_ERROR_NOT_SUPPORTED);
+    g_assert_cmpint (wyrebox_duckdb_open_error_code ("IO Error: Trying to "
+        "read a database file with storage version number 99, but we can "
+        "only read storage versions between 64 and 69."), ==,
+        G_IO_ERROR_NOT_SUPPORTED);
     g_assert_cmpint (wyrebox_duckdb_open_error_code ("IO Error: Cannot open "
         "file \"/x/catalog.duckdb\": No such file or directory"), ==,
         G_IO_ERROR_FAILED);
