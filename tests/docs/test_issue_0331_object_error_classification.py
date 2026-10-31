@@ -147,7 +147,7 @@ def main() -> None:
         '"Could not set lock on file"',
         '"is not a valid DuckDB database file"',
         '"Corrupt database file"',
-        '"Trying to read a database file with version number"',
+        '"Trying to read a database file with"',
     ]:
         assert literal in shared_source, (
             f"DuckDB open classification drifted: {literal}"

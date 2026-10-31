@@ -121,6 +121,16 @@ def main() -> None:
     ]:
         assert needle in wrap_text, f"wrap file missing {needle}"
 
+    assert (
+        "https://github.com/duckdb/duckdb/releases/download/v2.0.0/"
+        "duckdb-shared-libs-linux-amd64.tar.gz"
+    ) in wrap_text
+    assert "source_filename = duckdb-shared-libs-linux-amd64-v2.0.0.tar.gz" in wrap_text
+    assert (
+        "source_hash = "
+        "993ad89e7dfca66cd6da994c2cad090c2fc160ddf9f550498a098ab4bb13cfb1"
+    ) in wrap_text
+
     assert GITIGNORE_PATH.is_file(), "missing subprojects/.gitignore"
     gitignore_text = GITIGNORE_PATH.read_text(encoding="utf-8")
     for line in [
@@ -182,6 +192,14 @@ def main() -> None:
         "required: true",
     ]:
         assert needle in packagefile_text, f"DuckDB packagefile missing {needle}"
+    assert "version: '2.0.0'" in packagefile_text
+
+    for workflow_name in ("pr-lint.yml", "main-ci.yml"):
+        workflow_text = (
+            REPO_ROOT / ".github" / "workflows" / workflow_name
+        ).read_text(encoding="utf-8")
+        assert "DUCKDB_VERSION: v2.0.0" in workflow_text, workflow_name
+        assert "DUCKDB_VERSION: v1.5.6" not in workflow_text, workflow_name
 
     assert not re.search(
         r"cc\.find_library\(\s*['\"]duckdb['\"]\s*,\s*required:\s*true",
