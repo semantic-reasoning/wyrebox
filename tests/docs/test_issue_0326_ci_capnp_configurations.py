@@ -79,6 +79,15 @@ def assert_minimal_job(workflow: str, name: str, job_text: str) -> None:
     assert "meson test" in job_text, f"{workflow}:{name} must run tests"
 
 
+def sanitize_test_step(workflow: str, name: str, job_text: str) -> str:
+    match = re.search(
+        r"      - name: Test\n        run: \|\n(?P<body>(?:          .*\n)*)",
+        job_text,
+    )
+    assert match, f"{workflow}:{name} must have one Test step"
+    return match.group("body")
+
+
 def assert_sanitize_architectures(workflow: str, name: str,
                                   job_text: str) -> None:
     for runner in SANITIZE_RUNNERS:
@@ -91,6 +100,32 @@ def assert_sanitize_architectures(workflow: str, name: str,
         f"{workflow}:{name} must use a source-built DuckDB on arm64"
     )
 
+    body = sanitize_test_step(workflow, name, job_text)
+    invocations = [
+        line for line in body.splitlines() if "meson test" in line
+    ]
+    assert len(invocations) == 1, (
+        f"{workflow}:{name} Test step must invoke meson test once"
+    )
+    invocation = invocations[0]
+    for flag in (
+        "--timeout-multiplier 6",
+        '--num-processes "$num_processes"',
+        "--print-errorlogs",
+    ):
+        assert flag in invocation or flag in body, (
+            f"{workflow}:{name} Test step must pass {flag}"
+        )
+    assert 'num_processes="$(nproc)"' in body, (
+        f"{workflow}:{name} must keep full parallelism off arm64"
+    )
+    assert re.search(
+        r'if \[ "\$\{\{ matrix\.arch \}\}" = "arm64" \]; then\n'
+        r"            num_processes=1\n"
+        r"          fi\n",
+        body,
+    ), f"{workflow}:{name} must run arm64 sanitizer tests one at a time"
+
 
 def main() -> None:
     for workflow, names in CAPNP_JOBS.items():
@@ -99,10 +134,15 @@ def main() -> None:
             assert name in jobs, f"{workflow}: missing job {name}"
             assert_capnp_job(workflow, name, jobs[name])
 
+    sanitize_steps = []
     for workflow, name in SANITIZE_ARCH_JOBS.items():
         jobs = read_jobs(workflow)
         assert name in jobs, f"{workflow}: missing job {name}"
         assert_sanitize_architectures(workflow, name, jobs[name])
+        sanitize_steps.append(sanitize_test_step(workflow, name, jobs[name]))
+    assert sanitize_steps[0] == sanitize_steps[1], (
+        "pr-sanitize and sanitize Test steps must stay identical"
+    )
 
     workflow, name = MINIMAL_JOB
     jobs = read_jobs(workflow)
