@@ -60,7 +60,11 @@ struct wyrebox_dovecot_transaction
     /* First member: index_transaction_commit() frees the whole struct. */
     struct mailbox_transaction_context t;
     gboolean flags_changed;
-    gboolean expunge_refused;
+    /* IMAP never sets MAIL_INDEX_TRANSACTION_CHANGE_EXPUNGE. */
+    gboolean expunges_requested;
+    /* Freed before commit or rollback frees this struct. */
+    uint32_t *expunge_uids;
+    unsigned int expunge_count;
 };
 
 struct wyrebox_dovecot_mailbox_list
@@ -382,6 +386,50 @@ wyrebox_dovecot_list_iter_deinit (struct mailbox_list_iterate_context *ctx)
 
     pool_unref (&ctx->pool);
     return ret;
+}
+
+static void
+wyrebox_dovecot_mailbox_set_write_error (struct wyrebox_dovecot_mailbox *wbox,
+    const char *operation, const GError *error)
+{
+    struct mailbox *box = &wbox->box;
+
+    if (g_error_matches (error, WYREBOX_DOVECOT_DAEMON_CLIENT_ERROR,
+        WYREBOX_DAEMON_ERROR_PERMISSION_DENIED)) {
+        mail_storage_set_error (box->storage, MAIL_ERROR_PERM,
+            MAIL_ERRSTR_NO_PERMISSION);
+        return;
+    }
+    if (g_error_matches (error, WYREBOX_DOVECOT_DAEMON_CLIENT_ERROR,
+        WYREBOX_DAEMON_ERROR_NOT_FOUND)) {
+        mail_storage_set_error (box->storage, MAIL_ERROR_NOTFOUND,
+            "WyreBox message is not in this mailbox");
+        return;
+    }
+    if (g_error_matches (error, WYREBOX_DOVECOT_DAEMON_CLIENT_ERROR,
+        WYREBOX_DAEMON_ERROR_CONFLICT)) {
+        wbox->inconsistent = TRUE;
+        mailbox_set_critical (box,
+            "WyreBox %s conflicted with the mailbox: %s", operation,
+            error->message);
+        return;
+    }
+    if (g_error_matches (error, WYREBOX_DOVECOT_DAEMON_CLIENT_ERROR,
+        WYREBOX_DAEMON_ERROR_PERMANENT_FAILURE)) {
+        mail_storage_set_error (box->storage, MAIL_ERROR_PARAMS,
+            "WyreBox rejected the mailbox change");
+        return;
+    }
+    if (wyrebox_dovecot_error_is_unavailable (error)) {
+        e_error (box->event, "WyreBox daemon %s failed: %s", operation,
+            error->message);
+        mail_storage_set_error (box->storage, MAIL_ERROR_UNAVAILABLE,
+            "WyreBox daemon is unavailable");
+        return;
+    }
+
+    mailbox_set_critical (box, "WyreBox daemon %s failed: %s", operation,
+        error->message);
 }
 
 static void
@@ -1499,11 +1547,91 @@ wyrebox_dovecot_mail_update_keywords (struct mail *_mail,
     index_mail_update_keywords (_mail, modify_type, keywords);
 }
 
-/* The refusal surfaces at commit as MAIL_ERROR_PERM. */
+static void
+wyrebox_dovecot_transaction_free_expunge_uids (
+    struct wyrebox_dovecot_transaction *wt)
+{
+    i_free (wt->expunge_uids);
+    wt->expunge_uids = NULL;
+    wt->expunge_count = 0;
+}
+
+static void
+wyrebox_dovecot_transaction_note_expunge (
+    struct wyrebox_dovecot_transaction *wt, uint32_t uid)
+{
+    for (unsigned int i = 0; i < wt->expunge_count; i++) {
+        if (wt->expunge_uids[i] == uid) {
+            return;
+        }
+    }
+
+    wt->expunge_uids = i_realloc (wt->expunge_uids,
+            wt->expunge_count * sizeof (uint32_t),
+            (wt->expunge_count + 1) * sizeof (uint32_t));
+    wt->expunge_uids[wt->expunge_count++] = uid;
+    wt->expunges_requested = TRUE;
+}
+
+/* Records the index expunge now. The daemon tombstone is written at commit,
+ * while this transaction is still alive. */
 static void
 wyrebox_dovecot_mail_expunge (struct mail *_mail)
 {
-    wyrebox_dovecot_mail_transaction (_mail)->expunge_refused = TRUE;
+    struct wyrebox_dovecot_transaction *wt =
+        wyrebox_dovecot_mail_transaction (_mail);
+    uint32_t uid = _mail->uid;
+
+    if (uid == 0) {
+        mail_index_lookup_uid (_mail->transaction->view, _mail->seq, &uid);
+    }
+    if (uid == 0) {
+        wt->expunges_requested = TRUE;
+        return;
+    }
+
+    mail_index_expunge (_mail->transaction->itrans, _mail->seq);
+    wyrebox_dovecot_transaction_note_expunge (wt, uid);
+}
+
+static int
+wyrebox_dovecot_transaction_push_expunge (
+    struct wyrebox_dovecot_mailbox *wbox,
+    struct wyrebox_dovecot_transaction *wt)
+{
+    struct mailbox *box = &wbox->box;
+    struct wyrebox_dovecot_storage *storage =
+        (struct wyrebox_dovecot_storage *)box->storage;
+    g_autofree guint64 *uids = NULL;
+    g_autoptr (GError) error = NULL;
+    guint64 journal_offset = 0;
+
+    if (wt->expunge_count == 0) {
+        mail_storage_set_error (box->storage, MAIL_ERROR_PARAMS,
+            "WyreBox expunge is missing a UID");
+        return -1;
+    }
+
+    uids = g_new (guint64, wt->expunge_count);
+    qsort (wt->expunge_uids, wt->expunge_count, sizeof (uint32_t),
+        wyrebox_dovecot_compare_uid);
+    for (unsigned int i = 0; i < wt->expunge_count; i++) {
+        uids[i] = wt->expunge_uids[i];
+    }
+
+    if (!wyrebox_dovecot_daemon_client_expunge (storage->socket_path,
+        storage->account_identity, wbox->state.select_result.mailbox_id,
+        wbox->state.select_result.uid_validity, uids, wt->expunge_count,
+        &journal_offset, &error)) {
+        wyrebox_dovecot_mailbox_set_write_error (wbox, "EXPUNGE", error);
+        return -1;
+    }
+
+    e_debug (box->event, "WyreBox expunge mailbox=%s uids=%u "
+        "journal_offset=%" G_GUINT64_FORMAT,
+        wbox->state.select_result.mailbox_id, wt->expunge_count,
+        journal_offset);
+    return 0;
 }
 
 static struct mailbox_transaction_context *
@@ -1517,6 +1645,14 @@ wyrebox_dovecot_transaction_begin (struct mailbox *box,
     return &wt->t;
 }
 
+static void
+wyrebox_dovecot_transaction_rollback (struct mailbox_transaction_context *t)
+{
+    wyrebox_dovecot_transaction_free_expunge_uids (
+        (struct wyrebox_dovecot_transaction *)t);
+    index_transaction_rollback (t);
+}
+
 static int
 wyrebox_dovecot_transaction_commit (struct mailbox_transaction_context *t,
     struct mail_transaction_commit_changes *changes_r)
@@ -1527,11 +1663,23 @@ wyrebox_dovecot_transaction_commit (struct mailbox_transaction_context *t,
         (struct wyrebox_dovecot_mailbox *)t->box;
     struct mailbox *box = t->box;
 
-    if (wt->expunge_refused) {
-        index_transaction_rollback (t);
-        mail_storage_set_error (box->storage, MAIL_ERROR_PERM,
-            "WyreBox does not support EXPUNGE yet");
-        return -1;
+    if (wt->expunges_requested) {
+        int expunge_ret;
+
+        if (mailbox_is_readonly (box)) {
+            wyrebox_dovecot_transaction_free_expunge_uids (wt);
+            index_transaction_rollback (t);
+            mail_storage_set_error (box->storage, MAIL_ERROR_PERM,
+                "WyreBox mailbox is read-only");
+            return -1;
+        }
+
+        expunge_ret = wyrebox_dovecot_transaction_push_expunge (wbox, wt);
+        wyrebox_dovecot_transaction_free_expunge_uids (wt);
+        if (expunge_ret < 0) {
+            index_transaction_rollback (t);
+            return -1;
+        }
     }
     if (wt->flags_changed && mailbox_is_readonly (box)) {
         index_transaction_rollback (t);
@@ -1619,7 +1767,7 @@ static struct mailbox wyrebox_dovecot_mailbox_template = {
         .notify_changes = wyrebox_dovecot_mailbox_notify_changes,
         .transaction_begin = wyrebox_dovecot_transaction_begin,
         .transaction_commit = wyrebox_dovecot_transaction_commit,
-        .transaction_rollback = index_transaction_rollback,
+        .transaction_rollback = wyrebox_dovecot_transaction_rollback,
         .mail_alloc = wyrebox_dovecot_mail_alloc,
         .search_init = index_storage_search_init,
         .search_deinit = index_storage_search_deinit,

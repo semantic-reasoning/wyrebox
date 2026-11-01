@@ -705,32 +705,95 @@ test_examine_is_read_only (ImapRealDaemonFixture *fixture,
 }
 
 static void
-test_expunge_is_refused (ImapRealDaemonFixture *fixture,
+assert_daemon_inbox_counts (ImapRealDaemonFixture *fixture,
+    guint32 message_count, guint32 uid_validity, guint32 uid_next)
+{
+    g_auto (WyreboxDaemonMailboxSelectResult) daemon_state = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &daemon_state,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (daemon_state.message_count, ==, message_count);
+    g_assert_cmpuint (daemon_state.uid_validity, ==, uid_validity);
+    g_assert_cmpuint (daemon_state.uid_next, ==, uid_next);
+}
+
+static void
+test_expunge_hides_membership (ImapRealDaemonFixture *fixture,
     gconstpointer user_data)
 {
-    const char *const deleted[] = { "\\Deleted", NULL };
     g_autofree char *config_path = NULL;
+    g_autofree char *uidvalidity = NULL;
+    g_autofree char *uidnext = NULL;
+    g_auto (WyreboxDaemonMailboxSelectResult) before = { 0 };
     g_auto (ImapSession) session = { 0 };
+    g_auto (ImapSession) again = { 0 };
+    g_autoptr (GError) error = NULL;
 
     (void)user_data;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &before, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (before.message_count, ==, 1);
+    uidvalidity = g_strdup_printf ("[UIDVALIDITY %u]", before.uid_validity);
+    uidnext = g_strdup_printf ("[UIDNEXT %u]", before.uid_next);
 
     config_path = write_wyrebox_config (fixture, fixture->socket_path);
     run_imap (config_path, "a SELECT INBOX\r\n"
         "b STORE 1 +FLAGS (\\Deleted)\r\n"
-        "c EXPUNGE\r\n"
-        "d UID EXPUNGE 1\r\n"
-        "e FETCH 1 (UID FLAGS)\r\n"
-        "f CLOSE\r\nz LOGOUT\r\n", &session);
+        "c EXPUNGE\r\nz LOGOUT\r\n", &session);
 
     g_assert_nonnull (strstr (session.output, "\r\nb OK"));
-    g_assert_nonnull (strstr (session.output, "\r\nc OK Expunge ignored"));
-    g_assert_nonnull (strstr (session.output, "\r\nd OK Expunge ignored"));
-    g_assert_nonnull (strstr (session.output, "\r\ne OK"));
-    g_assert_nonnull (strstr (session.output,
-        "\r\nf OK Closed without expunging"));
-    g_assert_null (strstr (session.output, "* 1 EXPUNGE"));
-    assert_fetch_flags (session.output, 1, deleted);
-    assert_daemon_flags (fixture, deleted);
+    g_assert_nonnull (strstr (session.output, "* 1 EXPUNGE"));
+    g_assert_nonnull (strstr (session.output, "\r\nc OK Expunge completed"));
+    g_assert_null (strstr (session.output, "Expunge ignored"));
+    assert_daemon_inbox_counts (fixture, 0, before.uid_validity,
+        before.uid_next);
+
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b UID EXPUNGE 1\r\nz LOGOUT\r\n", &again);
+    g_assert_nonnull (strstr (again.output, "* 0 EXISTS\r\n"));
+    g_assert_nonnull (strstr (again.output, uidvalidity));
+    g_assert_nonnull (strstr (again.output, uidnext));
+    g_assert_nonnull (strstr (again.output, "\r\nb OK Expunge completed"));
+    g_assert_null (strstr (again.output, "* 1 EXPUNGE"));
+    assert_daemon_inbox_counts (fixture, 0, before.uid_validity,
+        before.uid_next);
+}
+
+static void
+test_close_expunges_deleted (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_auto (WyreboxDaemonMailboxSelectResult) before = { 0 };
+    g_auto (ImapSession) session = { 0 };
+    g_auto (ImapSession) again = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    (void)user_data;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &before, &error));
+    g_assert_no_error (error);
+
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b STORE 1 +FLAGS (\\Deleted)\r\n"
+        "c CLOSE\r\nz LOGOUT\r\n", &session);
+
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+    g_assert_nonnull (strstr (session.output, "\r\nc OK Close completed"));
+    g_assert_null (strstr (session.output, "Closed without expunging"));
+    assert_daemon_inbox_counts (fixture, 0, before.uid_validity,
+        before.uid_next);
+
+    run_imap (config_path, "a SELECT INBOX\r\nz LOGOUT\r\n", &again);
+    g_assert_nonnull (strstr (again.output, "* 0 EXISTS\r\n"));
+    g_assert_nonnull (strstr (again.output, "\r\na OK"));
 }
 
 static void
@@ -917,9 +980,12 @@ main (int argc, char **argv)
     g_test_add ("/dovecot/imap/examine-is-read-only",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_examine_is_read_only, fixture_tear_down);
-    g_test_add ("/dovecot/imap/expunge-is-refused",
+    g_test_add ("/dovecot/imap/expunge-hides-membership",
         ImapRealDaemonFixture, NULL, fixture_set_up,
-        test_expunge_is_refused, fixture_tear_down);
+        test_expunge_hides_membership, fixture_tear_down);
+    g_test_add ("/dovecot/imap/close-expunges-deleted",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_close_expunges_deleted, fixture_tear_down);
     g_test_add ("/dovecot/imap/status-matches-daemon-state",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_status_matches_daemon_state, fixture_tear_down);
