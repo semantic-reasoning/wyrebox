@@ -68,6 +68,21 @@ struct wyrebox_dovecot_transaction
     /* Freed before commit or rollback frees this struct. */
     uint32_t *expunge_uids;
     unsigned int expunge_count;
+    /* MOVE already tombstones these. A later expunge must not. */
+    uint32_t *move_source_uids;
+    unsigned int move_source_count;
+    /* One COPY or MOVE, sent once from the destination commit. */
+    gboolean copy_batch_set;
+    gboolean copy_moving;
+    WyreboxDaemonMailboxListEntryKind copy_source_kind;
+    guint64 copy_source_uid_validity;
+    guint64 copy_dest_uid_validity;
+    char *copy_source_mailbox_id;
+    char *copy_dest_mailbox_id;
+    uint32_t *copy_source_uids;
+    unsigned int copy_source_count;
+    uint32_t *copy_dest_uids;
+    unsigned int copy_dest_count;
 };
 
 struct wyrebox_dovecot_pending_append
@@ -1625,6 +1640,196 @@ wyrebox_dovecot_set_append_error (struct wyrebox_dovecot_mailbox *wbox,
     wyrebox_dovecot_mailbox_set_write_error (wbox, "APPEND", error);
 }
 
+static void
+wyrebox_dovecot_transaction_free_move_sources (
+    struct wyrebox_dovecot_transaction *wt)
+{
+    i_free (wt->move_source_uids);
+    wt->move_source_uids = NULL;
+    wt->move_source_count = 0;
+}
+
+static void
+wyrebox_dovecot_transaction_free_copy_batch (
+    struct wyrebox_dovecot_transaction *wt)
+{
+    i_free (wt->copy_source_mailbox_id);
+    i_free (wt->copy_dest_mailbox_id);
+    i_free (wt->copy_source_uids);
+    i_free (wt->copy_dest_uids);
+    wt->copy_source_mailbox_id = NULL;
+    wt->copy_dest_mailbox_id = NULL;
+    wt->copy_source_uids = NULL;
+    wt->copy_dest_uids = NULL;
+    wt->copy_source_count = 0;
+    wt->copy_dest_count = 0;
+    wt->copy_batch_set = FALSE;
+}
+
+static void
+wyrebox_dovecot_append_uid (uint32_t **uids, unsigned int *count,
+    uint32_t uid)
+{
+    *uids = i_realloc (*uids, *count * sizeof (uint32_t),
+            (*count + 1) * sizeof (uint32_t));
+    (*uids)[(*count)++] = uid;
+}
+
+static bool
+wyrebox_dovecot_transaction_is_move_source (
+    struct wyrebox_dovecot_transaction *wt, uint32_t uid)
+{
+    for (unsigned int i = 0; i < wt->move_source_count; i++) {
+        if (wt->move_source_uids[i] == uid) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static gboolean
+wyrebox_dovecot_parse_copy_summary (const char *summary, gboolean moving,
+    const char *dest_mailbox_id, guint64 dest_uid_validity,
+    const uint32_t *source_uids, unsigned int n_uids,
+    uint32_t **dest_uids_r)
+{
+    g_autofree char *prefix = NULL;
+    const char *pairs;
+    uint32_t *dest_uids;
+
+    prefix = g_strdup_printf ("%s dest_mailbox_id=%s dest_uidvalidity=%"
+            G_GUINT64_FORMAT " pairs=",
+            moving ? "memberships_moved" : "memberships_copied",
+            dest_mailbox_id, dest_uid_validity);
+    if (!g_str_has_prefix (summary, prefix)) {
+        return FALSE;
+    }
+
+    pairs = summary + strlen (prefix);
+    dest_uids = i_new (uint32_t, n_uids);
+    for (unsigned int i = 0; i < n_uids; i++) {
+        char *end = NULL;
+        guint64 src_uid;
+        guint64 dest_uid;
+
+        src_uid = g_ascii_strtoull (pairs, &end, 10);
+        if (end == pairs || *end != ':' || src_uid != source_uids[i]) {
+            i_free (dest_uids);
+            return FALSE;
+        }
+        pairs = end + 1;
+        dest_uid = g_ascii_strtoull (pairs, &end, 10);
+        if (end == pairs || dest_uid == 0 || dest_uid > UINT32_MAX) {
+            i_free (dest_uids);
+            return FALSE;
+        }
+        if (i + 1 < n_uids) {
+            if (*end != ',') {
+                i_free (dest_uids);
+                return FALSE;
+            }
+            pairs = end + 1;
+        } else if (*end != '\0') {
+            i_free (dest_uids);
+            return FALSE;
+        }
+        dest_uids[i] = (uint32_t)dest_uid;
+    }
+
+    *dest_uids_r = dest_uids;
+    return TRUE;
+}
+
+static int
+wyrebox_dovecot_transaction_push_copy (
+    struct wyrebox_dovecot_mailbox *wbox,
+    struct wyrebox_dovecot_transaction *wt)
+{
+    struct mailbox *box = &wbox->box;
+    struct wyrebox_dovecot_storage *storage =
+        (struct wyrebox_dovecot_storage *)box->storage;
+    g_autofree guint64 *uids = NULL;
+    g_autofree char *summary = NULL;
+    g_autoptr (GError) error = NULL;
+    guint64 journal_offset = 0;
+    uint32_t *dest_uids = NULL;
+
+    if (!wt->copy_batch_set) {
+        return 0;
+    }
+    if (wt->t.save_ctx == NULL) {
+        mailbox_set_critical (box,
+            "WyreBox copy has no save context for COPYUID");
+        return -1;
+    }
+    if (wt->copy_source_count == 0) {
+        mail_storage_set_error (box->storage, MAIL_ERROR_PARAMS,
+            "WyreBox copy is missing a UID");
+        return -1;
+    }
+    {
+        const char *fail_commit =
+            g_getenv ("WYREBOX_DOVECOT_FAIL_COPY_COMMIT");
+
+        /* Tests use this to fail after .copy has returned 0, before the
+         * daemon journal append. */
+        if (fail_commit != NULL && fail_commit[0] != '\0') {
+            mail_storage_set_error (box->storage, MAIL_ERROR_TEMP,
+                "WyreBox copy commit failed");
+            return -1;
+        }
+    }
+
+    qsort (wt->copy_source_uids, wt->copy_source_count, sizeof (uint32_t),
+        wyrebox_dovecot_compare_uid);
+    for (unsigned int i = 1; i < wt->copy_source_count; i++) {
+        if (wt->copy_source_uids[i] <= wt->copy_source_uids[i - 1]) {
+            mail_storage_set_error (box->storage, MAIL_ERROR_PARAMS,
+                "WyreBox copy UIDs are not strictly ascending");
+            return -1;
+        }
+    }
+
+    uids = g_new (guint64, wt->copy_source_count);
+    for (unsigned int i = 0; i < wt->copy_source_count; i++) {
+        uids[i] = wt->copy_source_uids[i];
+    }
+
+    if (wt->copy_moving) {
+        if (!wyrebox_dovecot_daemon_client_move (storage->socket_path,
+            storage->account_identity, wt->copy_source_mailbox_id,
+            wt->copy_source_uid_validity, wt->copy_dest_mailbox_id,
+            wt->copy_dest_uid_validity, uids, wt->copy_source_count,
+            &summary, &journal_offset, &error)) {
+            wyrebox_dovecot_mailbox_set_write_error (wbox, "MOVE", error);
+            return -1;
+        }
+    } else if (!wyrebox_dovecot_daemon_client_copy (storage->socket_path,
+        storage->account_identity, wt->copy_source_mailbox_id,
+        wt->copy_source_kind, wt->copy_source_uid_validity,
+        wt->copy_dest_mailbox_id, wt->copy_dest_uid_validity, uids,
+        wt->copy_source_count, &summary, &journal_offset, &error)) {
+        wyrebox_dovecot_mailbox_set_write_error (wbox, "COPY", error);
+        return -1;
+    }
+
+    if (!wyrebox_dovecot_parse_copy_summary (summary, wt->copy_moving,
+        wt->copy_dest_mailbox_id, wt->copy_dest_uid_validity,
+        wt->copy_source_uids, wt->copy_source_count, &dest_uids)) {
+        mailbox_set_critical (box, "WyreBox copy summary is unusable: %s",
+            summary);
+        return -1;
+    }
+
+    wt->copy_dest_uids = dest_uids;
+    wt->copy_dest_count = wt->copy_source_count;
+    e_debug (box->event, "WyreBox %s mailbox=%s uids=%u "
+        "journal_offset=%" G_GUINT64_FORMAT,
+        wt->copy_moving ? "move" : "copy", wt->copy_dest_mailbox_id,
+        wt->copy_source_count, journal_offset);
+    return 0;
+}
+
 static int
 wyrebox_dovecot_save_commit_pre (struct mail_save_context *ctx)
 {
@@ -1641,6 +1846,8 @@ wyrebox_dovecot_save_commit_pre (struct mail_save_context *ctx)
     if (t->changes == NULL) {
         mailbox_set_critical (&wbox->box,
             "WyreBox append has no commit changes");
+        wyrebox_dovecot_transaction_free_copy_batch (
+            (struct wyrebox_dovecot_transaction *)t);
         wyrebox_dovecot_save_context_destroy (save);
         return -1;
     }
@@ -1662,6 +1869,8 @@ wyrebox_dovecot_save_commit_pre (struct mail_save_context *ctx)
             (const char *const *)record->keywords, &summary,
             &journal_offset, &error)) {
             wyrebox_dovecot_set_append_error (wbox, record->size, error);
+            wyrebox_dovecot_transaction_free_copy_batch (
+                (struct wyrebox_dovecot_transaction *)t);
             wyrebox_dovecot_save_context_destroy (save);
             return -1;
         }
@@ -1669,6 +1878,8 @@ wyrebox_dovecot_save_commit_pre (struct mail_save_context *ctx)
             uid_validity, &uid)) {
             mailbox_set_critical (&wbox->box,
                 "WyreBox append summary is unusable: %s", summary);
+            wyrebox_dovecot_transaction_free_copy_batch (
+                (struct wyrebox_dovecot_transaction *)t);
             wyrebox_dovecot_save_context_destroy (save);
             return -1;
         }
@@ -1677,6 +1888,27 @@ wyrebox_dovecot_save_commit_pre (struct mail_save_context *ctx)
         e_debug (wbox->box.event, "WyreBox append mailbox=%s uid=%u "
             "journal_offset=%" G_GUINT64_FORMAT, mailbox_id, uid,
             journal_offset);
+    }
+
+    {
+        struct wyrebox_dovecot_transaction *wt =
+            (struct wyrebox_dovecot_transaction *)t;
+
+        if (wt->copy_batch_set) {
+            if (wt->copy_dest_count != wt->copy_source_count ||
+                wt->copy_dest_count == 0) {
+                mailbox_set_critical (&wbox->box,
+                    "WyreBox copy did not assign a destination UID");
+                wyrebox_dovecot_transaction_free_copy_batch (wt);
+                wyrebox_dovecot_save_context_destroy (save);
+                return -1;
+            }
+            for (unsigned int i = 0; i < wt->copy_dest_count; i++) {
+                seq_range_array_add (&t->changes->saved_uids,
+                    wt->copy_dest_uids[i]);
+            }
+            wyrebox_dovecot_transaction_free_copy_batch (wt);
+        }
     }
 
     return 0;
@@ -1890,6 +2122,9 @@ wyrebox_dovecot_mail_expunge (struct mail *_mail)
         wt->expunges_requested = TRUE;
         return;
     }
+    if (wyrebox_dovecot_transaction_is_move_source (wt, uid)) {
+        return;
+    }
 
     mail_index_expunge (_mail->transaction->itrans, _mail->seq);
     wyrebox_dovecot_transaction_note_expunge (wt, uid);
@@ -1949,8 +2184,12 @@ wyrebox_dovecot_transaction_begin (struct mailbox *box,
 static void
 wyrebox_dovecot_transaction_rollback (struct mailbox_transaction_context *t)
 {
-    wyrebox_dovecot_transaction_free_expunge_uids (
-        (struct wyrebox_dovecot_transaction *)t);
+    struct wyrebox_dovecot_transaction *wt =
+        (struct wyrebox_dovecot_transaction *)t;
+
+    wyrebox_dovecot_transaction_free_expunge_uids (wt);
+    wyrebox_dovecot_transaction_free_move_sources (wt);
+    wyrebox_dovecot_transaction_free_copy_batch (wt);
     index_transaction_rollback (t);
 }
 
@@ -1963,12 +2202,32 @@ wyrebox_dovecot_transaction_commit (struct mailbox_transaction_context *t,
     struct wyrebox_dovecot_mailbox *wbox =
         (struct wyrebox_dovecot_mailbox *)t->box;
     struct mailbox *box = t->box;
+    int copy_ret;
+
+    wyrebox_dovecot_transaction_free_move_sources (wt);
+    if (wt->copy_batch_set && wt->t.save_ctx != NULL &&
+        ((struct wyrebox_dovecot_save_context *)wt->t.save_ctx)->n_pending >
+        0) {
+        mailbox_set_critical (box, "WyreBox copy shares an append transaction");
+        wyrebox_dovecot_transaction_free_copy_batch (wt);
+        wyrebox_dovecot_transaction_free_expunge_uids (wt);
+        index_transaction_rollback (t);
+        return -1;
+    }
+    copy_ret = wyrebox_dovecot_transaction_push_copy (wbox, wt);
+    if (copy_ret < 0) {
+        wyrebox_dovecot_transaction_free_copy_batch (wt);
+        wyrebox_dovecot_transaction_free_expunge_uids (wt);
+        index_transaction_rollback (t);
+        return -1;
+    }
 
     if (wt->expunges_requested) {
         int expunge_ret;
 
         if (mailbox_is_readonly (box)) {
             wyrebox_dovecot_transaction_free_expunge_uids (wt);
+            wyrebox_dovecot_transaction_free_copy_batch (wt);
             index_transaction_rollback (t);
             mail_storage_set_error (box->storage, MAIL_ERROR_PERM,
                 "WyreBox mailbox is read-only");
@@ -2002,6 +2261,75 @@ wyrebox_dovecot_transaction_commit (struct mailbox_transaction_context *t,
         return -1;
     }
     return wyrebox_dovecot_mailbox_push_flag_changes (wbox);
+}
+
+static int
+wyrebox_dovecot_copy (struct mail_save_context *ctx, struct mail *mail)
+{
+    struct mail *src_mail = ctx->copy_src_mail != NULL ? ctx->copy_src_mail :
+        mail;
+    struct wyrebox_dovecot_transaction *dest =
+        (struct wyrebox_dovecot_transaction *)ctx->transaction;
+    struct wyrebox_dovecot_transaction *src_wt =
+        (struct wyrebox_dovecot_transaction *)src_mail->transaction;
+    struct wyrebox_dovecot_mailbox *src_box =
+        (struct wyrebox_dovecot_mailbox *)src_mail->box;
+    struct wyrebox_dovecot_mailbox *dest_box =
+        (struct wyrebox_dovecot_mailbox *)ctx->transaction->box;
+    const WyreboxDaemonMailboxSelectResult *src_state =
+        &src_box->state.select_result;
+    const WyreboxDaemonMailboxSelectResult *dest_state =
+        &dest_box->state.select_result;
+    uint32_t uid = src_mail->uid;
+
+    if (uid == 0) {
+        mail_index_lookup_uid (src_mail->transaction->view, src_mail->seq,
+            &uid);
+    }
+
+    if (mailbox_is_readonly (&dest_box->box) ||
+        (ctx->moving && mailbox_is_readonly (&src_box->box))) {
+        mail_storage_set_error (dest_box->box.storage, MAIL_ERROR_PERM,
+            "WyreBox mailbox is read-only");
+        index_save_context_free (ctx);
+        return -1;
+    }
+    if (uid == 0 || src_state->mailbox_id == NULL ||
+        dest_state->mailbox_id == NULL) {
+        mail_storage_set_error (dest_box->box.storage, MAIL_ERROR_PARAMS,
+            "WyreBox copy is missing a mailbox UID");
+        index_save_context_free (ctx);
+        return -1;
+    }
+
+    if (!dest->copy_batch_set) {
+        dest->copy_source_mailbox_id = i_strdup (src_state->mailbox_id);
+        dest->copy_dest_mailbox_id = i_strdup (dest_state->mailbox_id);
+        dest->copy_source_uid_validity = src_state->uid_validity;
+        dest->copy_dest_uid_validity = dest_state->uid_validity;
+        dest->copy_source_kind = src_state->kind;
+        dest->copy_moving = ctx->moving;
+        dest->copy_batch_set = TRUE;
+    } else if (dest->copy_moving != ctx->moving ||
+        dest->copy_source_kind != src_state->kind ||
+        dest->copy_source_uid_validity != src_state->uid_validity ||
+        dest->copy_dest_uid_validity != dest_state->uid_validity ||
+        strcmp (dest->copy_source_mailbox_id, src_state->mailbox_id) != 0 ||
+        strcmp (dest->copy_dest_mailbox_id, dest_state->mailbox_id) != 0) {
+        mail_storage_set_error (dest_box->box.storage, MAIL_ERROR_PARAMS,
+            "WyreBox copy batch changed mailbox");
+        index_save_context_free (ctx);
+        return -1;
+    }
+
+    wyrebox_dovecot_append_uid (&dest->copy_source_uids,
+        &dest->copy_source_count, uid);
+    if (ctx->moving) {
+        wyrebox_dovecot_append_uid (&src_wt->move_source_uids,
+            &src_wt->move_source_count, uid);
+    }
+    index_save_context_free (ctx);
+    return 0;
 }
 
 static struct mail_vfuncs wyrebox_dovecot_mail_vfuncs = {
@@ -2083,7 +2411,7 @@ static struct mailbox wyrebox_dovecot_mailbox_template = {
         .transaction_save_commit_pre = wyrebox_dovecot_save_commit_pre,
         .transaction_save_commit_post = wyrebox_dovecot_save_commit_post,
         .transaction_save_rollback = wyrebox_dovecot_save_rollback,
-        .copy = mail_storage_copy,
+        .copy = wyrebox_dovecot_copy,
         .is_inconsistent = wyrebox_dovecot_mailbox_is_inconsistent,
     },
 };
