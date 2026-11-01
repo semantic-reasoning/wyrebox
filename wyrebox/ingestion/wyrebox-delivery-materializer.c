@@ -1536,6 +1536,7 @@ materializer_check_copy_source (WyreboxDeliveryMaterializer *self,
     const WyreboxMembershipsCopiedItem *item, GError **error)
 {
     g_auto (duckdb_prepared_statement) statement = NULL;
+    g_auto (duckdb_prepared_statement) view_statement = NULL;
     g_auto (duckdb_result) result = { 0 };
     char *value = NULL;
     gboolean message_matches = FALSE;
@@ -1563,6 +1564,41 @@ materializer_check_copy_source (WyreboxDeliveryMaterializer *self,
             "DuckDB delivery materializer copy source lookup failed: %s",
             detail != NULL ? detail : "unknown DuckDB error");
         return FALSE;
+    }
+
+    if (duckdb_row_count (&result) == 0) {
+        /* A virtual COPY source lives in derived_view_memberships. The
+         * journal payload does not repeat the namespace, so an ordinary
+         * miss falls through to that table. */
+        duckdb_destroy_result (&result);
+        if (!materializer_prepare (self,
+            "SELECT dvm.message_id, dvm.is_visible "
+            "FROM derived_view_memberships dvm "
+            "JOIN mailbox_uid_state mus ON mus.account_id = dvm.account_id "
+            "AND mus.namespace_kind = 'derived_view' "
+            "AND mus.namespace_id = dvm.view_id "
+            "WHERE dvm.account_id = ? AND dvm.view_id = ? AND dvm.uid = ? "
+            "AND mus.uidvalidity = ?;", &view_statement, error) ||
+            !bind_varchar (view_statement, 1, payload->account_id, error) ||
+            !bind_varchar (view_statement, 2, payload->source_mailbox_id,
+            error) ||
+            !bind_uint64 (view_statement, 3, item->src_uid, error) ||
+            !bind_uint64 (view_statement, 4, payload->source_uidvalidity,
+            error) ||
+            duckdb_execute_prepared (view_statement, &result) !=
+            DuckDBSuccess) {
+            if (error != NULL && *error == NULL) {
+                const char *detail = duckdb_result_error (&result);
+
+                g_set_error (error,
+                    G_IO_ERROR,
+                    G_IO_ERROR_FAILED,
+                    "DuckDB delivery materializer copy source lookup failed: "
+                    "%s",
+                    detail != NULL ? detail : "unknown DuckDB error");
+            }
+            return FALSE;
+        }
     }
 
     if (duckdb_row_count (&result) != 1) {

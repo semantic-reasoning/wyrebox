@@ -110,6 +110,7 @@ bootstrap_daemon_storage (const char *root, const char *socket_path,
             NULL);
     g_autofree char *config_path = g_build_filename (root, "wyrebox.conf",
             NULL);
+    g_autofree char *rules_path = g_build_filename (root, "views.dl", NULL);
     g_autofree char *run_dir = g_path_get_dirname (socket_path);
     g_autofree char *contents = NULL;
     g_autoptr (WyreboxSchemaMetadataStore) store = NULL;
@@ -128,9 +129,16 @@ bootstrap_daemon_storage (const char *root, const char *socket_path,
     g_assert_no_error (error);
     g_clear_object (&store);
 
+    write_file (rules_path,
+        ".decl participant(message_id: symbol, address: symbol)\n"
+        ".decl show_in_virtual_folder(view_id: symbol, message_id: symbol)\n"
+        "show_in_virtual_folder(\"projects\", message_id) :- "
+        "participant(message_id, \"alice@example.test\").\n");
     contents = g_strdup_printf ("[daemon]\n" "socket_path=%s\n"
-            "journal_root_dir=%s\n" "object_root_dir=%s\n" "catalog_path=%s\n",
-            socket_path, journal_dir, object_dir, catalog_path);
+            "journal_root_dir=%s\n" "object_root_dir=%s\n" "catalog_path=%s\n"
+            "\n[wirelog]\n" "rules_path=%s\n"
+            "\n[view:projects]\n" "imap_name=Projects\n" "scope=message\n",
+            socket_path, journal_dir, object_dir, catalog_path, rules_path);
     write_file (config_path, contents);
     g_assert_cmpint (g_chmod (config_path, 0600), ==, 0);
 
@@ -984,6 +992,311 @@ test_oversize_append_is_limited (ImapRealDaemonFixture *fixture,
         before.uid_validity, before.uid_next);
 }
 
+static char *
+read_fixture_eml (const char *name, gsize *size_r)
+{
+    g_autofree char *path = g_build_filename (required_env
+                ("WYREBOX_EML_FIXTURE_DIR"), name, NULL);
+    g_autoptr (GError) error = NULL;
+    char *contents = NULL;
+
+    g_assert_true (g_file_get_contents (path, &contents, size_r, &error));
+    g_assert_no_error (error);
+    return contents;
+}
+
+static void
+assert_peek_uid_bytes (const char *output, guint32 seq, guint32 uid,
+    const char *bytes, gsize size)
+{
+    g_autofree char *prefix = NULL;
+    const char *literal;
+
+    prefix = g_strdup_printf ("* %u FETCH (UID %u BODY[] {%" G_GSIZE_FORMAT
+            "}\r\n", seq, uid, size);
+    literal = strstr (output, prefix);
+    g_assert_nonnull (literal);
+    literal += strlen (prefix);
+    g_assert_cmpmem (literal, size, bytes, size);
+}
+
+static void
+test_copy_assigns_next_uid (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_autofree char *copyuid = NULL;
+    g_autofree char *fetch = NULL;
+    g_autofree char *expected = NULL;
+    g_auto (WyreboxDaemonMailboxSelectResult) before = { 0 };
+    g_auto (ImapSession) session = { 0 };
+    g_auto (ImapSession) again = { 0 };
+    g_autoptr (GError) error = NULL;
+    gsize expected_size = 0;
+
+    (void)user_data;
+
+    expected = read_fixture_eml ("simple-crlf.eml", &expected_size);
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &before, &error));
+    g_assert_no_error (error);
+    copyuid = g_strdup_printf ("[COPYUID %u 1 %u]", before.uid_validity,
+            before.uid_next);
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b COPY 1 INBOX\r\nz LOGOUT\r\n", &session);
+    g_assert_nonnull (strstr (session.output, copyuid));
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+    assert_daemon_inbox_counts (fixture, before.message_count + 1,
+        before.uid_validity, before.uid_next + 1);
+
+    fetch = g_strdup_printf ("a SELECT INBOX\r\n"
+            "b UID FETCH 1 (BODY.PEEK[])\r\n"
+            "c UID FETCH %u (BODY.PEEK[])\r\nz LOGOUT\r\n", before.uid_next);
+    run_imap (config_path, fetch, &again);
+    assert_peek_uid_bytes (again.output, 1, 1, expected, expected_size);
+    assert_peek_uid_bytes (again.output, 2, before.uid_next, expected,
+        expected_size);
+}
+
+static void
+test_copy_two_uids (ImapRealDaemonFixture *fixture, gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_autofree char *script = NULL;
+    g_autofree char *copyuid = NULL;
+    g_auto (WyreboxDaemonMailboxSelectResult) before = { 0 };
+    g_auto (ImapSession) session = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    (void)user_data;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &before, &error));
+    g_assert_no_error (error);
+    copyuid = g_strdup_printf ("[COPYUID %u 1:2 %u:%u]", before.uid_validity,
+            before.uid_next + 1, before.uid_next + 2);
+    script = g_strdup_printf ("a SELECT INBOX\r\n"
+            "b APPEND INBOX {%zu+}\r\n%s\r\nz LOGOUT\r\n",
+            strlen (appended_message), appended_message);
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, script, &session);
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b UID COPY 1:2 INBOX\r\nz LOGOUT\r\n", &session);
+    g_assert_nonnull (strstr (session.output, copyuid));
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+    assert_daemon_inbox_counts (fixture, before.message_count + 3,
+        before.uid_validity, before.uid_next + 3);
+}
+
+static void
+test_move_replaces_uid (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_autofree char *copyuid = NULL;
+    g_autofree char *fetch = NULL;
+    g_autofree char *expected = NULL;
+    g_auto (WyreboxDaemonMailboxSelectResult) before = { 0 };
+    g_auto (ImapSession) session = { 0 };
+    g_auto (ImapSession) again = { 0 };
+    g_autoptr (GError) error = NULL;
+    gsize expected_size = 0;
+
+    (void)user_data;
+
+    expected = read_fixture_eml ("simple-crlf.eml", &expected_size);
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &before, &error));
+    g_assert_no_error (error);
+    copyuid = g_strdup_printf ("* OK [COPYUID %u 1 %u]", before.uid_validity,
+            before.uid_next);
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b UID MOVE 1 INBOX\r\nz LOGOUT\r\n", &session);
+    g_assert_nonnull (strstr (session.output, copyuid));
+    g_assert_nonnull (strstr (session.output, "\r\nb OK Move completed"));
+    assert_daemon_inbox_counts (fixture, before.message_count,
+        before.uid_validity, before.uid_next + 1);
+
+    fetch = g_strdup_printf ("a SELECT INBOX\r\n"
+            "b UID FETCH %u (BODY.PEEK[])\r\nz LOGOUT\r\n", before.uid_next);
+    run_imap (config_path, fetch, &again);
+    g_assert_nonnull (strstr (again.output, "* 1 EXISTS\r\n"));
+    assert_peek_uid_bytes (again.output, 1, before.uid_next, expected,
+        expected_size);
+    g_assert_null (strstr (again.output, "UID 1 "));
+}
+
+static void
+enable_fail_copy_commit (const char *config_path, const char *socket_path)
+{
+    g_autofree char *config = NULL;
+    g_autofree char *marker = NULL;
+    g_autofree char *replacement = NULL;
+    g_autoptr (GString) rewritten = g_string_new (NULL);
+    g_autoptr (GError) error = NULL;
+    char *at;
+
+    g_assert_true (g_file_get_contents (config_path, &config, NULL, &error));
+    g_assert_no_error (error);
+    marker = g_strdup_printf ("WYREBOX_SOCKET = %s\n", socket_path);
+    replacement = g_strdup_printf ("WYREBOX_SOCKET = %s\n"
+            "  WYREBOX_DOVECOT_FAIL_COPY_COMMIT = "
+            "%%{env:WYREBOX_DOVECOT_FAIL_COPY_COMMIT}\n", socket_path);
+    at = strstr (config, marker);
+    g_assert_nonnull (at);
+    g_string_append_len (rewritten, config, at - config);
+    g_string_append (rewritten, replacement);
+    g_string_append (rewritten, at + strlen (marker));
+    write_file (config_path, rewritten->str);
+}
+
+static void
+test_failed_move_keeps_source (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_auto (WyreboxDaemonMailboxSelectResult) before = { 0 };
+    g_auto (ImapSession) session = { 0 };
+    g_auto (ImapSession) again = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    (void)user_data;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &before, &error));
+    g_assert_no_error (error);
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    enable_fail_copy_commit (config_path, fixture->socket_path);
+    g_setenv ("WYREBOX_DOVECOT_FAIL_COPY_COMMIT", "1", TRUE);
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b UID MOVE 1 INBOX\r\nz LOGOUT\r\n", &session);
+    g_unsetenv ("WYREBOX_DOVECOT_FAIL_COPY_COMMIT");
+    g_assert_nonnull (strstr (session.output, "\r\nb NO"));
+    g_assert_null (strstr (session.output, "Move completed"));
+    assert_daemon_inbox_counts (fixture, before.message_count,
+        before.uid_validity, before.uid_next);
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b UID FETCH 1 (UID)\r\nz LOGOUT\r\n", &again);
+    g_assert_nonnull (strstr (again.output, "UID 1"));
+}
+
+static void
+test_move_to_virtual_keeps_source (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_auto (WyreboxDaemonMailboxSelectResult) before = { 0 };
+    g_auto (ImapSession) session = { 0 };
+    g_auto (ImapSession) again = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    (void)user_data;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &before, &error));
+    g_assert_no_error (error);
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b UID MOVE 1 Projects\r\nz LOGOUT\r\n", &session);
+    g_assert_nonnull (strstr (session.output, "\r\nb NO [NOPERM]"));
+    assert_daemon_inbox_counts (fixture, before.message_count,
+        before.uid_validity, before.uid_next);
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b UID FETCH 1 (UID)\r\nz LOGOUT\r\n", &again);
+    g_assert_nonnull (strstr (again.output, "UID 1"));
+    g_assert_nonnull (strstr (again.output, "\r\nb OK"));
+}
+
+static void
+test_copy_from_virtual_source (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_autofree char *fetch = NULL;
+    g_autofree char *expected = NULL;
+    g_auto (WyreboxDaemonMailboxSelectResult) before = { 0 };
+    g_auto (WyreboxDaemonMailboxSelectResult) projects = { 0 };
+    g_auto (ImapSession) session = { 0 };
+    g_auto (ImapSession) again = { 0 };
+    g_autoptr (GError) error = NULL;
+    gsize expected_size = 0;
+
+    (void)user_data;
+
+    expected = read_fixture_eml ("simple-crlf.eml", &expected_size);
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &before, &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "Projects", &projects,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (projects.message_count, ==, 1);
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, "a SELECT Projects\r\n"
+        "b COPY 1 INBOX\r\nz LOGOUT\r\n", &session);
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+    assert_daemon_inbox_counts (fixture, before.message_count + 1,
+        before.uid_validity, before.uid_next + 1);
+    fetch = g_strdup_printf ("a SELECT INBOX\r\n"
+            "b UID FETCH %u (BODY.PEEK[])\r\n"
+            "c SELECT Projects\r\nz LOGOUT\r\n", before.uid_next);
+    run_imap (config_path, fetch, &again);
+    assert_peek_uid_bytes (again.output, 2, before.uid_next, expected,
+        expected_size);
+    g_assert_nonnull (strstr (again.output, "* 1 EXISTS\r\n"));
+}
+
+static void
+test_virtual_writes_are_refused (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_auto (WyreboxDaemonMailboxSelectResult) inbox = { 0 };
+    g_auto (WyreboxDaemonMailboxSelectResult) projects = { 0 };
+    g_auto (ImapSession) to_projects = { 0 };
+    g_auto (ImapSession) move_source = { 0 };
+    g_auto (ImapSession) expunge = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    (void)user_data;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &inbox, &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "Projects", &projects,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (projects.message_count, ==, 1);
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b COPY 1 Projects\r\nz LOGOUT\r\n", &to_projects);
+    g_assert_nonnull (strstr (to_projects.output, "\r\nb NO [NOPERM]"));
+
+    run_imap (config_path, "a SELECT Projects\r\n"
+        "b UID MOVE 1 INBOX\r\nz LOGOUT\r\n", &move_source);
+    g_assert_nonnull (strstr (move_source.output, "\r\nb NO [NOPERM]"));
+
+    run_imap (config_path, "a SELECT Projects\r\n"
+        "b UID EXPUNGE 1\r\nz LOGOUT\r\n", &expunge);
+    /* imap_expunge() returns before the storage when the box is read-only. */
+    g_assert_nonnull (strstr (expunge.output, "\r\nb OK Expunge completed"));
+    g_assert_null (strstr (expunge.output, "* 1 EXPUNGE"));
+
+    assert_daemon_inbox_counts (fixture, inbox.message_count,
+        inbox.uid_validity, inbox.uid_next);
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "Projects", &projects,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (projects.message_count, ==, 1);
+}
+
 static void
 test_fresh_delivery_is_unseen (ImapRealDaemonFixture *fixture,
     gconstpointer user_data)
@@ -1189,6 +1502,27 @@ main (int argc, char **argv)
     g_test_add ("/dovecot/imap/oversize-append-is-limited",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_oversize_append_is_limited, fixture_tear_down);
+    g_test_add ("/dovecot/imap/copy-assigns-next-uid",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_copy_assigns_next_uid, fixture_tear_down);
+    g_test_add ("/dovecot/imap/copy-two-uids",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_copy_two_uids, fixture_tear_down);
+    g_test_add ("/dovecot/imap/move-replaces-uid",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_move_replaces_uid, fixture_tear_down);
+    g_test_add ("/dovecot/imap/failed-move-keeps-source",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_failed_move_keeps_source, fixture_tear_down);
+    g_test_add ("/dovecot/imap/move-to-virtual-keeps-source",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_move_to_virtual_keeps_source, fixture_tear_down);
+    g_test_add ("/dovecot/imap/copy-from-virtual-source",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_copy_from_virtual_source, fixture_tear_down);
+    g_test_add ("/dovecot/imap/virtual-writes-are-refused",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_virtual_writes_are_refused, fixture_tear_down);
     g_test_add ("/dovecot/imap/status-matches-daemon-state",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_status_matches_daemon_state, fixture_tear_down);

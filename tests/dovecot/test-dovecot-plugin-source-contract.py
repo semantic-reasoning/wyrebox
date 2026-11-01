@@ -139,8 +139,26 @@ def check_index_mailbox(text: str) -> None:
         text,
         "save context freed on rollback",
     )
-    require(r"\.copy\s*=\s*mail_storage_copy", text,
-            "copy stays the stock hook until MOVE and COPY")
+    require(r"\.copy\s*=\s*wyrebox_dovecot_copy", text,
+            "copy and move enter through the plugin")
+    require(r"wyrebox_dovecot_daemon_client_copy\s*\(", text,
+            "copy sent through the daemon client")
+    require(r"wyrebox_dovecot_daemon_client_move\s*\(", text,
+            "move sent through the daemon client")
+    require(
+        r"wyrebox_dovecot_transaction_commit[\s\S]*?"
+        r"wyrebox_dovecot_transaction_push_copy\s*\([\s\S]*?"
+        r"index_transaction_commit\s*\(",
+        text,
+        "daemon copy or move runs before the index commit",
+    )
+    require(
+        r"wyrebox_dovecot_mail_expunge[\s\S]*?"
+        r"wyrebox_dovecot_transaction_is_move_source\s*\("
+        r"[\s\S]*?return;[\s\S]*?mail_index_expunge\s*\(",
+        text,
+        "move sources are not expunged again",
+    )
     if text.count("mail_index_append") != 1:
         raise AssertionError(
             "plugin source contract failed: mail_index_append belongs only "
