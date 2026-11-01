@@ -206,6 +206,14 @@ views_fixture_set_up (ViewsFixture *fixture, gconstpointer user_data)
         "('msg-1', 'account-1', 'object-1', 1, 1),"
         "('msg-2', 'account-1', 'object-2', 2, 2),"
         "('msg-3', 'account-1', 'object-3', 3, 3);");
+    execute_sql (fixture,
+        "INSERT INTO mailbox_memberships ("
+        "membership_id, account_id, mailbox_id, message_id, uid, "
+        "internal_date_unix_us, journal_offset, journal_sequence, "
+        "journal_item, is_visible) VALUES "
+        "('mem-1', 'account-1', 'mbox-1', 'msg-1', 1, 0, 101, 1, 0, TRUE),"
+        "('mem-2', 'account-1', 'mbox-1', 'msg-2', 2, 0, 102, 1, 0, TRUE),"
+        "('mem-3', 'account-1', 'mbox-1', 'msg-3', 3, 0, 103, 1, 0, TRUE);");
     write_rules (fixture, TEST_RULES);
 }
 
@@ -367,6 +375,12 @@ test_thread_scope_refresh_loads_connected_messages (ViewsFixture *fixture,
         "INSERT INTO messages ("
         "message_id, account_id, object_id, journal_offset, journal_sequence"
         ") VALUES ('msg-4', 'account-1', 'object-4', 4, 4);");
+    execute_sql (fixture,
+        "INSERT INTO mailbox_memberships ("
+        "membership_id, account_id, mailbox_id, message_id, uid, "
+        "internal_date_unix_us, journal_offset, journal_sequence, "
+        "journal_item, is_visible) VALUES "
+        "('mem-4', 'account-1', 'mbox-1', 'msg-4', 4, 0, 104, 4, 0, TRUE);");
     insert_fact_at (fixture, "a1", "msg-1", "message_id",
         "[\"msg-1\",\"<a>\"]", 5);
     insert_fact_at (fixture, "a2", "msg-1", "has_keyword",
@@ -423,6 +437,47 @@ test_thread_scope_refresh_rejects_malformed_link_facts (ViewsFixture *fixture,
     g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
     g_assert_nonnull (strstr (error->message,
         "message_facts args_json is not a JSON array of strings"));
+}
+
+static void
+test_expunge_hides_derived_membership_on_next_refresh (ViewsFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autoptr (WyreboxDaemonWirelogViews) views = open_views (fixture);
+    g_autofree gchar *visible = NULL;
+    g_autofree gchar *hidden = NULL;
+    g_autofree gchar *uid = NULL;
+    g_autofree gchar *uidvalidity = NULL;
+    g_autofree gchar *uidvalidity_after = NULL;
+
+    (void)user_data;
+
+    insert_fact_at (fixture, "f1", "msg-1", "has_keyword",
+        "[\"msg-1\",\"project\"]", 4);
+    refresh (views, "account-1");
+    visible = visible_memberships (fixture);
+    g_assert_cmpstr (visible, ==, "projects,msg-1,1");
+    uidvalidity = query_rows (fixture,
+            "SELECT uidvalidity FROM mailbox_uid_state "
+            "WHERE namespace_kind = 'derived_view' "
+            "AND namespace_id = 'projects';");
+
+    execute_sql (fixture,
+        "UPDATE mailbox_memberships SET is_visible = FALSE, "
+        "expunged_journal_offset = 50, expunged_journal_sequence = 50 "
+        "WHERE message_id = 'msg-1';");
+    refresh (views, "account-1");
+    hidden = visible_memberships (fixture);
+    g_assert_cmpstr (hidden, ==, "");
+    uid = query_rows (fixture,
+            "SELECT uid FROM derived_view_memberships "
+            "WHERE message_id = 'msg-1';");
+    g_assert_cmpstr (uid, ==, "1");
+    uidvalidity_after = query_rows (fixture,
+            "SELECT uidvalidity FROM mailbox_uid_state "
+            "WHERE namespace_kind = 'derived_view' "
+            "AND namespace_id = 'projects';");
+    g_assert_cmpstr (uidvalidity_after, ==, uidvalidity);
 }
 
 static void
@@ -653,6 +708,10 @@ main (int argc, char **argv)
         "/daemon-api/wirelog-views/thread-scope-rejects-malformed-links",
         ViewsFixture, NULL, views_fixture_set_up,
         test_thread_scope_refresh_rejects_malformed_link_facts,
+        views_fixture_tear_down);
+    g_test_add ("/daemon-api/wirelog-views/expunge-hides-derived",
+        ViewsFixture, NULL, views_fixture_set_up,
+        test_expunge_hides_derived_membership_on_next_refresh,
         views_fixture_tear_down);
     g_test_add ("/daemon-api/wirelog-views/account-scope-loads-all",
         ViewsFixture, NULL, views_fixture_set_up,

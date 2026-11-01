@@ -841,8 +841,9 @@ write_refresh_state (WyreboxDaemonWirelogViews *self, const char *account_id,
 }
 
 /*
- * The newest journal sequence of the account's materialized messages and
- * facts; a fact insert or retract stores its own sequence on the fact row.
+ * The newest journal sequence of the account's materialized messages,
+ * facts, and ordinary memberships. EXPUNGE and MOVE record the tombstone on
+ * expunged_journal_sequence without moving journal_sequence.
  */
 static gboolean
 read_account_sequence (WyreboxDaemonWirelogViews *self,
@@ -856,7 +857,12 @@ read_account_sequence (WyreboxDaemonWirelogViews *self,
         "(SELECT COALESCE(MAX(journal_sequence), 0) FROM messages "
         "WHERE account_id = $1), "
         "(SELECT COALESCE(MAX(journal_sequence), 0) FROM message_facts "
-        "WHERE account_id = $1));", &statement, error) ||
+        "WHERE account_id = $1), "
+        "(SELECT COALESCE(MAX(journal_sequence), 0) FROM mailbox_memberships "
+        "WHERE account_id = $1), "
+        "(SELECT COALESCE(MAX(expunged_journal_sequence), 0) "
+        "FROM mailbox_memberships WHERE account_id = $1));",
+        &statement, error) ||
         !bind_varchar (statement, 1, account_id, error) ||
         !views_execute (statement, &result, error))
         return FALSE;
@@ -866,14 +872,17 @@ read_account_sequence (WyreboxDaemonWirelogViews *self,
 }
 
 /*
- * Messages delivered, or whose facts were inserted or retracted, after
- * journal sequence $2.
+ * Messages delivered, whose facts were inserted or retracted, or whose
+ * ordinary membership was written or tombstoned, after journal sequence $2.
  */
 #define REFRESH_CHANGED_MESSAGES \
         "SELECT message_id FROM messages " \
         "WHERE account_id = $1 AND journal_sequence > $2 " \
         "UNION SELECT message_id FROM message_facts " \
-        "WHERE account_id = $1 AND journal_sequence > $2"
+        "WHERE account_id = $1 AND journal_sequence > $2 " \
+        "UNION SELECT message_id FROM mailbox_memberships " \
+        "WHERE account_id = $1 AND (journal_sequence > $2 " \
+        "OR COALESCE(expunged_journal_sequence, 0) > $2)"
 
 #define REFRESH_EXISTING_MESSAGE \
         "message_id IN (SELECT message_id FROM messages WHERE account_id = $1)"

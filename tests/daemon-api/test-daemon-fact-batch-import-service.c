@@ -146,6 +146,16 @@ seed_materialization_catalog (const char *catalog_path, const char *account_id)
             "('mail-1', '%s', 'object-1', 1, 1),"
             "('mail-2', '%s', 'object-2', 2, 2);", account_id, account_id);
     execute_sql (fixture.connection, sql);
+    g_clear_pointer (&sql, g_free);
+    sql = g_strdup_printf (
+        "INSERT INTO mailbox_memberships ("
+        "membership_id, account_id, mailbox_id, message_id, uid, "
+        "internal_date_unix_us, journal_offset, journal_sequence, "
+        "journal_item, is_visible) VALUES "
+        "('mem-mail-1', '%s', 'mbox-1', 'mail-1', 1, 0, 101, 1, 0, TRUE),"
+        "('mem-mail-2', '%s', 'mbox-1', 'mail-2', 2, 0, 102, 1, 0, TRUE);",
+        account_id, account_id);
+    execute_sql (fixture.connection, sql);
     close_duckdb_fixture (&fixture);
 }
 

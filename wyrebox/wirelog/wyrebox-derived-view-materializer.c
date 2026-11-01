@@ -461,6 +461,52 @@ materializer_validate_message_exists (WyreboxDerivedViewMaterializer *self,
 }
 
 static gboolean
+materializer_has_visible_ordinary_membership (
+    WyreboxDerivedViewMaterializer *self, const gchar *account_id,
+    const gchar *message_id, gboolean *out_visible, GError **error)
+{
+    g_auto (duckdb_prepared_statement) statement = NULL;
+    guint64 count = 0;
+
+    if (!materializer_prepare (self,
+        "SELECT COUNT(*) FROM mailbox_memberships "
+        "WHERE account_id = ? AND message_id = ? AND is_visible = TRUE;",
+        &statement, error) ||
+        !bind_varchar (statement, 1, account_id, error) ||
+        !bind_varchar (statement, 2, message_id, error) ||
+        !materializer_count_prepared (statement, &count, error))
+        return FALSE;
+
+    *out_visible = count > 0;
+    return TRUE;
+}
+
+static gboolean
+materializer_retain_ordinarily_visible (WyreboxDerivedViewMaterializer *self,
+    const gchar *account_id, GHashTable *message_ids, GError **error)
+{
+    GHashTableIter iter;
+    gpointer key = NULL;
+    g_autoptr (GPtrArray) drop = g_ptr_array_new ();
+
+    g_hash_table_iter_init (&iter, message_ids);
+    while (g_hash_table_iter_next (&iter, &key, NULL)) {
+        gboolean visible = FALSE;
+
+        if (!materializer_has_visible_ordinary_membership (self, account_id,
+            key, &visible, error))
+            return FALSE;
+        if (!visible)
+            g_ptr_array_add (drop, key);
+    }
+
+    for (guint i = 0; i < drop->len; i++)
+        g_hash_table_remove (message_ids, g_ptr_array_index (drop, i));
+
+    return TRUE;
+}
+
+static gboolean
 materializer_membership_exists (WyreboxDerivedViewMaterializer *self,
     const gchar *account_id, const gchar *view_id, const gchar *message_id,
     const gchar *rule_version_hash, gboolean *out_exists, GError **error)
@@ -949,7 +995,14 @@ materializer_apply_membership (WyreboxDerivedViewMaterializer *self,
 
     if (!materializer_validate_message_exists (self, account_id,
         membership->message_id, error) ||
-        !materializer_membership_exists (self, account_id, view_id,
+        !materializer_has_visible_ordinary_membership (self, account_id,
+        membership->message_id, &exists, error))
+        return FALSE;
+
+    if (!exists)
+        return TRUE;
+
+    if (!materializer_membership_exists (self, account_id, view_id,
         membership->message_id, rule_version_hash, &exists, error))
         return FALSE;
 
@@ -1411,6 +1464,10 @@ materializer_refresh_memberships_with_changes (WyreboxDerivedViewMaterializer
     if (!materializer_query (self, "BEGIN TRANSACTION;", error))
         return FALSE;
 
+    if (!materializer_retain_ordinarily_visible (self, account_id,
+        incoming_message_ids, error))
+        goto fail;
+
     if (!materializer_insert_account (self, account_id, error) ||
         !materializer_ensure_derived_view (self, account_id, view_id, imap_name,
         definition_ref, error) ||
@@ -1429,6 +1486,14 @@ materializer_refresh_memberships_with_changes (WyreboxDerivedViewMaterializer
     for (guint i = 0; i < memberships->len; i++) {
         const WyreboxWirelogDerivedMembership *membership =
             g_ptr_array_index (memberships, i);
+
+        if (!g_hash_table_contains (incoming_message_ids,
+            membership->message_id)) {
+            if (!materializer_validate_message_exists (self, account_id,
+                membership->message_id, error))
+                goto fail;
+            continue;
+        }
 
         if (!materializer_refresh_membership (self, account_id, view_id,
             rule_version_hash, materialized_at_unix_us, membership, &uidnext,
@@ -1707,10 +1772,18 @@ wyrebox_derived_view_materializer_refresh_message_memberships_with_changes
         goto fail;
 
     for (guint i = 0; message_ids[i] != NULL; i++) {
+        gboolean member = g_hash_table_contains (members, message_ids[i]);
+        gboolean ordinary = FALSE;
+
+        if (member && (!materializer_validate_message_exists (self,
+            account_id, message_ids[i], error) ||
+            !materializer_has_visible_ordinary_membership (self, account_id,
+            message_ids[i], &ordinary, error)))
+            goto fail;
+
         if (!materializer_refresh_message (self, account_id, view_id,
             message_ids[i], rule_version_hash, materialized_at_unix_us,
-            g_hash_table_contains (members, message_ids[i]), &uidnext,
-            uidvalidity, changes, error))
+            member && ordinary, &uidnext, uidvalidity, changes, error))
             goto fail;
     }
 

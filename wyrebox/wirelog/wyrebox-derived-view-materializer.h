@@ -55,6 +55,13 @@ WyreboxDerivedViewMaterializer *wyrebox_derived_view_materializer_new_duckdb (
     const gchar *path,
     GError **error);
 
+/*
+ * A message is a view member only while mailbox_memberships has at least one
+ * visible row for the same account and message. Apply skips an ineligible
+ * message and does not assign it a virtual UID. Refresh hides an existing
+ * derived row in place, keeping that UID and the view UIDVALIDITY, and
+ * restores the same UID when a visible ordinary membership returns.
+ */
 gboolean wyrebox_derived_view_materializer_apply_memberships (
     WyreboxDerivedViewMaterializer *self,
     const gchar *account_id,
@@ -123,7 +130,8 @@ gboolean wyrebox_derived_view_materializer_refresh_current_rule_version_with_cha
 /*
  * Refreshes the membership of only the messages in @message_ids, a
  * NULL-terminated list, under @rule_version_hash. Each listed message is
- * visible exactly when @memberships names it: new members get the next UID,
+ * visible exactly when @memberships names it and it has a visible ordinary
+ * membership: new members get the next UID,
  * returning members keep their UID, and members not in @memberships are
  * hidden. Visible memberships of a listed message under another rule version
  * are hidden. Memberships of other messages are left unchanged.
