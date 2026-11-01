@@ -159,6 +159,14 @@ seed_messages (const gchar *path)
         "('msg-1', 'account-1', 'object-1', 1, 1),"
         "('msg-2', 'account-1', 'object-2', 2, 1),"
         "('msg-3', 'account-1', 'object-3', 3, 1);");
+    execute_sql (fixture.connection,
+        "INSERT INTO mailbox_memberships ("
+        "membership_id, account_id, mailbox_id, message_id, uid, "
+        "internal_date_unix_us, journal_offset, journal_sequence, "
+        "journal_item, is_visible) VALUES "
+        "('mem-msg-1', 'account-1', 'mbox-1', 'msg-1', 1, 0, 101, 1, 0, TRUE),"
+        "('mem-msg-2', 'account-1', 'mbox-1', 'msg-2', 2, 0, 102, 1, 0, TRUE),"
+        "('mem-msg-3', 'account-1', 'mbox-1', 'msg-3', 3, 0, 103, 1, 0, TRUE);");
     close_duckdb_fixture (&fixture);
 }
 

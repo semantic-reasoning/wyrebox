@@ -197,6 +197,16 @@ seed_messages (const gchar *path)
         "('msg-2', 'account-1', 'object-2', 2, 1),"
         "('msg-3', 'account-1', 'object-3', 3, 1),"
         "('other-account-msg', 'account-2', 'object-4', 4, 1);");
+    execute_sql (fixture.connection,
+        "INSERT INTO mailbox_memberships ("
+        "membership_id, account_id, mailbox_id, message_id, uid, "
+        "internal_date_unix_us, journal_offset, journal_sequence, "
+        "journal_item, is_visible) VALUES "
+        "('mem-msg-1', 'account-1', 'mbox-1', 'msg-1', 1, 0, 101, 1, 0, TRUE),"
+        "('mem-msg-2', 'account-1', 'mbox-1', 'msg-2', 2, 0, 102, 1, 0, TRUE),"
+        "('mem-msg-3', 'account-1', 'mbox-1', 'msg-3', 3, 0, 103, 1, 0, TRUE),"
+        "('mem-other', 'account-2', 'mbox-2', 'other-account-msg', 1, 0, "
+        "104, 1, 0, TRUE);");
     close_duckdb_fixture (&fixture);
 }
 
@@ -213,6 +223,15 @@ seed_colon_collision_messages (const gchar *path)
         "('c', 'account-1', 'object-c', 10, 1),"
         "('prelude', 'account-1', 'object-prelude', 11, 1),"
         "('b:c', 'account-1', 'object-b-c', 12, 1);");
+    execute_sql (fixture.connection,
+        "INSERT INTO mailbox_memberships ("
+        "membership_id, account_id, mailbox_id, message_id, uid, "
+        "internal_date_unix_us, journal_offset, journal_sequence, "
+        "journal_item, is_visible) VALUES "
+        "('mem-c', 'account-1', 'mbox-1', 'c', 1, 0, 110, 1, 0, TRUE),"
+        "('mem-prelude', 'account-1', 'mbox-1', 'prelude', 2, 0, 111, 1, 0, "
+        "TRUE),"
+        "('mem-bc', 'account-1', 'mbox-1', 'b:c', 3, 0, 112, 1, 0, TRUE);");
     close_duckdb_fixture (&fixture);
 }
 
@@ -1859,6 +1878,100 @@ test_message_refresh_without_messages_creates_view (void)
     remove_catalog (path);
 }
 
+static void
+tombstone_ordinary (const gchar *path, const gchar *message_id,
+    guint64 expunged_sequence)
+{
+    TestDuckdbFixture fixture = { 0 };
+    g_autofree gchar *sql = NULL;
+
+    open_duckdb_fixture (path, &fixture);
+    sql = g_strdup_printf (
+        "UPDATE mailbox_memberships SET is_visible = FALSE, "
+        "expunged_journal_offset = %" G_GUINT64_FORMAT ", "
+        "expunged_journal_sequence = %" G_GUINT64_FORMAT " "
+        "WHERE message_id = '%s';", expunged_sequence, expunged_sequence,
+        message_id);
+    execute_sql (fixture.connection, sql);
+    close_duckdb_fixture (&fixture);
+}
+
+static void
+restore_ordinary (const gchar *path, const gchar *message_id)
+{
+    TestDuckdbFixture fixture = { 0 };
+    g_autofree gchar *sql = NULL;
+
+    open_duckdb_fixture (path, &fixture);
+    sql = g_strdup_printf (
+        "UPDATE mailbox_memberships SET is_visible = TRUE, "
+        "expunged_journal_offset = NULL, expunged_journal_sequence = NULL "
+        "WHERE message_id = '%s';", message_id);
+    execute_sql (fixture.connection, sql);
+    close_duckdb_fixture (&fixture);
+}
+
+static void
+test_refresh_requires_visible_ordinary_membership (void)
+{
+    g_autofree gchar *path = create_catalog ();
+    g_autoptr (GPtrArray) memberships = new_memberships ();
+    g_autoptr (GError) error = NULL;
+    guint64 uidvalidity = 0;
+
+    seed_messages (path);
+    tombstone_ordinary (path, "msg-2", 20);
+    {
+        TestDuckdbFixture fixture = { 0 };
+
+        open_duckdb_fixture (path, &fixture);
+        execute_sql (fixture.connection,
+            "INSERT INTO mailbox_memberships ("
+            "membership_id, account_id, mailbox_id, message_id, uid, "
+            "internal_date_unix_us, journal_offset, journal_sequence, "
+            "journal_item, is_visible, expunged_journal_offset, "
+            "expunged_journal_sequence) VALUES "
+            "('mem-msg-1-old', 'account-1', 'mbox-old', 'msg-1', 1, 0, "
+            "201, 1, 0, FALSE, 201, 19);");
+        close_duckdb_fixture (&fixture);
+    }
+    add_membership (memberships, "view-project-alpha", "msg-1");
+    add_membership (memberships, "view-project-alpha", "msg-2");
+
+    g_assert_true (apply_memberships (path, memberships, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (query_membership_count_where (path,
+        "message_id = 'msg-2'"), ==, 0);
+    g_assert_cmpuint (query_uidnext (path), ==, 2);
+
+    g_assert_true (refresh_memberships (path, memberships, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (query_uid_for_message (path, "msg-1"), ==, 1);
+    g_assert_cmpuint (query_membership_count_where (path,
+        "message_id = 'msg-2'"), ==, 0);
+    g_assert_cmpuint (query_uidnext (path), ==, 2);
+    uidvalidity = query_uidvalidity (path);
+
+    tombstone_ordinary (path, "msg-1", 21);
+    g_assert_true (refresh_memberships (path, memberships, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (query_uid_for_message (path, "msg-1"), ==, 1);
+    g_assert_cmpuint (query_membership_count_where (path,
+        "message_id = 'msg-1' AND is_visible = FALSE"), ==, 1);
+    g_assert_cmpuint (query_uidvalidity (path), ==, uidvalidity);
+    g_assert_cmpuint (query_uidnext (path), ==, 2);
+
+    restore_ordinary (path, "msg-1");
+    g_assert_true (refresh_memberships (path, memberships, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (query_uid_for_message (path, "msg-1"), ==, 1);
+    g_assert_cmpuint (query_membership_count_where (path,
+        "message_id = 'msg-1' AND is_visible = TRUE"), ==, 1);
+    g_assert_cmpuint (query_uidvalidity (path), ==, uidvalidity);
+
+    remove_catalog (path);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1946,6 +2059,9 @@ main (int argc, char **argv)
         test_message_refresh_rejects_unlisted_membership);
     g_test_add_func ("/wirelog/derived-view-materializer/message-refresh-empty",
         test_message_refresh_without_messages_creates_view);
+    g_test_add_func (
+        "/wirelog/derived-view-materializer/ordinary-membership",
+        test_refresh_requires_visible_ordinary_membership);
 
     return g_test_run ();
 }
