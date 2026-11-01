@@ -7,6 +7,7 @@
 
 #include "array.h"
 #include "imap-match.h"
+#include "ioloop.h"
 #include "index-mail.h"
 #include "index-storage.h"
 #include "istream.h"
@@ -17,8 +18,10 @@
 #include "mail-user.h"
 #include "mailbox-list-private.h"
 #include "module-dir.h"
+#include "seq-range-array.h"
 #include "wyrebox-daemon-mailbox-list-result.h"
 #include "wyrebox-daemon-mailbox-select-result.h"
+#include "wyrebox-daemon-message-append-request.h"
 #include "wyrebox-dovecot-daemon-client.h"
 
 #include <gio/gio.h>
@@ -65,6 +68,25 @@ struct wyrebox_dovecot_transaction
     /* Freed before commit or rollback frees this struct. */
     uint32_t *expunge_uids;
     unsigned int expunge_count;
+};
+
+struct wyrebox_dovecot_pending_append
+{
+    unsigned char *bytes;
+    size_t size;
+    char **system_flags;
+    char **keywords;
+    guint64 internal_date_unix_us;
+};
+
+struct wyrebox_dovecot_save_context
+{
+    /* First member: Dovecot passes this pointer to the save vfuncs. */
+    struct mail_save_context ctx;
+    struct istream *input;
+    buffer_t *buf;
+    struct wyrebox_dovecot_pending_append *pending;
+    unsigned int n_pending;
 };
 
 struct wyrebox_dovecot_mailbox_list
@@ -1359,42 +1381,321 @@ wyrebox_dovecot_mailbox_notify_changes (struct mailbox *box)
     (void)box;
 }
 
+static void
+wyrebox_dovecot_free_name_list (char **names)
+{
+    if (names == NULL) {
+        return;
+    }
+
+    for (unsigned int i = 0; names[i] != NULL; i++) {
+        i_free (names[i]);
+    }
+    i_free (names);
+}
+
+static char **
+wyrebox_dovecot_copy_name_list (const char *const *names)
+{
+    unsigned int count = 0;
+    char **copy;
+
+    if (names == NULL) {
+        return NULL;
+    }
+    while (names[count] != NULL) {
+        count++;
+    }
+
+    copy = i_new (char *, count + 1);
+    for (unsigned int i = 0; i < count; i++) {
+        copy[i] = i_strdup (names[i]);
+    }
+    return copy;
+}
+
+static char **
+wyrebox_dovecot_copy_keyword_names (struct mail_save_context *ctx)
+{
+    struct mail_keywords *keywords = ctx->data.keywords;
+    const ARRAY_TYPE (keywords) *names;
+    char **copy;
+
+    if (keywords == NULL || keywords->count == 0) {
+        return NULL;
+    }
+
+    names = mail_index_get_keywords (ctx->transaction->box->index);
+    copy = i_new (char *, keywords->count + 1);
+    for (unsigned int i = 0; i < keywords->count; i++) {
+        const char *name = *array_idx (names, keywords->idx[i]);
+
+        copy[i] = i_strdup (name);
+    }
+    return copy;
+}
+
+static void
+wyrebox_dovecot_save_context_destroy (
+    struct wyrebox_dovecot_save_context *save)
+{
+    if (save->buf != NULL) {
+        buffer_free (&save->buf);
+    }
+    for (unsigned int i = 0; i < save->n_pending; i++) {
+        i_free (save->pending[i].bytes);
+        wyrebox_dovecot_free_name_list (save->pending[i].system_flags);
+        wyrebox_dovecot_free_name_list (save->pending[i].keywords);
+    }
+    i_free (save->pending);
+    i_free (save);
+}
+
 static struct mail_save_context *
 wyrebox_dovecot_save_alloc (struct mailbox_transaction_context *t)
 {
-    struct mail_save_context *ctx;
+    struct wyrebox_dovecot_save_context *save;
 
-    ctx = i_new (struct mail_save_context, 1);
-    ctx->transaction = t;
-    return ctx;
+    if (t->save_ctx != NULL) {
+        return t->save_ctx;
+    }
+
+    save = i_new (struct wyrebox_dovecot_save_context, 1);
+    save->ctx.transaction = t;
+    t->save_ctx = &save->ctx;
+    return &save->ctx;
 }
 
 static int
 wyrebox_dovecot_save_begin (struct mail_save_context *ctx,
     struct istream *input)
 {
-    (void)input;
-    return wyrebox_dovecot_mailbox_not_possible (ctx->transaction->box);
+    struct wyrebox_dovecot_save_context *save =
+        (struct wyrebox_dovecot_save_context *)ctx;
+
+    if (ctx->copying_via_save || ctx->copying_or_moving) {
+        return wyrebox_dovecot_mailbox_not_possible (ctx->transaction->box);
+    }
+    if (mailbox_is_readonly (ctx->transaction->box)) {
+        mail_storage_set_error (ctx->transaction->box->storage,
+            MAIL_ERROR_PERM, "WyreBox mailbox is read-only");
+        return -1;
+    }
+
+    if (save->buf == NULL) {
+        save->buf = buffer_create_dynamic (default_pool, 1024);
+    }
+    buffer_set_used_size (save->buf, 0);
+    save->input = input;
+    return 0;
 }
 
 static int
 wyrebox_dovecot_save_continue (struct mail_save_context *ctx)
 {
-    (void)ctx;
-    return -1;
+    struct wyrebox_dovecot_save_context *save =
+        (struct wyrebox_dovecot_save_context *)ctx;
+
+    for (;;) {
+        const unsigned char *data = NULL;
+        size_t size = 0;
+        int ret = i_stream_read_more (save->input, &data, &size);
+
+        if (size > 0) {
+            if (buffer_get_used_size (save->buf) + size >
+                WYREBOX_DAEMON_MESSAGE_APPEND_MAX_MESSAGE_BYTES) {
+                mail_storage_set_error (ctx->transaction->box->storage,
+                    MAIL_ERROR_LIMIT,
+                    "WyreBox message exceeds the append limit");
+                return -1;
+            }
+            buffer_append (save->buf, data, size);
+            i_stream_skip (save->input, size);
+        }
+        if (ret <= 0) {
+            if (ret < 0 && save->input->stream_errno != 0) {
+                mail_storage_set_error (ctx->transaction->box->storage,
+                    MAIL_ERROR_PARAMS,
+                    "WyreBox cannot read the appended message");
+                return -1;
+            }
+            return 0;
+        }
+        if (size == 0) {
+            return 0;
+        }
+    }
 }
 
 static int
 wyrebox_dovecot_save_finish (struct mail_save_context *ctx)
 {
+    struct wyrebox_dovecot_save_context *save =
+        (struct wyrebox_dovecot_save_context *)ctx;
+    struct wyrebox_dovecot_pending_append *record;
+    g_autoptr (GPtrArray) system_names = NULL;
+    size_t size;
+    time_t when;
+
+    size = save->buf == NULL ? 0 : buffer_get_used_size (save->buf);
+    if (size == 0) {
+        mail_storage_set_error (ctx->transaction->box->storage,
+            MAIL_ERROR_PARAMS, "WyreBox append message is empty");
+        index_save_context_free (ctx);
+        return -1;
+    }
+
+    save->pending = i_realloc (save->pending,
+            save->n_pending * sizeof (*save->pending),
+            (save->n_pending + 1) * sizeof (*save->pending));
+    record = &save->pending[save->n_pending++];
+    i_zero (record);
+    record->size = size;
+    record->bytes = i_malloc (size);
+    memcpy (record->bytes, buffer_get_data (save->buf, NULL), size);
+    system_names = wyrebox_dovecot_system_flag_names (ctx->data.flags);
+    record->system_flags = wyrebox_dovecot_copy_name_list (
+        (const char *const *)system_names->pdata);
+    record->keywords = wyrebox_dovecot_copy_keyword_names (ctx);
+    when = ctx->data.received_date < 0 ? ioloop_time :
+        ctx->data.received_date;
+    record->internal_date_unix_us = (guint64)when * G_USEC_PER_SEC;
+    buffer_set_used_size (save->buf, 0);
+    save->input = NULL;
     index_save_context_free (ctx);
-    return -1;
+    return 0;
 }
 
 static void
 wyrebox_dovecot_save_cancel (struct mail_save_context *ctx)
 {
+    struct wyrebox_dovecot_save_context *save =
+        (struct wyrebox_dovecot_save_context *)ctx;
+
+    if (save->buf != NULL) {
+        buffer_set_used_size (save->buf, 0);
+    }
+    save->input = NULL;
     index_save_context_free (ctx);
+}
+
+static gboolean
+wyrebox_dovecot_parse_append_summary (const char *summary,
+    const char *mailbox_id, guint64 uid_validity, uint32_t *uid_r)
+{
+    g_autofree char *prefix = NULL;
+    const char *uid_text;
+    char *end = NULL;
+    guint64 uid;
+
+    prefix = g_strdup_printf ("message_appended dest_mailbox_id=%s "
+            "dest_uidvalidity=%" G_GUINT64_FORMAT " pairs=%"
+            G_GUINT64_FORMAT ":", mailbox_id, uid_validity, uid_validity);
+    if (!g_str_has_prefix (summary, prefix)) {
+        return FALSE;
+    }
+
+    uid_text = summary + strlen (prefix);
+    uid = g_ascii_strtoull (uid_text, &end, 10);
+    if (end == uid_text || *end != '\0' || uid == 0 || uid > UINT32_MAX) {
+        return FALSE;
+    }
+
+    *uid_r = (uint32_t)uid;
+    return TRUE;
+}
+
+static void
+wyrebox_dovecot_set_append_error (struct wyrebox_dovecot_mailbox *wbox,
+    size_t message_size, const GError *error)
+{
+    struct mailbox *box = &wbox->box;
+
+    if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT)) {
+        if (message_size > WYREBOX_DAEMON_MESSAGE_APPEND_MAX_MESSAGE_BYTES) {
+            mail_storage_set_error (box->storage, MAIL_ERROR_LIMIT,
+                "WyreBox message exceeds the append limit");
+        } else {
+            mail_storage_set_error (box->storage, MAIL_ERROR_PARAMS,
+                "WyreBox rejected the appended message");
+        }
+        return;
+    }
+
+    wyrebox_dovecot_mailbox_set_write_error (wbox, "APPEND", error);
+}
+
+static int
+wyrebox_dovecot_save_commit_pre (struct mail_save_context *ctx)
+{
+    struct wyrebox_dovecot_save_context *save =
+        (struct wyrebox_dovecot_save_context *)ctx;
+    struct mailbox_transaction_context *t = ctx->transaction;
+    struct wyrebox_dovecot_mailbox *wbox =
+        (struct wyrebox_dovecot_mailbox *)t->box;
+    struct wyrebox_dovecot_storage *storage =
+        (struct wyrebox_dovecot_storage *)t->box->storage;
+    const char *mailbox_id = wbox->state.select_result.mailbox_id;
+    guint64 uid_validity = wbox->state.select_result.uid_validity;
+
+    if (t->changes == NULL) {
+        mailbox_set_critical (&wbox->box,
+            "WyreBox append has no commit changes");
+        wyrebox_dovecot_save_context_destroy (save);
+        return -1;
+    }
+
+    t->changes->uid_validity = uid_validity;
+    for (unsigned int i = 0; i < save->n_pending; i++) {
+        struct wyrebox_dovecot_pending_append *record = &save->pending[i];
+        g_autoptr (GBytes) message = g_bytes_new (record->bytes,
+                record->size);
+        g_autofree char *summary = NULL;
+        g_autoptr (GError) error = NULL;
+        guint64 journal_offset = 0;
+        uint32_t uid = 0;
+
+        if (!wyrebox_dovecot_daemon_client_append (storage->socket_path,
+            storage->account_identity, mailbox_id, uid_validity, message,
+            record->internal_date_unix_us,
+            (const char *const *)record->system_flags,
+            (const char *const *)record->keywords, &summary,
+            &journal_offset, &error)) {
+            wyrebox_dovecot_set_append_error (wbox, record->size, error);
+            wyrebox_dovecot_save_context_destroy (save);
+            return -1;
+        }
+        if (!wyrebox_dovecot_parse_append_summary (summary, mailbox_id,
+            uid_validity, &uid)) {
+            mailbox_set_critical (&wbox->box,
+                "WyreBox append summary is unusable: %s", summary);
+            wyrebox_dovecot_save_context_destroy (save);
+            return -1;
+        }
+
+        seq_range_array_add (&t->changes->saved_uids, uid);
+        e_debug (wbox->box.event, "WyreBox append mailbox=%s uid=%u "
+            "journal_offset=%" G_GUINT64_FORMAT, mailbox_id, uid,
+            journal_offset);
+    }
+
+    return 0;
+}
+
+static void
+wyrebox_dovecot_save_commit_post (struct mail_save_context *ctx,
+    struct mail_index_transaction_commit_result *result)
+{
+    (void)result;
+    wyrebox_dovecot_save_context_destroy (
+        (struct wyrebox_dovecot_save_context *)ctx);
+}
+
+static void
+wyrebox_dovecot_save_rollback (struct mail_save_context *ctx)
+{
+    wyrebox_dovecot_save_context_destroy (
+        (struct wyrebox_dovecot_save_context *)ctx);
 }
 
 static struct mail *
@@ -1779,6 +2080,9 @@ static struct mailbox wyrebox_dovecot_mailbox_template = {
         .save_continue = wyrebox_dovecot_save_continue,
         .save_finish = wyrebox_dovecot_save_finish,
         .save_cancel = wyrebox_dovecot_save_cancel,
+        .transaction_save_commit_pre = wyrebox_dovecot_save_commit_pre,
+        .transaction_save_commit_post = wyrebox_dovecot_save_commit_post,
+        .transaction_save_rollback = wyrebox_dovecot_save_rollback,
         .copy = mail_storage_copy,
         .is_inconsistent = wyrebox_dovecot_mailbox_is_inconsistent,
     },
