@@ -91,8 +91,22 @@ def check_index_mailbox(text: str) -> None:
     require(r"\.is_readonly\s*=\s*wyrebox_dovecot_mailbox_is_readonly", text,
             "views stay read-only")
     require(r"\.expunge\s*=\s*wyrebox_dovecot_mail_expunge", text,
-            "expunge refused until the daemon owns expunges")
-    require(r"MAIL_ERROR_PERM", text, "expunge refusal keeps CLOSE working")
+            "expunge recorded on the mail")
+    require(r"expunges_requested", text,
+            "expunge tracked on the transaction, not the index change bit")
+    require(r"wyrebox_dovecot_daemon_client_expunge\s*\(", text,
+            "expunge sent through the daemon client")
+    require(
+        r"wyrebox_dovecot_transaction_commit[\s\S]*?"
+        r"wyrebox_dovecot_transaction_push_expunge\s*\([\s\S]*?"
+        r"index_transaction_commit\s*\(",
+        text,
+        "daemon expunge runs before the index commit",
+    )
+    require(r"mail_index_expunge\s*\(_mail->transaction->itrans", text,
+            "untagged EXPUNGE is recorded in the open transaction")
+    require(r"MAIL_ERROR_PERM", text,
+            "read-only expunge stays a permission error")
     require(r"\.save_begin\s*=\s*wyrebox_dovecot_save_begin,", text,
             "saving stays refused until the daemon owns writes")
     require(r"MAIL_ERROR_NOTPOSSIBLE", text, "read-only refusal")
