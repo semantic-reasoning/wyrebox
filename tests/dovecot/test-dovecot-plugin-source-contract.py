@@ -25,6 +25,7 @@ def check_state_boundary(text: str) -> None:
         if include.startswith("wyrebox-") and include not in {
             "wyrebox-daemon-mailbox-list-result.h",
             "wyrebox-daemon-mailbox-select-result.h",
+            "wyrebox-daemon-message-append-request.h",
             "wyrebox-dovecot-daemon-client.h",
         }:
             raise AssertionError(
@@ -108,7 +109,43 @@ def check_index_mailbox(text: str) -> None:
     require(r"MAIL_ERROR_PERM", text,
             "read-only expunge stays a permission error")
     require(r"\.save_begin\s*=\s*wyrebox_dovecot_save_begin,", text,
-            "saving stays refused until the daemon owns writes")
+            "append enters through save_begin")
+    require(
+        r"wyrebox_dovecot_save_begin[\s\S]*?mailbox_is_readonly\s*\("
+        r"[\s\S]*?wyrebox_dovecot_daemon_client_append\s*\(",
+        text,
+        "read-only append is refused before the daemon call",
+    )
+    require(
+        r"wyrebox_dovecot_save_begin[\s\S]*?copying_via_save",
+        text,
+        "COPY and MOVE stay off the append path",
+    )
+    require(
+        r"\.transaction_save_commit_pre\s*=\s*"
+        r"wyrebox_dovecot_save_commit_pre",
+        text,
+        "APPENDUID is filled before the index commit",
+    )
+    require(
+        r"\.transaction_save_commit_post\s*=\s*"
+        r"wyrebox_dovecot_save_commit_post",
+        text,
+        "save context freed after a successful commit",
+    )
+    require(
+        r"\.transaction_save_rollback\s*=\s*"
+        r"wyrebox_dovecot_save_rollback",
+        text,
+        "save context freed on rollback",
+    )
+    require(r"\.copy\s*=\s*mail_storage_copy", text,
+            "copy stays the stock hook until MOVE and COPY")
+    if text.count("mail_index_append") != 1:
+        raise AssertionError(
+            "plugin source contract failed: mail_index_append belongs only "
+            "to the sync path"
+        )
     require(r"MAIL_ERROR_NOTPOSSIBLE", text, "read-only refusal")
     require(r"\.transaction_begin\s*=\s*wyrebox_dovecot_transaction_begin", text,
             "transaction tracking flag changes")

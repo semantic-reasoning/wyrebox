@@ -1,3 +1,4 @@
+#include "wyrebox-daemon-message-append-request.h"
 #include "wyrebox-dovecot-daemon-client.h"
 #include "wyrebox-schema-metadata-store.h"
 
@@ -796,6 +797,193 @@ test_close_expunges_deleted (ImapRealDaemonFixture *fixture,
     g_assert_nonnull (strstr (again.output, "\r\na OK"));
 }
 
+static const char appended_message[] =
+    "From: Alice <alice@example.test>\r\n"
+    "To: Bob <bob@example.test>\r\n"
+    "Subject: Appended\r\n"
+    "Message-ID: <appended@example.test>\r\n"
+    "\r\n"
+    "Appended body.\r\n";
+
+static const char appended_message_two[] =
+    "From: Alice <alice@example.test>\r\n"
+    "To: Bob <bob@example.test>\r\n"
+    "Subject: Appended two\r\n"
+    "Message-ID: <appended-two@example.test>\r\n"
+    "\r\n"
+    "Second appended body.\r\n";
+
+static char *
+append_script (const char *tag, const char *flag_suffix, const char *message)
+{
+    return g_strdup_printf ("%s APPEND INBOX%s {%zu+}\r\n%s\r\n", tag,
+               flag_suffix != NULL ? flag_suffix : "", strlen (message),
+               message);
+}
+
+static void
+test_append_assigns_next_uid (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_autofree char *append = NULL;
+    g_autofree char *script = NULL;
+    g_autofree char *appenduid = NULL;
+    g_autofree char *fetch = NULL;
+    g_autofree char *literal_prefix = NULL;
+    g_auto (WyreboxDaemonMailboxSelectResult) before = { 0 };
+    g_auto (ImapSession) session = { 0 };
+    g_auto (ImapSession) again = { 0 };
+    g_autoptr (GError) error = NULL;
+    const char *literal;
+
+    (void)user_data;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &before, &error));
+    g_assert_no_error (error);
+    appenduid = g_strdup_printf ("[APPENDUID %u %u]", before.uid_validity,
+            before.uid_next);
+    append = append_script ("b", NULL, appended_message);
+    script = g_strdup_printf ("a SELECT INBOX\r\n%sz LOGOUT\r\n", append);
+
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, script, &session);
+    g_assert_nonnull (strstr (session.output, appenduid));
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+    assert_daemon_inbox_counts (fixture, before.message_count + 1,
+        before.uid_validity, before.uid_next + 1);
+
+    fetch = g_strdup_printf ("a SELECT INBOX\r\n"
+            "b UID FETCH %u (BODY.PEEK[])\r\nz LOGOUT\r\n", before.uid_next);
+    run_imap (config_path, fetch, &again);
+    literal_prefix = g_strdup_printf ("* 2 FETCH (UID %u BODY[] {%"
+            G_GSIZE_FORMAT "}\r\n", before.uid_next,
+            strlen (appended_message));
+    literal = strstr (again.output, literal_prefix);
+    g_assert_nonnull (literal);
+    literal += strlen (literal_prefix);
+    g_assert_cmpmem (literal, strlen (appended_message), appended_message,
+        strlen (appended_message));
+    g_assert_nonnull (strstr (again.output, "\r\nb OK"));
+}
+
+static void
+test_append_stores_flags (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    const char *const expected[] = { "\\Seen", "Project-X", NULL };
+    g_autofree char *config_path = NULL;
+    g_autofree char *append = NULL;
+    g_autofree char *script = NULL;
+    g_auto (WyreboxDaemonMailboxSelectResult) before = { 0 };
+    g_auto (ImapSession) session = { 0 };
+    g_auto (ImapSession) again = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    (void)user_data;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &before, &error));
+    g_assert_no_error (error);
+    append = append_script ("b", " (\\Seen Project-X)", appended_message);
+    script = g_strdup_printf ("a SELECT INBOX\r\n%sz LOGOUT\r\n", append);
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, script, &session);
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b FETCH 2 (FLAGS)\r\nz LOGOUT\r\n", &again);
+    assert_fetch_flags (again.output, 2, expected);
+    assert_daemon_inbox_counts (fixture, before.message_count + 1,
+        before.uid_validity, before.uid_next + 1);
+}
+
+static void
+test_multiappend_assigns_two_uids (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_autofree char *script = NULL;
+    g_autofree char *appenduid = NULL;
+    g_auto (WyreboxDaemonMailboxSelectResult) before = { 0 };
+    g_auto (ImapSession) session = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    (void)user_data;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &before, &error));
+    g_assert_no_error (error);
+    appenduid = g_strdup_printf ("[APPENDUID %u %u:%u]", before.uid_validity,
+            before.uid_next, before.uid_next + 1);
+    script = g_strdup_printf ("a SELECT INBOX\r\n"
+            "b APPEND INBOX {%zu+}\r\n%s {%zu+}\r\n%s\r\n"
+            "z LOGOUT\r\n", strlen (appended_message), appended_message,
+            strlen (appended_message_two), appended_message_two);
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, script, &session);
+    g_assert_nonnull (strstr (session.output, appenduid));
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+    assert_daemon_inbox_counts (fixture, before.message_count + 2,
+        before.uid_validity, before.uid_next + 2);
+}
+
+static void
+test_examine_append_is_refused (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_autofree char *append = NULL;
+    g_autofree char *script = NULL;
+    g_auto (WyreboxDaemonMailboxSelectResult) before = { 0 };
+    g_auto (ImapSession) session = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    (void)user_data;
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &before, &error));
+    g_assert_no_error (error);
+    append = append_script ("b", NULL, appended_message);
+    script = g_strdup_printf ("a EXAMINE INBOX\r\n%sz LOGOUT\r\n", append);
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, script, &session);
+    g_assert_nonnull (strstr (session.output, "\r\nb NO [NOPERM]"));
+    assert_daemon_inbox_counts (fixture, before.message_count,
+        before.uid_validity, before.uid_next);
+}
+
+static void
+test_oversize_append_is_limited (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_autofree char *script = NULL;
+    g_autoptr (GString) message = g_string_new ("Subject: big\r\n\r\n");
+    g_auto (WyreboxDaemonMailboxSelectResult) before = { 0 };
+    g_auto (ImapSession) session = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    (void)user_data;
+
+    g_string_set_size (message,
+        WYREBOX_DAEMON_MESSAGE_APPEND_MAX_MESSAGE_BYTES + 1);
+    memset (message->str + strlen ("Subject: big\r\n\r\n"), 'x',
+        message->len - strlen ("Subject: big\r\n\r\n"));
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &before, &error));
+    g_assert_no_error (error);
+    script = g_strdup_printf ("a SELECT INBOX\r\n"
+            "b APPEND INBOX {%zu+}\r\n%s\r\n"
+            "z LOGOUT\r\n", message->len, message->str);
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, script, &session);
+    g_assert_nonnull (strstr (session.output, "\r\nb NO [LIMIT]"));
+    assert_daemon_inbox_counts (fixture, before.message_count,
+        before.uid_validity, before.uid_next);
+}
+
 static void
 test_fresh_delivery_is_unseen (ImapRealDaemonFixture *fixture,
     gconstpointer user_data)
@@ -986,6 +1174,21 @@ main (int argc, char **argv)
     g_test_add ("/dovecot/imap/close-expunges-deleted",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_close_expunges_deleted, fixture_tear_down);
+    g_test_add ("/dovecot/imap/append-assigns-next-uid",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_append_assigns_next_uid, fixture_tear_down);
+    g_test_add ("/dovecot/imap/append-stores-flags",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_append_stores_flags, fixture_tear_down);
+    g_test_add ("/dovecot/imap/multiappend-assigns-two-uids",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_multiappend_assigns_two_uids, fixture_tear_down);
+    g_test_add ("/dovecot/imap/examine-append-is-refused",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_examine_append_is_refused, fixture_tear_down);
+    g_test_add ("/dovecot/imap/oversize-append-is-limited",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_oversize_append_is_limited, fixture_tear_down);
     g_test_add ("/dovecot/imap/status-matches-daemon-state",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_status_matches_daemon_state, fixture_tear_down);
