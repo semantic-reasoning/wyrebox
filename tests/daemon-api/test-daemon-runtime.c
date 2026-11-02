@@ -227,6 +227,14 @@ seed_two_account_catalog (const char *catalog_path)
         "('mail-1', 'account-1', 'object-1', 1, 1),"
         "('mail-2', 'account-1', 'object-2', 2, 2),"
         "('mail-3', 'account-2', 'object-3', 3, 3);");
+    /* A view stays hidden until some ordinary membership is visible. */
+    execute_sql (fixture.connection,
+        "INSERT INTO mailbox_memberships ("
+        "membership_id, account_id, mailbox_id, message_id, uid, "
+        "internal_date_unix_us, journal_offset, journal_sequence, "
+        "journal_item, is_visible) VALUES "
+        "('mem-mail-1', 'account-1', 'mbox-1', 'mail-1', 1, 0, 101, 1, 0, "
+        "TRUE);");
     close_duckdb_fixture (&fixture);
 }
 
