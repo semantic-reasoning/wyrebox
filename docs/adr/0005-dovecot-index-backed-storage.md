@@ -30,6 +30,14 @@ They model the old design and cannot exercise lib-index at all.
     session rebuilds the index from the daemon, so WyreBox mailbox identity
     never lives in Dovecot files.
 - Sync takes the daemon's SELECT result and UID map:
+  - Open loads one SELECT and one UID map. The first sync after open reuses
+    that installed state and does not call the daemon again, so SELECT costs
+    at most one of each.
+  - Later syncs refresh from the daemon only when
+    `index_mailbox_want_full_sync` says so. `MAILBOX_SYNC_FLAG_FAST` syncs
+    inside the full-sync interval keep the installed state and skip the
+    daemon. A cheap mailbox change marker and moving daemon calls off the
+    blocking `imap` ioloop remain follow-ups (not yet).
   - It writes the daemon UIDVALIDITY into an empty index.
   - It appends new UIDs in ascending order and raises the next UID to the
     daemon's UIDNEXT.
@@ -37,8 +45,9 @@ They model the old design and cannot exercise lib-index at all.
     message in the index, replacing the index values. The sync transaction
     skips unchanged messages, so an unchanged mailbox reports no flag
     updates.
-  - During sync, daemon state replaces the mailbox's copy only after the
-    index commit succeeds, so the index UIDs and the rows used for FETCH always match.
+  - On a daemon refresh, daemon state replaces the mailbox's copy only after
+    the index commit succeeds, so the index UIDs and the rows used for FETCH
+    always match.
   - A UIDVALIDITY change inside one session fails the sync. The mailbox keeps
     its previous state and reports itself through `is_inconsistent`, so
     `imap` disconnects the session instead of serving new bytes under old
@@ -154,8 +163,9 @@ They model the old design and cannot exercise lib-index at all.
   WyreBox namespaces until #314: their expunges log commit errors.
 - The index is rebuilt per session, so CONDSTORE and QRESYNC modification
   sequences do not survive a reconnect.
-- Daemon calls are blocking and run on the `imap` ioloop, as `pop3c` does.
-  Async daemon calls are a follow-up.
+- Daemon calls are still blocking on the `imap` ioloop, as `pop3c` does.
+  Async daemon calls remain a follow-up; #363 only cuts how many blocking
+  SELECT and UID-map calls run.
 - Builders without Dovecot `2.4.2` headers lose plugin compile coverage. Only
   the system-mode build, such as the `ubuntu-26.04` CI job, compiles and runs
   the plugin. Plugin changes must be validated there, running `imap` as a
@@ -170,8 +180,8 @@ They model the old design and cannot exercise lib-index at all.
 - LSUB and `LIST (SUBSCRIBED)` return every mailbox, and subscribing is not
   supported. This must be settled before Thunderbird smoke testing.
 - The daemon client sets no socket timeout, so a stuck `wyreboxd` blocks the
-  `imap` process. Opening a mailbox and its first sync each cost a SELECT and
-  a UID map round trip.
+  `imap` process (#362). Without a mailbox change marker, FAST syncs can miss
+  another session's updates until the next full sync.
 - The daemon trusts the account identity that the caller supplies. Binding
   callers to an account before multi-user deployment is a follow-up.
 - Keeping the previous state on a failed re-sync and disconnecting on a

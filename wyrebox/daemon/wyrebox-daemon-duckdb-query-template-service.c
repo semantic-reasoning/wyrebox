@@ -4,6 +4,7 @@
 #include "wyrebox-daemon-duckdb-query-template-catalog.h"
 #include "wyrebox-daemon-audit-payload.h"
 #include "wyrebox-daemon-error.h"
+#include "wyrebox-daemon-test-counter.h"
 #include "wyrebox-duckdb-shared.h"
 #include "wyrebox-journal-writer.h"
 
@@ -2331,6 +2332,12 @@ wyrebox_daemon_duckdb_query_template_service_handle_identity
     if (!wyrebox_daemon_response_frame_init_stream_chunk (out_frame,
         &response_chunk, error))
         return FALSE;
+
+    if (g_strcmp0 (request->template_id, "mailbox.uid_map.v1") == 0 ||
+        g_strcmp0 (request->template_id, "derived_view.uid_map.v1") == 0) {
+        wyrebox_daemon_test_counter_increment
+            ("WYREBOX_TEST_UID_MAP_COUNTER_PATH");
+    }
 
     append_duckdb_query_success_audit (self, identity, request);
 

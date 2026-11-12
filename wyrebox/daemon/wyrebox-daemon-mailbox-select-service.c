@@ -1,4 +1,5 @@
 #include "wyrebox-daemon-mailbox-select-service.h"
+#include "wyrebox-daemon-test-counter.h"
 
 #include <gio/gio.h>
 
@@ -120,6 +121,8 @@ wyrebox_daemon_mailbox_select_service_handle_identity
         return FALSE;
     }
 
+    wyrebox_daemon_test_counter_increment
+        ("WYREBOX_TEST_MAILBOX_SELECT_COUNTER_PATH");
     return wyrebox_daemon_response_frame_init_mailbox_select (out_frame,
                identity->request_id, identity->correlation_id, &result, error);
 }

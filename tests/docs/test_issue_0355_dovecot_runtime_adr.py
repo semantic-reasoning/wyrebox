@@ -125,7 +125,14 @@ def main() -> None:
         r"Every changed message costs up to two daemon round trips",
         sections[gaps],
     ), "Known Gaps must not claim the old per-message flag round-trip cost"
+    assert not re.search(
+        r"Opening a mailbox and its first sync each cost",
+        sections[gaps],
+    ), "Known Gaps must not claim open+first-sync each cost SELECT+UID map"
     assert_section_matches(sections, decision, r"homogeneous")
+    assert_section_matches(sections, decision, r"index_mailbox_want_full_sync")
+    assert_section_matches(sections, decision, r"at most one of each")
+    assert_section_matches(sections, decision, r"not yet")
     assert_section_matches(sections, gaps, r"STORE on a view is untested")
     assert_section_matches(sections, gaps, r"CONDSTORE")
     assert_section_matches(sections, gaps, r"autoexpunge")
@@ -141,6 +148,7 @@ def main() -> None:
     assert_section_matches(sections, gaps, r"timeout")
     assert_section_matches(sections, gaps, r"account")
     assert_section_matches(sections, gaps, r"interactive")
+    assert_section_matches(sections, gaps, r"change marker")
 
 
 if __name__ == "__main__":
