@@ -1906,7 +1906,7 @@ test_dovecot_daemon_client_update_flags_rejects_unexpected_response_kind (void)
 static void
 test_dovecot_daemon_client_update_flags_rejects_invalid_keyword_locally (void)
 {
-    const char *const keywords[] = { "$Forwarded", NULL };
+    const char *const keywords[] = { "bad%kw", NULL };
     g_autoptr (GError) error = NULL;
     guint64 journal_offset = 99;
 
