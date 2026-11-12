@@ -84,6 +84,7 @@ They model the old design and cannot exercise lib-index at all.
   }
   import_environment {
     WYREBOX_SOCKET = /run/wyrebox/wyrebox.sock
+    WYREBOX_DAEMON_UDS_TIMEOUT_SEC = 30
   }
   ```
 
@@ -94,6 +95,12 @@ They model the old design and cannot exercise lib-index at all.
   variable, which `import_environment` passes into the `imap` process. It
   defaults to `/run/wyrebox/wyrebox.sock`. The account identity is the
   Dovecot user name.
+- Shared UDS client calls use a 30-second idle timeout by default
+  (`g_socket_client_set_timeout` / `g_socket_set_timeout`). Operators may
+  raise it with `WYREBOX_DAEMON_UDS_TIMEOUT_SEC` (positive integer only; zero
+  or invalid values keep the default). There is no Dovecot plugin setting.
+  Expiry surfaces as `G_IO_ERROR_TIMED_OUT`, which the plugin maps to IMAP
+  `NO [UNAVAILABLE]`.
 - Ordinary mailboxes answer SELECT with `[READ-WRITE]`. EXAMINE and virtual
   mailbox views stay read-only, and a flag change committed on a read-only
   mailbox fails with a not-possible error. Save and copy also fail with a
@@ -179,9 +186,9 @@ They model the old design and cannot exercise lib-index at all.
   the read-only refusal of STORE on a view is untested at the IMAP level.
 - LSUB and `LIST (SUBSCRIBED)` return every mailbox, and subscribing is not
   supported. This must be settled before Thunderbird smoke testing.
-- The daemon client sets no socket timeout, so a stuck `wyreboxd` blocks the
-  `imap` process (#362). Without a mailbox change marker, FAST syncs can miss
-  another session's updates until the next full sync.
+- Without a mailbox change marker, FAST syncs can miss another session's
+  updates until the next full sync. A stuck daemon still blocks the `imap`
+  ioloop for up to the UDS idle timeout rather than forever.
 - The daemon trusts the account identity that the caller supplies. Binding
   callers to an account before multi-user deployment is a follow-up.
 - Keeping the previous state on a failed re-sync and disconnecting on a

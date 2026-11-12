@@ -91,7 +91,8 @@ def main() -> None:
         re.MULTILINE,
     ), "ADR must show multi-line Dovecot 2.4 config blocks"
     assert re.search(
-        r"^\s*import_environment \{\n\s*WYREBOX_SOCKET = \S+\n\s*\}$",
+        r"^\s*import_environment \{\n\s*WYREBOX_SOCKET = \S+\n"
+        r"(?:\s*WYREBOX_DAEMON_UDS_TIMEOUT_SEC = \S+\n)?\s*\}$",
         sections[decision],
         re.MULTILINE,
     ), "ADR must show the multi-line socket import_environment block"
@@ -145,7 +146,13 @@ def main() -> None:
     assert_section_matches(sections, decision, r"daemon flags and keywords")
     assert_section_matches(sections, gaps, r"INTERNALDATE")
     assert_section_matches(sections, gaps, r"LSUB")
-    assert_section_matches(sections, gaps, r"timeout")
+    assert not re.search(r"#362", sections[gaps]), (
+        "Known Gaps must not claim socket timeout waits for #362"
+    )
+    assert_section_matches(sections, decision, r"WYREBOX_DAEMON_UDS_TIMEOUT_SEC")
+    assert_section_matches(sections, decision, r"30-second idle timeout")
+    assert_section_matches(sections, decision, r"G_IO_ERROR_TIMED_OUT")
+    assert_section_matches(sections, gaps, r"idle timeout")
     assert_section_matches(sections, gaps, r"account")
     assert_section_matches(sections, gaps, r"interactive")
     assert_section_matches(sections, gaps, r"change marker")

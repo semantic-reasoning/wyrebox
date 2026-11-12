@@ -13,6 +13,7 @@ typedef enum
     FAKE_SERVER_ROUND_TRIP,
     FAKE_SERVER_CLOSE_WITHOUT_RESPONSE,
     FAKE_SERVER_TRUNCATED_RESPONSE,
+    FAKE_SERVER_ACCEPT_AND_NEVER_REPLY,
 } FakeServerBehavior;
 
 typedef struct
@@ -24,6 +25,7 @@ typedef struct
     gsize expected_request_size;
     const guint8 *response;
     gsize response_size;
+    guint hold_open_sec;
 } FakeServer;
 
 static void
@@ -122,6 +124,11 @@ fake_server_thread_main (gpointer user_data)
     case FAKE_SERVER_TRUNCATED_RESPONSE:
         write_truncated_response_frame (output);
         break;
+    case FAKE_SERVER_ACCEPT_AND_NEVER_REPLY:
+        /* Keep the connection open without writing so the client blocks
+         * until its idle timeout fires. Close only after the hold. */
+        g_usleep ((gulong)server->hold_open_sec * G_USEC_PER_SEC);
+        break;
     }
 
     g_assert_true (g_io_stream_close (G_IO_STREAM (connection), NULL, &error));
@@ -146,6 +153,8 @@ fake_server_start (FakeServer *server,
     server->expected_request_size = expected_request_size;
     server->response = response;
     server->response_size = response_size;
+    if (server->hold_open_sec == 0)
+        server->hold_open_sec = 3;
 
     address = g_unix_socket_address_new (socket_path);
     g_assert_true (g_socket_listener_add_address (server->listener,
@@ -325,6 +334,74 @@ test_uds_client_truncated_response_returns_error (void)
     remove_tree (root);
 }
 
+static void
+test_uds_client_resolve_timeout_sec_defaults_and_overrides (void)
+{
+    const char *previous = g_getenv (WYREBOX_DAEMON_UDS_TIMEOUT_ENV);
+
+    g_unsetenv (WYREBOX_DAEMON_UDS_TIMEOUT_ENV);
+    g_assert_cmpuint (wyrebox_daemon_uds_client_resolve_timeout_sec (), ==,
+        WYREBOX_DAEMON_UDS_CLIENT_DEFAULT_TIMEOUT_SEC);
+
+    g_setenv (WYREBOX_DAEMON_UDS_TIMEOUT_ENV, "1", TRUE);
+    g_assert_cmpuint (wyrebox_daemon_uds_client_resolve_timeout_sec (), ==, 1);
+
+    g_setenv (WYREBOX_DAEMON_UDS_TIMEOUT_ENV, "0", TRUE);
+    g_assert_cmpuint (wyrebox_daemon_uds_client_resolve_timeout_sec (), ==,
+        WYREBOX_DAEMON_UDS_CLIENT_DEFAULT_TIMEOUT_SEC);
+
+    g_setenv (WYREBOX_DAEMON_UDS_TIMEOUT_ENV, "abc", TRUE);
+    g_assert_cmpuint (wyrebox_daemon_uds_client_resolve_timeout_sec (), ==,
+        WYREBOX_DAEMON_UDS_CLIENT_DEFAULT_TIMEOUT_SEC);
+
+    g_setenv (WYREBOX_DAEMON_UDS_TIMEOUT_ENV, "", TRUE);
+    g_assert_cmpuint (wyrebox_daemon_uds_client_resolve_timeout_sec (), ==,
+        WYREBOX_DAEMON_UDS_CLIENT_DEFAULT_TIMEOUT_SEC);
+
+    if (previous != NULL)
+        g_setenv (WYREBOX_DAEMON_UDS_TIMEOUT_ENV, previous, TRUE);
+    else
+        g_unsetenv (WYREBOX_DAEMON_UDS_TIMEOUT_ENV);
+}
+
+static void
+test_uds_client_stalled_server_times_out (void)
+{
+    const guint8 request[] = "request";
+    const char *previous = g_getenv (WYREBOX_DAEMON_UDS_TIMEOUT_ENV);
+    g_autofree char *root = NULL;
+    g_autofree char *socket_path = make_socket_path (&root);
+    g_autoptr (GBytes) request_payload = NULL;
+    g_autoptr (GBytes) response = NULL;
+    g_autoptr (GError) error = NULL;
+    FakeServer server = { 0 };
+    gint64 started;
+    gint64 elapsed_msec;
+
+    g_setenv (WYREBOX_DAEMON_UDS_TIMEOUT_ENV, "1", TRUE);
+    server.hold_open_sec = 4;
+    fake_server_start (&server, socket_path,
+        FAKE_SERVER_ACCEPT_AND_NEVER_REPLY, request, sizeof (request), NULL,
+        0);
+    request_payload = g_bytes_new_static (request, sizeof (request));
+
+    started = g_get_monotonic_time ();
+    response = wyrebox_daemon_uds_client_send_request (socket_path,
+            request_payload, &error);
+    elapsed_msec = (g_get_monotonic_time () - started) / 1000;
+
+    g_assert_null (response);
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT);
+    g_assert_cmpint (elapsed_msec, <, 5000);
+    fake_server_join (&server);
+    remove_tree (root);
+
+    if (previous != NULL)
+        g_setenv (WYREBOX_DAEMON_UDS_TIMEOUT_ENV, previous, TRUE);
+    else
+        g_unsetenv (WYREBOX_DAEMON_UDS_TIMEOUT_ENV);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -346,6 +423,10 @@ main (int argc, char **argv)
         test_uds_client_server_close_without_response_returns_error);
     g_test_add_func ("/daemon-api/uds-client/truncated-response",
         test_uds_client_truncated_response_returns_error);
+    g_test_add_func ("/daemon-api/uds-client/resolve-timeout-sec",
+        test_uds_client_resolve_timeout_sec_defaults_and_overrides);
+    g_test_add_func ("/daemon-api/uds-client/stalled-server-times-out",
+        test_uds_client_stalled_server_times_out);
 
     return g_test_run ();
 }
