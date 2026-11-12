@@ -3,9 +3,11 @@
 #include <gio/gio.h>
 #include <string.h>
 
-#define WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC "WYREFLC1"
+#define WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC_V1 "WYREFLC1"
+#define WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC_V2 "WYREFLC2"
 #define WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC_LEN 8
-#define WYREBOX_FLAG_CHANGED_PAYLOAD_HEADER_SIZE 33
+#define WYREBOX_FLAG_CHANGED_PAYLOAD_V1_HEADER_SIZE 33
+#define WYREBOX_FLAG_CHANGED_PAYLOAD_V2_HEADER_SIZE 29
 
 static const char *const system_flag_names[] = {
     "\\Seen",
@@ -123,9 +125,68 @@ strv_count (char **values)
 }
 
 static gboolean
+resolve_uids (const WyreboxFlagChangedPayload *payload,
+    const guint64 **out_uids,
+    gsize *out_n_uids, GIOErrorEnum code, GError **error)
+{
+    if (payload->n_uids > 0) {
+        if (payload->uids == NULL) {
+            g_set_error (error,
+                G_IO_ERROR, code, "FlagChanged payload uids are required");
+            return FALSE;
+        }
+        *out_uids = payload->uids;
+        *out_n_uids = payload->n_uids;
+        return TRUE;
+    }
+
+    if (payload->uid == 0) {
+        g_set_error (error,
+            G_IO_ERROR,
+            code, "FlagChanged payload uid and uidvalidity are required");
+        return FALSE;
+    }
+
+    *out_uids = &payload->uid;
+    *out_n_uids = 1;
+    return TRUE;
+}
+
+static gboolean
+validate_uids (const guint64 *uids, gsize n_uids, GIOErrorEnum code,
+    GError **error)
+{
+    if (uids == NULL || n_uids == 0) {
+        g_set_error (error,
+            G_IO_ERROR, code, "FlagChanged payload requires at least one uid");
+        return FALSE;
+    }
+
+    for (gsize i = 0; i < n_uids; i++) {
+        if (uids[i] == 0) {
+            g_set_error (error,
+                G_IO_ERROR,
+                code, "FlagChanged payload uid must be at least 1");
+            return FALSE;
+        }
+        if (i > 0 && uids[i] <= uids[i - 1]) {
+            g_set_error (error,
+                G_IO_ERROR,
+                code, "FlagChanged payload uids must be strictly ascending");
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+static gboolean
 validate_payload (const WyreboxFlagChangedPayload *payload, GIOErrorEnum code,
     GError **error)
 {
+    const guint64 *uids = NULL;
+    gsize n_uids = 0;
+
     if (payload == NULL) {
         g_set_error (error,
             G_IO_ERROR, code, "FlagChanged payload is required");
@@ -138,12 +199,16 @@ validate_payload (const WyreboxFlagChangedPayload *payload, GIOErrorEnum code,
         error))
         return FALSE;
 
-    if (payload->uid == 0 || payload->uidvalidity == 0) {
+    if (payload->uidvalidity == 0) {
         g_set_error (error,
             G_IO_ERROR,
             code, "FlagChanged payload uid and uidvalidity are required");
         return FALSE;
     }
+
+    if (!resolve_uids (payload, &uids, &n_uids, code, error) ||
+        !validate_uids (uids, n_uids, code, error))
+        return FALSE;
 
     switch (payload->mode) {
     case WYREBOX_FLAG_CHANGED_MODE_SET:
@@ -250,7 +315,6 @@ read_strv (const guint8 *data, gsize size, gsize *offset, guint32 count,
     if (count == 0)
         return TRUE;
 
-    /* Every encoded string takes at least its length prefix. */
     if ((gsize)count > (size - *offset) / sizeof (guint32)) {
         g_set_error (error,
             G_IO_ERROR,
@@ -280,10 +344,12 @@ wyrebox_flag_changed_payload_clear (WyreboxFlagChangedPayload *payload)
 
     g_clear_pointer (&payload->account_id, g_free);
     g_clear_pointer (&payload->mailbox_id, g_free);
+    g_clear_pointer (&payload->uids, g_free);
     g_clear_pointer (&payload->system_flags, g_strfreev);
     g_clear_pointer (&payload->user_keywords, g_strfreev);
     payload->uidvalidity = 0;
     payload->uid = 0;
+    payload->n_uids = 0;
     payload->mode = WYREBOX_FLAG_CHANGED_MODE_SET;
 }
 
@@ -293,23 +359,38 @@ wyrebox_flag_changed_payload_encode (const WyreboxFlagChangedPayload *payload,
 {
     g_autofree guint8 *data = NULL;
     guint8 *cursor = NULL;
-    gsize payload_len = WYREBOX_FLAG_CHANGED_PAYLOAD_HEADER_SIZE;
+    const guint64 *uids = NULL;
+    gsize n_uids = 0;
     gsize n_flags = 0;
     gsize n_keywords = 0;
+    gsize payload_len = 0;
+    gboolean multi = FALSE;
 
     g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
     if (!validate_payload (payload, G_IO_ERROR_INVALID_ARGUMENT, error))
         return NULL;
 
+    if (!resolve_uids (payload, &uids, &n_uids, G_IO_ERROR_INVALID_ARGUMENT,
+        error))
+        return NULL;
+
+    multi = n_uids > 1 || payload->n_uids > 0;
     n_flags = strv_count (payload->system_flags);
     n_keywords = strv_count (payload->user_keywords);
-    if (n_keywords > G_MAXUINT32) {
+    if (n_keywords > G_MAXUINT32 || n_uids > G_MAXUINT32) {
         g_set_error (error,
             G_IO_ERROR,
             G_IO_ERROR_INVALID_ARGUMENT,
-            "FlagChanged payload has too many user keywords");
+            "FlagChanged payload has too many entries");
         return NULL;
+    }
+
+    if (multi) {
+        payload_len = WYREBOX_FLAG_CHANGED_PAYLOAD_V2_HEADER_SIZE +
+            (n_uids * sizeof (guint64));
+    } else {
+        payload_len = WYREBOX_FLAG_CHANGED_PAYLOAD_V1_HEADER_SIZE;
     }
 
     if (!checked_add_string (&payload_len, payload->account_id, error) ||
@@ -327,15 +408,30 @@ wyrebox_flag_changed_payload_encode (const WyreboxFlagChangedPayload *payload,
     }
 
     data = g_malloc0 (payload_len);
-    memcpy (data, WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC,
-        WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC_LEN);
-    write_u64_le (data + 8, payload->uid);
-    write_u64_le (data + 16, payload->uidvalidity);
-    data[24] = (guint8)payload->mode;
-    write_u32_le (data + 25, (guint32)n_flags);
-    write_u32_le (data + 29, (guint32)n_keywords);
+    if (multi) {
+        memcpy (data, WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC_V2,
+            WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC_LEN);
+        write_u64_le (data + 8, payload->uidvalidity);
+        data[16] = (guint8)payload->mode;
+        write_u32_le (data + 17, (guint32)n_uids);
+        write_u32_le (data + 21, (guint32)n_flags);
+        write_u32_le (data + 25, (guint32)n_keywords);
+        cursor = data + WYREBOX_FLAG_CHANGED_PAYLOAD_V2_HEADER_SIZE;
+        for (gsize i = 0; i < n_uids; i++) {
+            write_u64_le (cursor, uids[i]);
+            cursor += sizeof (guint64);
+        }
+    } else {
+        memcpy (data, WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC_V1,
+            WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC_LEN);
+        write_u64_le (data + 8, uids[0]);
+        write_u64_le (data + 16, payload->uidvalidity);
+        data[24] = (guint8)payload->mode;
+        write_u32_le (data + 25, (guint32)n_flags);
+        write_u32_le (data + 29, (guint32)n_keywords);
+        cursor = data + WYREBOX_FLAG_CHANGED_PAYLOAD_V1_HEADER_SIZE;
+    }
 
-    cursor = data + WYREBOX_FLAG_CHANGED_PAYLOAD_HEADER_SIZE;
     write_string (&cursor, payload->account_id);
     write_string (&cursor, payload->mailbox_id);
     for (gsize i = 0; i < n_flags; i++)
@@ -353,39 +449,84 @@ wyrebox_flag_changed_payload_decode (GBytes *bytes,
 {
     const guint8 *data = NULL;
     gsize size = 0;
-    gsize offset = WYREBOX_FLAG_CHANGED_PAYLOAD_HEADER_SIZE;
+    gsize offset = 0;
     g_auto (WyreboxFlagChangedPayload) decoded = { 0 };
+    gboolean multi = FALSE;
+    guint32 n_flags = 0;
+    guint32 n_keywords = 0;
+    guint32 n_uids = 0;
 
     g_return_val_if_fail (bytes != NULL, FALSE);
     g_return_val_if_fail (out_payload != NULL, FALSE);
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
     data = g_bytes_get_data (bytes, &size);
-    if (size < WYREBOX_FLAG_CHANGED_PAYLOAD_HEADER_SIZE) {
+    if (size < WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC_LEN) {
         g_set_error (error,
             G_IO_ERROR,
             G_IO_ERROR_INVALID_DATA, "FlagChanged payload is truncated");
         return FALSE;
     }
 
-    if (memcmp (data, WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC,
-        WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC_LEN) != 0) {
+    if (memcmp (data, WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC_V2,
+        WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC_LEN) == 0) {
+        multi = TRUE;
+        if (size < WYREBOX_FLAG_CHANGED_PAYLOAD_V2_HEADER_SIZE) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA, "FlagChanged payload is truncated");
+            return FALSE;
+        }
+        decoded.uidvalidity = read_u64_le (data + 8);
+        decoded.mode = (WyreboxFlagChangedMode)data[16];
+        n_uids = read_u32_le (data + 17);
+        n_flags = read_u32_le (data + 21);
+        n_keywords = read_u32_le (data + 25);
+        offset = WYREBOX_FLAG_CHANGED_PAYLOAD_V2_HEADER_SIZE;
+        if ((gsize)n_uids > (size - offset) / sizeof (guint64)) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA, "FlagChanged payload is truncated");
+            return FALSE;
+        }
+        decoded.uids = g_new (guint64, n_uids);
+        for (guint32 i = 0; i < n_uids; i++) {
+            decoded.uids[i] = read_u64_le (data + offset);
+            offset += sizeof (guint64);
+        }
+        decoded.n_uids = n_uids;
+        decoded.uid = n_uids > 0 ? decoded.uids[0] : 0;
+    } else if (memcmp (data, WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC_V1,
+        WYREBOX_FLAG_CHANGED_PAYLOAD_MAGIC_LEN) == 0) {
+        if (size < WYREBOX_FLAG_CHANGED_PAYLOAD_V1_HEADER_SIZE) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA, "FlagChanged payload is truncated");
+            return FALSE;
+        }
+        decoded.uid = read_u64_le (data + 8);
+        decoded.uidvalidity = read_u64_le (data + 16);
+        decoded.mode = (WyreboxFlagChangedMode)data[24];
+        n_flags = read_u32_le (data + 25);
+        n_keywords = read_u32_le (data + 29);
+        offset = WYREBOX_FLAG_CHANGED_PAYLOAD_V1_HEADER_SIZE;
+        /* Keep legacy callers on the single-UID fields so a V1 decode
+         * re-encodes as V1. */
+        decoded.uids = NULL;
+        decoded.n_uids = 0;
+    } else {
         g_set_error (error,
             G_IO_ERROR,
             G_IO_ERROR_INVALID_DATA, "invalid FlagChanged payload magic");
         return FALSE;
     }
 
-    decoded.uid = read_u64_le (data + 8);
-    decoded.uidvalidity = read_u64_le (data + 16);
-    decoded.mode = (WyreboxFlagChangedMode)data[24];
-
     if (!read_string (data, size, &offset, &decoded.account_id, error) ||
         !read_string (data, size, &offset, &decoded.mailbox_id, error) ||
-        !read_strv (data, size, &offset, read_u32_le (data + 25),
-        &decoded.system_flags, error) ||
-        !read_strv (data, size, &offset, read_u32_le (data + 29),
-        &decoded.user_keywords, error))
+        !read_strv (data, size, &offset, n_flags, &decoded.system_flags,
+        error) ||
+        !read_strv (data, size, &offset, n_keywords, &decoded.user_keywords,
+        error))
         return FALSE;
 
     if (offset != size) {
@@ -399,6 +540,7 @@ wyrebox_flag_changed_payload_decode (GBytes *bytes,
     if (!validate_payload (&decoded, G_IO_ERROR_INVALID_DATA, error))
         return FALSE;
 
+    (void)multi;
     *out_payload = decoded;
     memset (&decoded, 0, sizeof (decoded));
     return TRUE;

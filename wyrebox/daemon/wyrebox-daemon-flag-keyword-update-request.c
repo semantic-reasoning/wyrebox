@@ -2,6 +2,7 @@
 #include "wyrebox-daemon-user-keyword.h"
 
 #include <gio/gio.h>
+#include <string.h>
 
 static gboolean
 validate_non_empty_text (const char *value, const char *field_name,
@@ -148,6 +149,47 @@ copy_text_vector (const char *const *values,
     return TRUE;
 }
 
+static gboolean
+validate_batch_uids (const guint64 *uids, gsize n_uids, GError **error)
+{
+    if (uids == NULL || n_uids == 0) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT,
+            "flag keyword update requires at least one uid");
+        return FALSE;
+    }
+
+    if (n_uids > WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MAX_UIDS) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT,
+            "flag keyword update exceeds maximum of %" G_GSIZE_FORMAT " uids",
+            WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MAX_UIDS);
+        return FALSE;
+    }
+
+    for (gsize i = 0; i < n_uids; i++) {
+        if (uids[i] == 0) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_ARGUMENT,
+                "flag keyword update uid must be at least 1");
+            return FALSE;
+        }
+
+        if (i > 0 && uids[i] <= uids[i - 1]) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_ARGUMENT,
+                "flag keyword update uids must be strictly ascending");
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
 void wyrebox_daemon_flag_keyword_update_request_clear
     (WyreboxDaemonFlagKeywordUpdateRequest *request)
 {
@@ -158,6 +200,8 @@ void wyrebox_daemon_flag_keyword_update_request_clear
     g_clear_pointer (&request->mailbox_id, g_free);
     request->uid_validity = 0;
     request->mailbox_uid = 0;
+    g_clear_pointer (&request->uids, g_free);
+    request->n_uids = 0;
     request->mode = WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET;
     g_clear_pointer (&request->system_flags, g_strfreev);
     g_clear_pointer (&request->user_keywords, g_strfreev);
@@ -222,6 +266,8 @@ wyrebox_daemon_flag_keyword_update_request_init
     next.mailbox_id = g_strdup (mailbox_id);
     next.uid_validity = uid_validity;
     next.mailbox_uid = mailbox_uid;
+    next.uids = NULL;
+    next.n_uids = 0;
     next.mode = mode;
     next.system_flags = g_steal_pointer (&copied_system_flags);
     next.user_keywords = g_steal_pointer (&copied_user_keywords);
@@ -230,6 +276,78 @@ wyrebox_daemon_flag_keyword_update_request_init
     *request = next;
     next.account_identity = NULL;
     next.mailbox_id = NULL;
+    next.system_flags = NULL;
+    next.user_keywords = NULL;
+
+    return TRUE;
+}
+
+gboolean
+wyrebox_daemon_flag_keyword_update_request_init_batch
+    (WyreboxDaemonFlagKeywordUpdateRequest *request,
+    const char *account_identity, const char *mailbox_id, guint64 uid_validity,
+    const guint64 *uids, gsize n_uids, WyreboxDaemonFlagKeywordUpdateMode mode,
+    const char *const *system_flags, const char *const *user_keywords,
+    GError **error)
+{
+    g_auto (WyreboxDaemonFlagKeywordUpdateRequest) next = { 0 };
+    g_auto (GStrv) copied_system_flags = NULL;
+    g_auto (GStrv) copied_user_keywords = NULL;
+
+    g_return_val_if_fail (request != NULL, FALSE);
+    g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (!validate_non_empty_text (account_identity, "account_identity", error))
+        return FALSE;
+
+    if (!validate_non_empty_text (mailbox_id, "mailbox_id", error))
+        return FALSE;
+
+    if (uid_validity == 0) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_ARGUMENT,
+            "flag keyword update uid_validity is required");
+        return FALSE;
+    }
+
+    if (!validate_batch_uids (uids, n_uids, error))
+        return FALSE;
+
+    if (!validate_mode (mode, error))
+        return FALSE;
+
+    if (!copy_text_vector (system_flags,
+        "system_flags", validate_system_flag, FALSE, &copied_system_flags,
+        error))
+        return FALSE;
+
+    if (!copy_text_vector (user_keywords,
+        "user_keywords", validate_user_keyword, TRUE, &copied_user_keywords,
+        error))
+        return FALSE;
+
+    if (!validate_payload (mode,
+        (const char *const *)copied_system_flags,
+        (const char *const *)copied_user_keywords, error))
+        return FALSE;
+
+    next.account_identity = g_strdup (account_identity);
+    next.mailbox_id = g_strdup (mailbox_id);
+    next.uid_validity = uid_validity;
+    next.mailbox_uid = 0;
+    next.uids = g_new (guint64, n_uids);
+    memcpy (next.uids, uids, n_uids * sizeof (guint64));
+    next.n_uids = n_uids;
+    next.mode = mode;
+    next.system_flags = g_steal_pointer (&copied_system_flags);
+    next.user_keywords = g_steal_pointer (&copied_user_keywords);
+
+    wyrebox_daemon_flag_keyword_update_request_clear (request);
+    *request = next;
+    next.account_identity = NULL;
+    next.mailbox_id = NULL;
+    next.uids = NULL;
     next.system_flags = NULL;
     next.user_keywords = NULL;
 

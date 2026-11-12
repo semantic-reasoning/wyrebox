@@ -170,8 +170,8 @@ def check_index_mailbox(text: str) -> None:
     require(r"\.transaction_commit\s*=\s*wyrebox_dovecot_transaction_commit",
             text, "flag changes pushed at transaction commit")
     require(r"mail_index_sync_next\s*\(", text, "index flag records read")
-    require(r"wyrebox_dovecot_daemon_client_update_flags\s*\(", text,
-            "flag changes sent through the daemon client")
+    require(r"wyrebox_dovecot_daemon_client_update_flags_batch\s*\(", text,
+            "homogeneous flag batches sent through the daemon client")
     require(r"index_transaction_rollback\s*\(", text,
             "refused transactions rolled back")
     require(r"parsed_mail_attachment_detection_add_flags", text,

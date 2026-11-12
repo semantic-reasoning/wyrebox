@@ -112,6 +112,25 @@ gboolean wyrebox_dovecot_daemon_client_update_flags (
     guint64 *out_journal_offset,
     GError **error);
 
+/*
+ * Homogeneous batch: one mode/flags/keywords applied to @uids. On success,
+ * @out_summary receives the daemon summary string (transfer full) when
+ * non-NULL. Legacy single-UID update_flags remains for error-frame semantics.
+ */
+gboolean wyrebox_dovecot_daemon_client_update_flags_batch (
+    const char *socket_path,
+    const char *account_identity,
+    const char *mailbox_id,
+    guint64 uid_validity,
+    const guint64 *uids,
+    gsize n_uids,
+    WyreboxDaemonFlagKeywordUpdateMode mode,
+    const char *const *system_flags,
+    const char *const *user_keywords,
+    guint64 *out_journal_offset,
+    char **out_summary,
+    GError **error);
+
 gboolean wyrebox_dovecot_daemon_client_expunge (
     const char *socket_path,
     const char *account_identity,

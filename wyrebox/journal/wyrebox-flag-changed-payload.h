@@ -10,9 +10,11 @@ typedef enum
 } WyreboxFlagChangedMode;
 
 /*
- * One flag/keyword update of a mailbox membership, journaled as a single
+ * One flag/keyword update of mailbox memberships, journaled as a single
  * FlagChanged record.
  *
+ * @uids / @n_uids: owned ascending UID list. Legacy single-UID callers may
+ *   set @uid and leave @n_uids at 0; encode treats that as one UID.
  * @system_flags: (nullable): NULL-terminated IMAP system flags, each one of
  *   \Seen, \Answered, \Flagged, \Deleted or \Draft, without duplicates.
  * @user_keywords: (nullable): NULL-terminated user keywords without
@@ -30,6 +32,8 @@ typedef struct
     char *mailbox_id;
     guint64 uidvalidity;
     guint64 uid;
+    guint64 *uids;
+    gsize n_uids;
     WyreboxFlagChangedMode mode;
     GStrv system_flags;
     GStrv user_keywords;
@@ -51,7 +55,7 @@ GBytes *wyrebox_flag_changed_payload_encode (
 /*
  * Decodes @bytes into @out_payload, which must be zero-initialized or
  * cleared. Malformed or invalid payloads fail with G_IO_ERROR_INVALID_DATA
- * and leave @out_payload untouched.
+ * and leave @out_payload untouched. WYREFLC1 single-UID journals still decode.
  */
 gboolean wyrebox_flag_changed_payload_decode (GBytes *bytes,
     WyreboxFlagChangedPayload *out_payload,

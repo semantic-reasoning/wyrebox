@@ -91,12 +91,11 @@ They model the old design and cannot exercise lib-index at all.
   not-possible error until #314.
 - Flag and keyword changes reach `wyreboxd` when the Dovecot transaction
   commits. The `transaction_commit` wrapper commits the index first, then
-  reads the pending flag records and sends at most one
-  `FlagKeywordUpdateRequest` SET and one CLEAR per changed message, in
-  ascending UID order. The daemon journals
-  each change, and the plugin updates its copy of the row only after the
-  daemon accepts it. This covers STORE and the implicit `\Seen` of a
-  `BODY[]` fetch.
+  reads the pending flag records, groups identical SET and CLEAR deltas, and
+  sends one homogeneous `FlagKeywordUpdateRequest` per group (ascending UID
+  list, at most 65535 UIDs). The daemon journals each accepted group once, and
+  the plugin updates its copy of a row only after the daemon accepts that UID.
+  This covers STORE and the implicit `\Seen` of a `BODY[]` fetch.
   - A keyword the daemon cannot represent, or an unavailable or conflicting
     daemon, stops the push: that message and the remaining ones revert to
     the daemon's values. A daemon rejection of a single message reverts only
@@ -153,8 +152,6 @@ They model the old design and cannot exercise lib-index at all.
   refused expunges keep `\Deleted` messages, clients that hide deleted
   messages diverge from the server. Do not enable autoexpunge or POP3 on
   WyreBox namespaces until #314: their expunges log commit errors.
-- Every changed message costs up to two daemon round trips at commit. A
-  batched flag update is a follow-up under #375.
 - The index is rebuilt per session, so CONDSTORE and QRESYNC modification
   sequences do not survive a reconnect.
 - Daemon calls are blocking and run on the `imap` ioloop, as `pop3c` does.

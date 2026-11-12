@@ -138,7 +138,9 @@ Flag and keyword mutations are canonical only after the corresponding
 `FlagChanged` record is durably appended. One flag/keyword update writes
 exactly one `FlagChanged` record carrying the update mode, the system flags,
 and the user keywords together, so a change to both is never split across
-records. `KeywordChanged` is reserved: it is not written and replay does not
+records. That record may cover one UID or a homogeneous ascending list of
+accepted UIDs that share the same mode, system flags, and user keywords.
+`KeywordChanged` is reserved: it is not written and replay does not
 materialize it. Group commit is allowed for flag and keyword mutations if the
 caller does not receive durable success until the grouped records are durable.
 Deferred acknowledgement of flag or keyword success is allowed; acknowledging

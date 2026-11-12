@@ -90,6 +90,12 @@ assert_round_trip (const WyreboxFlagChangedPayload *payload)
     g_assert_cmpstr (decoded.mailbox_id, ==, payload->mailbox_id);
     g_assert_cmpuint (decoded.uidvalidity, ==, payload->uidvalidity);
     g_assert_cmpuint (decoded.uid, ==, payload->uid);
+    g_assert_cmpuint (decoded.n_uids, ==, payload->n_uids);
+    if (payload->n_uids > 0) {
+        g_assert_nonnull (decoded.uids);
+        for (gsize i = 0; i < payload->n_uids; i++)
+            g_assert_cmpuint (decoded.uids[i], ==, payload->uids[i]);
+    }
     g_assert_cmpint (decoded.mode, ==, payload->mode);
     assert_strv_equal (decoded.system_flags, payload->system_flags);
     assert_strv_equal (decoded.user_keywords, payload->user_keywords);
@@ -125,6 +131,33 @@ test_round_trip_empty_replace (void)
     payload.system_flags = NULL;
     payload.user_keywords = NULL;
     assert_round_trip (&payload);
+}
+
+static void
+test_round_trip_multi_uid (void)
+{
+    guint64 uids[] = { 3, 7, 11 };
+    WyreboxFlagChangedPayload payload = valid_payload ();
+
+    payload.uid = uids[0];
+    payload.uids = uids;
+    payload.n_uids = G_N_ELEMENTS (uids);
+    assert_round_trip (&payload);
+
+    payload.mode = WYREBOX_FLAG_CHANGED_MODE_CLEAR;
+    payload.user_keywords = NULL;
+    assert_round_trip (&payload);
+}
+
+static void
+test_encode_rejects_unordered_uids (void)
+{
+    guint64 unordered[] = { 3, 2 };
+    WyreboxFlagChangedPayload payload = valid_payload ();
+
+    payload.uids = unordered;
+    payload.n_uids = G_N_ELEMENTS (unordered);
+    assert_encode_fails (&payload);
 }
 
 static void
@@ -228,7 +261,7 @@ test_decode_rejects_bad_magic_and_version (void)
     assert_decode_fails_invalid_data (bad_magic);
 
     memcpy (copy, data, size);
-    copy[7] = '2';
+    copy[7] = '9';
     bad_version = g_bytes_new (copy, size);
     assert_decode_fails_invalid_data (bad_version);
 }
@@ -305,6 +338,10 @@ main (int argc, char **argv)
         test_round_trip_each_mode);
     g_test_add_func ("/journal/flag-changed/roundtrip-empty-replace",
         test_round_trip_empty_replace);
+    g_test_add_func ("/journal/flag-changed/roundtrip-multi-uid",
+        test_round_trip_multi_uid);
+    g_test_add_func ("/journal/flag-changed/encode-rejects-unordered-uids",
+        test_encode_rejects_unordered_uids);
     g_test_add_func ("/journal/flag-changed/golden-header",
         test_encoded_header_matches_golden);
     g_test_add_func ("/journal/flag-changed/encode-invalid",

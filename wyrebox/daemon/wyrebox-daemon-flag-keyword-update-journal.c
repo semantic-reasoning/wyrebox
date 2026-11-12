@@ -5,6 +5,7 @@
 
 #include <duckdb.h>
 #include <gio/gio.h>
+#include <string.h>
 
 typedef struct
 {
@@ -59,7 +60,7 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (FlagKeywordUpdateJournal,
 static gboolean
 query_target (FlagKeywordUpdateJournal *self, const char *sql,
     const WyreboxDaemonFlagKeywordUpdateRequest *request, gboolean bind_uid,
-    duckdb_result *out_result, GError **error)
+    guint64 uid, duckdb_result *out_result, GError **error)
 {
     g_auto (duckdb_prepared_statement) statement = NULL;
     const char *detail = NULL;
@@ -78,8 +79,7 @@ query_target (FlagKeywordUpdateJournal *self, const char *sql,
         request->account_identity) != DuckDBSuccess ||
         duckdb_bind_varchar (statement, 2,
         request->mailbox_id) != DuckDBSuccess ||
-        (bind_uid && duckdb_bind_uint64 (statement, 3,
-        request->mailbox_uid) != DuckDBSuccess)) {
+        (bind_uid && duckdb_bind_uint64 (statement, 3, uid) != DuckDBSuccess)) {
         g_set_error (error,
             G_IO_ERROR, G_IO_ERROR_FAILED, "flag keyword update bind failed");
         return FALSE;
@@ -98,11 +98,10 @@ query_target (FlagKeywordUpdateJournal *self, const char *sql,
 }
 
 static gboolean
-check_target (FlagKeywordUpdateJournal *self,
+check_mailbox (FlagKeywordUpdateJournal *self,
     const WyreboxDaemonFlagKeywordUpdateRequest *request, GError **error)
 {
     g_auto (duckdb_result) mailbox = { 0 };
-    g_auto (duckdb_result) membership = { 0 };
 
     if (!query_target (self,
         "SELECT us.uidvalidity FROM mailbox_uid_state us "
@@ -111,7 +110,7 @@ check_target (FlagKeywordUpdateJournal *self,
         "WHERE us.account_id = ? AND us.namespace_kind = 'mailbox' "
         "AND us.namespace_id = ? "
         "AND mb.is_visible = TRUE AND mb.is_selectable = TRUE;",
-        request, FALSE, &mailbox, error))
+        request, FALSE, 0, &mailbox, error))
         return FALSE;
 
     if (duckdb_row_count (&mailbox) == 0) {
@@ -132,13 +131,40 @@ check_target (FlagKeywordUpdateJournal *self,
         return FALSE;
     }
 
+    return TRUE;
+}
+
+static gboolean
+membership_visible (FlagKeywordUpdateJournal *self,
+    const WyreboxDaemonFlagKeywordUpdateRequest *request, guint64 uid,
+    gboolean *out_visible, GError **error)
+{
+    g_auto (duckdb_result) membership = { 0 };
+
     if (!query_target (self,
         "SELECT 1 FROM mailbox_memberships "
         "WHERE account_id = ? AND mailbox_id = ? AND uid = ? "
-        "AND is_visible = TRUE;", request, TRUE, &membership, error))
+        "AND is_visible = TRUE;", request, TRUE, uid, &membership, error))
         return FALSE;
 
-    if (duckdb_row_count (&membership) == 0) {
+    *out_visible = duckdb_row_count (&membership) > 0;
+    return TRUE;
+}
+
+static gboolean
+check_target (FlagKeywordUpdateJournal *self,
+    const WyreboxDaemonFlagKeywordUpdateRequest *request, GError **error)
+{
+    gboolean visible = FALSE;
+
+    if (!check_mailbox (self, request, error))
+        return FALSE;
+
+    if (!membership_visible (self, request, request->mailbox_uid, &visible,
+        error))
+        return FALSE;
+
+    if (!visible) {
         g_set_error (error,
             G_IO_ERROR,
             G_IO_ERROR_NOT_FOUND,
@@ -148,6 +174,37 @@ check_target (FlagKeywordUpdateJournal *self,
     }
 
     return TRUE;
+}
+
+static void
+note_flag_update_counter (void)
+{
+    const char *path = g_getenv ("WYREBOX_TEST_FLAG_UPDATE_COUNTER_PATH");
+    g_autofree char *contents = NULL;
+    gsize length = 0;
+    guint64 count = 0;
+
+    if (path == NULL || path[0] == '\0')
+        return;
+
+    if (g_file_get_contents (path, &contents, &length, NULL) && length > 0)
+        count = g_ascii_strtoull (contents, NULL, 10);
+    contents = g_strdup_printf ("%" G_GUINT64_FORMAT, count + 1);
+    g_file_set_contents (path, contents, -1, NULL);
+}
+
+static gchar *
+format_uid_list (const guint64 *uids, gsize n_uids)
+{
+    g_autoptr (GString) text = g_string_new (NULL);
+
+    for (gsize i = 0; i < n_uids; i++) {
+        if (i > 0)
+            g_string_append_c (text, ',');
+        g_string_append_printf (text, "%" G_GUINT64_FORMAT, uids[i]);
+    }
+
+    return g_string_free (g_steal_pointer (&text), FALSE);
 }
 
 static WyreboxFlagChangedMode
@@ -181,13 +238,16 @@ mode_name (WyreboxDaemonFlagKeywordUpdateMode mode)
 static gboolean
 append_flag_change (FlagKeywordUpdateJournal *self,
     const WyreboxDaemonFlagKeywordUpdateRequest *request,
-    guint64 *out_offset, guint64 *out_sequence, GError **error)
+    const guint64 *uids, gsize n_uids, guint64 *out_offset,
+    guint64 *out_sequence, GError **error)
 {
     WyreboxFlagChangedPayload payload = {
         .account_id = request->account_identity,
         .mailbox_id = request->mailbox_id,
         .uidvalidity = request->uid_validity,
-        .uid = request->mailbox_uid,
+        .uid = n_uids == 1 ? uids[0] : 0,
+        .uids = (guint64 *)uids,
+        .n_uids = n_uids > 1 || request->n_uids > 0 ? n_uids : 0,
         .mode = flag_changed_mode (request->mode),
         .system_flags = request->system_flags,
         .user_keywords = request->user_keywords,
@@ -204,6 +264,70 @@ append_flag_change (FlagKeywordUpdateJournal *self,
 }
 
 static gboolean
+update_flags_batch (FlagKeywordUpdateJournal *self,
+    const WyreboxDaemonRequestIdentity *identity,
+    const WyreboxDaemonFlagKeywordUpdateRequest *request,
+    WyreboxDaemonSuccessReceipt *out_receipt, GError **error)
+{
+    g_autofree guint64 *accepted = g_new0 (guint64, request->n_uids);
+    g_autofree guint64 *gone = g_new0 (guint64, request->n_uids);
+    g_autofree gchar *accepted_text = NULL;
+    g_autofree gchar *gone_text = NULL;
+    gsize n_accepted = 0;
+    gsize n_gone = 0;
+    guint64 journal_offset = 0;
+    guint64 journal_sequence = 0;
+
+    {
+        g_autoptr (GMutexLocker) locker =
+            g_mutex_locker_new (&self->connection_mutex);
+
+        if (!check_mailbox (self, request, error))
+            return FALSE;
+
+        for (gsize i = 0; i < request->n_uids; i++) {
+            gboolean visible = FALSE;
+
+            if (!membership_visible (self, request, request->uids[i], &visible,
+                error))
+                return FALSE;
+            if (visible)
+                accepted[n_accepted++] = request->uids[i];
+            else
+                gone[n_gone++] = request->uids[i];
+        }
+    }
+
+    if (n_accepted > 0 &&
+        !append_flag_change (self, request, accepted, n_accepted,
+        &journal_offset, &journal_sequence, error))
+        return FALSE;
+
+    if (n_accepted > 0) {
+        wyrebox_daemon_delivery_materialization_catch_up_or_schedule_retry
+            (self->materialization);
+    }
+
+    accepted_text = format_uid_list (accepted, n_accepted);
+    gone_text = format_uid_list (gone, n_gone);
+
+    wyrebox_daemon_success_receipt_clear (out_receipt);
+    out_receipt->request_id = g_strdup (identity->request_id);
+    if (n_accepted > 0) {
+        out_receipt->durable_marker = g_strdup_printf ("journal:%"
+                G_GUINT64_FORMAT ":%" G_GUINT64_FORMAT, journal_offset,
+                journal_sequence);
+        out_receipt->journal_offset = journal_offset;
+        out_receipt->journal_sequence = journal_sequence;
+    }
+    out_receipt->summary = g_strdup_printf (
+        "flag_keyword_update mode=%s mailbox_id=%s accepted=%s gone=%s "
+        "failed_permanent=", mode_name (request->mode),
+        request->mailbox_id, accepted_text, gone_text);
+    return TRUE;
+}
+
+static gboolean
 update_flags (const WyreboxDaemonRequestIdentity *identity,
     const WyreboxDaemonFlagKeywordUpdateRequest *request,
     WyreboxDaemonSuccessReceipt *out_receipt, gpointer user_data,
@@ -212,6 +336,13 @@ update_flags (const WyreboxDaemonRequestIdentity *identity,
     FlagKeywordUpdateJournal *self = user_data;
     guint64 journal_offset = 0;
     guint64 journal_sequence = 0;
+    guint64 single_uid = 0;
+
+    note_flag_update_counter ();
+
+    if (request->n_uids > 0)
+        return update_flags_batch (self, identity, request, out_receipt,
+                   error);
 
     {
         g_autoptr (GMutexLocker) locker =
@@ -221,7 +352,8 @@ update_flags (const WyreboxDaemonRequestIdentity *identity,
             return FALSE;
     }
 
-    if (!append_flag_change (self, request, &journal_offset,
+    single_uid = request->mailbox_uid;
+    if (!append_flag_change (self, request, &single_uid, 1, &journal_offset,
         &journal_sequence, error))
         return FALSE;
 

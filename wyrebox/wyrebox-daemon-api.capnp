@@ -175,6 +175,9 @@ struct FlagKeywordUpdateRequest {
   mode @4 :FlagKeywordUpdateMode;
   systemFlags @5 :List(Text);
   userKeywords @6 :List(Text);
+  # Homogeneous batch. When non-empty, mailboxUid is ignored and UIDs share
+  # mode/systemFlags/userKeywords. At most 65535 strictly ascending UIDs.
+  uids @7 :List(UInt64);
 }
 
 enum FlagKeywordUpdateMode {

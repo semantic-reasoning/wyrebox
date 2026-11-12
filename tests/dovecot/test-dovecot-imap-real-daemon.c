@@ -22,6 +22,7 @@ typedef struct
     char *root;
     char *socket_path;
     char *plugin_dir;
+    char *flag_update_counter_path;
     GSubprocess *daemon;
 } ImapRealDaemonFixture;
 
@@ -199,6 +200,9 @@ fixture_set_up (ImapRealDaemonFixture *fixture, gconstpointer user_data)
     fixture->socket_path = g_build_filename (fixture->root, "run",
             "wyrebox.sock", NULL);
     fixture->plugin_dir = g_build_filename (fixture->root, "plugins", NULL);
+    fixture->flag_update_counter_path = g_build_filename (fixture->root,
+            "flag-update-counter", NULL);
+    write_file (fixture->flag_update_counter_path, "0");
 
     g_assert_cmpint (g_mkdir_with_parents (fixture->plugin_dir, 0750), ==, 0);
     plugin_link = g_build_filename (fixture->plugin_dir, "wyrebox_plugin.so",
@@ -215,6 +219,9 @@ fixture_set_up (ImapRealDaemonFixture *fixture, gconstpointer user_data)
     /* An aborted assertion must not leave wyreboxd holding the test's
      * output pipes open. */
     launcher = g_subprocess_launcher_new (G_SUBPROCESS_FLAGS_NONE);
+    g_subprocess_launcher_setenv (launcher,
+        "WYREBOX_TEST_FLAG_UPDATE_COUNTER_PATH",
+        fixture->flag_update_counter_path, TRUE);
     g_subprocess_launcher_set_child_setup (launcher, die_with_parent, NULL,
         NULL);
     fixture->daemon = g_subprocess_launcher_spawnv (launcher, argv, &error);
@@ -290,6 +297,9 @@ restart_daemon (ImapRealDaemonFixture *fixture)
     g_assert_false (g_test_failed ());
 
     launcher = g_subprocess_launcher_new (G_SUBPROCESS_FLAGS_NONE);
+    g_subprocess_launcher_setenv (launcher,
+        "WYREBOX_TEST_FLAG_UPDATE_COUNTER_PATH",
+        fixture->flag_update_counter_path, TRUE);
     g_subprocess_launcher_set_child_setup (launcher, die_with_parent, NULL,
         NULL);
     fixture->daemon = g_subprocess_launcher_spawnv (launcher, argv, &error);
@@ -310,6 +320,7 @@ fixture_tear_down (ImapRealDaemonFixture *fixture, gconstpointer user_data)
     g_clear_pointer (&fixture->root, g_free);
     g_clear_pointer (&fixture->socket_path, g_free);
     g_clear_pointer (&fixture->plugin_dir, g_free);
+    g_clear_pointer (&fixture->flag_update_counter_path, g_free);
 }
 
 static char *
@@ -666,6 +677,54 @@ test_store_updates_daemon_flags (ImapRealDaemonFixture *fixture,
     g_assert_nonnull (strstr (session.output, "\r\ng OK"));
     assert_fetch_flags (session.output, 1, expected);
     assert_daemon_flags (fixture, expected);
+}
+
+static guint64
+read_flag_update_counter (ImapRealDaemonFixture *fixture)
+{
+    g_autofree char *contents = NULL;
+    gsize length = 0;
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (g_file_get_contents (fixture->flag_update_counter_path,
+        &contents, &length, &error));
+    g_assert_no_error (error);
+    if (length == 0)
+        return 0;
+    return g_ascii_strtoull (contents, NULL, 10);
+}
+
+static void
+test_multi_uid_store_batches_daemon_round_trips (ImapRealDaemonFixture
+    *fixture, gconstpointer user_data)
+{
+    const char *const expected[] = { "\\Flagged", NULL };
+    g_autofree char *config_path = NULL;
+    g_autofree char *script = NULL;
+    g_auto (ImapSession) session = { 0 };
+    guint64 before = 0;
+
+    (void)user_data;
+
+    deliver_fixture (fixture->socket_path, "html-message.eml");
+    deliver_fixture (fixture->socket_path, "utf8-8bit-body.eml");
+    write_file (fixture->flag_update_counter_path, "0");
+    before = read_flag_update_counter (fixture);
+    g_assert_cmpuint (before, ==, 0);
+
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    script = g_strdup_printf ("a SELECT INBOX\r\n"
+            "b STORE 1:3 +FLAGS (\\Flagged)\r\n"
+            "c FETCH 1:3 (UID FLAGS)\r\nz LOGOUT\r\n");
+    run_imap (config_path, script, &session);
+
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+    g_assert_nonnull (strstr (session.output, "\r\nc OK"));
+    assert_fetch_flags (session.output, 1, expected);
+    assert_fetch_flags (session.output, 2, expected);
+    assert_fetch_flags (session.output, 3, expected);
+    /* One homogeneous SET batch, independent of the UID count. */
+    g_assert_cmpuint (read_flag_update_counter (fixture), ==, 1);
 }
 
 static void
@@ -1561,6 +1620,9 @@ main (int argc, char **argv)
     g_test_add ("/dovecot/imap/store-updates-daemon-flags",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_store_updates_daemon_flags, fixture_tear_down);
+    g_test_add ("/dovecot/imap/multi-uid-store-batches-daemon-round-trips",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_multi_uid_store_batches_daemon_round_trips, fixture_tear_down);
     g_test_add ("/dovecot/imap/store-rejected-keyword-reverts",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_store_rejected_keyword_reverts, fixture_tear_down);

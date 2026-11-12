@@ -1030,12 +1030,68 @@ typedef enum
     WYREBOX_DOVECOT_PUSH_FAILED,
 } WyreboxDovecotPushResult;
 
-static WyreboxDovecotPushResult
-wyrebox_dovecot_push_update (struct wyrebox_dovecot_mailbox *wbox,
-    WyreboxDovecotMailboxUidMapRow *row,
-    WyreboxDaemonFlagKeywordUpdateMode mode, enum mail_flags flags,
-    GHashTable *keywords, GError **error)
+static gboolean
+wyrebox_dovecot_summary_has_uid (const char *summary, const char *field,
+    guint64 uid)
 {
+    g_autofree char *needle = g_strdup_printf ("%" G_GUINT64_FORMAT, uid);
+    const char *cursor;
+    g_autofree char *prefix = g_strdup_printf ("%s=", field);
+
+    if (summary == NULL)
+        return FALSE;
+    cursor = strstr (summary, prefix);
+    if (cursor == NULL)
+        return FALSE;
+    cursor += strlen (prefix);
+    while (*cursor != '\0' && *cursor != ' ') {
+        const char *end = cursor;
+        gsize len;
+
+        while (*end != '\0' && *end != ',' && *end != ' ')
+            end++;
+        len = (gsize)(end - cursor);
+        if (len == strlen (needle) && strncmp (cursor, needle, len) == 0)
+            return TRUE;
+        if (*end == '\0' || *end == ' ')
+            break;
+        cursor = end + 1;
+    }
+    return FALSE;
+}
+
+static gchar *
+wyrebox_dovecot_flag_group_key (enum mail_flags flags, GHashTable *keywords)
+{
+    g_autoptr (GPtrArray) system_names =
+        wyrebox_dovecot_system_flag_names (flags);
+    g_autoptr (GPtrArray) keyword_names =
+        wyrebox_dovecot_keyword_names (keywords);
+    g_autoptr (GString) key = g_string_new (NULL);
+
+    for (guint i = 0; i + 1 < system_names->len; i++) {
+        if (i > 0)
+            g_string_append_c (key, '\n');
+        g_string_append (key, g_ptr_array_index (system_names, i));
+    }
+    g_string_append_c (key, '|');
+    for (guint i = 0; i + 1 < keyword_names->len; i++) {
+        if (i > 0)
+            g_string_append_c (key, '\n');
+        g_string_append (key, g_ptr_array_index (keyword_names, i));
+    }
+    return g_string_free (g_steal_pointer (&key), FALSE);
+}
+
+static WyreboxDovecotPushResult
+wyrebox_dovecot_push_update_batch (struct wyrebox_dovecot_mailbox *wbox,
+    WyreboxDaemonFlagKeywordUpdateMode mode, enum mail_flags flags,
+    GHashTable *keywords, const guint64 *uids, gsize n_uids,
+    WyreboxDovecotMailboxUidMapRow **rows, char **out_summary, GError **error)
+{
+    if (out_summary != NULL)
+        *out_summary = NULL;
+
     struct wyrebox_dovecot_storage *storage =
         (struct wyrebox_dovecot_storage *)wbox->box.storage;
     const WyreboxDaemonMailboxSelectResult *select = &wbox->state.select_result;
@@ -1049,24 +1105,23 @@ wyrebox_dovecot_push_update (struct wyrebox_dovecot_mailbox *wbox,
     const char *const *user_keywords =
         (const char *const *)keyword_names->pdata;
     guint64 journal_offset = 0;
+    g_autofree char *summary = NULL;
 
-    if (system_names->len == 1 && keyword_names->len == 1) {
+    if (n_uids == 0 || (system_names->len == 1 && keyword_names->len == 1))
         return WYREBOX_DOVECOT_PUSH_OK;
-    }
 
-    /* Validate here: the client reports a malformed daemon response with
-     * the same error code as invalid input. */
-    if (!wyrebox_daemon_flag_keyword_update_request_init (&request,
+    if (!wyrebox_daemon_flag_keyword_update_request_init_batch (&request,
         storage->account_identity, select->mailbox_id, select->uid_validity,
-        row->uid, mode, system_flags, user_keywords, error)) {
-        e_debug (wbox->box.event, "WyreBox cannot store flags of UID %"
-            G_GUINT64_FORMAT ": %s", row->uid, (*error)->message);
+        uids, n_uids, mode, system_flags, user_keywords, error)) {
+        e_debug (wbox->box.event, "WyreBox cannot store flags: %s",
+            (*error)->message);
         return WYREBOX_DOVECOT_PUSH_INVALID;
     }
 
-    if (!wyrebox_dovecot_daemon_client_update_flags (storage->socket_path,
+    if (!wyrebox_dovecot_daemon_client_update_flags_batch (storage->socket_path,
         storage->account_identity, select->mailbox_id, select->uid_validity,
-        row->uid, mode, system_flags, user_keywords, &journal_offset, error)) {
+        uids, n_uids, mode, system_flags, user_keywords, &journal_offset,
+        &summary, error)) {
         if (g_error_matches (*error, WYREBOX_DOVECOT_DAEMON_CLIENT_ERROR,
             WYREBOX_DAEMON_ERROR_NOT_FOUND)) {
             return WYREBOX_DOVECOT_PUSH_MESSAGE_GONE;
@@ -1078,12 +1133,19 @@ wyrebox_dovecot_push_update (struct wyrebox_dovecot_mailbox *wbox,
         return WYREBOX_DOVECOT_PUSH_FAILED;
     }
 
-    e_debug (wbox->box.event, "WyreBox flag update mailbox=%s uid=%"
-        G_GUINT64_FORMAT " mode=%s journal_offset=%" G_GUINT64_FORMAT,
-        select->mailbox_id, row->uid,
+    e_debug (wbox->box.event, "WyreBox flag update mailbox=%s uids=%"
+        G_GSIZE_FORMAT " mode=%s journal_offset=%" G_GUINT64_FORMAT,
+        select->mailbox_id, n_uids,
         mode == WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET ? "set" : "clear",
         journal_offset);
-    wyrebox_dovecot_row_apply_update (row, mode, system_flags, user_keywords);
+
+    for (gsize i = 0; i < n_uids; i++) {
+        if (wyrebox_dovecot_summary_has_uid (summary, "accepted", uids[i]))
+            wyrebox_dovecot_row_apply_update (rows[i], mode, system_flags,
+                user_keywords);
+    }
+    if (out_summary != NULL)
+        *out_summary = g_steal_pointer (&summary);
     return WYREBOX_DOVECOT_PUSH_OK;
 }
 
@@ -1132,8 +1194,8 @@ wyrebox_dovecot_mailbox_set_flag_update_error (struct wyrebox_dovecot_mailbox
 
 /*
  * Sends the index flag changes committed since the last push to the daemon,
- * one SET and one CLEAR per UID at most. A UID whose update fails is reset
- * to the last flags the daemon accepted.
+ * one homogeneous SET and one CLEAR batch per distinct flag/keyword group.
+ * A UID whose update fails is reset to the last flags the daemon accepted.
  */
 static int
 wyrebox_dovecot_mailbox_push_flag_changes (struct wyrebox_dovecot_mailbox
@@ -1177,50 +1239,162 @@ wyrebox_dovecot_mailbox_push_flag_changes (struct wyrebox_dovecot_mailbox
     }
     g_array_sort (uids, wyrebox_dovecot_compare_uid);
 
-    for (guint i = 0; i < uids->len; i++) {
-        guint32 uid = g_array_index (uids, guint32, i);
-        WyreboxDovecotFlagDelta *delta =
-            g_hash_table_lookup (deltas, GUINT_TO_POINTER (uid));
-        WyreboxDovecotMailboxUidMapRow *row =
-            g_hash_table_lookup (wbox->state.rows_by_uid,
-                GUINT_TO_POINTER (uid));
-        WyreboxDovecotPushResult result = WYREBOX_DOVECOT_PUSH_OK;
-        g_autoptr (GError) error = NULL;
+    /* Homogeneous groups: one SET batch and one CLEAR batch per distinct
+     * flag/keyword set, so multi-UID STORE is O(groups) not O(UIDs). */
+    {
+        g_autoptr (GHashTable) set_groups =
+            g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
+                (GDestroyNotify)g_array_unref);
+        g_autoptr (GHashTable) clear_groups =
+            g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
+                (GDestroyNotify)g_array_unref);
+        GHashTableIter group_iter;
+        gpointer group_key;
+        gpointer group_value;
 
-        /* Records that cannot be pushed fail the commit; the reconcile in
-         * the next sync_index restores the daemon flags for them. */
-        if (row == NULL) {
-            mailbox_set_critical (box, "WyreBox has no daemon row for UID %u",
-                uid);
-            collected = FALSE;
-            continue;
-        }
+        for (guint i = 0; i < uids->len; i++) {
+            guint32 uid = g_array_index (uids, guint32, i);
+            WyreboxDovecotFlagDelta *delta =
+                g_hash_table_lookup (deltas, GUINT_TO_POINTER (uid));
+            WyreboxDovecotMailboxUidMapRow *row =
+                g_hash_table_lookup (wbox->state.rows_by_uid,
+                    GUINT_TO_POINTER (uid));
 
-        if (!stopped) {
-            result = wyrebox_dovecot_push_update (wbox, row,
-                    WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET,
-                    delta->add_flags,
-                    delta->add_keywords, &error);
-        }
-        if (!stopped && result == WYREBOX_DOVECOT_PUSH_OK) {
-            result = wyrebox_dovecot_push_update (wbox, row,
-                    WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_CLEAR,
-                    delta->remove_flags, delta->remove_keywords, &error);
-        }
-
-        if (stopped || result != WYREBOX_DOVECOT_PUSH_OK) {
-            wyrebox_dovecot_index_apply_row_flags (box, sync_trans, delta->seq,
-                row);
-        }
-        if (result == WYREBOX_DOVECOT_PUSH_MESSAGE_GONE) {
-            e_warning (box->event, "WyreBox UID %u vanished during a flag "
-                "update: %s", uid, error->message);
-        } else if (result != WYREBOX_DOVECOT_PUSH_OK) {
-            if (first_error == NULL) {
-                first_error = g_steal_pointer (&error);
-                first_result = result;
+            if (row == NULL) {
+                mailbox_set_critical (box,
+                    "WyreBox has no daemon row for UID %u", uid);
+                collected = FALSE;
+                continue;
             }
-            stopped = stopped || result != WYREBOX_DOVECOT_PUSH_MESSAGE_FAILED;
+
+            if (g_hash_table_size (delta->add_keywords) > 0 ||
+                delta->add_flags != 0) {
+                g_autofree char *key =
+                    wyrebox_dovecot_flag_group_key (delta->add_flags,
+                        delta->add_keywords);
+                GArray *group = g_hash_table_lookup (set_groups, key);
+
+                if (group == NULL) {
+                    group = g_array_new (FALSE, FALSE, sizeof (guint32));
+                    g_hash_table_insert (set_groups, g_steal_pointer (&key),
+                        group);
+                }
+                g_array_append_val (group, uid);
+            }
+            if (g_hash_table_size (delta->remove_keywords) > 0 ||
+                delta->remove_flags != 0) {
+                g_autofree char *key =
+                    wyrebox_dovecot_flag_group_key (delta->remove_flags,
+                        delta->remove_keywords);
+                GArray *group = g_hash_table_lookup (clear_groups, key);
+
+                if (group == NULL) {
+                    group = g_array_new (FALSE, FALSE, sizeof (guint32));
+                    g_hash_table_insert (clear_groups, g_steal_pointer (&key),
+                        group);
+                }
+                g_array_append_val (group, uid);
+            }
+        }
+
+        g_hash_table_iter_init (&group_iter, set_groups);
+        while (!stopped && g_hash_table_iter_next (&group_iter, &group_key,
+            &group_value)) {
+            GArray *group = group_value;
+            guint32 first_uid = g_array_index (group, guint32, 0);
+            WyreboxDovecotFlagDelta *sample =
+                g_hash_table_lookup (deltas, GUINT_TO_POINTER (first_uid));
+            g_autofree guint64 *batch_uids = g_new0 (guint64, group->len);
+            g_autofree WyreboxDovecotMailboxUidMapRow **batch_rows =
+                g_new0 (WyreboxDovecotMailboxUidMapRow *, group->len);
+            WyreboxDovecotPushResult result = WYREBOX_DOVECOT_PUSH_OK;
+            g_autoptr (GError) error = NULL;
+            g_autofree char *summary = NULL;
+
+            for (guint i = 0; i < group->len; i++) {
+                guint32 uid = g_array_index (group, guint32, i);
+
+                batch_uids[i] = uid;
+                batch_rows[i] = g_hash_table_lookup (wbox->state.rows_by_uid,
+                        GUINT_TO_POINTER (uid));
+            }
+            result = wyrebox_dovecot_push_update_batch (wbox,
+                    WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET,
+                    sample->add_flags, sample->add_keywords, batch_uids,
+                    group->len, batch_rows, &summary, &error);
+            for (guint i = 0; i < group->len; i++) {
+                guint32 uid = g_array_index (group, guint32, i);
+                WyreboxDovecotFlagDelta *delta =
+                    g_hash_table_lookup (deltas, GUINT_TO_POINTER (uid));
+
+                if (result != WYREBOX_DOVECOT_PUSH_OK ||
+                    !wyrebox_dovecot_summary_has_uid (summary, "accepted",
+                    uid)) {
+                    wyrebox_dovecot_index_apply_row_flags (box, sync_trans,
+                        delta->seq, batch_rows[i]);
+                }
+            }
+            if (result == WYREBOX_DOVECOT_PUSH_MESSAGE_GONE) {
+                e_warning (box->event, "WyreBox UIDs vanished during a flag "
+                    "update: %s", error->message);
+            } else if (result != WYREBOX_DOVECOT_PUSH_OK) {
+                if (first_error == NULL) {
+                    first_error = g_steal_pointer (&error);
+                    first_result = result;
+                }
+                stopped = stopped ||
+                    result != WYREBOX_DOVECOT_PUSH_MESSAGE_FAILED;
+            }
+        }
+
+        g_hash_table_iter_init (&group_iter, clear_groups);
+        while (!stopped && g_hash_table_iter_next (&group_iter, &group_key,
+            &group_value)) {
+            GArray *group = group_value;
+            guint32 first_uid = g_array_index (group, guint32, 0);
+            WyreboxDovecotFlagDelta *sample =
+                g_hash_table_lookup (deltas, GUINT_TO_POINTER (first_uid));
+            g_autofree guint64 *batch_uids = g_new0 (guint64, group->len);
+            g_autofree WyreboxDovecotMailboxUidMapRow **batch_rows =
+                g_new0 (WyreboxDovecotMailboxUidMapRow *, group->len);
+            WyreboxDovecotPushResult result = WYREBOX_DOVECOT_PUSH_OK;
+            g_autoptr (GError) error = NULL;
+            g_autofree char *summary = NULL;
+
+            for (guint i = 0; i < group->len; i++) {
+                guint32 uid = g_array_index (group, guint32, i);
+
+                batch_uids[i] = uid;
+                batch_rows[i] = g_hash_table_lookup (wbox->state.rows_by_uid,
+                        GUINT_TO_POINTER (uid));
+            }
+            result = wyrebox_dovecot_push_update_batch (wbox,
+                    WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_CLEAR,
+                    sample->remove_flags, sample->remove_keywords, batch_uids,
+                    group->len, batch_rows, &summary, &error);
+            for (guint i = 0; i < group->len; i++) {
+                guint32 uid = g_array_index (group, guint32, i);
+                WyreboxDovecotFlagDelta *delta =
+                    g_hash_table_lookup (deltas, GUINT_TO_POINTER (uid));
+
+                if (result != WYREBOX_DOVECOT_PUSH_OK ||
+                    !wyrebox_dovecot_summary_has_uid (summary, "accepted",
+                    uid)) {
+                    wyrebox_dovecot_index_apply_row_flags (box, sync_trans,
+                        delta->seq, batch_rows[i]);
+                }
+            }
+            if (result == WYREBOX_DOVECOT_PUSH_MESSAGE_GONE) {
+                e_warning (box->event, "WyreBox UIDs vanished during a flag "
+                    "update: %s", error->message);
+            } else if (result != WYREBOX_DOVECOT_PUSH_OK) {
+                if (first_error == NULL) {
+                    first_error = g_steal_pointer (&error);
+                    first_result = result;
+                }
+                stopped = stopped ||
+                    result != WYREBOX_DOVECOT_PUSH_MESSAGE_FAILED;
+            }
         }
     }
 

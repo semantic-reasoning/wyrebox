@@ -835,6 +835,10 @@ decode_delivery_ingestion_request (const RequestFrame::Reader & request_frame,
     return TRUE;
 }
 
+static gboolean decode_uint64_list (const capnp::List < uint64_t,
+    capnp::Kind::PRIMITIVE > ::Reader & value_list, guint64 **out_values,
+    gsize *out_n_values);
+
 static gboolean
 decode_flag_keyword_update_request (const RequestFrame::Reader & request_frame,
     WyreboxDaemonCapnpDecodedRequestState *state,
@@ -859,15 +863,35 @@ decode_flag_keyword_update_request (const RequestFrame::Reader & request_frame,
     if (!decode_strv (flag_keyword_update.getUserKeywords (), &user_keywords))
         return FALSE;
 
-    if (!wyrebox_daemon_flag_keyword_update_request_init
-            (&state->flag_keyword_update,
-        flag_keyword_update.getAccountIdentity ().cStr (),
-        flag_keyword_update.getMailboxId ().cStr (),
-        flag_keyword_update.getUidValidity (),
-        flag_keyword_update.getMailboxUid (), c_mode,
-        (const char *const *)system_flags,
-        (const char *const *)user_keywords, error))
-        return FALSE;
+    {
+        g_autofree guint64 *uids = NULL;
+        gsize n_uids = 0;
+
+        if (!decode_uint64_list (flag_keyword_update.getUids (), &uids,
+            &n_uids))
+            return set_invalid_argument (error,
+                       "flag keyword update uids are invalid");
+
+        if (n_uids > 0) {
+            if (!wyrebox_daemon_flag_keyword_update_request_init_batch
+                    (&state->flag_keyword_update,
+                flag_keyword_update.getAccountIdentity ().cStr (),
+                flag_keyword_update.getMailboxId ().cStr (),
+                flag_keyword_update.getUidValidity (), uids, n_uids, c_mode,
+                (const char *const *)system_flags,
+                (const char *const *)user_keywords, error))
+                return FALSE;
+        } else if (!wyrebox_daemon_flag_keyword_update_request_init
+                (&state->flag_keyword_update,
+            flag_keyword_update.getAccountIdentity ().cStr (),
+            flag_keyword_update.getMailboxId ().cStr (),
+            flag_keyword_update.getUidValidity (),
+            flag_keyword_update.getMailboxUid (), c_mode,
+            (const char *const *)system_flags,
+            (const char *const *)user_keywords, error)) {
+            return FALSE;
+        }
+    }
 
     out_request_frame->request_id = state->request_id;
     out_request_frame->caller_identity = state->caller_identity;
@@ -1920,6 +1944,15 @@ validate_flag_keyword_update_encode_input (const WyreboxDaemonRequestIdentity
         identity->tool_identity, identity->correlation_id, error))
         return FALSE;
 
+    if (request->n_uids > 0) {
+        return wyrebox_daemon_flag_keyword_update_request_init_batch
+                   (&validated_request, request->account_identity,
+                   request->mailbox_id, request->uid_validity, request->uids,
+                   request->n_uids, request->mode,
+                   (const char *const *)request->system_flags,
+                   (const char *const *)request->user_keywords, error);
+    }
+
     return wyrebox_daemon_flag_keyword_update_request_init (&validated_request,
                request->account_identity,
                request->mailbox_id,
@@ -1937,6 +1970,10 @@ encode_strv (capnp::List < capnp::Text > ::Builder values,
     for (guint i = 0; strv != NULL && strv[i] != NULL; i++)
         values.set (i, strv[i]);
 }
+
+static void encode_uint64_list (capnp::List < uint64_t,
+    capnp::Kind::PRIMITIVE > ::Builder values, const guint64 *uids,
+    gsize n_uids);
 
 static gboolean
 encode_flag_keyword_update_request (const WyreboxDaemonRequestIdentity
@@ -1996,6 +2033,8 @@ encode_flag_keyword_update_request (const WyreboxDaemonRequestIdentity
             (const char *const *)request->system_flags);
         encode_strv (flag_keyword_update.initUserKeywords (n_user_keywords),
             (const char *const *)request->user_keywords);
+        encode_uint64_list (flag_keyword_update.initUids (request->n_uids),
+            request->uids, request->n_uids);
 
         auto words = capnp::messageToFlatArray (request_builder);
         auto bytes = words.asBytes ();
