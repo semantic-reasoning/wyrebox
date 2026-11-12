@@ -42,6 +42,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-message-search-dispatcher.c',
   'daemon/wyrebox-daemon-message-search-duckdb.c',
   'daemon/wyrebox-daemon-flag-keyword-update-journal.c',
+  'daemon/wyrebox-daemon-test-counter.c',
   'daemon/wyrebox-daemon-memberships-copy-move-journal.c',
   'daemon/wyrebox-daemon-message-append-dispatcher.c',
   'daemon/wyrebox-daemon-message-append-journal.c',

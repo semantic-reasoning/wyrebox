@@ -23,6 +23,8 @@ typedef struct
     char *socket_path;
     char *plugin_dir;
     char *flag_update_counter_path;
+    char *mailbox_select_counter_path;
+    char *uid_map_counter_path;
     GSubprocess *daemon;
 } ImapRealDaemonFixture;
 
@@ -202,7 +204,13 @@ fixture_set_up (ImapRealDaemonFixture *fixture, gconstpointer user_data)
     fixture->plugin_dir = g_build_filename (fixture->root, "plugins", NULL);
     fixture->flag_update_counter_path = g_build_filename (fixture->root,
             "flag-update-counter", NULL);
+    fixture->mailbox_select_counter_path = g_build_filename (fixture->root,
+            "mailbox-select-counter", NULL);
+    fixture->uid_map_counter_path = g_build_filename (fixture->root,
+            "uid-map-counter", NULL);
     write_file (fixture->flag_update_counter_path, "0");
+    write_file (fixture->mailbox_select_counter_path, "0");
+    write_file (fixture->uid_map_counter_path, "0");
 
     g_assert_cmpint (g_mkdir_with_parents (fixture->plugin_dir, 0750), ==, 0);
     plugin_link = g_build_filename (fixture->plugin_dir, "wyrebox_plugin.so",
@@ -222,6 +230,12 @@ fixture_set_up (ImapRealDaemonFixture *fixture, gconstpointer user_data)
     g_subprocess_launcher_setenv (launcher,
         "WYREBOX_TEST_FLAG_UPDATE_COUNTER_PATH",
         fixture->flag_update_counter_path, TRUE);
+    g_subprocess_launcher_setenv (launcher,
+        "WYREBOX_TEST_MAILBOX_SELECT_COUNTER_PATH",
+        fixture->mailbox_select_counter_path, TRUE);
+    g_subprocess_launcher_setenv (launcher,
+        "WYREBOX_TEST_UID_MAP_COUNTER_PATH",
+        fixture->uid_map_counter_path, TRUE);
     g_subprocess_launcher_set_child_setup (launcher, die_with_parent, NULL,
         NULL);
     fixture->daemon = g_subprocess_launcher_spawnv (launcher, argv, &error);
@@ -300,6 +314,12 @@ restart_daemon (ImapRealDaemonFixture *fixture)
     g_subprocess_launcher_setenv (launcher,
         "WYREBOX_TEST_FLAG_UPDATE_COUNTER_PATH",
         fixture->flag_update_counter_path, TRUE);
+    g_subprocess_launcher_setenv (launcher,
+        "WYREBOX_TEST_MAILBOX_SELECT_COUNTER_PATH",
+        fixture->mailbox_select_counter_path, TRUE);
+    g_subprocess_launcher_setenv (launcher,
+        "WYREBOX_TEST_UID_MAP_COUNTER_PATH",
+        fixture->uid_map_counter_path, TRUE);
     g_subprocess_launcher_set_child_setup (launcher, die_with_parent, NULL,
         NULL);
     fixture->daemon = g_subprocess_launcher_spawnv (launcher, argv, &error);
@@ -321,6 +341,8 @@ fixture_tear_down (ImapRealDaemonFixture *fixture, gconstpointer user_data)
     g_clear_pointer (&fixture->socket_path, g_free);
     g_clear_pointer (&fixture->plugin_dir, g_free);
     g_clear_pointer (&fixture->flag_update_counter_path, g_free);
+    g_clear_pointer (&fixture->mailbox_select_counter_path, g_free);
+    g_clear_pointer (&fixture->uid_map_counter_path, g_free);
 }
 
 static char *
@@ -519,6 +541,82 @@ test_select_matches_daemon_state (ImapRealDaemonFixture *fixture,
     g_assert_nonnull (strstr (session.output, "\r\na OK [READ-WRITE]"));
 }
 
+static guint64
+read_counter_file (const char *path)
+{
+    g_autofree char *contents = NULL;
+    gsize length = 0;
+    g_autoptr (GError) error = NULL;
+
+    g_assert_true (g_file_get_contents (path, &contents, &length, &error));
+    g_assert_no_error (error);
+    if (length == 0)
+        return 0;
+    return g_ascii_strtoull (contents, NULL, 10);
+}
+
+static guint64
+read_flag_update_counter (ImapRealDaemonFixture *fixture)
+{
+    return read_counter_file (fixture->flag_update_counter_path);
+}
+
+static void
+reset_select_uid_map_counters (ImapRealDaemonFixture *fixture)
+{
+    write_file (fixture->mailbox_select_counter_path, "0");
+    write_file (fixture->uid_map_counter_path, "0");
+}
+
+static void
+test_select_costs_one_select_and_one_uid_map (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_auto (ImapSession) session = { 0 };
+
+    (void)user_data;
+
+    reset_select_uid_map_counters (fixture);
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b FETCH 1 (FLAGS)\r\nz LOGOUT\r\n", &session);
+
+    g_assert_nonnull (strstr (session.output, "\r\na OK [READ-WRITE]"));
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+    g_assert_cmpuint (read_counter_file (fixture->mailbox_select_counter_path),
+        ==, 1);
+    g_assert_cmpuint (read_counter_file (fixture->uid_map_counter_path), ==,
+        1);
+}
+
+static void
+test_fast_sync_skips_daemon_refresh (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_auto (ImapSession) session = { 0 };
+    guint64 select_before;
+    guint64 uid_map_before;
+
+    (void)user_data;
+
+    reset_select_uid_map_counters (fixture);
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    /* FETCH (FLAGS) uses MAILBOX_SYNC_FLAG_FAST when \Seen is unchanged. */
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b FETCH 1 (FLAGS)\r\n"
+        "c FETCH 1 (FLAGS)\r\nz LOGOUT\r\n", &session);
+
+    g_assert_nonnull (strstr (session.output, "\r\na OK [READ-WRITE]"));
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+    g_assert_nonnull (strstr (session.output, "\r\nc OK"));
+    select_before = read_counter_file (fixture->mailbox_select_counter_path);
+    uid_map_before = read_counter_file (fixture->uid_map_counter_path);
+    g_assert_cmpuint (select_before, ==, 1);
+    g_assert_cmpuint (uid_map_before, ==, 1);
+}
+
 static gint
 compare_strings (gconstpointer a, gconstpointer b)
 {
@@ -677,21 +775,6 @@ test_store_updates_daemon_flags (ImapRealDaemonFixture *fixture,
     g_assert_nonnull (strstr (session.output, "\r\ng OK"));
     assert_fetch_flags (session.output, 1, expected);
     assert_daemon_flags (fixture, expected);
-}
-
-static guint64
-read_flag_update_counter (ImapRealDaemonFixture *fixture)
-{
-    g_autofree char *contents = NULL;
-    gsize length = 0;
-    g_autoptr (GError) error = NULL;
-
-    g_assert_true (g_file_get_contents (fixture->flag_update_counter_path,
-        &contents, &length, &error));
-    g_assert_no_error (error);
-    if (length == 0)
-        return 0;
-    return g_ascii_strtoull (contents, NULL, 10);
 }
 
 static void
@@ -1611,6 +1694,12 @@ main (int argc, char **argv)
     g_test_add ("/dovecot/imap/select-matches-daemon-state",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_select_matches_daemon_state, fixture_tear_down);
+    g_test_add ("/dovecot/imap/select-costs-one-select-and-one-uid-map",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_select_costs_one_select_and_one_uid_map, fixture_tear_down);
+    g_test_add ("/dovecot/imap/fast-sync-skips-daemon-refresh",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_fast_sync_skips_daemon_refresh, fixture_tear_down);
     g_test_add ("/dovecot/imap/select-reflects-daemon-flags",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_select_reflects_daemon_flags, fixture_tear_down);

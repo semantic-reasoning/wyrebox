@@ -56,6 +56,8 @@ struct wyrebox_dovecot_mailbox
     gboolean in_index_sync;
     /* Ordinary mailboxes accept flag changes; views stay read-only. */
     gboolean writable;
+    /* Open already loaded SELECT+UID map; first sync reuses it. */
+    gboolean pending_open_state;
 };
 
 struct wyrebox_dovecot_transaction
@@ -732,7 +734,8 @@ wyrebox_dovecot_sync_append_new (struct mailbox *box,
 }
 
 static int
-wyrebox_dovecot_mailbox_sync_index (struct wyrebox_dovecot_mailbox *wbox)
+wyrebox_dovecot_mailbox_sync_index_apply (struct wyrebox_dovecot_mailbox
+    *wbox, const WyreboxDovecotMailboxState *state)
 {
     struct mailbox *box = &wbox->box;
     struct mail_index_sync_ctx *sync_ctx;
@@ -740,17 +743,8 @@ wyrebox_dovecot_mailbox_sync_index (struct wyrebox_dovecot_mailbox *wbox)
     struct mail_index_transaction *sync_trans;
     struct mail_index_sync_rec sync_rec;
     const struct mail_index_header *hdr;
-    g_auto (WyreboxDovecotMailboxState) state = { 0 };
-    g_autoptr (GError) error = NULL;
-    const char *operation = NULL;
     uint32_t uid_validity;
     int ret;
-
-    if (!wyrebox_dovecot_mailbox_load_state (wbox, &state, &operation,
-        &error)) {
-        wyrebox_dovecot_mailbox_set_daemon_error (box, operation, error);
-        return -1;
-    }
 
     ret = mail_index_sync_begin (box->index, &sync_ctx, &sync_view,
             &sync_trans, index_storage_get_sync_flags (box) |
@@ -764,7 +758,7 @@ wyrebox_dovecot_mailbox_sync_index (struct wyrebox_dovecot_mailbox *wbox)
     }
 
     hdr = mail_index_get_header (sync_view);
-    uid_validity = state.select_result.uid_validity;
+    uid_validity = state->select_result.uid_validity;
     if (hdr->uid_validity == 0) {
         mail_index_update_header (sync_trans,
             offsetof (struct mail_index_header, uid_validity), &uid_validity,
@@ -781,10 +775,10 @@ wyrebox_dovecot_mailbox_sync_index (struct wyrebox_dovecot_mailbox *wbox)
     }
 
     wbox->in_index_sync = TRUE;
-    wyrebox_dovecot_sync_expunge_missing (&state, sync_view, sync_trans);
-    wyrebox_dovecot_sync_apply_existing_flags (box, &state, sync_view,
+    wyrebox_dovecot_sync_expunge_missing (state, sync_view, sync_trans);
+    wyrebox_dovecot_sync_apply_existing_flags (box, state, sync_view,
         sync_trans);
-    wyrebox_dovecot_sync_append_new (box, &state, sync_view, sync_trans);
+    wyrebox_dovecot_sync_append_new (box, state, sync_view, sync_trans);
 
     /* Flag changes are pushed at transaction commit. Anything still pending
      * was not accepted by the daemon, and the daemon flags applied above
@@ -799,7 +793,37 @@ wyrebox_dovecot_mailbox_sync_index (struct wyrebox_dovecot_mailbox *wbox)
         return -1;
     }
 
-    wyrebox_dovecot_mailbox_install_state (wbox, &state);
+    return 0;
+}
+
+static int
+wyrebox_dovecot_mailbox_sync_index (struct wyrebox_dovecot_mailbox *wbox,
+    gboolean reuse_installed)
+{
+    struct mailbox *box = &wbox->box;
+    g_auto (WyreboxDovecotMailboxState) loaded = { 0 };
+    const WyreboxDovecotMailboxState *state;
+    g_autoptr (GError) error = NULL;
+    const char *operation = NULL;
+    int ret;
+
+    if (reuse_installed) {
+        state = &wbox->state;
+    } else {
+        if (!wyrebox_dovecot_mailbox_load_state (wbox, &loaded, &operation,
+            &error)) {
+            wyrebox_dovecot_mailbox_set_daemon_error (box, operation, error);
+            return -1;
+        }
+        state = &loaded;
+    }
+
+    ret = wyrebox_dovecot_mailbox_sync_index_apply (wbox, state);
+    if (ret < 0)
+        return ret;
+
+    if (!reuse_installed)
+        wyrebox_dovecot_mailbox_install_state (wbox, &loaded);
     return 0;
 }
 
@@ -1417,10 +1441,20 @@ static struct mailbox_sync_context *
 wyrebox_dovecot_mailbox_sync_init (struct mailbox *box,
     enum mailbox_sync_flags flags)
 {
-    int ret;
+    struct wyrebox_dovecot_mailbox *wbox =
+        (struct wyrebox_dovecot_mailbox *)box;
+    gboolean want_full;
+    int ret = 0;
 
-    ret = wyrebox_dovecot_mailbox_sync_index ((struct wyrebox_dovecot_mailbox
-            *)box);
+    /* Always call want_full_sync so FAST interval stamps sync_last_check,
+     * including the pending-open reuse path that skips the daemon. */
+    want_full = index_mailbox_want_full_sync (box, flags);
+    if (wbox->pending_open_state) {
+        ret = wyrebox_dovecot_mailbox_sync_index (wbox, TRUE);
+        wbox->pending_open_state = FALSE;
+    } else if (want_full) {
+        ret = wyrebox_dovecot_mailbox_sync_index (wbox, FALSE);
+    }
     return index_mailbox_sync_init (box, flags, ret < 0);
 }
 
@@ -1497,6 +1531,7 @@ wyrebox_dovecot_mailbox_open (struct mailbox *box)
     wyrebox_dovecot_mailbox_install_state (wbox, &state);
     wbox->writable = wbox->state.select_result.kind ==
         WYREBOX_DAEMON_MAILBOX_LIST_ENTRY_ORDINARY;
+    wbox->pending_open_state = TRUE;
     return index_storage_mailbox_open (box, FALSE);
 }
 
@@ -1509,6 +1544,7 @@ wyrebox_dovecot_mailbox_close (struct mailbox *box)
     wyrebox_dovecot_mailbox_state_clear (&wbox->state);
     wbox->inconsistent = FALSE;
     wbox->writable = FALSE;
+    wbox->pending_open_state = FALSE;
     index_storage_mailbox_close (box);
 }
 
@@ -1519,6 +1555,7 @@ wyrebox_dovecot_mailbox_free (struct mailbox *box)
         (struct wyrebox_dovecot_mailbox *)box;
 
     wyrebox_dovecot_mailbox_state_clear (&wbox->state);
+    wbox->pending_open_state = FALSE;
     index_storage_mailbox_free (box);
 }
 
