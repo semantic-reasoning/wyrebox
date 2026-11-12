@@ -392,6 +392,10 @@ user keyword changes:
 - replace the current mailbox-scoped system flag and user keyword set with the
   supplied values.
 
+User keywords are RFC 3501 atoms (ASCII). SET, CLEAR, and REPLACE match user
+keywords case-insensitively and keep the first stored spelling. System flags
+remain exact IMAP flag names.
+
 The operation changes daemon-owned mailbox membership state only. It never
 rewrites raw RFC 5322 objects, never alters canonical object bytes, and never
 stores flags or keywords inside the raw message object.

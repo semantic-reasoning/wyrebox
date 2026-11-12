@@ -112,8 +112,12 @@ def main() -> None:
     assert not re.search(r"until #313", sections[gaps]), (
         "Known Gaps must not claim flag changes wait for #313"
     )
-    assert_section_matches(sections, gaps, r"#374")
-    assert_section_matches(sections, gaps, r"PERMANENTFLAGS")
+    assert not re.search(r"#374", sections[gaps]), (
+        "Known Gaps must not claim keyword charset waits for #374"
+    )
+    assert not re.search(r"\[A-Za-z0-9_\.-\]", sections[gaps]), (
+        "Known Gaps must not claim the old keyword charset"
+    )
     assert_section_matches(sections, gaps, r"round trip")
     assert_section_matches(sections, gaps, r"#375")
     assert_section_matches(sections, gaps, r"STORE on a view is untested")

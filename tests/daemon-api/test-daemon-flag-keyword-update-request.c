@@ -246,9 +246,53 @@ test_request_init_rejects_space_user_keyword (void)
 }
 
 static void
-test_request_init_rejects_slash_user_keyword (void)
+test_request_init_accepts_slash_user_keyword (void)
 {
     const char *user_keywords[] = { "needs/review", NULL };
+    g_autoptr (GError) error = NULL;
+    g_auto (WyreboxDaemonFlagKeywordUpdateRequest) request = { 0 };
+
+    g_assert_true (init_request (&request,
+        WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET,
+        "account-1", "mailbox-inbox", 77, 42, NULL, user_keywords, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (request.user_keywords[0], ==, "needs/review");
+}
+
+static void
+test_request_init_accepts_dollar_user_keywords (void)
+{
+    const char *user_keywords[] = { "$Forwarded", "$Junk", "a+b", NULL };
+    g_autoptr (GError) error = NULL;
+    g_auto (WyreboxDaemonFlagKeywordUpdateRequest) request = { 0 };
+
+    g_assert_true (init_request (&request,
+        WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET,
+        "account-1", "mailbox-inbox", 77, 42, NULL, user_keywords, &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (request.user_keywords[0], ==, "$Forwarded");
+    g_assert_cmpstr (request.user_keywords[1], ==, "$Junk");
+    g_assert_cmpstr (request.user_keywords[2], ==, "a+b");
+}
+
+static void
+test_request_init_rejects_percent_user_keyword (void)
+{
+    const char *user_keywords[] = { "bad%kw", NULL };
+    g_autoptr (GError) error = NULL;
+    g_auto (WyreboxDaemonFlagKeywordUpdateRequest) request = { 0 };
+
+    g_assert_false (init_request (&request,
+        WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET,
+        "account-1", "mailbox-inbox", 77, 42, NULL, user_keywords, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_assert_null (request.user_keywords);
+}
+
+static void
+test_request_init_rejects_case_duplicate_user_keywords (void)
+{
+    const char *user_keywords[] = { "Todo", "todo", NULL };
     g_autoptr (GError) error = NULL;
     g_auto (WyreboxDaemonFlagKeywordUpdateRequest) request = { 0 };
 
@@ -414,8 +458,17 @@ main (int argc, char **argv)
         "rejects-space-user-keyword",
         test_request_init_rejects_space_user_keyword);
     g_test_add_func ("/daemon-api/flag-keyword-update-request/"
-        "rejects-slash-user-keyword",
-        test_request_init_rejects_slash_user_keyword);
+        "accepts-slash-user-keyword",
+        test_request_init_accepts_slash_user_keyword);
+    g_test_add_func ("/daemon-api/flag-keyword-update-request/"
+        "accepts-dollar-user-keywords",
+        test_request_init_accepts_dollar_user_keywords);
+    g_test_add_func ("/daemon-api/flag-keyword-update-request/"
+        "rejects-percent-user-keyword",
+        test_request_init_rejects_percent_user_keyword);
+    g_test_add_func ("/daemon-api/flag-keyword-update-request/"
+        "rejects-case-duplicate-user-keywords",
+        test_request_init_rejects_case_duplicate_user_keywords);
     g_test_add_func ("/daemon-api/flag-keyword-update-request/"
         "rejects-empty-user-keyword",
         test_request_init_rejects_empty_user_keyword);

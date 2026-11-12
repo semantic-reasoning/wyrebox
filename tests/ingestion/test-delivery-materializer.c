@@ -1551,6 +1551,32 @@ apply_flag_change_ok (const gchar *path, WyreboxFlagChangedMode mode,
 #define FLAG_SUFFIX "/account-1/inbox:account-1"
 
 static void
+test_flag_change_keyword_case_keeps_first_spelling (void)
+{
+    g_autofree gchar *path = create_catalog_with_one_inbox_message ();
+
+    apply_flag_change_ok (path, WYREBOX_FLAG_CHANGED_MODE_SET,
+        "", "Todo", 30, 2);
+    assert_flag_state (path, "", "Todo@30:2" FLAG_SUFFIX);
+
+    apply_flag_change_ok (path, WYREBOX_FLAG_CHANGED_MODE_SET,
+        "", "todo", 40, 3);
+    assert_flag_state (path, "", "Todo@30:2" FLAG_SUFFIX);
+
+    apply_flag_change_ok (path, WYREBOX_FLAG_CHANGED_MODE_CLEAR,
+        "", "TODO", 50, 4);
+    assert_flag_state (path, "", "");
+
+    apply_flag_change_ok (path, WYREBOX_FLAG_CHANGED_MODE_SET,
+        "", "Todo", 60, 5);
+    apply_flag_change_ok (path, WYREBOX_FLAG_CHANGED_MODE_REPLACE,
+        "", "todo", 70, 6);
+    assert_flag_state (path, "", "Todo@60:5" FLAG_SUFFIX);
+
+    remove_catalog (path);
+}
+
+static void
 test_flag_change_set_clear_replace (void)
 {
     g_autofree gchar *path = create_catalog_with_one_inbox_message ();
@@ -2989,6 +3015,9 @@ main (int argc, char **argv)
 
     g_test_add_func ("/ingestion/delivery-materializer/flag-change-modes",
         test_flag_change_set_clear_replace);
+    g_test_add_func (
+        "/ingestion/delivery-materializer/flag-change-keyword-case",
+        test_flag_change_keyword_case_keeps_first_spelling);
     g_test_add_func ("/ingestion/delivery-materializer/flag-change-suffix",
         test_flag_change_suffix_reapply_is_idempotent);
     g_test_add_func ("/ingestion/delivery-materializer/flag-change-unknown",

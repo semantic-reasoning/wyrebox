@@ -274,6 +274,29 @@ stop_daemon (ImapRealDaemonFixture *fixture)
     g_clear_object (&fixture->daemon);
 }
 
+/* Respawns wyreboxd on the existing catalog. Do not re-bootstrap. */
+static void
+restart_daemon (ImapRealDaemonFixture *fixture)
+{
+    g_autofree char *config_path = g_build_filename (fixture->root,
+            "wyrebox.conf", NULL);
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GSubprocessLauncher) launcher = NULL;
+    const char *argv[] = {
+        required_env ("WYREBOXD_EXECUTABLE"), "--config", config_path, NULL
+    };
+
+    stop_daemon (fixture);
+    g_assert_false (g_test_failed ());
+
+    launcher = g_subprocess_launcher_new (G_SUBPROCESS_FLAGS_NONE);
+    g_subprocess_launcher_set_child_setup (launcher, die_with_parent, NULL,
+        NULL);
+    fixture->daemon = g_subprocess_launcher_spawnv (launcher, argv, &error);
+    g_assert_no_error (error);
+    g_assert_true (wait_for_socket (fixture->socket_path));
+}
+
 static void
 fixture_tear_down (ImapRealDaemonFixture *fixture, gconstpointer user_data)
 {
@@ -657,13 +680,79 @@ test_store_rejected_keyword_reverts (ImapRealDaemonFixture *fixture,
 
     config_path = write_wyrebox_config (fixture, fixture->socket_path);
     run_imap (config_path, "a SELECT INBOX\r\n"
-        "b STORE 1 +FLAGS (bad+kw)\r\n"
+        "b STORE 1 +FLAGS (bad%kw)\r\n"
         "c NOOP\r\n"
         "d FETCH 1 (UID FLAGS)\r\nz LOGOUT\r\n", &session);
 
     g_assert_nonnull (strstr (session.output, "\r\nb NO [CANNOT]"));
     g_assert_nonnull (strstr (session.output, "\r\nc OK"));
     assert_fetch_flags (session.output, 1, expected);
+    assert_daemon_flags (fixture, expected);
+}
+
+static void
+test_store_dollar_keywords_persist (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    const char *const expected[] = { "$Forwarded", "$Junk", NULL };
+    g_autofree char *config_path = NULL;
+    g_auto (ImapSession) first = { 0 };
+    g_auto (ImapSession) reconnect = { 0 };
+    g_auto (ImapSession) after_restart = { 0 };
+
+    (void)user_data;
+
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b STORE 1 +FLAGS ($Forwarded $Junk)\r\n"
+        "c FETCH 1 (UID FLAGS)\r\nz LOGOUT\r\n", &first);
+    g_assert_nonnull (strstr (first.output, "\r\nb OK"));
+    assert_fetch_flags (first.output, 1, expected);
+    assert_daemon_flags (fixture, expected);
+
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b FETCH 1 (UID FLAGS)\r\nz LOGOUT\r\n", &reconnect);
+    g_assert_nonnull (strstr (reconnect.output, "\r\nb OK"));
+    assert_fetch_flags (reconnect.output, 1, expected);
+    assert_daemon_flags (fixture, expected);
+
+    restart_daemon (fixture);
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b FETCH 1 (UID FLAGS)\r\nz LOGOUT\r\n", &after_restart);
+    g_assert_nonnull (strstr (after_restart.output, "\r\nb OK"));
+    assert_fetch_flags (after_restart.output, 1, expected);
+    assert_daemon_flags (fixture, expected);
+}
+
+static void
+test_store_keyword_case_keeps_first_spelling (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    const char *const expected[] = { "Todo", NULL };
+    const char *const lower[] = { "todo", NULL };
+    g_autofree char *config_path = NULL;
+    g_auto (WyreboxDaemonMailboxSelectResult) daemon_state = { 0 };
+    g_auto (ImapSession) session = { 0 };
+    g_autoptr (GError) error = NULL;
+
+    (void)user_data;
+
+    config_path = write_wyrebox_config (fixture, fixture->socket_path);
+    run_imap (config_path, "a SELECT INBOX\r\n"
+        "b STORE 1 +FLAGS (Todo)\r\nz LOGOUT\r\n", &session);
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+    assert_daemon_flags (fixture, expected);
+
+    g_assert_true (wyrebox_dovecot_daemon_client_select_mailbox
+            (fixture->socket_path, TEST_ACCOUNT, "INBOX", &daemon_state,
+        &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_dovecot_daemon_client_update_flags
+            (fixture->socket_path, TEST_ACCOUNT, daemon_state.mailbox_id,
+        daemon_state.uid_validity, 1,
+        WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET, NULL, lower, NULL,
+        &error));
+    g_assert_no_error (error);
     assert_daemon_flags (fixture, expected);
 }
 
@@ -1475,6 +1564,12 @@ main (int argc, char **argv)
     g_test_add ("/dovecot/imap/store-rejected-keyword-reverts",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_store_rejected_keyword_reverts, fixture_tear_down);
+    g_test_add ("/dovecot/imap/store-dollar-keywords-persist",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_store_dollar_keywords_persist, fixture_tear_down);
+    g_test_add ("/dovecot/imap/store-keyword-case-keeps-first-spelling",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_store_keyword_case_keeps_first_spelling, fixture_tear_down);
     g_test_add ("/dovecot/imap/fetch-body-marks-seen",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_fetch_body_marks_seen, fixture_tear_down);

@@ -1,4 +1,5 @@
 #include "wyrebox-daemon-message-append-request.h"
+#include "wyrebox-daemon-user-keyword.h"
 
 #include <gio/gio.h>
 
@@ -58,36 +59,15 @@ validate_system_flag (const char *value, GError **error)
 static gboolean
 validate_user_keyword (const char *value, GError **error)
 {
-    if (!validate_non_empty_text (value, "user_keywords", error))
-        return FALSE;
-
-    if (value[0] == '\\') {
-        g_set_error (error,
-            G_IO_ERROR,
-            G_IO_ERROR_INVALID_ARGUMENT,
-            "message append user_keywords must not contain system flags");
-        return FALSE;
-    }
-
-    for (const char *cursor = value; *cursor != '\0'; cursor++) {
-        if (!(g_ascii_isalnum (*cursor) || *cursor == '_' || *cursor == '-'
-            || *cursor == '.')) {
-            g_set_error (error,
-                G_IO_ERROR,
-                G_IO_ERROR_INVALID_ARGUMENT,
-                "message append user_keywords contains invalid characters");
-            return FALSE;
-        }
-    }
-
-    return TRUE;
+    return wyrebox_daemon_user_keyword_validate (value,
+               "message append user_keywords", error);
 }
 
 static gboolean
 copy_text_vector (const char *const *values,
     const char *field_name,
     gboolean (*validate_value) (const char *value, GError **error),
-    gchar ***out_values, GError **error)
+    gboolean casefold_duplicates, gchar ***out_values, GError **error)
 {
     g_auto (GStrv) copy = NULL;
 
@@ -105,7 +85,11 @@ copy_text_vector (const char *const *values,
             return FALSE;
 
         for (gsize j = 0; j < i; j++) {
-            if (g_strcmp0 (values[j], value) == 0) {
+            gboolean duplicate = casefold_duplicates ?
+                wyrebox_daemon_user_keyword_equal (values[j], value) :
+                g_strcmp0 (values[j], value) == 0;
+
+            if (duplicate) {
                 g_set_error (error,
                     G_IO_ERROR,
                     G_IO_ERROR_INVALID_ARGUMENT,
@@ -205,12 +189,11 @@ wyrebox_daemon_message_append_request_init
         return FALSE;
 
     if (!copy_text_vector (system_flags, "system_flags", validate_system_flag,
-        &next.system_flags, error))
+        FALSE, &next.system_flags, error))
         return FALSE;
 
     if (!copy_text_vector (user_keywords, "user_keywords",
-        validate_user_keyword,
-        &next.user_keywords, error))
+        validate_user_keyword, TRUE, &next.user_keywords, error))
         return FALSE;
 
     next.account_identity = g_strdup (account_identity);
