@@ -4,6 +4,7 @@
 #include "wyrebox-daemon-runtime.h"
 #include "wyrebox-duckdb-shared.h"
 #include "wyrebox-eml-ingestor.h"
+#include "wyrebox-flag-changed-payload.h"
 #include "wyrebox-journal-reader.h"
 #include "wyrebox-journal-writer.h"
 #include "wyrebox-local-object-store.h"
@@ -480,6 +481,55 @@ test_rebuilt_catalog_replays_flags (Fixture *fixture, gconstpointer user_data)
     g_assert_cmpstr (rebuilt, ==, expected);
 }
 
+static void
+test_batch_update_accepts_visible_and_skips_gone (Fixture *fixture,
+    gconstpointer user_data)
+{
+    const guint64 uids[] = { 1, 2, 99 };
+    const char *const seen[] = { "\\Seen", NULL };
+    g_auto (WyreboxDaemonFlagKeywordUpdateRequest) request = { 0 };
+    g_auto (WyreboxDaemonResponseFrame) frame = { 0 };
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxJournalReader) reader = NULL;
+    g_auto (WyreboxJournalRecord) record = { 0 };
+    g_auto (WyreboxFlagChangedPayload) payload = { 0 };
+    gboolean eof = FALSE;
+    guint flag_records = 0;
+
+    (void)user_data;
+
+    g_assert_true (wyrebox_daemon_flag_keyword_update_request_init_batch
+            (&request, "account-1", "inbox:account-1", 1, uids,
+        G_N_ELEMENTS (uids), WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET,
+        seen, NULL, &error));
+    g_assert_no_error (error);
+    g_assert_true (wyrebox_daemon_flag_keyword_update_dispatch (
+            fixture->service, "request-batch", "dovecot", "account-1",
+            "dovecot-storage", "imap-store-batch", &request, &frame, &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (frame.kind, ==, WYREBOX_DAEMON_RESPONSE_FRAME_SUCCESS);
+    g_assert_nonnull (strstr (frame.success.summary, "accepted=1,2"));
+    g_assert_nonnull (strstr (frame.success.summary, "gone=99"));
+    assert_flag_rows (fixture, "flags [1 \\Seen, 2 \\Seen] keywords []");
+
+    reader = wyrebox_journal_reader_new (fixture->journal_root, &error);
+    g_assert_no_error (error);
+    while (wyrebox_journal_reader_read_next (reader, &record, &eof, &error)) {
+        if (record.event_type == WYREBOX_JOURNAL_EVENT_FLAG_CHANGED) {
+            flag_records++;
+            g_assert_true (wyrebox_flag_changed_payload_decode (record.payload,
+                &payload, &error));
+            g_assert_no_error (error);
+            g_assert_cmpuint (payload.n_uids, ==, 2);
+            g_assert_cmpuint (payload.uids[0], ==, 1);
+            g_assert_cmpuint (payload.uids[1], ==, 2);
+            wyrebox_flag_changed_payload_clear (&payload);
+        }
+    }
+    g_assert_true (eof);
+    g_assert_cmpuint (flag_records, ==, 1);
+}
+
 #define ADD_TEST(path, func) \
         g_test_add ("/daemon-api/flag-keyword-update-journal/" path, Fixture, \
             NULL, fixture_set_up, func, fixture_tear_down)
@@ -491,6 +541,8 @@ main (int argc, char **argv)
 
     ADD_TEST ("modes", test_update_modes_materialize_flags_and_keywords);
     ADD_TEST ("one-record", test_update_writes_one_flag_changed_record);
+    ADD_TEST ("batch-accepts-visible-skips-gone",
+        test_batch_update_accepts_visible_and_skips_gone);
     ADD_TEST ("invalid-flags", test_invalid_flags_are_rejected);
     ADD_TEST ("unknown-uid-stale-uidvalidity",
         test_unknown_uid_and_stale_uidvalidity_fail);

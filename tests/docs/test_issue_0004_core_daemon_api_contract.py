@@ -1242,6 +1242,21 @@ def main() -> None:
         "## Flag Keyword Update Operation Contract",
         r"journal_offset.*equivalent durable marker",
     )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"homogeneous list of mailbox-scoped UIDs|many UIDs of one selected mailbox",
+    )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"65535",
+    )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"accepted.*gone.*failed_permanent|gone.*accepted",
+    )
     assert_section_forbidden(
         sections,
         "## Flag Keyword Update Operation Contract",
@@ -1260,6 +1275,11 @@ def main() -> None:
             "## Flag Keyword Update Operation Contract",
             error_case,
         )
+    assert_section_matches(
+        sections,
+        "## Flag Keyword Update Operation Contract",
+        r"multi-UID request.*gone.*success|gone` on success",
+    )
     assert_section_matches(
         sections,
         "## Flag Keyword Update Operation Contract",

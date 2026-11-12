@@ -212,6 +212,11 @@ def main() -> None:
     assert_section_matches(
         sections,
         "## Durability Semantics",
+        r"homogeneous ascending list of accepted UIDs",
+    )
+    assert_section_matches(
+        sections,
+        "## Durability Semantics",
         r"`KeywordChanged` is reserved: it is not written and replay does not materialize it",
     )
     assert_section_matches(

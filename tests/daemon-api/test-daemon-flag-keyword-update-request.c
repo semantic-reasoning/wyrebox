@@ -411,6 +411,55 @@ test_request_init_replaces_existing_value (void)
     g_assert_null (request.user_keywords);
 }
 
+static void
+test_request_init_batch_copies_uids (void)
+{
+    const char *system_flags[] = { "\\Seen", NULL };
+    const guint64 uids[] = { 1, 2, 40 };
+    g_autoptr (GError) error = NULL;
+    g_auto (WyreboxDaemonFlagKeywordUpdateRequest) request = { 0 };
+
+    g_assert_true (wyrebox_daemon_flag_keyword_update_request_init_batch
+            (&request, "account-1", "mailbox-inbox", 77, uids,
+        G_N_ELEMENTS (uids), WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET,
+        system_flags, NULL, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (request.mailbox_uid, ==, 0);
+    g_assert_cmpuint (request.n_uids, ==, 3);
+    g_assert_cmpuint (request.uids[0], ==, 1);
+    g_assert_cmpuint (request.uids[1], ==, 2);
+    g_assert_cmpuint (request.uids[2], ==, 40);
+}
+
+static void
+test_request_init_batch_rejects_unordered_and_oversize (void)
+{
+    const char *system_flags[] = { "\\Seen", NULL };
+    const guint64 unordered[] = { 2, 1 };
+    g_autofree guint64 *too_many = NULL;
+    g_autoptr (GError) error = NULL;
+    g_auto (WyreboxDaemonFlagKeywordUpdateRequest) request = { 0 };
+
+    g_assert_false (wyrebox_daemon_flag_keyword_update_request_init_batch
+            (&request, "account-1", "mailbox-inbox", 77, unordered,
+        G_N_ELEMENTS (unordered), WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET,
+        system_flags, NULL, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+    g_clear_error (&error);
+
+    too_many = g_new0 (guint64,
+            WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MAX_UIDS + 1);
+    for (gsize i = 0; i < WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MAX_UIDS + 1;
+        i++)
+        too_many[i] = i + 1;
+    g_assert_false (wyrebox_daemon_flag_keyword_update_request_init_batch
+            (&request, "account-1", "mailbox-inbox", 77, too_many,
+        WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MAX_UIDS + 1,
+        WYREBOX_DAEMON_FLAG_KEYWORD_UPDATE_MODE_SET, system_flags, NULL,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -486,6 +535,11 @@ main (int argc, char **argv)
         test_request_init_rejects_control_in_user_keyword);
     g_test_add_func ("/daemon-api/flag-keyword-update-request/"
         "replaces-existing-value", test_request_init_replaces_existing_value);
+    g_test_add_func ("/daemon-api/flag-keyword-update-request/"
+        "batch-copies-uids", test_request_init_batch_copies_uids);
+    g_test_add_func ("/daemon-api/flag-keyword-update-request/"
+        "batch-rejects-unordered-and-oversize",
+        test_request_init_batch_rejects_unordered_and_oversize);
 
     return g_test_run ();
 }

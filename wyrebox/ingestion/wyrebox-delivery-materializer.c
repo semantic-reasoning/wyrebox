@@ -1029,8 +1029,8 @@ wyrebox_delivery_materializer_apply_to_inbox_full (WyreboxDeliveryMaterializer
 
 static gboolean
 materializer_resolve_flag_target (WyreboxDeliveryMaterializer *self,
-    const WyreboxFlagChangedPayload *payload, gchar **out_membership_id,
-    GError **error)
+    const WyreboxFlagChangedPayload *payload, guint64 uid,
+    gchar **out_membership_id, GError **error)
 {
     g_auto (duckdb_prepared_statement) statement = NULL;
     g_auto (duckdb_result) result = { 0 };
@@ -1045,7 +1045,7 @@ materializer_resolve_flag_target (WyreboxDeliveryMaterializer *self,
         "AND mus.uidvalidity = ?;", &statement, error) ||
         !bind_varchar (statement, 1, payload->account_id, error) ||
         !bind_varchar (statement, 2, payload->mailbox_id, error) ||
-        !bind_uint64 (statement, 3, payload->uid, error) ||
+        !bind_uint64 (statement, 3, uid, error) ||
         !bind_uint64 (statement, 4, payload->uidvalidity, error))
         return FALSE;
 
@@ -1069,7 +1069,7 @@ materializer_resolve_flag_target (WyreboxDeliveryMaterializer *self,
             "flag change target %s/%s UIDVALIDITY %" G_GUINT64_FORMAT
             " UID %" G_GUINT64_FORMAT " is not materialized",
             payload->account_id, payload->mailbox_id, payload->uidvalidity,
-            payload->uid);
+            uid);
         return FALSE;
     }
 
@@ -1249,7 +1249,8 @@ wyrebox_delivery_materializer_apply_flag_change (WyreboxDeliveryMaterializer
     *self, const WyreboxFlagChangedPayload *payload, guint64 journal_offset,
     guint64 journal_sequence, gboolean advance_checkpoint, GError **error)
 {
-    g_autofree gchar *membership_id = NULL;
+    const guint64 *uids = NULL;
+    gsize n_uids = 0;
 
     g_return_val_if_fail (WYREBOX_IS_DELIVERY_MATERIALIZER (self), FALSE);
     g_return_val_if_fail (payload != NULL, FALSE);
@@ -1257,18 +1258,34 @@ wyrebox_delivery_materializer_apply_flag_change (WyreboxDeliveryMaterializer
     g_return_val_if_fail (payload->mailbox_id != NULL, FALSE);
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
+    if (payload->n_uids > 0) {
+        uids = payload->uids;
+        n_uids = payload->n_uids;
+    } else {
+        uids = &payload->uid;
+        n_uids = 1;
+    }
+
     if (!materializer_query (self, "BEGIN TRANSACTION;", error))
         return FALSE;
 
-    if (!materializer_resolve_flag_target (self, payload, &membership_id,
-        error) ||
-        !materializer_apply_flag_table (self, &flag_tables[0], payload,
-        payload->system_flags, membership_id, journal_offset,
-        journal_sequence, error) ||
-        !materializer_apply_flag_table (self, &flag_tables[1], payload,
-        payload->user_keywords, membership_id, journal_offset,
-        journal_sequence, error) ||
-        (advance_checkpoint && !materializer_save_checkpoint (self,
+    for (gsize i = 0; i < n_uids; i++) {
+        g_autofree gchar *membership_id = NULL;
+
+        if (!materializer_resolve_flag_target (self, payload, uids[i],
+            &membership_id, error) ||
+            !materializer_apply_flag_table (self, &flag_tables[0], payload,
+            payload->system_flags, membership_id, journal_offset,
+            journal_sequence, error) ||
+            !materializer_apply_flag_table (self, &flag_tables[1], payload,
+            payload->user_keywords, membership_id, journal_offset,
+            journal_sequence, error)) {
+            materializer_rollback_quietly (self);
+            return FALSE;
+        }
+    }
+
+    if ((advance_checkpoint && !materializer_save_checkpoint (self,
         journal_offset, journal_sequence, error)) ||
         !materializer_query (self, "COMMIT;", error)) {
         materializer_rollback_quietly (self);

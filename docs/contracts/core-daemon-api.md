@@ -375,8 +375,8 @@ sufficient for `wyreboxd` to authorize and correlate the operation:
 - caller/account identity;
 - stable selected-mailbox identity for an ordinary mailbox or virtual mailbox;
 - selected-mailbox `UIDVALIDITY` or equivalent selection epoch; and
-- mailbox-scoped UID or equivalent message reference within that selected
-  mailbox context.
+- one mailbox-scoped UID, or a homogeneous list of mailbox-scoped UIDs, as the
+  message reference within that selected mailbox context.
 
 The caller/account identity scopes all access. The selected mailbox identity
 and mailbox-scoped UID/message reference are the mutation boundary. A
@@ -392,6 +392,10 @@ user keyword changes:
 - replace the current mailbox-scoped system flag and user keyword set with the
   supplied values.
 
+A request may target many UIDs of one selected mailbox that share the same mode,
+system flags, and user keywords. The UID list is at most 65535 entries and must
+be strictly ascending. A single-UID request remains valid.
+
 User keywords are RFC 3501 atoms (ASCII). SET, CLEAR, and REPLACE match user
 keywords case-insensitively and keep the first stored spelling. System flags
 remain exact IMAP flag names.
@@ -403,13 +407,19 @@ stores flags or keywords inside the raw message object.
 Dovecot-visible success is valid only after the corresponding flag/keyword
 mutation has reached the durable mutation-journal boundary. A success response
 includes `journal_offset` or an equivalent durable marker so the Dovecot caller
-path and logs can correlate the accepted mutation with durable state.
+path and logs can correlate the accepted mutation with durable state. A
+multi-UID success may also report per-UID `accepted`, `gone`, and
+`failed_permanent` results in the summary. Only accepted UIDs are journaled.
 
 Flag/keyword update error behavior is governed by
 `docs/contracts/error-model.md`:
 
-- an absent mailbox, selected mailbox outside the authorized scope, or absent
-  message reference in scope is `not found`;
+- an absent mailbox or selected mailbox outside the authorized scope is
+  `not found`;
+- for a single-UID request, an absent message reference in scope is
+  `not found`;
+- for a multi-UID request, absent UIDs are listed as `gone` on success and do
+  not fail the whole request;
 - account, mailbox, message, or view authorization failure is
   `permission denied`;
 - stale `UIDVALIDITY`, stale selected-mailbox context, invalid selected state,

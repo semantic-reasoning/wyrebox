@@ -118,8 +118,14 @@ def main() -> None:
     assert not re.search(r"\[A-Za-z0-9_\.-\]", sections[gaps]), (
         "Known Gaps must not claim the old keyword charset"
     )
-    assert_section_matches(sections, gaps, r"round trip")
-    assert_section_matches(sections, gaps, r"#375")
+    assert not re.search(r"#375", sections[gaps]), (
+        "Known Gaps must not claim per-message flag round trips wait for #375"
+    )
+    assert not re.search(
+        r"Every changed message costs up to two daemon round trips",
+        sections[gaps],
+    ), "Known Gaps must not claim the old per-message flag round-trip cost"
+    assert_section_matches(sections, decision, r"homogeneous")
     assert_section_matches(sections, gaps, r"STORE on a view is untested")
     assert_section_matches(sections, gaps, r"CONDSTORE")
     assert_section_matches(sections, gaps, r"autoexpunge")
