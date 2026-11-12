@@ -67,6 +67,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-flag-keyword-update-dispatcher.c',
   'daemon/wyrebox-daemon-flag-keyword-update-request.c',
   'daemon/wyrebox-daemon-flag-keyword-update-service.c',
+  'daemon/wyrebox-daemon-user-keyword.c',
   'daemon/wyrebox-daemon-memberships-copy-move-dispatcher.c',
   'daemon/wyrebox-daemon-memberships-copy-move-request.c',
   'daemon/wyrebox-daemon-memberships-copy-move-service.c',

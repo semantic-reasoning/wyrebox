@@ -959,6 +959,21 @@ wyrebox_dovecot_strv_contains (const char *const *names, const char *name)
     return names != NULL && g_strv_contains (names, name);
 }
 
+static gboolean
+wyrebox_dovecot_keyword_strv_contains (const char *const *names,
+    const char *name)
+{
+    if (names == NULL || name == NULL)
+        return FALSE;
+
+    for (guint i = 0; names[i] != NULL; i++) {
+        if (g_ascii_strcasecmp (names[i], name) == 0)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
 /* Applies one accepted SET or CLEAR to the cached daemon row. */
 static void
 wyrebox_dovecot_row_apply_update (WyreboxDovecotMailboxUidMapRow *row,
@@ -986,14 +1001,14 @@ wyrebox_dovecot_row_apply_update (WyreboxDovecotMailboxUidMapRow *row,
         if (name[0] == '\\') {
             continue;
         }
-        if (!set && wyrebox_dovecot_strv_contains (keywords, name)) {
+        if (!set && wyrebox_dovecot_keyword_strv_contains (keywords, name)) {
             continue;
         }
         g_strv_builder_add (builder, name);
     }
     for (guint i = 0; set && keywords[i] != NULL; i++) {
-        if (!wyrebox_dovecot_strv_contains ((const char *const *)row->flags,
-            keywords[i])) {
+        if (!wyrebox_dovecot_keyword_strv_contains (
+                (const char *const *)row->flags, keywords[i])) {
             g_strv_builder_add (builder, keywords[i]);
         }
     }
@@ -2449,7 +2464,7 @@ wyrebox_dovecot_storage_create (struct mail_storage *storage,
         return -1;
     }
 
-    /* Attachment flags are $-keywords the daemon cannot store. */
+    /* Attachment auto-flags still conflict with WyreBox ownership of STORE. */
     if (storage->set->parsed_mail_attachment_detection_add_flags) {
         *error_r = "mail_driver = wyrebox requires "
             "mail_attachment_detection_options without add-flags";

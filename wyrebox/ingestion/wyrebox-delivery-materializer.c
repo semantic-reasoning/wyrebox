@@ -1,4 +1,5 @@
 #include "wyrebox-delivery-materializer.h"
+#include "wyrebox-daemon-user-keyword.h"
 #include "wyrebox-duckdb-shared.h"
 #include "wyrebox-rfc5322-date.h"
 
@@ -1171,16 +1172,27 @@ materializer_insert_flag_name (WyreboxDeliveryMaterializer *self,
 }
 
 static gboolean
-strv_has (char **values, const gchar *name)
+strv_has (char **values, const gchar *name, gboolean casefold)
 {
-    return values != NULL && g_strv_contains ((const gchar *const *)values,
-               name);
+    if (values == NULL)
+        return FALSE;
+
+    if (!casefold)
+        return g_strv_contains ((const gchar *const *)values, name);
+
+    for (gsize i = 0; values[i] != NULL; i++) {
+        if (wyrebox_daemon_user_keyword_equal (values[i], name))
+            return TRUE;
+    }
+
+    return FALSE;
 }
 
 /*
  * Rows are only inserted for names that are absent and only deleted for names
  * that are present, so a name is never deleted and re-inserted in one
- * transaction.
+ * transaction. User keywords match ASCII case-insensitively and keep the
+ * first stored spelling.
  */
 static gboolean
 materializer_apply_flag_table (WyreboxDeliveryMaterializer *self,
@@ -1191,8 +1203,15 @@ materializer_apply_flag_table (WyreboxDeliveryMaterializer *self,
     g_autoptr (GHashTable) current = NULL;
     GHashTableIter iter;
     gpointer key = NULL;
+    gboolean casefold = g_strcmp0 (table->table, "message_keywords") == 0;
 
-    current = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+    if (casefold) {
+        current = g_hash_table_new_full (wyrebox_daemon_user_keyword_hash,
+                wyrebox_daemon_user_keyword_equal, g_free, NULL);
+    } else {
+        current = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
+                NULL);
+    }
     if (!materializer_load_flag_names (self, table, membership_id, current,
         error))
         return FALSE;
@@ -1200,7 +1219,7 @@ materializer_apply_flag_table (WyreboxDeliveryMaterializer *self,
     if (payload->mode == WYREBOX_FLAG_CHANGED_MODE_REPLACE) {
         g_hash_table_iter_init (&iter, current);
         while (g_hash_table_iter_next (&iter, &key, NULL)) {
-            if (!strv_has (names, key) &&
+            if (!strv_has (names, key, casefold) &&
                 !materializer_delete_flag_name (self, table, membership_id,
                 key, error))
                 return FALSE;
@@ -1208,11 +1227,12 @@ materializer_apply_flag_table (WyreboxDeliveryMaterializer *self,
     }
 
     for (gsize i = 0; names != NULL && names[i] != NULL; i++) {
-        gboolean present = g_hash_table_contains (current, names[i]);
+        gpointer stored = g_hash_table_lookup (current, names[i]);
+        gboolean present = stored != NULL;
 
         if (payload->mode == WYREBOX_FLAG_CHANGED_MODE_CLEAR) {
             if (present && !materializer_delete_flag_name (self, table,
-                membership_id, names[i], error))
+                membership_id, stored, error))
                 return FALSE;
         } else if (!present && !materializer_insert_flag_name (self, table,
             payload->account_id, payload->mailbox_id, membership_id, names[i],

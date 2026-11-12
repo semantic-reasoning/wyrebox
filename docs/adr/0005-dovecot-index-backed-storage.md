@@ -108,11 +108,10 @@ They model the old design and cannot exercise lib-index at all.
   `OK Expunge ignored`, CLOSE answers `OK Closed without expunging`, and
   messages keep their `\Deleted` flag.
 - Dovecot `2.4` adds `$HasAttachment` and `$HasNoAttachment` keywords by
-  default, and the daemon cannot store `$` keywords. The storage refuses to
-  start when `mail_attachment_detection_options` includes `add-flags`; the
-  example above sets `mail_attachment_detection_options =` empty. Tools
-  that set those keywords directly, such as `doveadm rebuild attachments`,
-  fail like any other `$` keyword.
+  default. The daemon can store `$` keywords through STORE, but WyreBox still
+  refuses to start when `mail_attachment_detection_options` includes
+  `add-flags`; the example above sets `mail_attachment_detection_options =`
+  empty so Dovecot does not invent attachment keywords behind the daemon.
 - Fixture mode no longer compiles the plugin. The real port needs
   lib-index headers that the simplified fixture does not and should not copy.
   Fixture mode keeps the source and build contract checks only.
@@ -154,10 +153,6 @@ They model the old design and cannot exercise lib-index at all.
   refused expunges keep `\Deleted` messages, clients that hide deleted
   messages diverge from the server. Do not enable autoexpunge or POP3 on
   WyreBox namespaces until #314: their expunges log commit errors.
-- The daemon accepts only `[A-Za-z0-9_.-]` keywords, compared
-  case-sensitively. SELECT still advertises `\*` in `PERMANENTFLAGS`, so
-  client keywords such as `$Forwarded` or `$Junk` fail with `[CANNOT]`
-  until #374.
 - Every changed message costs up to two daemon round trips at commit. A
   batched flag update is a follow-up under #375.
 - The index is rebuilt per session, so CONDSTORE and QRESYNC modification

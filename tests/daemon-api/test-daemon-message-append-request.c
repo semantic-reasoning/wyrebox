@@ -31,6 +31,35 @@ test_request_init_copies_fields (void)
 }
 
 static void
+test_request_init_accepts_dollar_user_keyword (void)
+{
+    const char *user_keywords[] = { "$Forwarded", NULL };
+    g_autoptr (GBytes) message = one_byte_message ();
+    g_autoptr (GError) error = NULL;
+    g_auto (WyreboxDaemonMessageAppendRequest) request = { 0 };
+
+    g_assert_true (wyrebox_daemon_message_append_request_init (&request,
+        "account-1", "inbox:account-1", 1, message, 42, NULL, user_keywords,
+        &error));
+    g_assert_no_error (error);
+    g_assert_cmpstr (request.user_keywords[0], ==, "$Forwarded");
+}
+
+static void
+test_request_init_rejects_case_duplicate_user_keywords (void)
+{
+    const char *user_keywords[] = { "Todo", "todo", NULL };
+    g_autoptr (GBytes) message = one_byte_message ();
+    g_autoptr (GError) error = NULL;
+    g_auto (WyreboxDaemonMessageAppendRequest) request = { 0 };
+
+    g_assert_false (wyrebox_daemon_message_append_request_init (&request,
+        "account-1", "inbox:account-1", 1, message, 42, NULL, user_keywords,
+        &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT);
+}
+
+static void
 test_request_init_rejects_empty_body (void)
 {
     g_autoptr (GBytes) message = g_bytes_new_static ("", 0);
@@ -64,6 +93,12 @@ main (int argc, char **argv)
 
     g_test_add_func ("/daemon-api/message-append-request/copies-fields",
         test_request_init_copies_fields);
+    g_test_add_func ("/daemon-api/message-append-request/"
+        "accepts-dollar-user-keyword",
+        test_request_init_accepts_dollar_user_keyword);
+    g_test_add_func ("/daemon-api/message-append-request/"
+        "rejects-case-duplicate-user-keywords",
+        test_request_init_rejects_case_duplicate_user_keywords);
     g_test_add_func ("/daemon-api/message-append-request/rejects-empty-body",
         test_request_init_rejects_empty_body);
     g_test_add_func (
