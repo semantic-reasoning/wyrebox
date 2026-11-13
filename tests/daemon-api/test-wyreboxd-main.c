@@ -374,8 +374,29 @@ spawn_daemon (const DaemonRoot *daemon_root, GSubprocessFlags stderr_flag)
 }
 
 /*
+ * AF_UNIX: a sockpath can exist before accept is ready, or after the daemon
+ * exits without unlinking. Treat readiness as a successful connect, not mere
+ * path presence, so start_daemon does not hand callers Connection refused.
+ */
+static gboolean
+try_connect_daemon_socket (const char *socket_path)
+{
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GSocketAddress) address = NULL;
+    g_autoptr (GSocketClient) client = NULL;
+    g_autoptr (GSocketConnection) connection = NULL;
+
+    client = g_socket_client_new ();
+    g_socket_client_set_timeout (client, 1);
+    address = g_unix_socket_address_new (socket_path);
+    connection = g_socket_client_connect (client,
+            G_SOCKET_CONNECTABLE (address), NULL, &error);
+    return connection != NULL;
+}
+
+/*
  * Startup validates storage, prepares the catalog and catches up before the
- * socket appears, which is slow under sanitizers, so allow a generous bound
+ * socket accepts, which is slow under sanitizers, so allow a generous bound
  * but stop as soon as the daemon exits.
  */
 static gboolean
@@ -384,7 +405,8 @@ wait_for_socket (GSubprocess *subprocess, const char *socket_path)
     gint64 deadline = g_get_monotonic_time () + 30 * G_TIME_SPAN_SECOND;
 
     while (g_get_monotonic_time () < deadline) {
-        if (g_file_test (socket_path, G_FILE_TEST_EXISTS))
+        if (g_file_test (socket_path, G_FILE_TEST_EXISTS)
+            && try_connect_daemon_socket (socket_path))
             return TRUE;
         if (g_subprocess_get_identifier (subprocess) == NULL)
             return FALSE;
@@ -421,8 +443,16 @@ start_daemon (const DaemonRoot *daemon_root)
     g_object_set_data_full (G_OBJECT (subprocess), DAEMON_STDERR_PATH_KEY,
         stderr_path, g_free);
 
-    if (wait_for_socket (subprocess, daemon_root->socket_path))
-        return subprocess;
+    if (wait_for_socket (subprocess, daemon_root->socket_path)) {
+        if (g_subprocess_get_identifier (subprocess) != NULL)
+            return subprocess;
+        (void)g_subprocess_wait (subprocess, NULL, NULL);
+        (void)g_file_get_contents (stderr_path, &stderr_text, NULL, NULL);
+        g_printerr (
+            "--- wyreboxd stderr ---\n%s\n--- end wyreboxd stderr ---\n",
+            stderr_text != NULL ? stderr_text : "(unavailable)");
+        g_error ("wyreboxd exited after its socket became accept-ready");
+    }
 
     /* Reap a daemon that is still starting so it does not outlive the test. */
     g_subprocess_force_exit (subprocess);
@@ -430,6 +460,7 @@ start_daemon (const DaemonRoot *daemon_root)
     (void)g_file_get_contents (stderr_path, &stderr_text, NULL, NULL);
     g_printerr ("--- wyreboxd stderr ---\n%s\n--- end wyreboxd stderr ---\n",
         stderr_text != NULL ? stderr_text : "(unavailable)");
+    /* Keep this wording: start-reports-startup-failure matches it. */
     g_error ("wyreboxd did not create its socket");
 }
 
