@@ -1007,10 +1007,13 @@ test_connection_server_stop_waits_for_in_flight_session (void)
     g_autofree char *root = NULL;
     g_autofree char *socket_path = NULL;
     g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) query_response = NULL;
     g_autoptr (GSocketConnection) query_connection = NULL;
     g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
     WyreboxDaemonRequestAdapter *adapter = NULL;
     GThread *releaser = NULL;
+    GInputStream *query_input = NULL;
+    GSocket *query_socket = NULL;
 
     blocking_route_state_init (&state);
     g_mutex_init (&record.mutex);
@@ -1023,12 +1026,21 @@ test_connection_server_stop_waits_for_in_flight_session (void)
     g_assert_no_error (error);
 
     query_connection = start_blocking_query (socket_path, &state);
+    query_input = g_io_stream_get_input_stream (G_IO_STREAM (query_connection));
+    query_socket = g_socket_connection_get_socket (query_connection);
     releaser = g_thread_new ("release-query", release_blocking_query_later,
             &state);
 
     g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
     g_assert_no_error (error);
     g_assert_true (blocking_query_completed (&state));
+
+    /* #380: stop must leave the write half open so the client gets the reply. */
+    await_framed_response_data (query_socket, 2000);
+    query_response = wyrebox_daemon_frame_io_read_payload (query_input, &error);
+    g_assert_no_error (error);
+    assert_payload_equal (query_response, (const guint8 *)"query-success",
+        strlen ("query-success"));
 
     g_clear_object (&server);
     g_mutex_lock (&record.mutex);
@@ -1039,6 +1051,58 @@ test_connection_server_stop_waits_for_in_flight_session (void)
     g_thread_join (releaser);
     g_mutex_clear (&record.mutex);
     blocking_route_state_clear (&state);
+    remove_tree (root);
+}
+
+static void
+test_connection_server_stop_idle_connection_returns_before_drain_timeout (void)
+{
+    const guint8 second_request[] = "subsequent";
+    const guint8 response[] = "adapter-response";
+    g_autofree char *root = NULL;
+    g_autofree char *socket_path = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GBytes) second_response = NULL;
+    g_autoptr (GSocketConnection) idle_connection = NULL;
+    g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+    g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
+    gint64 stop_started = 0;
+    FakeAdapterState state = {
+        .expected_request = second_request,
+        .expected_request_size = sizeof (second_request),
+        .expect_peer_credentials = TRUE,
+        .expected_peer_credentials = {.uid = 0},
+        .request_id = "idle-drain",
+        .encoded_response = response,
+        .encoded_response_size = sizeof (response),
+    };
+
+    root = NULL;
+    socket_path = make_socket_path (&root);
+    state.expected_peer_credentials.uid = getuid ();
+    state.expected_peer_credentials.gid = getgid ();
+    state.expected_peer_credentials.pid = getpid ();
+
+    adapter = create_fake_adapter (&state);
+    server = wyrebox_daemon_connection_server_new (socket_path, adapter);
+    wyrebox_daemon_connection_server_set_drain_timeout (server, 5000);
+    g_assert_true (wyrebox_daemon_connection_server_start (server, &error));
+    g_assert_no_error (error);
+
+    /* Establish an accepted session blocked on read before stop. */
+    idle_connection = connect_with_socket_client (socket_path);
+    g_assert_nonnull (idle_connection);
+    second_response = send_request_and_read_response (socket_path,
+            second_request, sizeof (second_request));
+    assert_payload_equal (second_response, response, sizeof (response));
+
+    stop_started = g_get_monotonic_time ();
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (g_get_monotonic_time () - stop_started, <,
+        2 * G_TIME_SPAN_SECOND);
+    assert_connection_closed_by_peer (idle_connection);
+
     remove_tree (root);
 }
 
@@ -1111,6 +1175,9 @@ main (int argc, char **argv)
     g_test_add_func
         ("/daemon-api/connection-server/stop-waits-for-in-flight-session",
         test_connection_server_stop_waits_for_in_flight_session);
+    g_test_add_func
+        ("/daemon-api/connection-server/stop-idle-returns-before-drain-timeout",
+        test_connection_server_stop_idle_connection_returns_before_drain_timeout);
     g_test_add_func
         ("/daemon-api/connection-server/stop-abandons-after-drain-timeout",
         test_connection_server_stop_abandons_session_after_drain_timeout);
