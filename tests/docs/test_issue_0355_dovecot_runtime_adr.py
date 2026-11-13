@@ -145,7 +145,18 @@ def main() -> None:
     )
     assert_section_matches(sections, decision, r"daemon flags and keywords")
     assert_section_matches(sections, gaps, r"INTERNALDATE")
-    assert_section_matches(sections, gaps, r"LSUB")
+    assert not re.search(
+        r"LSUB and `LIST \(SUBSCRIBED\)` return every mailbox",
+        sections[gaps],
+    ), "Known Gaps must not claim LSUB/SUBSCRIBE wait for #361"
+    assert not re.search(r"#361", sections[gaps]), (
+        "Known Gaps must not claim subscription semantics wait for #361"
+    )
+    assert_section_matches(sections, decision, r"Subscription model A")
+    assert_section_matches(sections, decision, r"\\Subscribed")
+    assert_section_matches(sections, decision, r"SUBSCRIBE")
+    assert_section_matches(sections, decision, r"no-ops")
+    assert_section_matches(sections, decision, r"SPECIAL-USE")
     assert not re.search(r"#362", sections[gaps]), (
         "Known Gaps must not claim socket timeout waits for #362"
     )

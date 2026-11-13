@@ -442,6 +442,62 @@ test_list_shows_daemon_inbox (ImapRealDaemonFixture *fixture,
 }
 
 static void
+test_lsub_and_subscribe_are_model_a (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_auto (ImapSession) session = { 0 };
+
+    (void)user_data;
+
+    config_path = write_dovecot_config (fixture, fixture->socket_path,
+            WYREBOX_LIST_SETTINGS);
+    run_imap (config_path,
+        "a LSUB \"\" \"*\"\r\n"
+        "b LIST (SUBSCRIBED) \"\" \"*\"\r\n"
+        "c SUBSCRIBE INBOX\r\n"
+        "d UNSUBSCRIBE INBOX\r\n"
+        "e LSUB \"\" \"*\"\r\n"
+        "z LOGOUT\r\n", &session);
+
+    g_assert_nonnull (strstr (session.output, "* PREAUTH"));
+    g_assert_cmpuint (count_occurrences (session.output, "* LSUB"), >=, 2);
+    g_assert_nonnull (strstr (session.output, "\"/\" INBOX\r\n"));
+    g_assert_nonnull (strstr (session.output, "\\Subscribed"));
+    g_assert_nonnull (strstr (session.output, "\r\na OK"));
+    g_assert_nonnull (strstr (session.output, "\r\nb OK"));
+    g_assert_nonnull (strstr (session.output, "\r\nc OK"));
+    g_assert_nonnull (strstr (session.output, "\r\nd OK"));
+    g_assert_nonnull (strstr (session.output, "\r\ne OK"));
+    g_assert_cmpuint (count_occurrences (session.output, "\"/\" INBOX\r\n"),
+        >=, 2);
+}
+
+static void
+test_list_special_use_skips_inbox_flag (ImapRealDaemonFixture *fixture,
+    gconstpointer user_data)
+{
+    g_autofree char *config_path = NULL;
+    g_auto (ImapSession) list_session = { 0 };
+    g_auto (ImapSession) special_session = { 0 };
+
+    (void)user_data;
+
+    config_path = write_dovecot_config (fixture, fixture->socket_path,
+            WYREBOX_LIST_SETTINGS);
+    run_imap (config_path, "a LIST \"\" \"*\"\r\nz LOGOUT\r\n",
+        &list_session);
+    run_imap (config_path, "a LIST (SPECIAL-USE) \"\" \"*\"\r\nz LOGOUT\r\n",
+        &special_session);
+
+    g_assert_nonnull (strstr (list_session.output, "\"/\" INBOX\r\n"));
+    g_assert_nonnull (strstr (list_session.output, "\r\na OK"));
+    g_assert_null (strstr (special_session.output, "\"/\" INBOX\r\n"));
+    g_assert_null (strstr (special_session.output, "* LIST"));
+    g_assert_nonnull (strstr (special_session.output, "\r\na OK"));
+}
+
+static void
 test_list_uses_configured_socket (ImapRealDaemonFixture *fixture,
     gconstpointer user_data)
 {
@@ -1682,6 +1738,12 @@ main (int argc, char **argv)
     g_test_add ("/dovecot/imap/list-shows-daemon-inbox",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_list_shows_daemon_inbox, fixture_tear_down);
+    g_test_add ("/dovecot/imap/lsub-and-subscribe-are-model-a",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_lsub_and_subscribe_are_model_a, fixture_tear_down);
+    g_test_add ("/dovecot/imap/list-special-use-skips-inbox-flag",
+        ImapRealDaemonFixture, NULL, fixture_set_up,
+        test_list_special_use_skips_inbox_flag, fixture_tear_down);
     g_test_add ("/dovecot/imap/list-uses-configured-socket",
         ImapRealDaemonFixture, NULL, fixture_set_up,
         test_list_uses_configured_socket, fixture_tear_down);
