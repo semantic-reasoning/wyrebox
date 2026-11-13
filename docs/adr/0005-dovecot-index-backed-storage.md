@@ -59,6 +59,13 @@ They model the old design and cannot exercise lib-index at all.
   `mailbox_list_register` when the plugin loads, replacing the iterator hook.
   It lists the daemon's mailboxes with `/` as the separator. Mailbox names
   pass to the daemon unchanged, so the namespace must have no namespace prefix.
+- Subscription model A (issue #361): every listed mailbox is
+  `\Subscribed`. `LSUB` and `LIST (SUBSCRIBED)` therefore match the ordinary
+  LIST set. `SUBSCRIBE` and `UNSUBSCRIBE` succeed as no-ops and do not change
+  later LSUB results. `LIST (SPECIAL-USE)` returns only mailboxes whose
+  daemon `special_use` is set and is not `\Inbox` (not an RFC 6154 flag).
+  Persistent per-mailbox subscription state stays out of the daemon API until
+  a later issue needs it.
 - Daemon-reported errors use the `WYREBOX_DOVECOT_DAEMON_CLIENT_ERROR` domain
   with the daemon error class as the code; transport errors stay in
   `G_IO_ERROR`. A missing mailbox answers `NO [NONEXISTENT]`. An unreachable
@@ -184,8 +191,6 @@ They model the old design and cannot exercise lib-index at all.
 - Virtual mailbox views report no flags or keywords, because the daemon UID
   map for a view carries none. No scripted IMAP test selects a view yet, so
   the read-only refusal of STORE on a view is untested at the IMAP level.
-- LSUB and `LIST (SUBSCRIBED)` return every mailbox, and subscribing is not
-  supported. This must be settled before Thunderbird smoke testing.
 - Without a mailbox change marker, FAST syncs can miss another session's
   updates until the next full sync. A stuck daemon still blocks the `imap`
   ioloop for up to the UDS idle timeout rather than forever.

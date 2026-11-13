@@ -17,6 +17,7 @@
 #include "mail-storage-private.h"
 #include "mail-user.h"
 #include "mailbox-list-private.h"
+#include "mailbox-tree.h"
 #include "module-dir.h"
 #include "seq-range-array.h"
 #include "wyrebox-daemon-mailbox-list-result.h"
@@ -190,8 +191,14 @@ static int
 wyrebox_dovecot_list_subscriptions_refresh (struct mailbox_list *src_list,
     struct mailbox_list *dest_list)
 {
+    /* Model A: every mailbox is subscribed. Keep an empty subscriptions
+       tree so mailbox_is_subscribed / SUBSCRIBE never assert; LSUB matching
+       uses MAILBOX_SUBSCRIBED on list infos instead. */
     (void)src_list;
-    (void)dest_list;
+    if (dest_list->subscriptions == NULL) {
+        dest_list->subscriptions = mailbox_tree_init (
+            mail_namespace_get_sep (dest_list->ns));
+    }
     return 0;
 }
 
@@ -199,10 +206,21 @@ static int
 wyrebox_dovecot_list_set_subscribed (struct mailbox_list *list,
     const char *name, bool set)
 {
-    (void)name;
-    (void)set;
-    mailbox_list_set_error (list, MAIL_ERROR_NOTPOSSIBLE, "Not supported");
-    return -1;
+    bool created ATTR_UNUSED;
+    struct mailbox_node *node;
+
+    /* Model A: SUBSCRIBE/UNSUBSCRIBE are successful no-ops. Remember a
+       SUBSCRIBE in the tree so mailbox_is_subscribed stays true; never
+       drop entries on UNSUBSCRIBE so LSUB does not shrink. */
+    if (list->subscriptions == NULL) {
+        list->subscriptions = mailbox_tree_init (
+            mail_namespace_get_sep (list->ns));
+    }
+    if (set) {
+        node = mailbox_tree_get (list->subscriptions, name, &created);
+        node->flags |= MAILBOX_SUBSCRIBED;
+    }
+    return 0;
 }
 
 static int
@@ -238,14 +256,28 @@ wyrebox_dovecot_list_get_mailbox_flags (struct mailbox_list *list,
     return 0;
 }
 
+static gboolean
+wyrebox_dovecot_list_entry_has_special_use (
+    const WyreboxDaemonMailboxListEntry *entry)
+{
+    /* "\Inbox" is not an RFC 6154 special-use flag. */
+    return entry->special_use != NULL
+           && strcmp (entry->special_use, "\\Inbox") != 0;
+}
+
 static enum mailbox_info_flags
 wyrebox_dovecot_list_info_flags (const WyreboxDaemonMailboxListEntry *entry,
     enum mailbox_list_iter_flags iter_flags)
 {
     enum mailbox_info_flags flags = 0;
 
+    /* Model A: always subscribed so LSUB (RETURN_NO_FLAGS +
+       SELECT_SUBSCRIBED) still matches through Dovecot's auto-subscribed
+       path when the subscriptions tree is empty. */
+    flags |= MAILBOX_SUBSCRIBED;
+
     if ((iter_flags & MAILBOX_LIST_ITER_RETURN_NO_FLAGS) != 0) {
-        return 0;
+        return flags;
     }
 
     if (!entry->is_selectable) {
@@ -331,6 +363,11 @@ wyrebox_dovecot_list_fill (struct wyrebox_dovecot_mailbox_list_iter *iter,
             vname = "INBOX";
         }
 
+        if ((iter->ctx.flags & MAILBOX_LIST_ITER_SELECT_SPECIALUSE) != 0
+            && !wyrebox_dovecot_list_entry_has_special_use (entry)) {
+            continue;
+        }
+
         if (imap_match (iter->ctx.glob, vname) != IMAP_MATCH_YES) {
             continue;
         }
@@ -339,10 +376,8 @@ wyrebox_dovecot_list_fill (struct wyrebox_dovecot_mailbox_list_iter *iter,
         info->ns = list->ns;
         info->vname = p_strdup (pool, vname);
         info->flags = wyrebox_dovecot_list_info_flags (entry, iter->ctx.flags);
-        /* "\Inbox" is not an RFC 6154 special-use flag. */
         if ((iter->ctx.flags & MAILBOX_LIST_ITER_RETURN_SPECIALUSE) != 0
-            && entry->special_use != NULL
-            && strcmp (entry->special_use, "\\Inbox") != 0) {
+            && wyrebox_dovecot_list_entry_has_special_use (entry)) {
             info->special_use = p_strdup (pool, entry->special_use);
         }
     }
