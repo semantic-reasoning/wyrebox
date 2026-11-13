@@ -111,8 +111,9 @@ wyrebox_daemon_connection_server_shared_state_remove_connection
 }
 
 static void
-wyrebox_daemon_connection_server_shared_state_close_connections
-    (WyreboxDaemonConnectionServerSharedState *state)
+wyrebox_daemon_connection_server_shared_state_shutdown_connections
+    (WyreboxDaemonConnectionServerSharedState *state,
+    gboolean shutdown_read, gboolean shutdown_write)
 {
     g_autoptr (GPtrArray) snapshot =
         g_ptr_array_new_with_free_func (g_object_unref);
@@ -128,10 +129,19 @@ wyrebox_daemon_connection_server_shared_state_close_connections
         GSocketConnection *connection = g_ptr_array_index (snapshot, i);
         GSocket *socket = g_socket_connection_get_socket (connection);
 
-        if (!g_socket_shutdown (socket, TRUE, TRUE, &shutdown_error))
+        if (!g_socket_shutdown (socket, shutdown_read, shutdown_write,
+            &shutdown_error))
             g_message ("daemon connection failed to shutdown during stop: %s",
                 shutdown_error->message);
     }
+}
+
+static void
+wyrebox_daemon_connection_server_shared_state_close_connections
+    (WyreboxDaemonConnectionServerSharedState *state)
+{
+    wyrebox_daemon_connection_server_shared_state_shutdown_connections (state,
+        TRUE, TRUE);
 }
 
 static WyreboxDaemonConnectionServerSessionTracker *
@@ -434,9 +444,10 @@ wyrebox_daemon_connection_server_stop (WyreboxDaemonConnectionServer *self,
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
     stopped = wyrebox_daemon_socket_listener_stop (self->listener, error);
+    /* SHUT_RD first: idle sessions see EOF; busy ones can still write replies. */
     if (self->shared_state != NULL)
-        wyrebox_daemon_connection_server_shared_state_close_connections
-            (self->shared_state);
+        wyrebox_daemon_connection_server_shared_state_shutdown_connections
+            (self->shared_state, TRUE, FALSE);
 
     abandoned = wyrebox_daemon_connection_server_session_tracker_wait_idle
             (self->tracker, g_get_monotonic_time ()
@@ -444,6 +455,11 @@ wyrebox_daemon_connection_server_stop (WyreboxDaemonConnectionServer *self,
     if (abandoned > 0)
         g_warning ("%u in-flight daemon session(s) abandoned after %u ms "
             "drain timeout", abandoned, self->drain_timeout_ms);
+
+    /* SHUT_WR leftovers after the drain (usually an empty snapshot). */
+    if (self->shared_state != NULL)
+        wyrebox_daemon_connection_server_shared_state_shutdown_connections
+            (self->shared_state, FALSE, TRUE);
 
     return stopped;
 }

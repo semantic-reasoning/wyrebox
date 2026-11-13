@@ -27,12 +27,14 @@ gboolean wyrebox_daemon_connection_server_start (
     GError **error);
 
 /*
- * Stops accepting connections, shuts down the open ones and waits up to the
- * drain timeout for their sessions to finish. When none is left running, no
- * session thread holds the request adapter afterwards, so dropping the last
- * references releases it on the calling thread. Sessions still running at the
- * timeout are logged and abandoned with their references; calling stop again
- * waits for them once more.
+ * Stops accepting connections, shuts down the read side of open connections
+ * so idle sessions see EOF while busy sessions can still write their reply,
+ * then waits up to the drain timeout for sessions to finish. Afterwards it
+ * shuts down the write side of any connections still open. When none is left
+ * running, no session thread holds the request adapter afterwards, so dropping
+ * the last references releases it on the calling thread. Sessions still
+ * running at the timeout are logged and abandoned with their references;
+ * calling stop again waits for them once more.
  *
  * Call it from the thread that runs the server's main context. Finalizing a
  * server without stopping it does not wait for sessions.
