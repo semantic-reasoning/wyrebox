@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -16,6 +17,10 @@ def run(command: list[str], cwd: Path) -> None:
 
 
 def main() -> None:
+    # Extra arguments are Meson -D options from the enclosing build, such as
+    # -Dduckdb_root on architectures without a bundled DuckDB prebuilt.
+    setup_options = sys.argv[1:]
+
     if not DOVECOT_CONFIG.is_file() or not os.access(DOVECOT_IMAP, os.X_OK):
         raise SystemExit(
             "Postfix to Dovecot recipe prerequisites are missing: install "
@@ -35,6 +40,7 @@ def main() -> None:
             [
                 "meson",
                 "setup",
+                *setup_options,
                 "-Ddovecot_backend=enabled",
                 f"-Ddovecot_config={DOVECOT_CONFIG}",
                 str(builddir),
