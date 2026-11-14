@@ -16,6 +16,8 @@ ExecStart=@WYREBOXD_BINDIR@/wyreboxd --config @WYREBOXD_CONFIG_PATH@
 Restart=on-failure
 RestartPreventExitStatus=65
 RestartSec=2s
+# Above the 30 s connection-server drain so stop can abandon and exit before SIGKILL.
+TimeoutStopSec=45s
 
 [Install]
 WantedBy=multi-user.target

@@ -1690,6 +1690,104 @@ seed_unselectable_inbox (const DaemonRoot *daemon_root)
         "('mailbox-inbox', 'account-1', 'INBOX', FALSE, TRUE);");
 }
 
+/*
+ * Spawns wyreboxd with a short drain and a long session hold so stop abandons
+ * in-flight work. wait_for_socket's successful connect starts the held
+ * session.
+ */
+static GSubprocess *
+spawn_daemon_with_drain_hold (const DaemonRoot *daemon_root,
+    const char *drain_timeout_ms, const char *session_hold_ms,
+    char **out_stderr_path)
+{
+    static guint hold_start_count;
+    g_autoptr (GSubprocessLauncher) launcher = NULL;
+    g_autofree char *stderr_name = NULL;
+    char *stderr_path = NULL;
+    GSubprocess *subprocess = NULL;
+
+    stderr_name = g_strdup_printf ("wyreboxd-hold-%u.stderr",
+            ++hold_start_count);
+    stderr_path = g_build_filename (daemon_root->root, stderr_name, NULL);
+    launcher = g_subprocess_launcher_new (G_SUBPROCESS_FLAGS_STDOUT_SILENCE);
+    g_subprocess_launcher_set_stderr_file_path (launcher, stderr_path);
+    g_subprocess_launcher_setenv (launcher, "WYREBOXD_DRAIN_TIMEOUT_MS",
+        drain_timeout_ms, TRUE);
+    g_subprocess_launcher_setenv (launcher, "WYREBOXD_TEST_SESSION_HOLD_MS",
+        session_hold_ms, TRUE);
+
+    subprocess = spawn_daemon_with_launcher (daemon_root, launcher);
+    *out_stderr_path = stderr_path;
+    return subprocess;
+}
+
+static void
+test_wyreboxd_exits_tempfail_when_drain_abandons_session (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) subprocess = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autofree char *stderr_path = NULL;
+    g_autofree char *stderr_text = NULL;
+    gint64 stop_started = 0;
+
+    daemon_root_init (&daemon_root);
+    subprocess = spawn_daemon_with_drain_hold (&daemon_root, "200", "10000",
+            &stderr_path);
+    g_assert_true (wait_for_socket (subprocess, daemon_root.socket_path));
+
+    stop_started = g_get_monotonic_time ();
+    g_subprocess_send_signal (subprocess, SIGTERM);
+    g_assert_true (g_subprocess_wait (subprocess, NULL, &error));
+    g_assert_no_error (error);
+    g_assert_true (g_subprocess_get_if_exited (subprocess));
+    g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==,
+        EX_TEMPFAIL);
+    g_assert_cmpint (g_get_monotonic_time () - stop_started, <,
+        2 * G_TIME_SPAN_SECOND);
+
+    g_assert_true (g_file_get_contents (stderr_path, &stderr_text, NULL,
+        &error));
+    g_assert_no_error (error);
+    g_assert_nonnull (strstr (stderr_text,
+        "in-flight daemon session(s) abandoned after 200 ms drain timeout"));
+}
+
+static void
+test_wyreboxd_second_sigterm_cuts_drain_short (void)
+{
+    g_auto (DaemonRoot) daemon_root = { 0 };
+    g_autoptr (GSubprocess) subprocess = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autofree char *stderr_path = NULL;
+    g_autofree char *stderr_text = NULL;
+    gint64 stop_started = 0;
+
+    daemon_root_init (&daemon_root);
+    subprocess = spawn_daemon_with_drain_hold (&daemon_root, "5000", "10000",
+            &stderr_path);
+    g_assert_true (wait_for_socket (subprocess, daemon_root.socket_path));
+
+    stop_started = g_get_monotonic_time ();
+    g_subprocess_send_signal (subprocess, SIGTERM);
+    g_usleep (100 * G_TIME_SPAN_MILLISECOND);
+    g_subprocess_send_signal (subprocess, SIGTERM);
+    g_assert_true (g_subprocess_wait (subprocess, NULL, &error));
+    g_assert_no_error (error);
+    g_assert_true (g_subprocess_get_if_exited (subprocess));
+    g_assert_false (g_subprocess_get_if_signaled (subprocess));
+    g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==,
+        EX_TEMPFAIL);
+    g_assert_cmpint (g_get_monotonic_time () - stop_started, <,
+        2 * G_TIME_SPAN_SECOND);
+
+    g_assert_true (g_file_get_contents (stderr_path, &stderr_text, NULL,
+        &error));
+    g_assert_no_error (error);
+    g_assert_nonnull (strstr (stderr_text,
+        "in-flight daemon session(s) abandoned after drain abort"));
+}
+
 #define SIGNALLED_EXIT_ROOT_ENV "WYREBOXD_MAIN_TEST_SIGNALLED_EXIT_ROOT"
 
 static void
@@ -2587,6 +2685,11 @@ main (int argc, char **argv)
         test_wyreboxd_exits_dataerr_on_corrupt_journal_record);
     g_test_add_func ("/daemon-api/wyreboxd/starts-with-held-account",
         test_wyreboxd_starts_with_held_account);
+    g_test_add_func
+        ("/daemon-api/wyreboxd/exits-tempfail-when-drain-abandons-session",
+        test_wyreboxd_exits_tempfail_when_drain_abandons_session);
+    g_test_add_func ("/daemon-api/wyreboxd/second-sigterm-cuts-drain-short",
+        test_wyreboxd_second_sigterm_cuts_drain_short);
     g_test_add_func ("/daemon-api/wyreboxd/stop-reports-signalled-exit",
         test_wyreboxd_stop_reports_signalled_exit);
     g_test_add_func ("/daemon-api/wyreboxd/start-reports-startup-failure",

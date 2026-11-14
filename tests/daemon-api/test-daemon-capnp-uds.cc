@@ -302,7 +302,7 @@ test_capnp_uds_mailbox_list_round_trip (void)
   g_assert_true (state.was_called);
   assert_mailbox_list_response (response);
 
-  g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+  g_assert_true (wyrebox_daemon_connection_server_stop (server, NULL, NULL, &error));
   g_assert_no_error (error);
 
   remove_tree (root);

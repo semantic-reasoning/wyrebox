@@ -198,21 +198,66 @@ wyrebox_daemon_connection_server_session_tracker_session_finished
     g_mutex_unlock (&tracker->mutex);
 }
 
-/* Returns the number of sessions still running at @deadline. */
+/*
+ * Returns the number of sessions still running when the wait ends (deadline,
+ * cancel, or idle). Dispatches the default main context between slices so a
+ * stop-thread signal source can cancel @cancellable.
+ */
 static guint
 wyrebox_daemon_connection_server_session_tracker_wait_idle
-    (WyreboxDaemonConnectionServerSessionTracker *tracker, gint64 deadline)
+    (WyreboxDaemonConnectionServerSessionTracker *tracker, gint64 deadline,
+    GCancellable *cancellable)
 {
     guint in_flight = 0;
 
     g_mutex_lock (&tracker->mutex);
-    while (tracker->in_flight > 0
-        && g_cond_wait_until (&tracker->idle_cond, &tracker->mutex, deadline))
-        ;
+    while (tracker->in_flight > 0) {
+        gint64 now;
+        gint64 slice;
+
+        now = g_get_monotonic_time ();
+        if (now >= deadline)
+            break;
+        if (cancellable != NULL && g_cancellable_is_cancelled (cancellable))
+            break;
+
+        slice = now + 50 * G_TIME_SPAN_MILLISECOND;
+        if (slice > deadline)
+            slice = deadline;
+
+        g_mutex_unlock (&tracker->mutex);
+        while (g_main_context_pending (NULL))
+            g_main_context_iteration (NULL, FALSE);
+        g_mutex_lock (&tracker->mutex);
+
+        if (tracker->in_flight == 0)
+            break;
+        if (cancellable != NULL && g_cancellable_is_cancelled (cancellable))
+            break;
+        if (g_get_monotonic_time () >= deadline)
+            break;
+
+        (void)g_cond_wait_until (&tracker->idle_cond, &tracker->mutex, slice);
+    }
     in_flight = tracker->in_flight;
     g_mutex_unlock (&tracker->mutex);
 
     return in_flight;
+}
+
+static void
+wyrebox_daemon_connection_server_maybe_hold_session_for_tests (void)
+{
+    const char *hold_ms = g_getenv ("WYREBOXD_TEST_SESSION_HOLD_MS");
+    guint64 parsed = 0;
+
+    if (hold_ms == NULL || hold_ms[0] == '\0')
+        return;
+    if (!g_ascii_string_to_unsigned (hold_ms, 10, 1, G_MAXUINT, &parsed, NULL))
+        return;
+
+    /* Hold outside materialization so SIGTERM can reach connection_server_stop. */
+    g_usleep (parsed * G_TIME_SPAN_MILLISECOND);
 }
 
 static void
@@ -284,6 +329,8 @@ wyrebox_daemon_connection_server_run_session (GTask *task,
             wyrebox_daemon_connection_server_shared_state_ref (
                 context->shared_state),
             (GDestroyNotify)wyrebox_daemon_connection_server_shared_state_unref);
+
+    wyrebox_daemon_connection_server_maybe_hold_session_for_tests ();
 
     if (!wyrebox_daemon_connection_session_process_payloads (session, &error))
         g_message ("daemon connection session failed: %s", error->message);
@@ -435,13 +482,17 @@ wyrebox_daemon_connection_server_start (WyreboxDaemonConnectionServer *self,
 
 gboolean
 wyrebox_daemon_connection_server_stop (WyreboxDaemonConnectionServer *self,
-    GError **error)
+    GCancellable *cancellable, guint *out_abandoned, GError **error)
 {
     gboolean stopped = FALSE;
     guint abandoned = 0;
+    gboolean cancelled = FALSE;
 
     g_return_val_if_fail (WYREBOX_IS_DAEMON_CONNECTION_SERVER (self), FALSE);
     g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+    if (out_abandoned != NULL)
+        *out_abandoned = 0;
 
     stopped = wyrebox_daemon_socket_listener_stop (self->listener, error);
     /* SHUT_RD first: idle sessions see EOF; busy ones can still write replies. */
@@ -451,10 +502,19 @@ wyrebox_daemon_connection_server_stop (WyreboxDaemonConnectionServer *self,
 
     abandoned = wyrebox_daemon_connection_server_session_tracker_wait_idle
             (self->tracker, g_get_monotonic_time ()
-            + (gint64)self->drain_timeout_ms * G_TIME_SPAN_MILLISECOND);
-    if (abandoned > 0)
-        g_warning ("%u in-flight daemon session(s) abandoned after %u ms "
-            "drain timeout", abandoned, self->drain_timeout_ms);
+            + (gint64)self->drain_timeout_ms * G_TIME_SPAN_MILLISECOND,
+            cancellable);
+    cancelled = cancellable != NULL && g_cancellable_is_cancelled (cancellable);
+    if (abandoned > 0) {
+        if (cancelled)
+            g_warning ("%u in-flight daemon session(s) abandoned after drain "
+                "abort", abandoned);
+        else
+            g_warning ("%u in-flight daemon session(s) abandoned after %u ms "
+                "drain timeout", abandoned, self->drain_timeout_ms);
+    }
+    if (out_abandoned != NULL)
+        *out_abandoned = abandoned;
 
     /* SHUT_WR leftovers after the drain (usually an empty snapshot). */
     if (self->shared_state != NULL)
