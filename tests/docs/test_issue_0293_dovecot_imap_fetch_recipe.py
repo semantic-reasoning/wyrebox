@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 
@@ -20,6 +21,10 @@ def run(command: list[str], cwd: Path) -> None:
 
 
 def main() -> None:
+    # Extra arguments are Meson -D options from the enclosing build, such as
+    # -Dduckdb_root on architectures without a bundled DuckDB prebuilt.
+    setup_options = sys.argv[1:]
+
     dovecot_config = Path(
         os.environ.get("WYREBOX_DOVECOT_CONFIG", DEFAULT_DOVECOT_CONFIG)
     )
@@ -42,6 +47,7 @@ def main() -> None:
             [
                 "meson",
                 "setup",
+                *setup_options,
                 "-Ddovecot_backend=enabled",
                 f"-Ddovecot_config={dovecot_config}",
                 str(builddir),

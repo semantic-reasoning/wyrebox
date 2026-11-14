@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -13,11 +14,18 @@ def run(command: list[str], cwd: Path) -> None:
 
 
 def main() -> None:
+    # Extra arguments are Meson -D options from the enclosing build, such as
+    # -Dduckdb_root on architectures without a bundled DuckDB prebuilt.
+    setup_options = sys.argv[1:]
+
     with tempfile.TemporaryDirectory(prefix="wyrebox-postfix-to-dovecot-e2e-recipe-") as tmp:
         tempdir = Path(tmp)
         builddir = tempdir / "build"
 
-        run(["meson", "setup", str(builddir), str(REPO_ROOT)], cwd=tempdir)
+        run(
+            ["meson", "setup", *setup_options, str(builddir), str(REPO_ROOT)],
+            cwd=tempdir,
+        )
         run(
             [
                 "meson",

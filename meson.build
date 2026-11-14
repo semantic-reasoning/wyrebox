@@ -120,6 +120,13 @@ duckdb_api_probe = '''
 # resolving a system provider.
 duckdb_root = get_option('duckdb_root')
 
+# Nested meson setups (docs recipes, Dovecot setup tests, install smoke) need
+# the same -Dduckdb_root when the enclosing build uses a source-built DuckDB.
+nested_setup_forwarded_args = []
+if duckdb_root != ''
+  nested_setup_forwarded_args += ['-Dduckdb_root=' + duckdb_root]
+endif
+
 if duckdb_root != ''
   duckdb_lib = cc.find_library('duckdb',
     dirs: duckdb_root / 'lib',
@@ -609,17 +616,19 @@ test(
   args: files('tests/docs/test_issue_0029_postfix_pipe_install.py'),
 )
 
+test(
+  'docs issue 0372 duckdb root forwarding',
+  python,
+  args: files('tests/docs/test_issue_0372_duckdb_root_forwarding.py'),
+)
+
 if capnp_serialization_found
-  postfix_pipe_install_smoke_args = [
-    files('tests/docs/test_issue_0029_postfix_pipe_install_smoke.py'),
-  ]
-  if duckdb_root != ''
-    postfix_pipe_install_smoke_args += ['-Dduckdb_root=' + duckdb_root]
-  endif
   test(
     'docs issue 0029 postfix pipe install smoke',
     python,
-    args: postfix_pipe_install_smoke_args,
+    args: [
+      files('tests/docs/test_issue_0029_postfix_pipe_install_smoke.py'),
+    ] + nested_setup_forwarded_args,
     timeout: 600,
   )
 endif
@@ -640,7 +649,9 @@ if fs.is_file('/usr/lib/dovecot/dovecot-config')
   test(
     'docs issue 0289 postfix dovecot e2e recipe',
     python,
-    args: files('tests/docs/test_issue_0289_postfix_dovecot_e2e_recipe.py'),
+    args: [
+      files('tests/docs/test_issue_0289_postfix_dovecot_e2e_recipe.py'),
+    ] + nested_setup_forwarded_args,
     is_parallel: false,
     timeout: 600,
   )
@@ -648,7 +659,9 @@ if fs.is_file('/usr/lib/dovecot/dovecot-config')
   test(
     'docs issue 0293 dovecot imap fetch recipe',
     python,
-    args: files('tests/docs/test_issue_0293_dovecot_imap_fetch_recipe.py'),
+    args: [
+      files('tests/docs/test_issue_0293_dovecot_imap_fetch_recipe.py'),
+    ] + nested_setup_forwarded_args,
     is_parallel: false,
     timeout: 600,
   )
@@ -656,7 +669,9 @@ if fs.is_file('/usr/lib/dovecot/dovecot-config')
   test(
     'docs issue 0292 postfix to dovecot e2e recipe',
     python,
-    args: files('tests/docs/test_issue_0292_postfix_to_dovecot_e2e_recipe.py'),
+    args: [
+      files('tests/docs/test_issue_0292_postfix_to_dovecot_e2e_recipe.py'),
+    ] + nested_setup_forwarded_args,
     is_parallel: false,
     timeout: 600,
   )
@@ -664,7 +679,9 @@ if fs.is_file('/usr/lib/dovecot/dovecot-config')
   test(
     'docs issue 0315 postfix dovecot imap e2e recipe',
     python,
-    args: files('tests/docs/test_issue_0315_postfix_dovecot_imap_e2e_recipe.py'),
+    args: [
+      files('tests/docs/test_issue_0315_postfix_dovecot_imap_e2e_recipe.py'),
+    ] + nested_setup_forwarded_args,
     is_parallel: false,
     timeout: 600,
   )

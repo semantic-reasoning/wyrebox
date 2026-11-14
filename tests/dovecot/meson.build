@@ -28,17 +28,10 @@ test(
   args: files('test-dovecot-config-include-dir.py'),
 )
 
-# The setup tests run a nested meson setup, which needs the enclosing build's
-# -Dduckdb_root on architectures without a bundled DuckDB prebuilt.
-dovecot_setup_forwarded_args = []
-if duckdb_root != ''
-  dovecot_setup_forwarded_args += ['-Dduckdb_root=' + duckdb_root]
-endif
-
 test(
   'dovecot system setup',
   python,
-  args: [files('test-dovecot-system-setup.py')] + dovecot_setup_forwarded_args,
+  args: [files('test-dovecot-system-setup.py')] + nested_setup_forwarded_args,
   is_parallel: false,
   timeout: 900,
 )
@@ -46,7 +39,7 @@ test(
 test(
   'dovecot fixture setup',
   python,
-  args: [files('test-dovecot-fixture-setup.py')] + dovecot_setup_forwarded_args,
+  args: [files('test-dovecot-fixture-setup.py')] + nested_setup_forwarded_args,
   is_parallel: false,
   timeout: 300,
 )
