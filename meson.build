@@ -778,6 +778,7 @@ if git_program.found()
   endif
 endif
 
+subdir('tests/helpers')
 subdir('tests/object-store')
 subdir('tests/backup')
 subdir('tests/admin')

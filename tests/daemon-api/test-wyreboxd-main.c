@@ -19,6 +19,7 @@
 #include "wyrebox-journal-reader.h"
 #include "wyrebox-journal-writer.h"
 #include "wyrebox-local-object-store.h"
+#include "wyrebox-test-daemon.h"
 
 #include <signal.h>
 #include <string.h>
@@ -184,6 +185,17 @@ run_wyreboxd (const DaemonRoot *daemon_root, gboolean initialize_storage,
     g_assert_true (g_subprocess_communicate_utf8 (subprocess, NULL, NULL,
         &stdout_text, &stderr_text, &error));
     g_assert_no_error (error);
+
+    if (!g_subprocess_get_if_exited (subprocess)) {
+        int signal_number = g_subprocess_get_if_signaled (subprocess) ?
+            g_subprocess_get_term_sig (subprocess) : 0;
+
+        g_printerr (
+            "--- wyreboxd stderr ---\n%s\n--- end wyreboxd stderr ---\n",
+            stderr_text != NULL ? stderr_text : "(unavailable)");
+        g_error ("wyreboxd terminated by signal %d (%s)", signal_number,
+            g_strsignal (signal_number));
+    }
 
     if (out_stdout != NULL)
         *out_stdout = g_steal_pointer (&stdout_text);
@@ -373,49 +385,6 @@ spawn_daemon (const DaemonRoot *daemon_root, GSubprocessFlags stderr_flag)
     return spawn_daemon_with_launcher (daemon_root, launcher);
 }
 
-/*
- * AF_UNIX: a sockpath can exist before accept is ready, or after the daemon
- * exits without unlinking. Treat readiness as a successful connect, not mere
- * path presence, so start_daemon does not hand callers Connection refused.
- */
-static gboolean
-try_connect_daemon_socket (const char *socket_path)
-{
-    g_autoptr (GError) error = NULL;
-    g_autoptr (GSocketAddress) address = NULL;
-    g_autoptr (GSocketClient) client = NULL;
-    g_autoptr (GSocketConnection) connection = NULL;
-
-    client = g_socket_client_new ();
-    g_socket_client_set_timeout (client, 1);
-    address = g_unix_socket_address_new (socket_path);
-    connection = g_socket_client_connect (client,
-            G_SOCKET_CONNECTABLE (address), NULL, &error);
-    return connection != NULL;
-}
-
-/*
- * Startup validates storage, prepares the catalog and catches up before the
- * socket accepts, which is slow under sanitizers, so allow a generous bound
- * but stop as soon as the daemon exits.
- */
-static gboolean
-wait_for_socket (GSubprocess *subprocess, const char *socket_path)
-{
-    gint64 deadline = g_get_monotonic_time () + 30 * G_TIME_SPAN_SECOND;
-
-    while (g_get_monotonic_time () < deadline) {
-        if (g_file_test (socket_path, G_FILE_TEST_EXISTS)
-            && try_connect_daemon_socket (socket_path))
-            return TRUE;
-        if (g_subprocess_get_identifier (subprocess) == NULL)
-            return FALSE;
-        g_usleep (10 * 1000);
-    }
-
-    return FALSE;
-}
-
 #define DAEMON_STDERR_PATH_KEY "wyreboxd-stderr-path"
 
 /*
@@ -443,7 +412,8 @@ start_daemon (const DaemonRoot *daemon_root)
     g_object_set_data_full (G_OBJECT (subprocess), DAEMON_STDERR_PATH_KEY,
         stderr_path, g_free);
 
-    if (wait_for_socket (subprocess, daemon_root->socket_path)) {
+    if (wyrebox_test_wait_for_daemon_socket (subprocess,
+        daemon_root->socket_path, 0)) {
         if (g_subprocess_get_identifier (subprocess) != NULL)
             return subprocess;
         (void)g_subprocess_wait (subprocess, NULL, NULL);
@@ -454,44 +424,16 @@ start_daemon (const DaemonRoot *daemon_root)
         g_error ("wyreboxd exited after its socket became accept-ready");
     }
 
-    /* Reap a daemon that is still starting so it does not outlive the test. */
-    g_subprocess_force_exit (subprocess);
-    (void)g_subprocess_wait (subprocess, NULL, NULL);
-    (void)g_file_get_contents (stderr_path, &stderr_text, NULL, NULL);
-    g_printerr ("--- wyreboxd stderr ---\n%s\n--- end wyreboxd stderr ---\n",
-        stderr_text != NULL ? stderr_text : "(unavailable)");
-    /* Keep this wording: start-reports-startup-failure matches it. */
-    g_error ("wyreboxd did not create its socket");
-}
+    {
+        gsize stderr_length = 0;
 
-/*
- * Fails the test unless the waited-for @subprocess exited with status 0,
- * naming the signal when wyreboxd was killed. @stderr_text, which may be NULL,
- * goes to stderr verbatim first: TAP folds a g_error() message onto one line,
- * which would make a sanitizer report unreadable.
- */
-static void
-assert_daemon_exited_cleanly (GSubprocess *subprocess, const char *stderr_text)
-{
-    int status = 0;
-
-    if (g_subprocess_get_if_exited (subprocess)
-        && g_subprocess_get_exit_status (subprocess) == 0)
-        return;
-
-    g_printerr ("--- wyreboxd stderr ---\n%s\n--- end wyreboxd stderr ---\n",
-        stderr_text != NULL ? stderr_text : "(unavailable)");
-
-    if (!g_subprocess_get_if_exited (subprocess)) {
-        int signal_number = g_subprocess_get_if_signaled (subprocess) ?
-            g_subprocess_get_term_sig (subprocess) : 0;
-
-        g_error ("wyreboxd terminated by signal %d (%s)", signal_number,
-            g_strsignal (signal_number));
+        (void)g_file_get_contents (stderr_path, &stderr_text, &stderr_length,
+            NULL);
+        /* Keep this wording: start-reports-startup-failure matches it. */
+        wyrebox_test_fail_daemon_socket_wait (subprocess,
+            (const guint8 *)stderr_text, stderr_length,
+            "wyreboxd did not create its socket");
     }
-
-    status = g_subprocess_get_exit_status (subprocess);
-    g_error ("wyreboxd exited with status %d", status);
 }
 
 static void
@@ -499,6 +441,7 @@ stop_daemon (GSubprocess *subprocess)
 {
     g_autoptr (GError) error = NULL;
     g_autofree char *stderr_text = NULL;
+    gsize stderr_length = 0;
     const char *stderr_path = g_object_get_data (G_OBJECT (subprocess),
             DAEMON_STDERR_PATH_KEY);
 
@@ -506,8 +449,10 @@ stop_daemon (GSubprocess *subprocess)
     g_assert_true (g_subprocess_wait (subprocess, NULL, &error));
     g_assert_no_error (error);
     if (stderr_path != NULL)
-        (void)g_file_get_contents (stderr_path, &stderr_text, NULL, NULL);
-    assert_daemon_exited_cleanly (subprocess, stderr_text);
+        (void)g_file_get_contents (stderr_path, &stderr_text, &stderr_length,
+            NULL);
+    wyrebox_test_assert_daemon_exited_cleanly (subprocess,
+        (const guint8 *)stderr_text, stderr_length);
 }
 
 static void
@@ -517,14 +462,30 @@ assert_daemon_startup_fails (const DaemonRoot *daemon_root, int exit_status,
     g_autoptr (GSubprocess) subprocess = spawn_daemon (daemon_root,
             G_SUBPROCESS_FLAGS_STDERR_PIPE);
     g_autoptr (GError) error = NULL;
-    g_autofree char *stderr_text = NULL;
+    g_autoptr (GBytes) stderr_bytes = NULL;
+    gsize stderr_length = 0;
+    const guint8 *stderr_data = NULL;
 
-    g_assert_true (g_subprocess_communicate_utf8 (subprocess, NULL, NULL,
-        NULL, &stderr_text, &error));
+    g_assert_true (g_subprocess_communicate (subprocess, NULL, NULL, NULL,
+        &stderr_bytes, &error));
     g_assert_no_error (error);
+    stderr_data = g_bytes_get_data (stderr_bytes, &stderr_length);
+    if (!g_subprocess_get_if_exited (subprocess)) {
+        int signal_number = g_subprocess_get_if_signaled (subprocess) ?
+            g_subprocess_get_term_sig (subprocess) : 0;
+
+        g_printerr (
+            "--- wyreboxd stderr ---\n%.*s\n--- end wyreboxd stderr ---\n",
+            (int)stderr_length,
+            stderr_data != NULL ? (const char *)stderr_data : "");
+        g_error ("wyreboxd terminated by signal %d (%s)", signal_number,
+            g_strsignal (signal_number));
+    }
     g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==,
         exit_status);
-    g_assert_nonnull (strstr (stderr_text, stderr_substring));
+    g_assert_nonnull (stderr_data);
+    g_assert_nonnull (g_strstr_len ((const char *)stderr_data, stderr_length,
+        stderr_substring));
     g_assert_false (g_file_test (daemon_root->socket_path, G_FILE_TEST_EXISTS));
 }
 
@@ -1272,6 +1233,7 @@ test_wyreboxd_rejects_invalid_config_path (void)
 
     g_assert_true (g_subprocess_wait (subprocess, NULL, &error));
     g_assert_no_error (error);
+    g_assert_true (g_subprocess_get_if_exited (subprocess));
     g_assert_cmpint (g_subprocess_get_exit_status (subprocess), ==, 78);
 }
 
@@ -1602,22 +1564,21 @@ test_wyreboxd_starts_with_missing_raw_object (void)
 {
     g_auto (DaemonRoot) daemon_root = { 0 };
     g_autoptr (GSubprocess) subprocess = NULL;
-    g_autoptr (GError) error = NULL;
     g_autofree char *object_path = NULL;
     g_autofree char *stderr_text = NULL;
+    const char *stderr_path = NULL;
 
     daemon_root_init (&daemon_root);
     journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
     object_path = first_raw_object_path (&daemon_root);
     g_assert_cmpint (g_remove (object_path), ==, 0);
 
-    subprocess = spawn_daemon (&daemon_root, G_SUBPROCESS_FLAGS_STDERR_PIPE);
-    g_assert_true (wait_for_socket (subprocess, daemon_root.socket_path));
-    g_subprocess_send_signal (subprocess, SIGTERM);
-    g_assert_true (g_subprocess_communicate_utf8 (subprocess, NULL, NULL, NULL,
-        &stderr_text, &error));
-    g_assert_no_error (error);
-    assert_daemon_exited_cleanly (subprocess, stderr_text);
+    subprocess = start_daemon (&daemon_root);
+    stop_daemon (subprocess);
+    stderr_path = g_object_get_data (G_OBJECT (subprocess),
+            DAEMON_STDERR_PATH_KEY);
+    g_assert_nonnull (stderr_path);
+    g_assert_true (g_file_get_contents (stderr_path, &stderr_text, NULL, NULL));
     g_assert_nonnull (strstr (stderr_text,
         "journaled deliveries with missing or corrupt raw objects: 1, first "
         "at journal sequence 1"));
@@ -1754,20 +1715,19 @@ test_wyreboxd_starts_with_held_account (void)
 {
     g_auto (DaemonRoot) daemon_root = { 0 };
     g_autoptr (GSubprocess) subprocess = NULL;
-    g_autoptr (GError) error = NULL;
     g_autofree char *stderr_text = NULL;
+    const char *stderr_path = NULL;
 
     daemon_root_init (&daemon_root);
     seed_unselectable_inbox (&daemon_root);
     journal_delivery_offline (&daemon_root, "delivery-1", "account-1");
 
-    subprocess = spawn_daemon (&daemon_root, G_SUBPROCESS_FLAGS_STDERR_PIPE);
-    g_assert_true (wait_for_socket (subprocess, daemon_root.socket_path));
-    g_subprocess_send_signal (subprocess, SIGTERM);
-    g_assert_true (g_subprocess_communicate_utf8 (subprocess, NULL, NULL, NULL,
-        &stderr_text, &error));
-    g_assert_no_error (error);
-    assert_daemon_exited_cleanly (subprocess, stderr_text);
+    subprocess = start_daemon (&daemon_root);
+    stop_daemon (subprocess);
+    stderr_path = g_object_get_data (G_OBJECT (subprocess),
+            DAEMON_STDERR_PATH_KEY);
+    g_assert_nonnull (stderr_path);
+    g_assert_true (g_file_get_contents (stderr_path, &stderr_text, NULL, NULL));
     g_assert_nonnull (strstr (stderr_text,
         "delivery materialization held account account-1"));
     g_assert_nonnull (strstr (stderr_text, "retry in 5000 ms"));
@@ -2154,20 +2114,19 @@ test_wyreboxd_acknowledges_delivery_when_materialization_fails (void)
     g_auto (DaemonRoot) daemon_root = { 0 };
     g_autoptr (GSubprocess) failing = NULL;
     g_autoptr (GSubprocess) restarted = NULL;
-    g_autoptr (GError) error = NULL;
     g_autofree char *stderr_text = NULL;
+    const char *stderr_path = NULL;
 
     daemon_root_init (&daemon_root);
     seed_unselectable_inbox (&daemon_root);
 
-    failing = spawn_daemon (&daemon_root, G_SUBPROCESS_FLAGS_STDERR_PIPE);
-    g_assert_true (wait_for_socket (failing, daemon_root.socket_path));
+    failing = start_daemon (&daemon_root);
     deliver (&daemon_root, "delivery-1");
-    g_subprocess_send_signal (failing, SIGTERM);
-    g_assert_true (g_subprocess_communicate_utf8 (failing, NULL, NULL, NULL,
-        &stderr_text, &error));
-    g_assert_no_error (error);
-    assert_daemon_exited_cleanly (failing, stderr_text);
+    stop_daemon (failing);
+    stderr_path = g_object_get_data (G_OBJECT (failing),
+            DAEMON_STDERR_PATH_KEY);
+    g_assert_nonnull (stderr_path);
+    g_assert_true (g_file_get_contents (stderr_path, &stderr_text, NULL, NULL));
     g_assert_nonnull (strstr (stderr_text,
         "delivery materialization held account account-1"));
     g_assert_nonnull (strstr (stderr_text, "retry in 5000 ms"));

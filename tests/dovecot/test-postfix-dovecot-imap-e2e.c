@@ -1,5 +1,6 @@
 #include "wyrebox-dovecot-daemon-client.h"
 #include "wyrebox-schema-metadata-store.h"
+#include "wyrebox-test-daemon.h"
 
 #include <gio/gio.h>
 #include <gio/gunixsocketaddress.h>
@@ -197,6 +198,8 @@ stop_process (GSubprocess **process, const char *name)
 
         g_test_message ("%s terminated by signal %d (%s)",
             name, signal_number, g_strsignal (signal_number));
+    } else if (!g_subprocess_get_if_exited (*process)) {
+        g_test_message ("%s did not exit after SIGTERM", name);
     } else if (g_subprocess_get_exit_status (*process) != 0) {
         g_test_message ("%s exited with status %d",
             name, g_subprocess_get_exit_status (*process));
@@ -307,12 +310,11 @@ start_daemon (E2eFixture *fixture)
     g_assert_null (fixture->daemon);
     fixture->daemon = spawn_with_parent_death (argv, G_SUBPROCESS_FLAGS_NONE,
             NULL);
-    for (guint i = 0; i < 500; i++) {
-        if (g_file_test (fixture->socket_path, G_FILE_TEST_EXISTS))
-            return;
-        g_usleep (10 * 1000);
+    if (!wyrebox_test_wait_for_daemon_socket (fixture->daemon,
+        fixture->socket_path, 0)) {
+        wyrebox_test_fail_daemon_socket_wait (fixture->daemon, NULL, 0,
+            "wyreboxd did not create its socket");
     }
-    g_assert_not_reached ();
 }
 
 static void
@@ -831,7 +833,7 @@ fixture_tear_down (E2eFixture *fixture, gconstpointer user_data)
 {
     (void)user_data;
 
-    stop_process (&fixture->master, "dovecot");
+    g_assert_true (stop_process (&fixture->master, "dovecot"));
     g_assert_true (stop_process (&fixture->daemon, "wyreboxd"));
 
     if (g_getenv ("WYREBOX_KEEP_TEST_ROOT") == NULL)
