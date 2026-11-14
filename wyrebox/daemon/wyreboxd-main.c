@@ -145,11 +145,43 @@ encode_response_frame (const WyreboxDaemonResponseFrame *response_frame,
 #endif
 }
 
+typedef struct
+{
+    GMainLoop *loop;
+    GCancellable *drain_cancellable;
+    gboolean stopping;
+} WyreboxdShutdown;
+
 static gboolean
 quit_main_loop_on_signal (gpointer user_data)
 {
-    g_main_loop_quit (user_data);
-    return G_SOURCE_REMOVE;
+    WyreboxdShutdown *shutdown = user_data;
+
+    if (!shutdown->stopping) {
+        shutdown->stopping = TRUE;
+        g_main_loop_quit (shutdown->loop);
+    } else if (shutdown->drain_cancellable != NULL) {
+        g_cancellable_cancel (shutdown->drain_cancellable);
+    }
+
+    /* Keep GLib signal disposition so a second SIGTERM cuts the drain short. */
+    return G_SOURCE_CONTINUE;
+}
+
+static void
+apply_drain_timeout_override (WyreboxDaemonConnectionServer *server)
+{
+    const char *timeout_ms = g_getenv ("WYREBOXD_DRAIN_TIMEOUT_MS");
+    guint64 parsed = 0;
+
+    if (timeout_ms == NULL || timeout_ms[0] == '\0')
+        return;
+    if (!g_ascii_string_to_unsigned (timeout_ms, 10, 1, G_MAXUINT, &parsed,
+        NULL))
+        return;
+
+    wyrebox_daemon_connection_server_set_drain_timeout (server,
+        (guint)parsed);
 }
 
 static void
@@ -340,10 +372,12 @@ run_daemon (int argc, char **argv)
     g_autoptr (GMainLoop) loop = NULL;
     g_autofree char *socket_path = NULL;
     g_autofree char *storage_id = NULL;
+    WyreboxdShutdown shutdown_state = { 0 };
     WyreboxDaemonDeliveryStorageValidationReport storage_report = { 0 };
     const char *catalog_path = NULL;
     const char *journal_root_dir = NULL;
     const char *object_root_dir = NULL;
+    guint abandoned = 0;
 
     if (!parse_options (argc, argv, &options, &error)) {
         g_printerr ("wyreboxd: %s\n", error->message);
@@ -576,22 +610,34 @@ run_daemon (int argc, char **argv)
      * and quits the loop on its first iteration.
      */
     loop = g_main_loop_new (NULL, FALSE);
-    (void)g_unix_signal_add (SIGTERM, quit_main_loop_on_signal, loop);
-    (void)g_unix_signal_add (SIGINT, quit_main_loop_on_signal, loop);
+    shutdown_state.loop = loop;
+    shutdown_state.drain_cancellable = g_cancellable_new ();
+    shutdown_state.stopping = FALSE;
+    apply_drain_timeout_override (server);
+    (void)g_unix_signal_add (SIGTERM, quit_main_loop_on_signal,
+        &shutdown_state);
+    (void)g_unix_signal_add (SIGINT, quit_main_loop_on_signal, &shutdown_state);
 
     if (!wyrebox_daemon_connection_server_start (server, &error)) {
         g_printerr ("wyreboxd: %s\n", error->message);
         wyrebox_daemon_delivery_materialization_stop (materialization);
+        g_clear_object (&shutdown_state.drain_cancellable);
         return EX_OSERR;
     }
 
     g_main_loop_run (loop);
     wyrebox_daemon_delivery_materialization_stop (materialization);
 
-    if (!wyrebox_daemon_connection_server_stop (server, &error)) {
+    if (!wyrebox_daemon_connection_server_stop (server,
+        shutdown_state.drain_cancellable, &abandoned, &error)) {
         g_printerr ("wyreboxd: %s\n", error->message);
+        g_clear_object (&shutdown_state.drain_cancellable);
         return EX_OSERR;
     }
+
+    g_clear_object (&shutdown_state.drain_cancellable);
+    if (abandoned > 0)
+        return EX_TEMPFAIL;
 
     return EX_OK;
 }

@@ -463,6 +463,16 @@ storage is not initialized after an upgrade, systemd stops restarting
 `wyreboxd` at its start rate limit. Fix the cause, then run
 `systemctl reset-failed wyreboxd` and `systemctl start wyreboxd`.
 
+`wyreboxd.service` sets `TimeoutStopSec=45s`. On stop, the daemon drains
+in-flight socket sessions for up to 30 s (the connection-server default).
+`TimeoutStopSec` sits above that drain so systemd does not SIGKILL before
+`wyreboxd` can abandon leftover work and exit. When the drain times out, or
+a second SIGTERM or SIGINT cuts it short, `wyreboxd` abandons remaining
+sessions, finishes an orderly shutdown, and exits `EX_TEMPFAIL` (75). A
+second signal during the drain cancels the wait; it does not restore the
+default disposition. systemd’s own escalation after `TimeoutStopSec` is
+SIGKILL, which cannot release stores.
+
 Socket activation is deferred. The initial service owns socket creation and
 lifecycle directly after startup and replay are complete.
 

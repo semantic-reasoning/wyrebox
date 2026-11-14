@@ -33,8 +33,9 @@ gboolean wyrebox_daemon_connection_server_start (
  * shuts down the write side of any connections still open. When none is left
  * running, no session thread holds the request adapter afterwards, so dropping
  * the last references releases it on the calling thread. Sessions still
- * running at the timeout are logged and abandoned with their references;
- * calling stop again waits for them once more.
+ * running at the timeout or when @cancellable is cancelled are logged and
+ * abandoned with their references; calling stop again waits for them once
+ * more. @out_abandoned (nullable) receives that leftover count.
  *
  * Call it from the thread that runs the server's main context. Finalizing a
  * server without stopping it does not wait for sessions.
@@ -43,6 +44,8 @@ gboolean wyrebox_daemon_connection_server_start (
  */
 gboolean wyrebox_daemon_connection_server_stop (
     WyreboxDaemonConnectionServer *self,
+    GCancellable *cancellable,
+    guint *out_abandoned,
     GError **error);
 
 #define WYREBOX_DAEMON_CONNECTION_SERVER_DEFAULT_DRAIN_TIMEOUT_MS 30000

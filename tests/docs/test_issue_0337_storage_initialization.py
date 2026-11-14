@@ -122,6 +122,9 @@ def check_service() -> None:
         "wyreboxd.service.in must require the default storage mounts"
     )
     assert re.search(r"^RestartPreventExitStatus=65$", service, re.MULTILINE)
+    assert re.search(r"^TimeoutStopSec=45s$", service, re.MULTILINE), (
+        "wyreboxd.service.in must keep TimeoutStopSec above the 30 s drain"
+    )
     assert "--initialize-storage" not in service, (
         "the service must never initialize storage on its own"
     )

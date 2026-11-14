@@ -680,7 +680,8 @@ test_connection_server_listener_lifecycle (void)
     g_io_stream_close (G_IO_STREAM (client), NULL, &error);
     g_assert_no_error (error);
 
-    g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, NULL, NULL,
+        &error));
     g_assert_no_error (error);
     g_assert_false (g_file_test (socket_path, G_FILE_TEST_EXISTS));
 
@@ -727,7 +728,8 @@ test_connection_server_round_trip (void)
     g_assert_cmpuint (state.encode_calls, ==, 1);
     g_assert_cmpuint (state.clear_calls, ==, 1);
 
-    g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, NULL, NULL,
+        &error));
     g_assert_no_error (error);
 
     remove_tree (root);
@@ -782,7 +784,8 @@ test_connection_server_two_clients_sequential (void)
     g_assert_cmpuint (state.encode_calls, ==, 2);
     g_assert_cmpuint (state.clear_calls, ==, 2);
 
-    g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, NULL, NULL,
+        &error));
     g_assert_no_error (error);
 
     remove_tree (root);
@@ -830,7 +833,8 @@ test_connection_server_malformed_payload_does_not_block_subsequent_clients
     g_assert_cmpuint (state.decode_calls, ==, 1);
     g_assert_cmpuint (state.encode_calls, ==, 1);
 
-    g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, NULL, NULL,
+        &error));
     g_assert_no_error (error);
 
     remove_tree (root);
@@ -871,7 +875,8 @@ test_connection_server_adapter_lifetime_protected (void)
     g_assert_cmpuint (state.decode_calls, ==, 1);
     g_assert_cmpuint (state.encode_calls, ==, 1);
 
-    g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, NULL, NULL,
+        &error));
     g_assert_no_error (error);
 
     remove_tree (root);
@@ -922,7 +927,8 @@ test_connection_server_idle_first_client_does_not_block_subsequent_client
     g_assert_cmpuint (state.encode_calls, ==, 1);
     g_assert_cmpuint (state.clear_calls, ==, 1);
 
-    g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, NULL, NULL,
+        &error));
     g_assert_no_error (error);
     assert_connection_closed_by_peer (idle_connection);
 
@@ -992,7 +998,8 @@ test_connection_server_blocking_query_does_not_block_delivery_ingestion
     assert_payload_equal (query_response, (const guint8 *)"query-success",
         strlen ("query-success"));
 
-    g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, NULL, NULL,
+        &error));
     g_assert_no_error (error);
 
     blocking_route_state_clear (&state);
@@ -1031,7 +1038,8 @@ test_connection_server_stop_waits_for_in_flight_session (void)
     releaser = g_thread_new ("release-query", release_blocking_query_later,
             &state);
 
-    g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, NULL, NULL,
+        &error));
     g_assert_no_error (error);
     g_assert_true (blocking_query_completed (&state));
 
@@ -1097,7 +1105,8 @@ test_connection_server_stop_idle_connection_returns_before_drain_timeout (void)
     assert_payload_equal (second_response, response, sizeof (response));
 
     stop_started = g_get_monotonic_time ();
-    g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, NULL, NULL,
+        &error));
     g_assert_no_error (error);
     g_assert_cmpint (g_get_monotonic_time () - stop_started, <,
         2 * G_TIME_SPAN_SECOND);
@@ -1117,6 +1126,7 @@ test_connection_server_stop_abandons_session_after_drain_timeout (void)
     g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
     g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
     gint64 stop_started = 0;
+    guint abandoned = 0;
 
     blocking_route_state_init (&state);
     socket_path = make_socket_path (&root);
@@ -1131,8 +1141,10 @@ test_connection_server_stop_abandons_session_after_drain_timeout (void)
     g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
         "1 in-flight daemon session(s) abandoned after 100 ms drain timeout");
     stop_started = g_get_monotonic_time ();
-    g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, NULL,
+        &abandoned, &error));
     g_assert_no_error (error);
+    g_assert_cmpuint (abandoned, ==, 1);
     g_assert_cmpint (g_get_monotonic_time () - stop_started, <,
         2 * G_TIME_SPAN_SECOND);
     g_test_assert_expected_messages ();
@@ -1141,7 +1153,70 @@ test_connection_server_stop_abandons_session_after_drain_timeout (void)
     /* Join the abandoned worker before @state leaves scope. */
     release_blocking_query (&state);
     wyrebox_daemon_connection_server_set_drain_timeout (server, 5000);
-    g_assert_true (wyrebox_daemon_connection_server_stop (server, &error));
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, NULL, NULL,
+        &error));
+    g_assert_no_error (error);
+    g_assert_true (blocking_query_completed (&state));
+
+    g_clear_object (&server);
+    g_clear_object (&adapter);
+    blocking_route_state_clear (&state);
+    remove_tree (root);
+}
+
+static gpointer
+cancel_drain_later (gpointer user_data)
+{
+    GCancellable *cancellable = user_data;
+
+    g_usleep (50 * G_TIME_SPAN_MILLISECOND);
+    g_cancellable_cancel (cancellable);
+    return NULL;
+}
+
+static void
+test_connection_server_stop_abandons_session_after_drain_abort (void)
+{
+    BlockingRouteState state = { 0 };
+    g_autofree char *root = NULL;
+    g_autofree char *socket_path = NULL;
+    g_autoptr (GError) error = NULL;
+    g_autoptr (GCancellable) cancellable = g_cancellable_new ();
+    g_autoptr (GSocketConnection) query_connection = NULL;
+    g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+    g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
+    GThread *canceller = NULL;
+    gint64 stop_started = 0;
+    guint abandoned = 0;
+
+    blocking_route_state_init (&state);
+    socket_path = make_socket_path (&root);
+    adapter = create_blocking_query_adapter (&state);
+    server = wyrebox_daemon_connection_server_new (socket_path, adapter);
+    wyrebox_daemon_connection_server_set_drain_timeout (server, 5000);
+    g_assert_true (wyrebox_daemon_connection_server_start (server, &error));
+    g_assert_no_error (error);
+
+    query_connection = start_blocking_query (socket_path, &state);
+
+    g_test_expect_message (NULL, G_LOG_LEVEL_WARNING,
+        "1 in-flight daemon session(s) abandoned after drain abort");
+    canceller = g_thread_new ("cancel-drain", cancel_drain_later, cancellable);
+    stop_started = g_get_monotonic_time ();
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, cancellable,
+        &abandoned, &error));
+    g_assert_no_error (error);
+    g_assert_cmpuint (abandoned, ==, 1);
+    g_assert_cmpint (g_get_monotonic_time () - stop_started, <,
+        2 * G_TIME_SPAN_SECOND);
+    g_test_assert_expected_messages ();
+    g_assert_false (blocking_query_completed (&state));
+
+    g_thread_join (canceller);
+    release_blocking_query (&state);
+    wyrebox_daemon_connection_server_set_drain_timeout (server, 5000);
+    g_assert_true (wyrebox_daemon_connection_server_stop (server, NULL, NULL,
+        &error));
     g_assert_no_error (error);
     g_assert_true (blocking_query_completed (&state));
 
@@ -1181,6 +1256,9 @@ main (int argc, char **argv)
     g_test_add_func
         ("/daemon-api/connection-server/stop-abandons-after-drain-timeout",
         test_connection_server_stop_abandons_session_after_drain_timeout);
+    g_test_add_func
+        ("/daemon-api/connection-server/stop-abandons-after-drain-abort",
+        test_connection_server_stop_abandons_session_after_drain_abort);
 
     return g_test_run ();
 }

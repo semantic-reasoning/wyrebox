@@ -207,6 +207,11 @@ def main() -> None:
         "journald first",
         "`LogsDirectory=wyrebox`",
         "`/var/log/wyrebox/`",
+        "`TimeoutStopSec=45s`",
+        "30 s",
+        "`EX_TEMPFAIL` (75)",
+        "second SIGTERM",
+        "SIGKILL",
         "Socket activation is deferred",
         "Non-systemd Linux support is deferred",
     ]:
