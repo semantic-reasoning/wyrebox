@@ -362,7 +362,7 @@ daemon_config_test = executable(
 wyreboxd_main_test = executable(
   'test-wyreboxd-main',
   'test-wyreboxd-main.c',
-  dependencies: [wyrebox_dep],
+  dependencies: [wyrebox_dep, wyrebox_test_daemon_dep],
 )
 
 daemon_runtime_test = executable(

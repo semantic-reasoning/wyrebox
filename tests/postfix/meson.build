@@ -7,7 +7,7 @@ postfix_pipe_executable_test = executable ('test-postfix-pipe-executable',['test
 postfix_lmtp_delivery_bridge_test = executable ('test-postfix-lmtp-delivery-bridge',['test-postfix-lmtp-delivery-bridge.cc', daemon_api_capnp_schema,], dependencies: [wyrebox_dep, capnp_dep, kj_dep], include_directories:[daemon_api_capnp_schema_include],)
 postfix_lmtp_executable_test = executable ('test-postfix-lmtp-executable',['test-postfix-lmtp-executable.cc', daemon_api_capnp_schema,], dependencies: [wyrebox_dep, capnp_dep, kj_dep], include_directories:[daemon_api_capnp_schema_include],)
 postfix_lmtp_delivery_test = executable ('test-postfix-lmtp-delivery',['test-postfix-lmtp-delivery.cc', daemon_api_capnp_schema,], dependencies: [wyrebox_dep, capnp_dep, kj_dep], include_directories:[daemon_api_capnp_schema_include],)
-postfix_pipe_real_daemon_test = executable ('test-postfix-pipe-real-daemon',['test-postfix-pipe-real-daemon.c', daemon_api_capnp_schema,], dependencies: [wyrebox_dep, capnp_dep, kj_dep], include_directories:[daemon_api_capnp_schema_include],)
+postfix_pipe_real_daemon_test = executable ('test-postfix-pipe-real-daemon',['test-postfix-pipe-real-daemon.c', daemon_api_capnp_schema,], dependencies: [wyrebox_dep, wyrebox_test_daemon_dep, capnp_dep, kj_dep], include_directories:[daemon_api_capnp_schema_include],)
      endif
      test ('postfix pipe input', postfix_pipe_input_test)
 test ('postfix pipe outcome', postfix_pipe_outcome_test)

@@ -1,6 +1,7 @@
 #include "wyrebox-daemon-message-append-request.h"
 #include "wyrebox-dovecot-daemon-client.h"
 #include "wyrebox-schema-metadata-store.h"
+#include "wyrebox-test-daemon.h"
 
 #include <gio/gio.h>
 #include <glib.h>
@@ -53,18 +54,6 @@ required_env (const char *name)
     g_assert_nonnull (value);
     g_assert_cmpstr (value, !=, "");
     return value;
-}
-
-static gboolean
-wait_for_socket (const char *socket_path)
-{
-    for (guint i = 0; i < 500; i++) {
-        if (g_file_test (socket_path, G_FILE_TEST_EXISTS))
-            return TRUE;
-        g_usleep (10 * 1000);
-    }
-
-    return FALSE;
 }
 
 static void
@@ -240,7 +229,11 @@ fixture_set_up (ImapRealDaemonFixture *fixture, gconstpointer user_data)
         NULL);
     fixture->daemon = g_subprocess_launcher_spawnv (launcher, argv, &error);
     g_assert_no_error (error);
-    g_assert_true (wait_for_socket (fixture->socket_path));
+    if (!wyrebox_test_wait_for_daemon_socket (fixture->daemon,
+        fixture->socket_path, 0)) {
+        wyrebox_test_fail_daemon_socket_wait (fixture->daemon, NULL, 0,
+            "wyreboxd did not create its socket");
+    }
 
     deliver_fixture (fixture->socket_path, "simple-crlf.eml");
 }
@@ -271,26 +264,16 @@ remove_tree (const char *path)
 static void
 stop_daemon (ImapRealDaemonFixture *fixture)
 {
-    g_autoptr (GError) error = NULL;
-
     if (fixture->daemon == NULL)
         return;
 
     g_subprocess_send_signal (fixture->daemon, SIGTERM);
-    if (!g_subprocess_wait (fixture->daemon, NULL, &error)) {
-        g_test_message ("waiting for wyreboxd failed: %s", error->message);
+    if (!wyrebox_test_wait_subprocess (fixture->daemon, 0)) {
+        g_test_message ("waiting for wyreboxd timed out or failed");
         g_test_fail ();
-    } else if (!g_subprocess_get_if_exited (fixture->daemon)) {
-        int signal_number = g_subprocess_get_if_signaled (fixture->daemon) ?
-            g_subprocess_get_term_sig (fixture->daemon) : 0;
-
-        g_test_message ("wyreboxd terminated by signal %d (%s)",
-            signal_number, g_strsignal (signal_number));
-        g_test_fail ();
-    } else if (g_subprocess_get_exit_status (fixture->daemon) != 0) {
-        g_test_message ("wyreboxd exited with status %d",
-            g_subprocess_get_exit_status (fixture->daemon));
-        g_test_fail ();
+    } else {
+        (void)wyrebox_test_check_daemon_exited_cleanly (fixture->daemon, NULL,
+            0);
     }
     g_clear_object (&fixture->daemon);
 }
@@ -324,7 +307,11 @@ restart_daemon (ImapRealDaemonFixture *fixture)
         NULL);
     fixture->daemon = g_subprocess_launcher_spawnv (launcher, argv, &error);
     g_assert_no_error (error);
-    g_assert_true (wait_for_socket (fixture->socket_path));
+    if (!wyrebox_test_wait_for_daemon_socket (fixture->daemon,
+        fixture->socket_path, 0)) {
+        wyrebox_test_fail_daemon_socket_wait (fixture->daemon, NULL, 0,
+            "wyreboxd did not create its socket");
+    }
 }
 
 static void

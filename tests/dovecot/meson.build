@@ -97,7 +97,7 @@ if capnp_serialization_found
   dovecot_imap_real_daemon_test = executable(
     'test-dovecot-imap-real-daemon',
     'test-dovecot-imap-real-daemon.c',
-    dependencies: [wyrebox_dep],
+    dependencies: [wyrebox_dep, wyrebox_test_daemon_dep],
   )
   dovecot_master = find_program(
     'dovecot',
@@ -126,7 +126,7 @@ if capnp_serialization_found
   postfix_dovecot_imap_e2e_test = executable(
     'test-postfix-dovecot-imap-e2e',
     'test-postfix-dovecot-imap-e2e.c',
-    dependencies: [wyrebox_dep],
+    dependencies: [wyrebox_dep, wyrebox_test_daemon_dep],
   )
   test(
     'postfix dovecot imap e2e',

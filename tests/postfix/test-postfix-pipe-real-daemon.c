@@ -4,6 +4,7 @@
 #include "wyrebox-local-object-store.h"
 #include "wyrebox-message-delivered-payload.h"
 #include "wyrebox-schema-metadata-store.h"
+#include "wyrebox-test-daemon.h"
 
 #include <gio/gio.h>
 #include <glib.h>
@@ -44,18 +45,6 @@ make_temp_root (const char *prefix)
     g_assert_no_error (error);
     g_assert_nonnull (root);
     return g_steal_pointer (&root);
-}
-
-static gboolean
-wait_for_socket (const char *socket_path)
-{
-    for (guint i = 0; i < 200; i++) {
-        if (g_file_test (socket_path, G_FILE_TEST_EXISTS))
-            return TRUE;
-        g_usleep (10 * 1000);
-    }
-
-    return FALSE;
 }
 
 static const char *
@@ -237,36 +226,6 @@ count_message_delivered_records (const char *journal_root_dir,
     return count;
 }
 
-/*
- * Fails the test unless the waited-for @subprocess exited with status 0,
- * naming the signal when wyreboxd was killed. @stderr_text, which may be NULL,
- * goes to stderr verbatim first: TAP folds a g_error() message onto one line,
- * which would make a sanitizer report unreadable.
- */
-static void
-assert_daemon_exited_cleanly (GSubprocess *subprocess, const char *stderr_text)
-{
-    int status = 0;
-
-    if (g_subprocess_get_if_exited (subprocess)
-        && g_subprocess_get_exit_status (subprocess) == 0)
-        return;
-
-    g_printerr ("--- wyreboxd stderr ---\n%s\n--- end wyreboxd stderr ---\n",
-        stderr_text != NULL ? stderr_text : "(unavailable)");
-
-    if (!g_subprocess_get_if_exited (subprocess)) {
-        int signal_number = g_subprocess_get_if_signaled (subprocess) ?
-            g_subprocess_get_term_sig (subprocess) : 0;
-
-        g_error ("wyreboxd terminated by signal %d (%s)", signal_number,
-            g_strsignal (signal_number));
-    }
-
-    status = g_subprocess_get_exit_status (subprocess);
-    g_error ("wyreboxd exited with status %d", status);
-}
-
 static void
 test_pipe_helper_delivers_through_wyreboxd_and_persists_journal (void)
 {
@@ -285,14 +244,18 @@ test_pipe_helper_delivers_through_wyreboxd_and_persists_journal (void)
     g_autofree char *socket_path = g_build_filename (run_dir, "wyrebox.sock",
             NULL);
     g_autoptr (GSubprocess) daemon = NULL;
-    g_autofree char *daemon_stderr = NULL;
+    g_autoptr (GSubprocessLauncher) launcher = NULL;
     g_autoptr (GError) error = NULL;
+    g_autofree char *stderr_path = g_build_filename (root, "wyreboxd.stderr",
+            NULL);
+    g_autofree char *daemon_stderr = NULL;
     g_auto (ProcessResult) helper_result = { 0 };
     g_auto (WyreboxMessageDeliveredPayload) payload = { 0 };
     g_autoptr (WyreboxLocalObjectStore) object_store = NULL;
     g_autoptr (GBytes) message_bytes = NULL;
     g_autoptr (GBytes) object_bytes = NULL;
     gsize object_size = 0;
+    gsize daemon_stderr_length = 0;
     const guint8 *object_data = NULL;
     const char *expected_object_key = NULL;
 
@@ -312,13 +275,22 @@ test_pipe_helper_delivers_through_wyreboxd_and_persists_journal (void)
         NULL
     };
 
-    daemon = g_subprocess_newv (daemon_argv,
-            (GSubprocessFlags)(G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
-            G_SUBPROCESS_FLAGS_STDERR_PIPE), &error);
+    launcher = g_subprocess_launcher_new (G_SUBPROCESS_FLAGS_STDOUT_SILENCE);
+    g_subprocess_launcher_set_stderr_file_path (launcher, stderr_path);
+    daemon = g_subprocess_launcher_spawnv (launcher, daemon_argv, &error);
     g_assert_no_error (error);
     g_assert_nonnull (daemon);
 
-    g_assert_true (wait_for_socket (socket_path));
+    if (!wyrebox_test_wait_for_daemon_socket (daemon, socket_path, 0)) {
+        g_autofree char *stderr_text = NULL;
+        gsize stderr_length = 0;
+
+        (void)g_file_get_contents (stderr_path, &stderr_text, &stderr_length,
+            NULL);
+        wyrebox_test_fail_daemon_socket_wait (daemon,
+            (const guint8 *)stderr_text, stderr_length,
+            "wyreboxd did not create its socket");
+    }
     run_pipe_helper (socket_path, message_bytes, &helper_result);
 
     g_assert_cmpint (helper_result.exit_status, ==, EX_OK);
@@ -355,10 +327,12 @@ test_pipe_helper_delivers_through_wyreboxd_and_persists_journal (void)
     g_assert_cmpmem (object_data, object_size, message, sizeof (message) - 1);
 
     g_subprocess_send_signal (daemon, SIGTERM);
-    g_assert_true (g_subprocess_communicate_utf8 (daemon, NULL, NULL, NULL,
-        &daemon_stderr, &error));
-    g_assert_no_error (error);
-    assert_daemon_exited_cleanly (daemon, daemon_stderr);
+    g_assert_true (wyrebox_test_wait_subprocess (daemon, 0));
+    (void)g_file_get_contents (stderr_path, &daemon_stderr,
+        &daemon_stderr_length,
+        NULL);
+    wyrebox_test_assert_daemon_exited_cleanly (daemon,
+        (const guint8 *)daemon_stderr, daemon_stderr_length);
 }
 
 int
