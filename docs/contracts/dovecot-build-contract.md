@@ -38,8 +38,8 @@ System mode (issue #354) builds against an installed `dovecot-dev` instead:
   whenever Cap'n Proto serialization is available. It drives the installed
   `imap` binary against a live `wyreboxd`, and skips unless the plugin was
   built (system mode), `imap` is installed, and the user is non-root. Fixture
-  mode runs the contract checks only. The fixture-based mailbox and loader smoke tests and the
-  `dovecot_loader_*` options are retired.
+  mode runs the contract checks only. The fixture-based mailbox and loader
+  smoke tests and the `dovecot_loader_*` options are retired.
 - Issue #315: `postfix dovecot imap e2e`
   (`tests/dovecot/test-postfix-dovecot-imap-e2e.c`) runs the whole delivery
   path against real processes, under the same Cap'n Proto condition.
