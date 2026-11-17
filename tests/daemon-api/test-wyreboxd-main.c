@@ -1653,8 +1653,8 @@ seed_unselectable_inbox (const DaemonRoot *daemon_root)
 
 /*
  * Spawns wyreboxd with a short drain and a long session hold so stop abandons
- * in-flight work. wait_for_socket's successful connect starts the held
- * session.
+ * in-flight work. The shared socket wait's successful connect starts the
+ * held session.
  */
 static GSubprocess *
 spawn_daemon_with_drain_hold (const DaemonRoot *daemon_root,
@@ -1695,7 +1695,16 @@ test_wyreboxd_exits_tempfail_when_drain_abandons_session (void)
     daemon_root_init (&daemon_root);
     subprocess = spawn_daemon_with_drain_hold (&daemon_root, "200", "10000",
             &stderr_path);
-    g_assert_true (wait_for_socket (subprocess, daemon_root.socket_path));
+    if (!wyrebox_test_wait_for_daemon_socket (subprocess,
+        daemon_root.socket_path, 0)) {
+        gsize stderr_length = 0;
+
+        (void)g_file_get_contents (stderr_path, &stderr_text, &stderr_length,
+            NULL);
+        wyrebox_test_fail_daemon_socket_wait (subprocess,
+            (const guint8 *)stderr_text, stderr_length,
+            "wyreboxd did not create its socket");
+    }
 
     stop_started = g_get_monotonic_time ();
     g_subprocess_send_signal (subprocess, SIGTERM);
@@ -1707,6 +1716,7 @@ test_wyreboxd_exits_tempfail_when_drain_abandons_session (void)
     g_assert_cmpint (g_get_monotonic_time () - stop_started, <,
         2 * G_TIME_SPAN_SECOND);
 
+    g_clear_pointer (&stderr_text, g_free);
     g_assert_true (g_file_get_contents (stderr_path, &stderr_text, NULL,
         &error));
     g_assert_no_error (error);
@@ -1727,7 +1737,16 @@ test_wyreboxd_second_sigterm_cuts_drain_short (void)
     daemon_root_init (&daemon_root);
     subprocess = spawn_daemon_with_drain_hold (&daemon_root, "5000", "10000",
             &stderr_path);
-    g_assert_true (wait_for_socket (subprocess, daemon_root.socket_path));
+    if (!wyrebox_test_wait_for_daemon_socket (subprocess,
+        daemon_root.socket_path, 0)) {
+        gsize stderr_length = 0;
+
+        (void)g_file_get_contents (stderr_path, &stderr_text, &stderr_length,
+            NULL);
+        wyrebox_test_fail_daemon_socket_wait (subprocess,
+            (const guint8 *)stderr_text, stderr_length,
+            "wyreboxd did not create its socket");
+    }
 
     stop_started = g_get_monotonic_time ();
     g_subprocess_send_signal (subprocess, SIGTERM);
@@ -1742,6 +1761,7 @@ test_wyreboxd_second_sigterm_cuts_drain_short (void)
     g_assert_cmpint (g_get_monotonic_time () - stop_started, <,
         2 * G_TIME_SPAN_SECOND);
 
+    g_clear_pointer (&stderr_text, g_free);
     g_assert_true (g_file_get_contents (stderr_path, &stderr_text, NULL,
         &error));
     g_assert_no_error (error);
