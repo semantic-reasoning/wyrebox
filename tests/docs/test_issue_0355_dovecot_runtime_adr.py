@@ -47,8 +47,12 @@ def main() -> None:
 
     sections = section_map(text)
 
-    assert_section_matches(sections, "## Status", r"issue #355")
-    assert_section_matches(sections, "## Status", r"Follow-up changes")
+    assert_section_matches(
+        sections, "## Status", r"Accepted and implemented for issue #355"
+    )
+    assert not re.search(
+        r"Follow-up changes|pre-port|Issue #313", sections["## Status"]
+    ), "Status must not keep the pre-implementation wording"
     assert_section_matches(sections, "## Context", r"ADR 0004")
     assert_section_matches(sections, "## Context", r"lib-index")
 
@@ -167,6 +171,11 @@ def main() -> None:
     assert_section_matches(sections, gaps, r"account")
     assert_section_matches(sections, gaps, r"interactive")
     assert_section_matches(sections, gaps, r"change marker")
+    assert_section_matches(sections, gaps, r"#364")
+    assert_section_matches(sections, gaps, r"#365")
+    assert_section_matches(sections, gaps, r"#366")
+    assert_section_matches(sections, gaps, r"#368")
+    assert_section_matches(sections, gaps, r"#369")
 
 
 if __name__ == "__main__":

@@ -2,9 +2,7 @@
 
 ## Status
 
-Accepted for issue #355. Follow-up changes under issue #355 implement it. Until
-each lands, the plugin keeps the pre-port behavior that ADR 0004 describes.
-Issue #313 adds flag and keyword changes.
+Accepted and implemented for issue #355.
 
 ## Context
 
@@ -14,8 +12,9 @@ mailboxes answer from a daemon snapshot and never open a Dovecot lib-index.
 LIST goes through a global iterator hook instead of a mailbox list driver.
 A real `imap` process needs an index for sequence and UID mapping, so it
 cannot select, fetch, or list WyreBox mailboxes. The only plugin behavior
-tests compile against the simplified header fixture in `tests/dovecot/fixtures/`.
-They model the old design and cannot exercise lib-index at all.
+tests compile against the simplified header fixture in
+`tests/dovecot/fixtures/`. They model the old design and cannot exercise
+lib-index at all.
 
 ## Decision
 
@@ -185,9 +184,9 @@ They model the old design and cannot exercise lib-index at all.
   the plugin. Plugin changes must be validated there, running `imap` as a
   non-root user.
 - The plugin links the full WyreBox library into `imap`. Splitting out a
-  thin daemon-client dependency is a follow-up.
+  thin daemon-client dependency is follow-up #369.
 - INTERNALDATE and the save date come from the message `Date:` header
-  rather than the WyreBox delivery time.
+  rather than the WyreBox delivery time (#366).
 - Virtual mailbox views report no flags or keywords, because the daemon UID
   map for a view carries none. No scripted IMAP test selects a view yet, so
   the read-only refusal of STORE on a view is untested at the IMAP level.
@@ -195,6 +194,9 @@ They model the old design and cannot exercise lib-index at all.
   updates until the next full sync. A stuck daemon still blocks the `imap`
   ioloop for up to the UDS idle timeout rather than forever.
 - The daemon trusts the account identity that the caller supplies. Binding
-  callers to an account before multi-user deployment is a follow-up.
+  callers to an account before multi-user deployment is follow-up #364.
 - Keeping the previous state on a failed re-sync and disconnecting on a
-  UIDVALIDITY change need an interactive IMAP session harness to test.
+  UIDVALIDITY change need an interactive IMAP session harness to test
+  (#365).
+- Non-empty Dovecot namespace prefixes remain unsupported; follow-up #368
+  covers list-driver and storage support.
