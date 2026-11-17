@@ -1,3 +1,36 @@
+# Thin daemon-client stack for out-of-process helpers (Dovecot plugin).
+# Keep disjoint from wyrebox_sources so each .c is compiled once.
+wyrebox_daemon_client_sources = files(
+  'daemon/wyrebox-daemon-frame-io.c',
+  'daemon/wyrebox-daemon-uds-client.c',
+  'daemon/wyrebox-daemon-peer-credentials.c',
+  'daemon/wyrebox-daemon-error.c',
+  'daemon/wyrebox-daemon-error-frame.c',
+  'daemon/wyrebox-daemon-response-frame.c',
+  'daemon/wyrebox-daemon-stream-chunk-frame.c',
+  'daemon/wyrebox-daemon-success-receipt.c',
+  'daemon/wyrebox-daemon-request-identity.c',
+  'daemon/wyrebox-daemon-user-keyword.c',
+  'daemon/wyrebox-daemon-mailbox-list-request.c',
+  'daemon/wyrebox-daemon-mailbox-list-result.c',
+  'daemon/wyrebox-daemon-mailbox-select-request.c',
+  'daemon/wyrebox-daemon-mailbox-select-result.c',
+  'daemon/wyrebox-daemon-mailbox-status-request.c',
+  'daemon/wyrebox-daemon-message-fetch-request.c',
+  'daemon/wyrebox-daemon-message-search-request.c',
+  'daemon/wyrebox-daemon-message-append-request.c',
+  'daemon/wyrebox-daemon-memberships-copy-move-request.c',
+  'daemon/wyrebox-daemon-memberships-expunge-request.c',
+  'daemon/wyrebox-daemon-flag-keyword-update-request.c',
+  'daemon/wyrebox-daemon-duckdb-query-template-request.c',
+  'daemon/wyrebox-daemon-delivery-ingestion-request.c',
+  'daemon/wyrebox-daemon-fact-mutation-request.c',
+  'daemon/wyrebox-daemon-fact-batch-import-request.c',
+  'daemon/wyrebox-daemon-mail-event-stream-request.c',
+  'daemon/wyrebox-daemon-wirelog-predicate-query-request.c',
+  'dovecot/wyrebox-dovecot-daemon-client.c',
+)
+
 wyrebox_sources = files(
   'admin/wyrebox-admin-health.c',
   'admin/wyrebox-admin-main.c',
@@ -11,8 +44,6 @@ wyrebox_sources = files(
   'backup/wyrebox-backup-set.c',
   'backup/wyrebox-backup-command.c',
   'backup/wyrebox-backup-tool-main.c',
-  'daemon/wyrebox-daemon-mailbox-list-request.c',
-  'daemon/wyrebox-daemon-mailbox-list-result.c',
   'daemon/wyrebox-daemon-mailbox-list-service.c',
   'daemon/wyrebox-daemon-derived-view-package.c',
   'daemon/wyrebox-daemon-derived-view-package-catalog.c',
@@ -24,12 +55,8 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-export-range.c',
   'daemon/wyrebox-daemon-mailbox-catalog-duckdb.c',
   'daemon/wyrebox-daemon-derived-view-catalog.c',
-  'daemon/wyrebox-daemon-mailbox-select-request.c',
-  'daemon/wyrebox-daemon-mailbox-status-request.c',
-  'daemon/wyrebox-daemon-mailbox-select-result.c',
   'daemon/wyrebox-daemon-mailbox-select-service.c',
   'daemon/wyrebox-daemon-mail-event.c',
-  'daemon/wyrebox-daemon-mail-event-stream-request.c',
   'daemon/wyrebox-daemon-mail-event-stream-service.c',
   'daemon/wyrebox-daemon-client-identity.c',
   'daemon/wyrebox-daemon-connection-session.c',
@@ -37,7 +64,6 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-mailbox-select-dispatcher.c',
   'daemon/wyrebox-daemon-request-router.c',
   'daemon/wyrebox-daemon-message-fetch-dispatcher.c',
-  'daemon/wyrebox-daemon-message-fetch-request.c',
   'daemon/wyrebox-daemon-message-fetch-service.c',
   'daemon/wyrebox-daemon-message-search-dispatcher.c',
   'daemon/wyrebox-daemon-message-search-duckdb.c',
@@ -46,55 +72,35 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-memberships-copy-move-journal.c',
   'daemon/wyrebox-daemon-message-append-dispatcher.c',
   'daemon/wyrebox-daemon-message-append-journal.c',
-  'daemon/wyrebox-daemon-message-append-request.c',
   'daemon/wyrebox-daemon-message-append-service.c',
   'daemon/wyrebox-daemon-memberships-expunge-journal.c',
-  'daemon/wyrebox-daemon-message-search-request.c',
   'daemon/wyrebox-daemon-message-search-service.c',
   'daemon/wyrebox-daemon-duckdb-query-template-dispatcher.c',
   'daemon/wyrebox-daemon-duckdb-query-template-catalog.c',
-  'daemon/wyrebox-daemon-duckdb-query-template-request.c',
   'daemon/wyrebox-daemon-duckdb-query-template-service.c',
   'daemon/wyrebox-daemon-wirelog-predicate-query-dispatcher.c',
   'daemon/wyrebox-daemon-wirelog-predicate-query-catalog.c',
-  'daemon/wyrebox-daemon-wirelog-predicate-query-request.c',
   'daemon/wyrebox-daemon-wirelog-predicate-query-service.c',
   'daemon/wyrebox-daemon-delivery-ingestion-dispatcher.c',
   'daemon/wyrebox-daemon-delivery-materialization.c',
   'daemon/wyrebox-daemon-fact-extraction.c',
   'daemon/wyrebox-daemon-exit-code.c',
   'daemon/wyrebox-daemon-delivery-ingestion-service.c',
-  'daemon/wyrebox-daemon-delivery-ingestion-request.c',
   'daemon/wyrebox-daemon-flag-keyword-update-dispatcher.c',
-  'daemon/wyrebox-daemon-flag-keyword-update-request.c',
   'daemon/wyrebox-daemon-flag-keyword-update-service.c',
-  'daemon/wyrebox-daemon-user-keyword.c',
   'daemon/wyrebox-daemon-memberships-copy-move-dispatcher.c',
-  'daemon/wyrebox-daemon-memberships-copy-move-request.c',
   'daemon/wyrebox-daemon-memberships-copy-move-service.c',
   'daemon/wyrebox-daemon-memberships-expunge-dispatcher.c',
-  'daemon/wyrebox-daemon-memberships-expunge-request.c',
   'daemon/wyrebox-daemon-memberships-expunge-service.c',
   'daemon/wyrebox-daemon-config.c',
-  'daemon/wyrebox-daemon-request-identity.c',
-  'daemon/wyrebox-daemon-peer-credentials.c',
-  'daemon/wyrebox-daemon-fact-batch-import-request.c',
   'daemon/wyrebox-daemon-fact-mutation-dispatcher.c',
   'daemon/wyrebox-daemon-fact-mutation-service.c',
-  'daemon/wyrebox-daemon-fact-mutation-request.c',
+  'daemon/wyrebox-daemon-fact-mutation-request-journal.c',
   'daemon/wyrebox-daemon-connection-server.c',
-  'daemon/wyrebox-daemon-frame-io.c',
-  'daemon/wyrebox-daemon-uds-client.c',
   'daemon/wyrebox-daemon-request-adapter.c',
   'daemon/wyrebox-daemon-runtime.c',
   'daemon/wyrebox-daemon-storage.c',
   'daemon/wyrebox-daemon-socket-listener.c',
-  'daemon/wyrebox-daemon-error.c',
-  'daemon/wyrebox-daemon-error-frame.c',
-  'daemon/wyrebox-daemon-response-frame.c',
-  'daemon/wyrebox-daemon-stream-chunk-frame.c',
-  'daemon/wyrebox-daemon-success-receipt.c',
-  'dovecot/wyrebox-dovecot-daemon-client.c',
   'duckdb/wyrebox-duckdb-shared.c',
   'postfix/wyrebox-postfix-lmtp-reply.c',
   'postfix/wyrebox-postfix-lmtp-session.c',
@@ -170,6 +176,13 @@ wyrebox_inc = include_directories(
 
 wyrebox_inc_paths = [wyrebox_inc]
 
+wyrebox_daemon_client_link_deps = [
+  glib_dep,
+  gobject_dep,
+  gio_dep,
+  gio_unix_dep,
+]
+
 wyrebox_link_deps = [
   glib_dep,
   gobject_dep,
@@ -179,12 +192,15 @@ wyrebox_link_deps = [
 ] + duckdb_deps
 
 if capnp_serialization_found
-  wyrebox_sources += [
+  wyrebox_daemon_client_sources += [
     'daemon/wyrebox-daemon-capnp-codec.cc',
-    'postfix/wyrebox-postfix-lmtp-delivery-bridge.c',
     daemon_api_capnp_schema,
   ]
+  wyrebox_sources += [
+    'postfix/wyrebox-postfix-lmtp-delivery-bridge.c',
+  ]
   wyrebox_inc_paths += [daemon_api_capnp_schema_include]
+  wyrebox_daemon_client_link_deps += [capnp_dep, kj_dep]
   wyrebox_link_deps += [capnp_dep, kj_dep]
 endif
 
@@ -202,16 +218,30 @@ if wirelog_runtime_found
   wyrebox_link_deps += [wirelog_dep]
 endif
 
+wyrebox_daemon_client_lib = static_library(
+  'wyrebox-daemon-client',
+  wyrebox_daemon_client_sources,
+  include_directories: wyrebox_inc_paths,
+  dependencies: wyrebox_daemon_client_link_deps,
+)
+
+wyrebox_daemon_client_dep = declare_dependency(
+  include_directories: wyrebox_inc_paths,
+  link_with: wyrebox_daemon_client_lib,
+  dependencies: wyrebox_daemon_client_link_deps,
+)
+
 wyrebox_lib = static_library(
   'wyrebox',
   wyrebox_sources,
   include_directories: wyrebox_inc_paths,
   dependencies: wyrebox_link_deps,
+  link_with: wyrebox_daemon_client_lib,
 )
 
 wyrebox_dep = declare_dependency(
   include_directories: wyrebox_inc_paths,
-  link_with: wyrebox_lib,
+  link_with: [wyrebox_lib, wyrebox_daemon_client_lib],
   dependencies: wyrebox_link_deps,
 )
 
@@ -228,7 +258,7 @@ if have_dovecot_backend and dovecot_uses_system_headers
     'wyrebox_plugin',
     'dovecot/wyrebox-dovecot-plugin.c',
     c_args: dovecot_backend_c_args + ['-fvisibility=hidden'],
-    dependencies: [wyrebox_dep],
+    dependencies: [wyrebox_daemon_client_dep],
     link_args: ['-Wl,--exclude-libs,ALL'],
     name_prefix: '',
     install: false,

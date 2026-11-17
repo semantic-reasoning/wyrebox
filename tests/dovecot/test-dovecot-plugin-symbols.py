@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,24 @@ FORBIDDEN_DEFINED_SYMBOLS = {
     "mail_storage_class_register",
     "mail_storage_class_unregister",
 }
+
+# Full-library bleed the thin daemon-client link must not pull into the plugin.
+# Anchored prefixes spare API request helpers such as
+# wyrebox_daemon_duckdb_query_template_*.
+FORBIDDEN_DEFINED_PREFIXES = (
+    "duckdb_",
+    "wyrebox_duckdb_",
+    "wyrebox_local_object_store",
+    "wyrebox_journal_",
+)
+
+# RUNPATH entries that only appear when the plugin still links the full stack.
+FORBIDDEN_RUNPATH_TOKENS = (
+    "duckdb",
+    "wirelog",
+)
+
+FORBIDDEN_NEEDED_RE = re.compile(r"libduckdb", re.IGNORECASE)
 
 
 def derive_dovecot_module_name(module_path: Path) -> str:
@@ -130,6 +149,64 @@ def assert_readelf_sees_dynamic_symbols(module_path: Path) -> None:
         raise AssertionError(f"readelf did not list required symbols: {missing}")
 
 
+def parse_dynamic_needed_and_runpaths(readelf_output: str) -> tuple[
+        list[str], list[str]]:
+    needed: list[str] = []
+    runpaths: list[str] = []
+    for line in readelf_output.splitlines():
+        if "(NEEDED)" in line:
+            start = line.find("[")
+            end = line.rfind("]")
+            if start != -1 and end != -1 and end > start:
+                needed.append(line[start + 1:end])
+        if "(RUNPATH)" in line or "(RPATH)" in line:
+            start = line.find("[")
+            end = line.rfind("]")
+            if start != -1 and end != -1 and end > start:
+                runpaths.append(line[start + 1:end])
+    return needed, runpaths
+
+
+def assert_no_full_stack_link_bleed(module_path: Path) -> None:
+    readelf = shutil.which("readelf")
+    if readelf is None:
+        raise AssertionError("readelf is required to verify Dovecot plugin symbols")
+    nm = shutil.which("nm")
+    if nm is None:
+        raise AssertionError("nm is required to verify Dovecot plugin symbols")
+
+    needed, runpaths = parse_dynamic_needed_and_runpaths(
+        run_tool(readelf, "-d", str(module_path)))
+    duckdb_needed = sorted(
+        name for name in needed if FORBIDDEN_NEEDED_RE.search(name))
+    if duckdb_needed:
+        raise AssertionError(
+            "Dovecot plugin must not DT_NEEDED DuckDB: " +
+            ", ".join(duckdb_needed))
+
+    forbidden_runpaths: list[str] = []
+    for runpath in runpaths:
+        lowered = runpath.lower()
+        for token in FORBIDDEN_RUNPATH_TOKENS:
+            if token in lowered:
+                forbidden_runpaths.append(runpath)
+                break
+    if forbidden_runpaths:
+        raise AssertionError(
+            "Dovecot plugin RUNPATH/RPATH must not reference full-stack "
+            "subprojects (duckdb/wirelog): " + "; ".join(forbidden_runpaths))
+
+    symbols = parse_dynamic_symbols(run_tool(nm, "--defined-only",
+                                             str(module_path)))
+    forbidden = sorted(
+        name for name in symbols
+        if any(name.startswith(prefix) for prefix in FORBIDDEN_DEFINED_PREFIXES))
+    if forbidden:
+        raise AssertionError(
+            "Dovecot plugin must not define full-stack storage symbols: " +
+            ", ".join(forbidden))
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("usage: test-dovecot-plugin-symbols.py MODULE_PATH")
@@ -141,6 +218,7 @@ def main() -> None:
     assert_required_symbols(module_path)
     assert_no_dovecot_host_symbols_defined(module_path)
     assert_readelf_sees_dynamic_symbols(module_path)
+    assert_no_full_stack_link_bleed(module_path)
     print(f"Dovecot plugin symbols verified: {module_path}")
 
 
