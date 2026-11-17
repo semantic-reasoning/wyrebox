@@ -128,9 +128,11 @@ bootstrap_daemon_storage (const char *root, const char *socket_path,
         "participant(message_id, \"alice@example.test\").\n");
     contents = g_strdup_printf ("[daemon]\n" "socket_path=%s\n"
             "journal_root_dir=%s\n" "object_root_dir=%s\n" "catalog_path=%s\n"
+            "\n[peer-account-binding:%u]\n" "accounts=account-1\n"
             "\n[wirelog]\n" "rules_path=%s\n"
             "\n[view:projects]\n" "imap_name=Projects\n" "scope=message\n",
-            socket_path, journal_dir, object_dir, catalog_path, rules_path);
+            socket_path, journal_dir, object_dir, catalog_path,
+            (unsigned int)getuid (), rules_path);
     write_file (config_path, contents);
     g_assert_cmpint (g_chmod (config_path, 0600), ==, 0);
 

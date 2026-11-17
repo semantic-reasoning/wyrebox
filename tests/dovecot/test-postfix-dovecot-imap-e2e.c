@@ -287,8 +287,10 @@ bootstrap_daemon_storage (E2eFixture *fixture)
     fixture->config_path = g_build_filename (fixture->root, "wyrebox.conf",
             NULL);
     contents = g_strdup_printf ("[daemon]\n" "socket_path=%s\n"
-            "journal_root_dir=%s\n" "object_root_dir=%s\n" "catalog_path=%s\n",
-            fixture->socket_path, journal_dir, object_dir, catalog_path);
+            "journal_root_dir=%s\n" "object_root_dir=%s\n" "catalog_path=%s\n"
+            "[peer-account-binding:%u]\n" "accounts=account-1\n",
+            fixture->socket_path, journal_dir, object_dir, catalog_path,
+            (unsigned int)getuid ());
     write_file (fixture->config_path, contents);
     g_assert_cmpint (g_chmod (fixture->config_path, 0600), ==, 0);
 

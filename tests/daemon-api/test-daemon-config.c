@@ -8,6 +8,16 @@
 #include <errno.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
+
+static char *
+peer_binding_section (void)
+{
+    return g_strdup_printf (
+        "[peer-account-binding:%u]\n"
+        "accounts=account-1\n",
+        (unsigned int)getuid ());
+}
 
 static char *
 create_config_fixture_dir (void)
@@ -34,6 +44,16 @@ write_config_fixture (const char *dir, const char *contents, mode_t mode)
     return g_steal_pointer (&path);
 }
 
+static char *
+write_valid_daemon_config (const char *dir, const char *daemon_body,
+    mode_t mode)
+{
+    g_autofree char *binding = peer_binding_section ();
+    g_autofree char *contents = g_strconcat (daemon_body, binding, NULL);
+
+    return write_config_fixture (dir, contents, mode);
+}
+
 static void
 assert_config_loads (const char *config_path)
 {
@@ -56,10 +76,28 @@ assert_config_loads (const char *config_path)
 }
 
 static void
-test_daemon_config_loads_canonical_config (void)
+test_daemon_config_rejects_missing_peer_binding (void)
 {
     g_autofree char *dir = create_config_fixture_dir ();
     g_autofree char *config_path = write_config_fixture (dir,
+            "[daemon]\n"
+            "socket_path=/run/wyrebox/wyrebox.sock\n"
+            "journal_root_dir=/var/lib/wyrebox/journal\n"
+            "object_root_dir=/var/lib/wyrebox/object-store\n"
+            "catalog_path=/var/lib/wyrebox/catalog.duckdb\n",
+            0600);
+    g_autoptr (GError) error = NULL;
+
+    g_assert_null (wyrebox_daemon_config_new_from_file (config_path, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+    g_assert_nonnull (strstr (error->message, "peer-account-binding"));
+}
+
+static void
+test_daemon_config_loads_canonical_config (void)
+{
+    g_autofree char *dir = create_config_fixture_dir ();
+    g_autofree char *config_path = write_valid_daemon_config (dir,
             "[daemon]\n"
             "socket_path=/run/wyrebox/wyrebox.sock\n"
             "journal_root_dir=/var/lib/wyrebox/journal\n"
@@ -74,7 +112,7 @@ static void
 test_daemon_config_validate_for_startup_accepts_absolute_socket_path (void)
 {
     g_autofree char *dir = create_config_fixture_dir ();
-    g_autofree char *config_path = write_config_fixture (dir,
+    g_autofree char *config_path = write_valid_daemon_config (dir,
             "[daemon]\n"
             "socket_path=/tmp/wyrebox.sock\n"
             "journal_root_dir=/tmp/wyrebox-journal\n"
@@ -133,7 +171,7 @@ static void
 test_daemon_config_accepts_non_canonical_absolute_socket_path (void)
 {
     g_autofree char *dir = create_config_fixture_dir ();
-    g_autofree char *config_path = write_config_fixture (dir,
+    g_autofree char *config_path = write_valid_daemon_config (dir,
             "[daemon]\n"
             "socket_path=/tmp/wyrebox.sock\n"
             "journal_root_dir=/tmp/wyrebox-journal\n"
@@ -230,7 +268,7 @@ static void
 test_daemon_config_loads_wirelog_views (void)
 {
     g_autofree char *dir = create_config_fixture_dir ();
-    g_autofree char *config_path = write_config_fixture (dir,
+    g_autofree char *config_path = write_valid_daemon_config (dir,
             "[daemon]\n"
             "socket_path=/run/wyrebox/wyrebox.sock\n"
             "\n"
@@ -281,7 +319,7 @@ static void
 test_daemon_config_without_wirelog_has_no_views (void)
 {
     g_autofree char *dir = create_config_fixture_dir ();
-    g_autofree char *config_path = write_config_fixture (dir,
+    g_autofree char *config_path = write_valid_daemon_config (dir,
             "[daemon]\n" "socket_path=/run/wyrebox/wyrebox.sock\n", 0600);
     g_autoptr (GError) error = NULL;
     g_autoptr (WyreboxDaemonConfig) config = NULL;
@@ -298,8 +336,10 @@ assert_wirelog_config_rejected (const char *wirelog_sections,
     const char *expected_message)
 {
     g_autofree char *dir = create_config_fixture_dir ();
+    g_autofree char *binding = peer_binding_section ();
     g_autofree char *contents = g_strconcat ("[daemon]\n"
-            "socket_path=/run/wyrebox/wyrebox.sock\n", wirelog_sections, NULL);
+            "socket_path=/run/wyrebox/wyrebox.sock\n", wirelog_sections,
+            binding, NULL);
     g_autofree char *config_path = write_config_fixture (dir, contents, 0600);
     g_autoptr (GError) error = NULL;
 
@@ -355,6 +395,8 @@ main (int argc, char **argv)
 {
     g_test_init (&argc, &argv, NULL);
 
+    g_test_add_func ("/daemon-api/config/rejects-missing-peer-binding",
+        test_daemon_config_rejects_missing_peer_binding);
     g_test_add_func ("/daemon-api/config/loads-canonical-config",
         test_daemon_config_loads_canonical_config);
     g_test_add_func

@@ -12,6 +12,7 @@
 
 #include <signal.h>
 #include <string.h>
+#include <unistd.h>
 #include <sysexits.h>
 
 typedef struct
@@ -74,8 +75,10 @@ write_config (const char *path, const char *socket_path,
 {
     g_autofree char *contents = g_strdup_printf ("[daemon]\n"
             "socket_path=%s\n" "journal_root_dir=%s\n" "object_root_dir=%s\n"
-            "catalog_path=%s\n", socket_path, journal_root_dir, object_root_dir,
-            catalog_path);
+            "catalog_path=%s\n"
+            "[peer-account-binding:%u]\n"
+            "accounts=account-1\n", socket_path, journal_root_dir,
+            object_root_dir, catalog_path, (unsigned int)getuid ());
     g_autoptr (GError) error = NULL;
 
     g_assert_true (g_file_set_contents (path, contents, -1, &error));
