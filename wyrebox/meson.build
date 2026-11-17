@@ -93,6 +93,7 @@ wyrebox_sources = files(
   'daemon/wyrebox-daemon-memberships-expunge-dispatcher.c',
   'daemon/wyrebox-daemon-memberships-expunge-service.c',
   'daemon/wyrebox-daemon-config.c',
+  'daemon/wyrebox-daemon-peer-account-authorizer.c',
   'daemon/wyrebox-daemon-fact-mutation-dispatcher.c',
   'daemon/wyrebox-daemon-fact-mutation-service.c',
   'daemon/wyrebox-daemon-fact-mutation-request-journal.c',

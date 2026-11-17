@@ -358,6 +358,11 @@ daemon_config_test = executable(
   'test-daemon-config.c',
   dependencies: [wyrebox_dep],
 )
+daemon_peer_account_authorizer_test = executable(
+  'test-daemon-peer-account-authorizer',
+  'test-daemon-peer-account-authorizer.c',
+  dependencies: [wyrebox_dep],
+)
 
 wyreboxd_main_test = executable(
   'test-wyreboxd-main',
@@ -617,6 +622,7 @@ test(
   },
 )
 test('daemon config', daemon_config_test)
+test('daemon peer account authorizer', daemon_peer_account_authorizer_test)
 if capnp_serialization_found
   test(
     'wyreboxd main',

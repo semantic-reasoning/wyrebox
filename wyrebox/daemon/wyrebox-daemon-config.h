@@ -1,6 +1,7 @@
 #pragma once
 
 #include <glib-object.h>
+#include <sys/types.h>
 
 /* *INDENT-OFF* */
 G_BEGIN_DECLS
@@ -109,6 +110,20 @@ WyreboxDaemonViewScope wyrebox_daemon_config_get_view_scope (
  * Returns: (transfer none): the validated config file path.
  */
 const char *wyrebox_daemon_config_get_config_path (WyreboxDaemonConfig *self);
+
+/*
+ * Returns: the number of [peer-account-binding:<uid>] sections.
+ */
+guint wyrebox_daemon_config_get_n_peer_bindings (WyreboxDaemonConfig *self);
+
+/*
+ * Returns: whether peer @uid may claim @account_identity under the loaded
+ * bindings. A binding with accounts=* allows any non-empty identity.
+ */
+gboolean wyrebox_daemon_config_peer_uid_allows_account (
+    WyreboxDaemonConfig *self,
+    uid_t uid,
+    const char *account_identity);
 
 G_END_DECLS
 /* *INDENT-ON* */

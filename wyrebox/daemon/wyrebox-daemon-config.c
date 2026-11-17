@@ -17,6 +17,14 @@ typedef struct
     WyreboxDaemonViewScope scope;
 } ConfigView;
 
+typedef struct
+{
+    uid_t uid;
+    gboolean allow_all;
+    char *accounts_raw;
+    GPtrArray *accounts;
+} ConfigPeerBinding;
+
 struct _WyreboxDaemonConfig
 {
     GObject parent_instance;
@@ -29,6 +37,7 @@ struct _WyreboxDaemonConfig
     char *wirelog_rules_path;
     char *extraction_rules_path;
     GPtrArray *views;
+    GPtrArray *peer_bindings;
 };
 
 G_DEFINE_TYPE (WyreboxDaemonConfig, wyrebox_daemon_config, G_TYPE_OBJECT);
@@ -87,6 +96,7 @@ typedef enum
     CONFIG_SECTION_DAEMON,
     CONFIG_SECTION_WIRELOG,
     CONFIG_SECTION_VIEW,
+    CONFIG_SECTION_PEER_BINDING,
 } ConfigSection;
 
 static void
@@ -98,6 +108,16 @@ config_view_free (gpointer data)
     g_free (view->imap_name);
     g_free (view->scope_name);
     g_free (view);
+}
+
+static void
+config_peer_binding_free (gpointer data)
+{
+    ConfigPeerBinding *binding = data;
+
+    g_free (binding->accounts_raw);
+    g_clear_pointer (&binding->accounts, g_ptr_array_unref);
+    g_free (binding);
 }
 
 static gboolean
@@ -133,11 +153,52 @@ assign_once (const char *config_path, const char *section, const char *key,
 }
 
 static gboolean
+parse_peer_binding_uid (const char *uid_text, uid_t *out_uid, GError **error)
+{
+    guint64 parsed = 0;
+    char *end = NULL;
+
+    if (uid_text == NULL || *uid_text == '\0') {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "peer-account-binding uid is required");
+        return FALSE;
+    }
+
+    for (const char *cursor = uid_text; *cursor != '\0'; cursor++) {
+        if (!g_ascii_isdigit (*cursor)) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "peer-account-binding uid must be decimal digits: %s",
+                uid_text);
+            return FALSE;
+        }
+    }
+
+    errno = 0;
+    parsed = g_ascii_strtoull (uid_text, &end, 10);
+    if (errno != 0 || end == uid_text || *end != '\0' ||
+        parsed > (guint64)G_MAXUINT) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "peer-account-binding uid is out of range: %s", uid_text);
+        return FALSE;
+    }
+
+    *out_uid = (uid_t)parsed;
+    return TRUE;
+}
+
+static gboolean
 begin_section (WyreboxDaemonConfig *self, const char *config_path,
     const char *name, ConfigSection *section, ConfigView **view,
-    GError **error)
+    ConfigPeerBinding **binding, GError **error)
 {
     *view = NULL;
+    *binding = NULL;
 
     if (g_strcmp0 (name, "daemon") == 0) {
         *section = CONFIG_SECTION_DAEMON;
@@ -181,6 +242,36 @@ begin_section (WyreboxDaemonConfig *self, const char *config_path,
         return TRUE;
     }
 
+    if (g_str_has_prefix (name, "peer-account-binding:")) {
+        const char *uid_text = name + strlen ("peer-account-binding:");
+        uid_t uid = 0;
+
+        if (!parse_peer_binding_uid (uid_text, &uid, error))
+            return FALSE;
+
+        for (guint i = 0; i < self->peer_bindings->len; i++) {
+            const ConfigPeerBinding *existing =
+                g_ptr_array_index (self->peer_bindings, i);
+
+            if (existing->uid == uid) {
+                g_set_error (error,
+                    G_IO_ERROR,
+                    G_IO_ERROR_INVALID_DATA,
+                    "daemon config '%s' defines peer-account-binding for "
+                    "uid %u more than once",
+                    config_path, (unsigned int)uid);
+                return FALSE;
+            }
+        }
+
+        *binding = g_new0 (ConfigPeerBinding, 1);
+        (*binding)->uid = uid;
+        (*binding)->accounts = g_ptr_array_new_with_free_func (g_free);
+        g_ptr_array_add (self->peer_bindings, *binding);
+        *section = CONFIG_SECTION_PEER_BINDING;
+        return TRUE;
+    }
+
     g_set_error (error,
         G_IO_ERROR,
         G_IO_ERROR_INVALID_DATA,
@@ -189,9 +280,81 @@ begin_section (WyreboxDaemonConfig *self, const char *config_path,
 }
 
 static gboolean
+assign_peer_binding_accounts (const char *config_path,
+    ConfigPeerBinding *binding, const char *value, GError **error)
+{
+    g_auto (GStrv) parts = NULL;
+
+    if (binding->accounts_raw != NULL) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config '%s' defines peer-account-binding accounts more "
+            "than once for uid %u",
+            config_path, (unsigned int)binding->uid);
+        return FALSE;
+    }
+
+    if (value == NULL || *value == '\0') {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config '%s' peer-account-binding uid %u requires a "
+            "non-empty accounts value",
+            config_path, (unsigned int)binding->uid);
+        return FALSE;
+    }
+
+    if (g_strcmp0 (value, "*") == 0) {
+        binding->accounts_raw = g_strdup (value);
+        binding->allow_all = TRUE;
+        return TRUE;
+    }
+
+    parts = g_strsplit (value, ",", -1);
+    for (guint i = 0; parts[i] != NULL; i++) {
+        g_autofree char *account = g_strdup (parts[i]);
+
+        g_strstrip (account);
+        if (*account == '\0') {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "daemon config '%s' peer-account-binding uid %u has an empty "
+                "account entry",
+                config_path, (unsigned int)binding->uid);
+            return FALSE;
+        }
+        if (g_strcmp0 (account, "*") == 0) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "daemon config '%s' peer-account-binding uid %u cannot mix "
+                "'*' with named accounts",
+                config_path, (unsigned int)binding->uid);
+            return FALSE;
+        }
+        g_ptr_array_add (binding->accounts, g_steal_pointer (&account));
+    }
+
+    if (binding->accounts->len == 0) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config '%s' peer-account-binding uid %u requires at "
+            "least one account",
+            config_path, (unsigned int)binding->uid);
+        return FALSE;
+    }
+
+    binding->accounts_raw = g_strdup (value);
+    return TRUE;
+}
+
+static gboolean
 assign_key (WyreboxDaemonConfig *self, const char *config_path,
-    ConfigSection section, ConfigView *view, const char *key,
-    const char *value, GError **error)
+    ConfigSection section, ConfigView *view, ConfigPeerBinding *binding,
+    const char *key, const char *value, GError **error)
 {
     switch (section) {
     case CONFIG_SECTION_DAEMON:
@@ -224,6 +387,11 @@ assign_key (WyreboxDaemonConfig *self, const char *config_path,
             return assign_once (config_path, "view", key, value,
                        &view->scope_name, error);
         break;
+    case CONFIG_SECTION_PEER_BINDING:
+        if (g_strcmp0 (key, "accounts") == 0)
+            return assign_peer_binding_accounts (config_path, binding, value,
+                       error);
+        break;
     case CONFIG_SECTION_NONE:
     default:
         g_assert_not_reached ();
@@ -237,12 +405,43 @@ assign_key (WyreboxDaemonConfig *self, const char *config_path,
 }
 
 static gboolean
+validate_peer_bindings (const WyreboxDaemonConfig *self, GError **error)
+{
+    if (self->peer_bindings->len == 0) {
+        g_set_error (error,
+            G_IO_ERROR,
+            G_IO_ERROR_INVALID_DATA,
+            "daemon config requires at least one "
+            "[peer-account-binding:<uid>] section");
+        return FALSE;
+    }
+
+    for (guint i = 0; i < self->peer_bindings->len; i++) {
+        const ConfigPeerBinding *binding =
+            g_ptr_array_index (self->peer_bindings, i);
+
+        if (binding->accounts_raw == NULL) {
+            g_set_error (error,
+                G_IO_ERROR,
+                G_IO_ERROR_INVALID_DATA,
+                "daemon config peer-account-binding uid %u is missing "
+                "accounts",
+                (unsigned int)binding->uid);
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+static gboolean
 parse_daemon_config_file (WyreboxDaemonConfig *self, const char *config_path,
     const char *contents, GError **error)
 {
     g_auto (GStrv) lines = NULL;
     ConfigSection section = CONFIG_SECTION_NONE;
     ConfigView *view = NULL;
+    ConfigPeerBinding *binding = NULL;
 
     lines = g_strsplit (contents, "\n", -1);
 
@@ -270,7 +469,7 @@ parse_daemon_config_file (WyreboxDaemonConfig *self, const char *config_path,
 
             *section_end = '\0';
             if (!begin_section (self, config_path, line + 1, &section, &view,
-                error))
+                &binding, error))
                 return FALSE;
 
             continue;
@@ -308,7 +507,8 @@ parse_daemon_config_file (WyreboxDaemonConfig *self, const char *config_path,
             return FALSE;
         }
 
-        if (!assign_key (self, config_path, section, view, key, value, error))
+        if (!assign_key (self, config_path, section, view, binding, key, value,
+            error))
             return FALSE;
     }
 
@@ -449,6 +649,7 @@ wyrebox_daemon_config_finalize (GObject *object)
     g_clear_pointer (&self->wirelog_rules_path, g_free);
     g_clear_pointer (&self->extraction_rules_path, g_free);
     g_clear_pointer (&self->views, g_ptr_array_unref);
+    g_clear_pointer (&self->peer_bindings, g_ptr_array_unref);
 
     G_OBJECT_CLASS (wyrebox_daemon_config_parent_class)->finalize (object);
 }
@@ -465,6 +666,8 @@ static void
 wyrebox_daemon_config_init (WyreboxDaemonConfig *self)
 {
     self->views = g_ptr_array_new_with_free_func (config_view_free);
+    self->peer_bindings =
+        g_ptr_array_new_with_free_func (config_peer_binding_free);
 }
 
 gboolean
@@ -547,6 +750,9 @@ wyrebox_daemon_config_validate_for_startup (const WyreboxDaemonConfig *self,
             self->catalog_path);
         return FALSE;
     }
+
+    if (!validate_peer_bindings (self, error))
+        return FALSE;
 
     return validate_wirelog_views (self, error);
 }
@@ -701,4 +907,41 @@ wyrebox_daemon_config_get_view_scope (WyreboxDaemonConfig *self, guint index)
 
     view = g_ptr_array_index (self->views, index);
     return view->scope;
+}
+
+guint
+wyrebox_daemon_config_get_n_peer_bindings (WyreboxDaemonConfig *self)
+{
+    g_return_val_if_fail (WYREBOX_IS_DAEMON_CONFIG (self), 0);
+
+    return self->peer_bindings->len;
+}
+
+gboolean
+wyrebox_daemon_config_peer_uid_allows_account (WyreboxDaemonConfig *self,
+    uid_t uid, const char *account_identity)
+{
+    g_return_val_if_fail (WYREBOX_IS_DAEMON_CONFIG (self), FALSE);
+
+    if (account_identity == NULL || *account_identity == '\0')
+        return FALSE;
+
+    for (guint i = 0; i < self->peer_bindings->len; i++) {
+        const ConfigPeerBinding *binding =
+            g_ptr_array_index (self->peer_bindings, i);
+
+        if (binding->uid != uid)
+            continue;
+        if (binding->allow_all)
+            return TRUE;
+        for (guint j = 0; j < binding->accounts->len; j++) {
+            const char *allowed = g_ptr_array_index (binding->accounts, j);
+
+            if (g_strcmp0 (allowed, account_identity) == 0)
+                return TRUE;
+        }
+        return FALSE;
+    }
+
+    return FALSE;
 }

@@ -23,6 +23,7 @@
 
 #include <signal.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <duckdb.h>
 #include <sysexits.h>
@@ -139,9 +140,11 @@ daemon_root_init_uninitialized (DaemonRoot *daemon_root)
             "socket_path=%s\n"
             "journal_root_dir=%s\n"
             "object_root_dir=%s\n"
-            "catalog_path=%s\n", daemon_root->socket_path,
+            "catalog_path=%s\n"
+            "[peer-account-binding:%u]\n"
+            "accounts=account-1\n", daemon_root->socket_path,
             daemon_root->journal_dir, daemon_root->object_dir,
-            daemon_root->catalog_path);
+            daemon_root->catalog_path, (unsigned int)getuid ());
     g_assert_true (g_file_set_contents (daemon_root->config_path,
         config_contents, -1, &error));
     g_assert_no_error (error);
