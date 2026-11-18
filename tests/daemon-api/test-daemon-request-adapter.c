@@ -1,6 +1,8 @@
+#include "wyrebox-daemon-config.h"
 #include "wyrebox-daemon-fact-mutation-request.h"
 #include "wyrebox-daemon-delivery-ingestion-request.h"
 #include "wyrebox-daemon-delivery-ingestion-service.h"
+#include "wyrebox-daemon-peer-account-authorizer.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-request-router.h"
 #include "wyrebox-daemon-flag-keyword-update-request.h"
@@ -9,9 +11,11 @@
 
 #include <gio/gio.h>
 #include <glib.h>
+#include <glib/gstdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 
 static WyreboxDaemonRequestAdapter *
 adapter_new_without_wirelog (WyreboxDaemonDeliveryIngestionService *delivery,
@@ -89,6 +93,34 @@ typedef struct
     WyreboxDaemonMessageSearchRequest message_search_request;
     WyreboxDaemonFlagKeywordUpdateRequest flag_keyword_update_request;
 } TestRequestAdapterDecodedState;
+
+static WyreboxDaemonPeerAccountAuthorizer *
+authorizer_for_uid_accounts (uid_t uid, const char *accounts_line)
+{
+    g_autoptr (GError) error = NULL;
+    g_autofree char *dir = g_dir_make_tmp (
+        "wyrebox-request-adapter-peer-XXXXXX", &error);
+    g_autofree char *path = NULL;
+    g_autofree char *contents = NULL;
+    g_autoptr (WyreboxDaemonConfig) config = NULL;
+
+    g_assert_no_error (error);
+    g_assert_nonnull (dir);
+    path = g_build_filename (dir, "wyrebox.conf", NULL);
+    contents = g_strdup_printf (
+        "[daemon]\n"
+        "socket_path=/run/wyrebox/wyrebox.sock\n"
+        "[peer-account-binding:%u]\n"
+        "%s\n",
+        (unsigned int)uid, accounts_line);
+    g_assert_true (g_file_set_contents (path, contents, -1, &error));
+    g_assert_no_error (error);
+    g_assert_cmpint (g_chmod (path, 0600), ==, 0);
+    config = wyrebox_daemon_config_new_from_file (path, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (config);
+    return wyrebox_daemon_peer_account_authorizer_new (config);
+}
 
 static void
 test_remove_tree (const char *path)
@@ -701,6 +733,185 @@ test_request_adapter_routes_mailbox_list (void)
 }
 
 static void
+test_request_adapter_denies_unbound_peer_mailbox_list (void)
+{
+    TestRequestAdapterCodecState codec_state = {
+        .scenario = TEST_REQUEST_ADAPTER_SCENARIO_MAILBOX_LIST_SUCCESS,
+        .request_payload = "request-mailbox-list",
+        .request_id = "request-mailbox-list",
+        .expected_peer_credentials = {
+            .uid = 2000,
+            .gid = 3000,
+            .pid = 4000,
+        },
+        .expected_peer_credentials_match = TRUE,
+    };
+    const WyreboxDaemonPeerCredentials credentials = {
+        .uid = 2000,
+        .gid = 3000,
+        .pid = 4000,
+    };
+    gboolean mailbox_list_was_called = FALSE;
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDaemonPeerAccountAuthorizer) authorizer = NULL;
+    g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+    g_autoptr (WyreboxDaemonMailboxListService) mailbox_list_service = NULL;
+    g_autoptr (GBytes) request = NULL;
+    g_autoptr (GBytes) response = NULL;
+
+    /*
+     * Bind a different uid so peer 2000 is unbound for account-1.
+     */
+    authorizer = authorizer_for_uid_accounts (1999, "accounts=account-1");
+    g_assert_nonnull (authorizer);
+
+    mailbox_list_service =
+        wyrebox_daemon_mailbox_list_service_new (append_fixture_mailbox_list,
+            &mailbox_list_was_called, NULL);
+    g_assert_nonnull (mailbox_list_service);
+
+    adapter =
+        wyrebox_daemon_request_adapter_new (NULL, NULL, mailbox_list_service,
+            NULL, NULL, NULL, NULL, test_request_adapter_decode, &codec_state,
+            NULL,
+            test_request_adapter_encode, &codec_state, NULL);
+    g_assert_nonnull (adapter);
+    wyrebox_daemon_request_adapter_set_peer_account_authorizer (adapter,
+        authorizer);
+
+    request = g_bytes_new_static ("request-mailbox-list",
+            strlen ("request-mailbox-list"));
+    response = wyrebox_daemon_request_adapter_handle_payload (&credentials,
+            request, adapter, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (response);
+    assert_bytes_equal (response, "encoded-error");
+    g_assert_false (mailbox_list_was_called);
+    g_assert_cmpuint (codec_state.decode_calls, ==, 1);
+    g_assert_cmpuint (codec_state.encode_calls, ==, 1);
+    g_assert_cmpuint (codec_state.clear_calls, ==, 1);
+}
+
+static void
+test_request_adapter_allows_bound_peer_mailbox_list (void)
+{
+    TestRequestAdapterCodecState codec_state = {
+        .scenario = TEST_REQUEST_ADAPTER_SCENARIO_MAILBOX_LIST_SUCCESS,
+        .request_payload = "request-mailbox-list",
+        .request_id = "request-mailbox-list",
+        .expected_peer_credentials = {
+            .uid = 2000,
+            .gid = 3000,
+            .pid = 4000,
+        },
+        .expected_peer_credentials_match = TRUE,
+    };
+    const WyreboxDaemonPeerCredentials credentials = {
+        .uid = 2000,
+        .gid = 3000,
+        .pid = 4000,
+    };
+    gboolean mailbox_list_was_called = FALSE;
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDaemonPeerAccountAuthorizer) authorizer = NULL;
+    g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+    g_autoptr (WyreboxDaemonMailboxListService) mailbox_list_service = NULL;
+    g_autoptr (GBytes) request = NULL;
+    g_autoptr (GBytes) response = NULL;
+
+    authorizer = authorizer_for_uid_accounts (2000, "accounts=account-1");
+    g_assert_nonnull (authorizer);
+
+    mailbox_list_service =
+        wyrebox_daemon_mailbox_list_service_new (append_fixture_mailbox_list,
+            &mailbox_list_was_called, NULL);
+    g_assert_nonnull (mailbox_list_service);
+
+    adapter =
+        wyrebox_daemon_request_adapter_new (NULL, NULL, mailbox_list_service,
+            NULL, NULL, NULL, NULL, test_request_adapter_decode, &codec_state,
+            NULL,
+            test_request_adapter_encode, &codec_state, NULL);
+    g_assert_nonnull (adapter);
+    wyrebox_daemon_request_adapter_set_peer_account_authorizer (adapter,
+        authorizer);
+
+    request = g_bytes_new_static ("request-mailbox-list",
+            strlen ("request-mailbox-list"));
+    response = wyrebox_daemon_request_adapter_handle_payload (&credentials,
+            request, adapter, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (response);
+    assert_bytes_equal (response, "encoded-mailbox-list");
+    g_assert_true (mailbox_list_was_called);
+    g_assert_cmpuint (codec_state.decode_calls, ==, 1);
+    g_assert_cmpuint (codec_state.encode_calls, ==, 1);
+    g_assert_cmpuint (codec_state.clear_calls, ==, 1);
+}
+
+static void
+test_request_adapter_skips_peer_binding_for_delivery (void)
+{
+    TestRequestAdapterCodecState codec_state = {
+        .scenario = TEST_REQUEST_ADAPTER_SCENARIO_DELIVERY_INGESTION_SUCCESS,
+        .request_payload = "request-delivery",
+        .request_id = "request-delivery",
+        .expected_peer_credentials = {
+            .uid = 1500,
+            .gid = 1600,
+            .pid = 1700,
+        },
+        .expected_peer_credentials_match = TRUE,
+    };
+    const WyreboxDaemonPeerCredentials credentials = {
+        .uid = 1500,
+        .gid = 1600,
+        .pid = 1700,
+    };
+    gboolean was_called = FALSE;
+    g_autoptr (GError) error = NULL;
+    g_autoptr (WyreboxDaemonPeerAccountAuthorizer) authorizer = NULL;
+    g_autoptr (WyreboxDaemonDeliveryIngestionService)
+    delivery_ingestion_service = NULL;
+    g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+    g_autoptr (GBytes) request = NULL;
+    g_autoptr (GBytes) response = NULL;
+
+    /*
+     * Peer 1500 is unbound; delivery must still succeed (ADR excludes it).
+     */
+    authorizer = authorizer_for_uid_accounts (1999, "accounts=account-1");
+    g_assert_nonnull (authorizer);
+
+    delivery_ingestion_service =
+        wyrebox_daemon_delivery_ingestion_service_new (ingest_delivery_fixture,
+            &was_called, NULL);
+    g_assert_nonnull (delivery_ingestion_service);
+
+    adapter =
+        wyrebox_daemon_request_adapter_new (delivery_ingestion_service, NULL,
+            NULL, NULL,
+            NULL, NULL, NULL,
+            test_request_adapter_decode, &codec_state, NULL,
+            test_request_adapter_encode, &codec_state, NULL);
+    g_assert_nonnull (adapter);
+    wyrebox_daemon_request_adapter_set_peer_account_authorizer (adapter,
+        authorizer);
+
+    request = g_bytes_new_static ("request-delivery",
+            strlen ("request-delivery"));
+    response = wyrebox_daemon_request_adapter_handle_payload (&credentials,
+            request, adapter, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (response);
+    assert_bytes_equal (response, "encoded-success");
+    g_assert_true (was_called);
+    g_assert_cmpuint (codec_state.decode_calls, ==, 1);
+    g_assert_cmpuint (codec_state.encode_calls, ==, 1);
+    g_assert_cmpuint (codec_state.clear_calls, ==, 1);
+}
+
+static void
 test_request_adapter_routes_delivery_ingestion (void)
 {
     TestRequestAdapterCodecState codec_state = {
@@ -1243,6 +1454,15 @@ main (int argc, char **argv)
 
     g_test_add_func ("/daemon-api/request-adapter/routes-mailbox-list",
         test_request_adapter_routes_mailbox_list);
+    g_test_add_func (
+        "/daemon-api/request-adapter/denies-unbound-peer-mailbox-list",
+        test_request_adapter_denies_unbound_peer_mailbox_list);
+    g_test_add_func (
+        "/daemon-api/request-adapter/allows-bound-peer-mailbox-list",
+        test_request_adapter_allows_bound_peer_mailbox_list);
+    g_test_add_func (
+        "/daemon-api/request-adapter/skips-peer-binding-for-delivery",
+        test_request_adapter_skips_peer_binding_for_delivery);
     g_test_add_func ("/daemon-api/request-adapter/routes-delivery-ingestion",
         test_request_adapter_routes_delivery_ingestion);
     g_test_add_func (

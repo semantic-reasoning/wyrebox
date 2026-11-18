@@ -1,7 +1,9 @@
 #include "wyrebox-daemon-capnp-codec.h"
+#include "wyrebox-daemon-config.h"
 #include "wyrebox-daemon-connection-server.h"
 #include "wyrebox-daemon-frame-io.h"
 #include "wyrebox-daemon-mailbox-list-service.h"
+#include "wyrebox-daemon-peer-account-authorizer.h"
 #include "wyrebox-daemon-request-adapter.h"
 
 #include <capnp/message.h>
@@ -11,6 +13,8 @@
 #include <gio/gunixsocketaddress.h>
 #include <glib.h>
 #include <glib/gstdio.h>
+
+#include <unistd.h>
 
 #include "wyrebox-daemon-api.capnp.h"
 
@@ -50,6 +54,34 @@ make_socket_path (char **out_root)
   *out_root = g_strdup (root);
 
   return g_build_filename (root, "run", "wyrebox.sock", NULL);
+}
+
+static WyreboxDaemonPeerAccountAuthorizer *
+authorizer_for_accounts (const char *accounts_line)
+{
+  g_autoptr (GError) error = NULL;
+  g_autofree char *dir = g_dir_make_tmp (
+      "wyrebox-capnp-uds-peer-XXXXXX", &error);
+  g_autofree char *path = NULL;
+  g_autofree char *contents = NULL;
+  g_autoptr (WyreboxDaemonConfig) config = NULL;
+
+  g_assert_no_error (error);
+  g_assert_nonnull (dir);
+  path = g_build_filename (dir, "wyrebox.conf", NULL);
+  contents = g_strdup_printf (
+      "[daemon]\n"
+      "socket_path=/run/wyrebox/wyrebox.sock\n"
+      "[peer-account-binding:%u]\n"
+      "%s\n",
+      (unsigned int) getuid (), accounts_line);
+  g_assert_true (g_file_set_contents (path, contents, -1, &error));
+  g_assert_no_error (error);
+  g_assert_cmpint (g_chmod (path, 0600), ==, 0);
+  config = wyrebox_daemon_config_new_from_file (path, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (config);
+  return wyrebox_daemon_peer_account_authorizer_new (config);
 }
 
 static GBytes *
@@ -259,6 +291,29 @@ assert_mailbox_list_response (GBytes *response)
 }
 
 static void
+assert_permission_denied_error_response (GBytes *response)
+{
+  gsize size = 0;
+  const guint8 *data = static_cast<const guint8 *> (
+      g_bytes_get_data (response, &size));
+
+  g_assert_cmpuint (size % sizeof (capnp::word), ==, 0);
+
+  auto words = kj::arrayPtr (reinterpret_cast<const capnp::word *> (data),
+      size / sizeof (capnp::word));
+  capnp::FlatArrayMessageReader reader (words);
+  auto response_frame = reader.getRoot<ResponseFrame> ();
+
+  g_assert_true (response_frame.which () == ResponseFrame::ERROR);
+  g_assert_cmpstr (response_frame.getRequestId ().cStr (), ==,
+      "request-uds-1");
+
+  auto error = response_frame.getError ();
+  g_assert_true (error.getErrorClass () == ErrorClass::PERMISSION_DENIED);
+  g_assert_cmpstr (error.getRequestId ().cStr (), ==, "request-uds-1");
+}
+
+static void
 test_capnp_uds_mailbox_list_round_trip (void)
 {
   g_autofree char *root = NULL;
@@ -269,6 +324,7 @@ test_capnp_uds_mailbox_list_round_trip (void)
   g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
   g_autoptr (WyreboxDaemonMailboxListService) mailbox_list_service = NULL;
   g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+  g_autoptr (WyreboxDaemonPeerAccountAuthorizer) authorizer = NULL;
   MailboxListFixtureState state = { 0 };
 
   socket_path = make_socket_path (&root);
@@ -288,6 +344,10 @@ test_capnp_uds_mailbox_list_round_trip (void)
       wyrebox_daemon_capnp_codec_encode_response_frame,
       NULL,
       NULL);
+  authorizer = authorizer_for_accounts ("accounts=account-uds");
+  g_assert_nonnull (authorizer);
+  wyrebox_daemon_request_adapter_set_peer_account_authorizer (adapter,
+      authorizer);
   server = wyrebox_daemon_connection_server_new (socket_path, adapter);
 
   g_assert_nonnull (mailbox_list_service);
@@ -308,6 +368,65 @@ test_capnp_uds_mailbox_list_round_trip (void)
   remove_tree (root);
 }
 
+static void
+test_capnp_uds_mailbox_list_denies_mismatched_peer_binding (void)
+{
+  g_autofree char *root = NULL;
+  g_autofree char *socket_path = NULL;
+  g_autoptr (GBytes) request = NULL;
+  g_autoptr (GBytes) response = NULL;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
+  g_autoptr (WyreboxDaemonMailboxListService) mailbox_list_service = NULL;
+  g_autoptr (WyreboxDaemonRequestAdapter) adapter = NULL;
+  g_autoptr (WyreboxDaemonPeerAccountAuthorizer) authorizer = NULL;
+  MailboxListFixtureState state = { 0 };
+
+  socket_path = make_socket_path (&root);
+  mailbox_list_service = wyrebox_daemon_mailbox_list_service_new (
+      list_mailboxes_fixture, &state, NULL);
+  adapter = wyrebox_daemon_request_adapter_new (NULL,
+      NULL,
+      mailbox_list_service,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_decode_request_frame,
+      NULL,
+      NULL,
+      wyrebox_daemon_capnp_codec_encode_response_frame,
+      NULL,
+      NULL);
+  /*
+   * Peer is getuid(); binding allows only another account so account-uds
+   * LIST must be denied before the list fixture runs.
+   */
+  authorizer = authorizer_for_accounts ("accounts=other-account");
+  g_assert_nonnull (authorizer);
+  wyrebox_daemon_request_adapter_set_peer_account_authorizer (adapter,
+      authorizer);
+  server = wyrebox_daemon_connection_server_new (socket_path, adapter);
+
+  g_assert_nonnull (mailbox_list_service);
+  g_assert_nonnull (adapter);
+  g_assert_nonnull (server);
+  g_assert_true (wyrebox_daemon_connection_server_start (server, &error));
+  g_assert_no_error (error);
+
+  request = build_mailbox_list_request_bytes ();
+  response = send_request_and_read_response (socket_path, request);
+
+  g_assert_false (state.was_called);
+  assert_permission_denied_error_response (response);
+
+  g_assert_true (wyrebox_daemon_connection_server_stop (server, NULL, NULL, &error));
+  g_assert_no_error (error);
+
+  remove_tree (root);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -315,6 +434,9 @@ main (int argc, char **argv)
 
   g_test_add_func ("/daemon-api/capnp-uds/mailbox-list-round-trip",
       test_capnp_uds_mailbox_list_round_trip);
+  g_test_add_func (
+      "/daemon-api/capnp-uds/mailbox-list-denies-mismatched-peer-binding",
+      test_capnp_uds_mailbox_list_denies_mismatched_peer_binding);
 
   return g_test_run ();
 }
