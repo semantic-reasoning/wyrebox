@@ -1,4 +1,5 @@
 #include "wyrebox-daemon-request-adapter.h"
+#include "wyrebox-daemon-error-frame.h"
 #include "wyrebox-daemon-request-router.h"
 
 #include <gio/gio.h>
@@ -20,6 +21,7 @@ struct _WyreboxDaemonRequestAdapter
     WyreboxDaemonMembershipsExpungeService *memberships_expunge_service;
     WyreboxDaemonMembershipsCopyMoveService *memberships_copy_move_service;
     WyreboxDaemonMessageAppendService *message_append_service;
+    WyreboxDaemonPeerAccountAuthorizer *peer_account_authorizer;
 
     GMutex mutation_route_mutex;
 
@@ -86,6 +88,7 @@ static void wyrebox_daemon_request_adapter_finalize (GObject *object)
     g_clear_object (&self->memberships_expunge_service);
     g_clear_object (&self->memberships_copy_move_service);
     g_clear_object (&self->message_append_service);
+    g_clear_object (&self->peer_account_authorizer);
     g_mutex_clear (&self->mutation_route_mutex);
 
     G_OBJECT_CLASS (wyrebox_daemon_request_adapter_parent_class)->finalize
@@ -124,6 +127,83 @@ operation_requires_mutation_route_lock (WyreboxDaemonRequestFrameOperation
     default:
         return FALSE;
     }
+}
+
+static gboolean
+operation_requires_peer_account_binding (WyreboxDaemonRequestFrameOperation
+    operation)
+{
+    switch (operation) {
+    case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_NONE:
+    case WYREBOX_DAEMON_REQUEST_FRAME_OPERATION_DELIVERY_INGESTION:
+        return FALSE;
+    default:
+        return TRUE;
+    }
+}
+
+static gboolean
+request_id_is_usable (const char *request_id)
+{
+    return request_id != NULL && *request_id != '\0';
+}
+
+static gboolean
+init_peer_deny_error_response (WyreboxDaemonResponseFrame *out_frame,
+    const char *request_id, const char *correlation_id, const GError *cause,
+    GError **error)
+{
+    g_auto (WyreboxDaemonErrorFrame) error_frame = { 0 };
+
+    if (!request_id_is_usable (request_id)) {
+        g_propagate_error (error, g_error_copy (cause));
+        return FALSE;
+    }
+
+    if (!wyrebox_daemon_error_frame_init_from_g_error (&error_frame,
+        request_id, cause, NULL, error))
+        return FALSE;
+
+    return wyrebox_daemon_response_frame_init_error (out_frame,
+               &error_frame, correlation_id, error);
+}
+
+/*
+ * Returns TRUE when routing may proceed. On peer deny with a usable
+ * request_id, fills @out_frame with an error response and returns TRUE so
+ * the adapter can encode the deny (no mailbox/message payload). On peer
+ * deny without a usable request_id, returns FALSE with @error set.
+ */
+static gboolean
+authorize_decoded_peer_account (WyreboxDaemonRequestAdapter *self,
+    const WyreboxDaemonPeerCredentials *peer_credentials,
+    const WyreboxDaemonDecodedRequestFrame *decoded_request,
+    WyreboxDaemonResponseFrame *out_frame, gboolean *out_denied,
+    GError **error)
+{
+    g_autoptr (GError) local_error = NULL;
+
+    *out_denied = FALSE;
+
+    if (self->peer_account_authorizer == NULL)
+        return TRUE;
+
+    if (!operation_requires_peer_account_binding (decoded_request->operation))
+        return TRUE;
+
+    if (decoded_request->account_identity == NULL
+        || *decoded_request->account_identity == '\0')
+        return TRUE;
+
+    if (wyrebox_daemon_peer_account_authorizer_allows
+            (self->peer_account_authorizer, peer_credentials->uid,
+        decoded_request->account_identity, &local_error))
+        return TRUE;
+
+    *out_denied = TRUE;
+    return init_peer_deny_error_response (out_frame,
+               decoded_request->request_id, decoded_request->correlation_id,
+               local_error, error);
 }
 
 static gboolean
@@ -310,6 +390,19 @@ void wyrebox_daemon_request_adapter_set_mail_event_stream_service
     g_set_object (&self->mail_event_stream_service, mail_event_stream_service);
 }
 
+void
+wyrebox_daemon_request_adapter_set_peer_account_authorizer (
+    WyreboxDaemonRequestAdapter *self,
+    WyreboxDaemonPeerAccountAuthorizer *peer_account_authorizer)
+{
+    g_return_if_fail (WYREBOX_IS_DAEMON_REQUEST_ADAPTER (self));
+    g_return_if_fail (peer_account_authorizer == NULL
+        || WYREBOX_IS_DAEMON_PEER_ACCOUNT_AUTHORIZER
+            (peer_account_authorizer));
+
+    g_set_object (&self->peer_account_authorizer, peer_account_authorizer);
+}
+
 GBytes *
 wyrebox_daemon_request_adapter_handle_payload (const
     WyreboxDaemonPeerCredentials *peer_credentials, GBytes *request,
@@ -321,6 +414,7 @@ wyrebox_daemon_request_adapter_handle_payload (const
     g_auto (WyreboxDaemonRequestAdapterDecodedState) decoded_state = { 0 };
     WyreboxDaemonDecodedRequestFrame decoded_request = { 0 };
     g_auto (WyreboxDaemonResponseFrame) response_frame = { 0 };
+    gboolean peer_denied = FALSE;
 
     g_return_val_if_fail (WYREBOX_IS_DAEMON_REQUEST_ADAPTER (self), NULL);
     g_return_val_if_fail (peer_credentials != NULL, NULL);
@@ -337,7 +431,12 @@ wyrebox_daemon_request_adapter_handle_payload (const
         self->decode_request_frame_user_data, &local_error))
         goto decode_failed;
 
-    if (!route_decoded_request_with_mutation_lock (self, &decoded_request,
+    if (!authorize_decoded_peer_account (self, peer_credentials,
+        &decoded_request, &response_frame, &peer_denied, &local_error))
+        goto route_failed;
+
+    if (!peer_denied
+        && !route_decoded_request_with_mutation_lock (self, &decoded_request,
         &response_frame, &local_error))
         goto route_failed;
 

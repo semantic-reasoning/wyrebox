@@ -19,6 +19,7 @@
 #include "wyrebox-daemon-mailbox-catalog-duckdb.h"
 #include "wyrebox-daemon-message-fetch-service.h"
 #include "wyrebox-daemon-message-search-duckdb.h"
+#include "wyrebox-daemon-peer-account-authorizer.h"
 #include "wyrebox-daemon-request-adapter.h"
 #include "wyrebox-daemon-runtime.h"
 #include "wyrebox-daemon-storage.h"
@@ -367,6 +368,8 @@ run_daemon (int argc, char **argv)
     g_autoptr (WyreboxDaemonFactMutationService) fact_mutation_service = NULL;
     g_autoptr (WyreboxDaemonWirelogPredicateQueryService)
     wirelog_predicate_query_service = NULL;
+    g_autoptr (WyreboxDaemonPeerAccountAuthorizer) peer_account_authorizer =
+        NULL;
     g_autoptr (WyreboxDaemonRequestAdapter) request_adapter = NULL;
     g_autoptr (WyreboxDaemonConnectionServer) server = NULL;
     g_autoptr (GMainLoop) loop = NULL;
@@ -601,6 +604,10 @@ run_daemon (int argc, char **argv)
         (request_adapter, memberships_copy_move_service);
     wyrebox_daemon_request_adapter_set_message_append_service
         (request_adapter, message_append_service);
+    peer_account_authorizer =
+        wyrebox_daemon_peer_account_authorizer_new (config);
+    wyrebox_daemon_request_adapter_set_peer_account_authorizer
+        (request_adapter, peer_account_authorizer);
     server = wyrebox_daemon_connection_server_new (socket_path,
             request_adapter);
 

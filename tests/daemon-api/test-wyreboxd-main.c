@@ -142,7 +142,7 @@ daemon_root_init_uninitialized (DaemonRoot *daemon_root)
             "object_root_dir=%s\n"
             "catalog_path=%s\n"
             "[peer-account-binding:%u]\n"
-            "accounts=account-1\n", daemon_root->socket_path,
+            "accounts=account-1,account-2\n", daemon_root->socket_path,
             daemon_root->journal_dir, daemon_root->object_dir,
             daemon_root->catalog_path, (unsigned int)getuid ());
     g_assert_true (g_file_set_contents (daemon_root->config_path,
@@ -1918,9 +1918,17 @@ test_wyreboxd_fetches_message_bytes (void)
         WYREBOX_DAEMON_ERROR_NOT_FOUND);
     assert_fetch_fails (&daemon_root, "account-1", "account-1", 2, 1,
         WYREBOX_DAEMON_ERROR_CONFLICT);
+    /*
+     * account-2 is peer-bound (harness allowlist) but has no messages; missing
+     * UID stays NOT_FOUND. Cross-account Cap'n Proto claim still denies.
+     * account-3 is outside the peer allowlist → PERMISSION_DENIED before
+     * mailbox lookup.
+     */
     assert_fetch_fails (&daemon_root, "account-2", "account-2", 1, 1,
         WYREBOX_DAEMON_ERROR_NOT_FOUND);
     assert_fetch_fails (&daemon_root, "account-2", "account-1", 1, 1,
+        WYREBOX_DAEMON_ERROR_PERMISSION_DENIED);
+    assert_fetch_fails (&daemon_root, "account-3", "account-3", 1, 1,
         WYREBOX_DAEMON_ERROR_PERMISSION_DENIED);
 
     stop_daemon (subprocess);

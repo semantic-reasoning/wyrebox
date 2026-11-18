@@ -10,6 +10,7 @@
 #include "wyrebox-daemon-memberships-expunge-service.h"
 #include "wyrebox-daemon-message-append-service.h"
 #include "wyrebox-daemon-message-search-service.h"
+#include "wyrebox-daemon-peer-account-authorizer.h"
 #include "wyrebox-daemon-wirelog-predicate-query-service.h"
 #include "wyrebox-daemon-peer-credentials.h"
 #include "wyrebox-daemon-request-router.h"
@@ -79,6 +80,17 @@ void wyrebox_daemon_request_adapter_set_memberships_copy_move_service (
 void wyrebox_daemon_request_adapter_set_message_append_service (
     WyreboxDaemonRequestAdapter *self,
     WyreboxDaemonMessageAppendService *message_append_service);
+
+/*
+ * Optional peer-account authorizer (ADR 0007). When set, account-scoped
+ * requests are checked against SO_PEERCRED uid before routing. Delivery
+ * ingestion is excluded. NULL leaves existing Cap'n Proto checks only
+ * (unit-test convenience); production always sets an authorizer from
+ * daemon config.
+ */
+void wyrebox_daemon_request_adapter_set_peer_account_authorizer (
+    WyreboxDaemonRequestAdapter *self,
+    WyreboxDaemonPeerAccountAuthorizer *peer_account_authorizer);
 
 GBytes *wyrebox_daemon_request_adapter_handle_payload (
     const WyreboxDaemonPeerCredentials *peer_credentials,
