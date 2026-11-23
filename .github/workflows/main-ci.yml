@@ -191,6 +191,19 @@ jobs:
           meson test -C _build --timeout-multiplier 6 \
             --num-processes "$num_processes" --print-errorlogs
 
+      # --print-errorlogs keeps only the last 100 lines of a failing test, which
+      # drops the LeakSanitizer direct-leak entries and the failing subtest
+      # name. Keep the full Meson test log so flaky sanitizer failures can be
+      # diagnosed from the run that hit them.
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitize-${{ matrix.arch }}-testlog
+          path: _build/meson-logs/testlog.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
   ubuntu-26-04-dovecot:
     name: Ubuntu 26.04 Dovecot 2.4.2
     runs-on: ubuntu-26.04
